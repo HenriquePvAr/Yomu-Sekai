@@ -4,7 +4,7 @@
 
 ## Checkout oficial recomendado
 
-Usar `<LOCAL_PROJECTS>/Tradutor.Ia-main-consolidation-v1` como checkout oficial de desenvolvimento: branch `main`, SHA publicado `ec9ca9e4acd0849020eb13a089817c1c11aeab7a`. A documentação da CI já foi sincronizada localmente e será registrada em commit; os diretórios gerados `.agents/`, `.basinfy/`, `.codex/` e `.mcp.json` ficam fora do staging.
+Usar `<LOCAL_PROJECTS>/Tradutor.Ia-main-consolidation-v1` como checkout oficial de desenvolvimento: branch `main`, SHA publicado `ec9ca9e4acd0849020eb13a089817c1c11aeab7a`. A documentação da CI e o inventário/plano foram registrados em commits locais de documentação; os diretórios gerados `.agents/`, `.basinfy/`, `.codex/` e `.mcp.json` ficam fora do staging.
 
 Manter `<LOCAL_PROJECTS>/Tradutor.Ia` isolado e protegido: é um checkout original em branch feature, com alterações rastreadas e centenas de arquivos não rastreados. Não usá-lo como checkout canônico nem sobrescrever seu conteúdo.
 
@@ -31,9 +31,9 @@ Para cada futuro arquivamento: confirmar processo parado e ausência de submódu
 
 ### BLOCKED_DIRTY — 8
 
-Não arquivar antes de revisão individual e proteção das alterações. Os oito overlays originais estão no backup externo verificado (IDs WT01–WT08); as mudanças documentais novas do checkout canônico serão salvas em commits locais. Os arquivos gerados não rastreados do checkout canônico permanecem preservados e fora do commit.
+Não arquivar antes de revisão individual e proteção das alterações. Os oito overlays originais estão no backup externo verificado (IDs WT01–WT08); as mudanças documentais do checkout canônico estão em commits locais, sem os arquivos gerados não rastreados. Esses arquivos gerados permanecem preservados e fora dos commits.
 
-- Checkout original `<LOCAL_PROJECTS>/Tradutor.Ia`: preserva alterações no worker/UI/bridge/benchmark/CLAUDE e pesquisa não rastreada. A matriz marca auto-reseed de permissões revogadas como rejeitado por risco de reautorizar usuário e a exceção de variância da fonte como não comprovada.
+- Checkout original `<LOCAL_PROJECTS>/Tradutor.Ia`: preserva alterações no worker/UI/bridge/benchmark/CLAUDE e pesquisa não rastreada. Os 13 arquivos gerados pela sessão Basinfy permanecem no local original e têm cópia incremental verificada em `<PRIVATE_BACKUP_ROOT>/incremental-basinfy-session-20261015-1` (manifesto SHA-256 `0205E5BE337F4E65214566225EFA678F13A04C65B57C63DB019B063080860421`); não foram revertidos ou removidos. A matriz marca auto-reseed de permissões revogadas como rejeitado por risco de reautorizar usuário e a exceção de variância da fonte como não comprovada.
 - `full-ui-community-operation`: snapshots/testes de tooling local, sem caller de produção.
 - `glyph-segmenter-v2`: checkpoint experimental (~46,7 MB), fora do runtime.
 - `history-bulk-delete-artifact-cards-v1`: overlay e relatórios preservados; contratos seguros têm contraparte canônica, mas arquivos locais continuam sem descarte.
