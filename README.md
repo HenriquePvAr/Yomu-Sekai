@@ -339,7 +339,7 @@ Página inicial da documentação: **[docs/README.md](docs/README.md)**.
 - [Política de Documentação](docs/DOCUMENTATION_POLICY.md) — regras de sincronização entre código e documentação.
 - [Arquitetura](docs/ARCHITECTURE.md) — detalhe técnico do pipeline e das fronteiras entre componentes.
 - [Desenvolvimento](docs/DEVELOPMENT.md) — setup, execução, testes, dependências externas, empacotamento e riscos conhecidos.
-- [Estrutura do projeto](docs/PROJECT_STRUCTURE.md) — localização do runtime, testes, ferramentas, pesquisa e relatórios.
+- [Estrutura do projeto](docs/architecture/REPOSITORY_STRUCTURE.md) — política da raiz, runtime, testes, ferramentas, pesquisa e relatórios.
 - [Política de artefatos](docs/ARTIFACT_POLICY.md) — o que pertence ao Git e o que deve permanecer externo.
 - [Contribuindo](CONTRIBUTING.md) — convenções, verificações locais e commits.
 - [Qualidade e validação](docs/QUALITY_AND_VALIDATION.md) — gates, estados terminais e limites conhecidos.

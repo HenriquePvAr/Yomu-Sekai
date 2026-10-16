@@ -10,7 +10,7 @@
 ## Módulos Python e raiz
 
 Implemente runtime novo no pacote `yomu/`, agrupado pela responsabilidade documentada em
-[`PROJECT_STRUCTURE.md`](PROJECT_STRUCTURE.md). Não adicione módulos de domínio, teste ou
+[`architecture/REPOSITORY_STRUCTURE.md`](architecture/REPOSITORY_STRUCTURE.md). Não adicione módulos de domínio, teste ou
 pesquisa diretamente na raiz. Os entrypoints de compatibilidade existentes são pequenos
 shims; altere a implementação canônica e preserve o shim somente quando o contrato público
 ou o packaging ainda depender do nome antigo.

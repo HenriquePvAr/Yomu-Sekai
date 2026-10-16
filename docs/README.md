@@ -51,7 +51,7 @@ Esta é a página inicial da documentação. Comece pelo documento certo para o 
 
 - [Arquitetura histórica do layout raiz](ARCHITECTURE.md) — snapshot de 2026-09-29; para o pacote consolidado, consulte o [estado atual](consolidation/YOMU_CURRENT_PRODUCT_STATE.md) e a [matriz de reconciliação](consolidation/YOMU_SOURCE_RECONCILIATION_MATRIX.md)
 - [Desenvolvimento](DEVELOPMENT.md) — setup, execução, testes, dependências externas, empacotamento e riscos conhecidos
-- [Estrutura do projeto](PROJECT_STRUCTURE.md) — localização do código, testes, ferramentas e pesquisa
+- [Estrutura do projeto](architecture/REPOSITORY_STRUCTURE.md) — localização do código, contratos da raiz, testes, ferramentas e pesquisa
 - [Fluxo de desenvolvimento](DEVELOPMENT_WORKFLOW.md) — comandos de validação após mudanças
 - [Política de artefatos](ARTIFACT_POLICY.md) — conteúdo versionado e outputs externos
 - [Fila de worker persistente](WORKER_QUEUE.md) — processos, estados, cancelamento e recuperação
@@ -75,7 +75,7 @@ Esta é a página inicial da documentação. Comece pelo documento certo para o 
 - [M16 — replay offline de qualidade](M16_TRANSLATION_QUALITY_REPLAY.md) — cobertura e limitações do replay read-only
 - [M20 — cobertura de tradução e integridade CLEAN](M20_RC_BLOCKER_HOTFIX.md) — ordem de reservation/retry, falhas sistêmicas e remoção independente do texto-fonte
 - [Quality Freeze](QUALITY_FREEZE.md) — o que está congelado, a evidência e como sair do freeze
-- [Taxonomia semântica e auditoria linguística](../SEMANTIC_CLASSIFICATION_AUDIT.md)
+- [Taxonomia semântica e auditoria linguística](architecture/SEMANTIC_CLASSIFICATION_AUDIT.md)
 
 ### Comunidade, autenticação e armazenamento
 
@@ -92,6 +92,7 @@ Esta é a página inicial da documentação. Comece pelo documento certo para o 
 ### Segurança, testes e diagnóstico
 
 - [Segurança e limites de confiança](SECURITY.md)
+- [Contrato de segredos de produção](operations/PRODUCTION_SECRETS_REQUIRED.md) — nomes/configuração exigidos; nunca contém valores privilegiados
 - [Testes herméticos e smokes manuais](TESTING.md)
 - [Troubleshooting](TROUBLESHOOTING.md)
 
@@ -113,7 +114,7 @@ Documentos de auditoria pontual, preservados como registro. Descrevem o estado n
 em que foram escritos e **não** substituem os documentos primários:
 
 - [Auditoria funcional — fontes e submissão](FULL_FUNCTIONAL_AUDIT.md)
-- [Taxonomia semântica e auditoria linguística](../SEMANTIC_CLASSIFICATION_AUDIT.md)
+- [Taxonomia semântica e auditoria linguística](architecture/SEMANTIC_CLASSIFICATION_AUDIT.md)
 - [Plano de rollback da migração de auth](../scripts/auth-migration/rollback-plan.md)
 
 ---

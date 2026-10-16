@@ -38,7 +38,7 @@
 | `docs/SOCIAL_ASSET_RETENTION_RECONCILIATION.md` | Atual | Mantido |
 | `docs/BETTER_AUTH_MIGRATION.md` | Atual (preparação, não default) | Mantido |
 | `docs/FULL_FUNCTIONAL_AUDIT.md` | Auditoria histórica | **Arquivado por rotulagem** no índice, como registro pontual |
-| `SEMANTIC_CLASSIFICATION_AUDIT.md` | Auditoria histórica + referência técnica | Mantido, indexado |
+| `SEMANTIC_CLASSIFICATION_AUDIT.md` | Auditoria histórica + referência técnica | Em 2026-08 foi mantido e indexado; em 2026-10-16 o conteúdo canônico foi movido para `docs/architecture/SEMANTIC_CLASSIFICATION_AUDIT.md`, com ponteiro no path antigo |
 | `scripts/auth-migration/rollback-plan.md` | Plano operacional histórico | Mantido, indexado |
 
 **Nenhum documento foi apagado.** Documentos de auditoria pontual foram preservados e

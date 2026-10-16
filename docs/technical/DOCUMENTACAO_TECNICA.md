@@ -284,10 +284,7 @@ usar o guard de job aqui devolvia `404` e tornava esses cards indeléveis. A rem
 **incondicional** — nunca depende de `page_count` positivo nem de uma pasta confinável.
 A exclusão de arquivos (`delete_files=True`) é separada, best-effort e *fail-closed*: só
 apaga a pasta do run quando ela resolve com segurança sob `output/` (`_confined_output_folder`
-rejeita `..`, caminho absoluto estranho, raiz de drive/home/AppData e escape por symlink,
-retornando `None` em vez de levantar), não há publicação vinculada (`local_artifact_published`
-protege o remoto) e a pasta existe; pasta ausente é idempotente. Em qualquer caso inseguro o
-card some e os arquivos são preservados (`files_state`: `removed` / `already_absent` /
+rejeita `..`, caminho absoluto estranho, raiz de drive<LOCAL_HOME>/ `already_absent` /
 `unsafe_path_preserved` / `delete_failed_preserved` / `preserved`).
 
 ### Início de tradução: camadas de proteção
@@ -1040,7 +1037,7 @@ delas modifica PDFs, páginas finais, revisões ou publicações, e nenhuma cham
 tradução. `audit_registry.py` resolve artefatos por **identidade** (diretório de saída +
 `revision_id`), nunca por glob, mtime, título ou heurística de "mais recente"; o hash do
 relatório carregado é verificado contra o registro, então arquivo velho ou trocado falha
-fechado. Detalhes em [`SEMANTIC_CLASSIFICATION_AUDIT.md`](../../SEMANTIC_CLASSIFICATION_AUDIT.md).
+fechado. Detalhes em [`SEMANTIC_CLASSIFICATION_AUDIT.md`](../architecture/SEMANTIC_CLASSIFICATION_AUDIT.md).
 
 O denominador de qualidade segue a taxonomia semântica, não apenas o rótulo visual legado.
 `speech`, `narration`, `unknown` e `decorative` podem ser story text quando o conteúdo é
@@ -2112,7 +2109,7 @@ antigos sem tentar uma auto-substituição insegura.
 `verify_package` confere o tamanho exato (barato, pega download truncado) e então calcula o
 SHA-256 **uma única vez**. Formato do pacote: ZIP (stdlib `zipfile`). `extract_package` valida
 **todas** as entradas antes de escrever qualquer byte e recusa: caminho absoluto POSIX,
-caminho com letra de unidade (`C:/...`), UNC (`//servidor/...`), `..` em qualquer posição,
+caminho com letra de unidade (`<LOCAL_C_DRIVE>/...`), UNC (`//servidor/...`), `..` em qualquer posição,
 barra invertida como travessia e entradas de link/reparse. Cada destino resolvido é ainda
 comparado com a raiz de staging como defesa em profundidade.
 
@@ -2266,7 +2263,7 @@ mistos, maiúsculas/minúsculas de volume Windows e junções normalizam para a 
 Desde o TDD #55 a normalização cobre também **URIs SQLite** (`sqlite_uri_path`): um
 `sqlite3.connect("file:.../jobs.sqlite3?mode=ro", uri=True)` é reduzido ao caminho de
 sistema de arquivos que nomeia — parâmetros de query (`mode`, `cache`, `vfs`, `immutable`),
-autoridade `file://localhost/`, forma `file:///C:/…` e percent-encoding não escapam mais do
+autoridade `file://localhost/`, forma `file:///<LOCAL_C_DRIVE>/…` e percent-encoding não escapam mais do
 guard. `:memory:` e `file::memory:?cache=shared` continuam permitidos, assim como qualquer
 URI apontando a um banco temporário isolado.
 
