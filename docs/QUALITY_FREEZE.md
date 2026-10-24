@@ -1,12 +1,14 @@
 # Quality Freeze
 
-> **Base verificada:** `5ebd77e` (branch `beta/packaging`) · **Revisado em:** 2026-09-03
+> **Base verificada:** `5f482ce1` (branch `main`) · **Revisado em:** 2026-10-24
+> (snapshot e evidência originais: `5ebd77e`, `beta/packaging`, 2026-09-03)
 >
 > [Voltar ao índice](README.md) · [Qualidade e validação](QUALITY_AND_VALIDATION.md)
 
 ## O que é o Quality Freeze
 
-**Estado: ATIVO.**
+**Estado: ATIVO (nominal) — baseline congelada não descreve mais a saída atual.** Ver
+[Estado em 2026-10-24](#estado-em-2026-10-24).
 
 O Quality Freeze é um congelamento deliberado do comportamento de produção do pipeline.
 Enquanto ele estiver ativo, o repositório trata o conjunto "código de produção +
@@ -49,6 +51,10 @@ resultado de qualidade" — esse papel é exclusivamente de `ee71cfa`.
 
 ## Evidência
 
+> Evidência histórica do freeze (2026-09-03). A contagem atual da suíte hermética está em
+> [Testes](TESTING.md) (~6160 passed / 0 failed / 141 skipped; os testes Postgres que
+> dependem de Docker são pulados sem Docker).
+
 | Item | Resultado |
 | --- | --- |
 | E2E real | job `c5d92ff5…` |
@@ -66,6 +72,20 @@ Os comandos exatos estão em [Desenvolvimento](DEVELOPMENT.md#testes) e
 ## Como sair do freeze
 
 O freeze não é levantado por uma suíte verde. Ele é levantado quando:
+
+```mermaid
+flowchart TD
+    A["Mudança de comportamento<br/>de produção"] --> B{"Carrega E2E real<br/>de produto próprio?"}
+    B -->|não| H["Evidência de qualidade inválida<br/>freeze bloqueia a mudança"]
+    B -->|sim| C{"1. OpenCV único<br/>e igual ao declarado?"}
+    C -->|não| H2["Freeze continua ATIVO"]
+    C -->|sim| D{"2. Instalação limpa Windows<br/>reproduzível dos manifests?"}
+    D -->|não| H2
+    D -->|sim| E{"3. Novo E2E real nessa instalação<br/>comparado com a evidência?"}
+    E -->|não reproduz| H2
+    E -->|reproduz| F["Freeze pode ser levantado<br/>(decisão explícita do owner)"]
+```
+
 
 1. a variante de OpenCV efetivamente carregada em runtime for única e igual à declarada
    (ver `OPENCV-VARIANT-SHADOWING-001` em [Riscos conhecidos](DEVELOPMENT.md#riscos-conhecidos));
@@ -115,8 +135,28 @@ Até lá, qualquer mudança de comportamento de produção precisa carregar seu 
 
 ---
 
+## Estado em 2026-10-24
+
+| Condição | Estado verificado em `5f482ce1` |
+| --- | --- |
+| 1 — OpenCV único | sem mudança desde #84F53R: `requirements/requirements-beta.txt` declara `opencv-python==5.0.0.93`; os perfis de requisitos ficam em `requirements/` desde `a42e18d8` |
+| 2 — instalação limpa | **não provada** — ver [E2E em máquina limpa](CLEAN_VM_E2E.md) |
+| 3 — E2E real | **não executado** para a reescrita da limpeza |
+
+Em 2026-10-23/24 (`5f482ce1`) a limpeza, a diagramação e o tratamento de SFX mudaram de
+comportamento por padrão: preenchimento LaMa local e comparação clássico × aprendido,
+releitura por OCR como portão de aceitação, texto encaixado no formato do balão e
+`TRANSLATE_SFX=True`. Detalhes em [Clean strategy](architecture/clean_strategy.md) e na
+[Documentação Técnica §16](technical/DOCUMENTACAO_TECNICA.md#16-limpeza-inpainting-e-renderização).
+A medição dessa reescrita foi feita com DeepL por harness de desenvolvedor em capítulos
+baixados, **não** por um E2E de produto pela UI. Pela regra acima, essa mudança ainda não
+tem a evidência que o freeze exige; a baseline `ee71cfa` e o job `902b149e` não descrevem a
+saída atual. O freeze **não** foi levantado: isso exige decisão explícita do owner após as
+três condições.
+
 ## Beta 0.9.1 — estado validado nesta fase (2026-09-25)
 
+> Registro histórico de 2026-09-25; o estado atual está em [Estado em 2026-10-24](#estado-em-2026-10-24).
 > Adendo ao freeze. Registra o que foi corrigido e comprovado fisicamente desde a base
 > acima. Nenhuma dependência de imagem/CV pinada mudou; o contrato do freeze continua ATIVO.
 

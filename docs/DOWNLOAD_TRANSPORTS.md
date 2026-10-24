@@ -1,9 +1,15 @@
 # Transportes de download e validação de páginas
 
-Duas lacunas que eu mesmo tinha registrado como abertas no relatório anterior, agora
-fechadas: a abstração de transporte e a validação por bytes.
+> **Base verificada:** `5f482ce1` (branch `main`) · **Revisado em:** 2026-10-24
+>
+> Código: `yomu/download/download_transport.py` (transportes, `DownloadLimits`,
+> `build_transports`), `yomu/download/pinned_requests.py` (pinning de destino),
+> `yomu/download/image_validation.py` (validação por bytes, `DuplicateTracker`) e
+> `yomu/download/comix_session.py` (clearance Comix). Este documento nasceu como registro do
+> fechamento de duas lacunas (abstração de transporte e validação por bytes); a seção abaixo é
+> o histórico do problema.
 
-## O buraco que existia
+## O buraco que existia (histórico)
 
 O downloader fazia:
 
@@ -27,6 +33,27 @@ dentro da rede. Validar a URL inicial não vale nada se um hop posterior não é
 `build_transports()` devolve na ordem `requests` → `browser_session` → `cloudscraper`
 quando este último foi autorizado. Todos compartilham o mesmo orçamento: um transporte não
 zera o limite do outro.
+
+```mermaid
+flowchart TD
+    B["build_transports(adapter, driver, page_url)"] --> R["RequestsTransport<br/>sempre presente"]
+    B --> Q{"driver aberto<br/>e page_url?"}
+    Q -->|sim| BS["BrowserSessionTransport<br/>cookies do domínio da página, em memória"]
+    Q -->|não| SKIP1["sem browser_session"]
+    B --> C{"ENABLE_CLOUDSCRAPER_TRANSPORT<br/>exatamente 1?"}
+    C -->|sim| CS["CloudscraperTransport<br/>import tardio; ausente vira source_not_ready"]
+    C -->|não| SKIP2["sem cloudscraper"]
+    R --> BUD["_BudgetTracker único do capítulo<br/>redirects, bytes, arquivos, duração"]
+    BS --> BUD
+    CS --> BUD
+    BUD --> PIN["pinned_request: socket no IP público validado,<br/>cada redirect revalidado"]
+    PIN --> IMG["validate_image_bytes + DuplicateTracker"]
+```
+
+Os três herdam de `RequestsTransport`, então todos instalam o pinning de destino
+(`install_pinned_requests`): cada conexão TCP vai para o endereço público validado daquele
+host/porta, `Host`, certificado e SNI continuam usando o hostname, e uma rota por proxy é
+recusada. A sessão também ignora proxy/netrc do ambiente (`trust_env = False`).
 
 ### Cloudscraper opcional
 
@@ -60,9 +87,17 @@ Quando o `BrowserSessionTransport` é usado, os cookies do Selenium são copiado
 - apenas em memória, nunca no banco e nunca em log;
 - limpos no `close()`.
 
+Exceção específica do Comix: para o adapter `comix`, `RequestsTransport` carrega o
+`cf_clearance` e o User-Agent que o **dono** obteve ao concluir uma verificação legítima, lidos
+de `%LOCALAPPDATA%\YomuSekai\comix_cf_cookie.json` (`yomu.download.comix_session`), e os aplica
+só ao domínio `.comix.to`. O valor nunca é registrado. Veja
+[Comix: fluxo com challenge](operations/comix_source_challenge.md).
+
 Teste verifica que o valor do cookie não aparece nem no `repr` do transporte.
 
 ## Limites
+
+Valores de `DownloadLimits`:
 
 | Limite | Padrão |
 | --- | --- |
@@ -106,9 +141,10 @@ Erro de rede é reduzido ao nome da classe da exceção.
 ## Limitações
 
 - `RequestsTransport`, `BrowserSessionTransport` e o `CloudscraperTransport` opt-in
-  compartilham as barreiras do caminho de download, mas não substituem política de egress do
-  navegador para URLs arbitrárias não confiáveis.
+  compartilham as barreiras do caminho de download (inclusive o pinning de DNS), mas não
+  substituem política de egress do navegador para URLs arbitrárias não confiáveis.
 - A validação por bytes é usada no caminho de download; a integração com o relatório de QA
   ainda não expõe os motivos de rejeição na UI.
-- Nenhum destes módulos foi exercitado contra um site real nesta tarefa: toda a cobertura é
-  hermética, com sessões falsas e DNS stubado.
+- Na tarefa que criou estes módulos, nenhum deles foi exercitado contra um site real: a
+  cobertura é hermética, com sessões falsas e DNS stubado. Esta revisão documental também não
+  executou downloads reais.

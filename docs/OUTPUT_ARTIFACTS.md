@@ -1,15 +1,20 @@
 # Saídas e artefatos
 
+> **Base verificada:** `5f482ce1` · **Revisado em:** 2026-10-24
+
 Este documento descreve o que os perfis atuais solicitam e como identificar os arquivos de uma
-execução. Para o usuário, o resumo é simples: **Automático** é o resultado para leitura/publicação;
-**QC Profissional** acrescenta material para revisão e finalização manual.
+execução. Na interface atual o usuário não escolhe o perfil diretamente: ele escolhe um cartão em
+**O que você quer gerar?** ([modos de saída](product/output_modes.md)), e o backend deriva o perfil.
+**Tradução pronta** usa o perfil `automatic`; **Completo** usa `professional_qc`; **Apenas Clean**,
+**Apenas tradução**, **Tradução + Clean** e **Personalizado** pedem só os artefatos das etapas
+escolhidas.
 
 ## Perfis
 
 | Perfil | Resultado solicitado |
 | --- | --- |
-| `automatic` — **Automático** | PDF traduzido (`final_pdf`) e imagens traduzidas (`translated_image`). |
-| `professional_qc` — **QC Profissional** | Os itens do Automático, imagens limpas (`clean_image`), PSD editável (`editable_psd`), Quality Report (`quality_report`) e Review Manifest (`review_manifest`). |
+| `automatic` — cartão **Tradução pronta** (rótulo antigo: Automático) | PDF traduzido (`final_pdf`) e imagens traduzidas (`translated_image`). |
+| `professional_qc` — cartão **Completo** (rótulo antigo: QC Profissional) | Os itens do Automático, imagens limpas (`clean_image`), PSD editável (`editable_psd`), Quality Report (`quality_report`) e Review Manifest (`review_manifest`). |
 
 O perfil é independente do modo de processamento. **Download-only** coleta e valida as páginas
 originais, sem OCR, tradução/provider ou YK, e força o perfil Automático sem produzir seus
@@ -17,17 +22,18 @@ artefatos de tradução.
 
 ## Artefatos e caminhos
 
-O Artifact Contract V2 (`artifact_contract.py`) define os caminhos canônicos relativos à raiz do
+O Artifact Contract V2 (`yomu/runtime/artifact_contract.py`) define os caminhos canônicos relativos à raiz do
 output:
 
 | Artefato | Caminho canônico | Uso |
 | --- | --- | --- |
-| PDF traduzido | `final/<slug>_ptbr.pdf` no resolver V2 | Leitura ou publicação. O pipeline atual ainda grava o PDF efetivo na raiz do output com o nome devolvido por `pdf_naming.py`; use o caminho do job/run. |
+| PDF traduzido | `final/<slug>_ptbr.pdf` no resolver V2 | Leitura ou publicação. O pipeline atual ainda grava o PDF efetivo na raiz do output com o nome devolvido por `yomu/export/pdf_naming.py`; use o caminho do job/run. |
 | Imagem traduzida | `images/translated/NNN.png` | Uma página lógica com tradução. |
 | Imagem limpa | `images/clean/NNN.png` | Arte sem lettering original, antes do texto traduzido. |
 | PSD editável | `psd/NNN.psd` | ORIGINAL, CLEAN e TEXT com Type Layers nativas. |
 | Quality Report | `qc/quality_report.json` no resolver V2 | Diagnóstico detalhado de qualidade e findings. O pipeline atual também grava `quality_report.json` e `.html` na raiz do output (ou `regression_report.*` em execução direcionada). |
 | Review Manifest | `qc/review_manifest.json` | Índice leve de QC, páginas e regiões ligadas à Review/PSD quando há identidade correspondente. |
+| Dados de tradução | `translation/translation.json` | Origem→alvo por região/página; entregável de **Apenas tradução** e **Tradução + Clean**, exibido na UI por **Ver tradução**. |
 
 O pipeline mantém também formatos e localizações legados por compatibilidade. Por exemplo,
 imagens traduzidas continuam em `pages/` e imagens limpas podem existir como `*_cleaned.png`,
@@ -67,8 +73,8 @@ Photoshop ou Photopea.
 
 ## PSD profissional
 
-O `editable_psd_writer.py` produz o `EDITABLE_PSD` atual com os grupos `ORIGINAL`, `CLEAN` e
-`TEXT`; as camadas de texto são Type Layers nativas. `professional_psd.py` é um caminho legado
+O `yomu/export/editable_psd_writer.py` produz o `EDITABLE_PSD` atual com os grupos `ORIGINAL`, `CLEAN` e
+`TEXT`; as camadas de texto são Type Layers nativas. `yomu/export/professional_psd.py` é um caminho legado
 separado e rasterizado, não o writer do contrato `EDITABLE_PSD`. Aviso ou substituição de fonte
 não implica rasterização. Não rasterize texto para economizar espaço.
 

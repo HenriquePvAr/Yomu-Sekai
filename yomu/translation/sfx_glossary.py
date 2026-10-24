@@ -6,7 +6,8 @@ present-tense action label ("*morde*"). The glossary is a data file
 (``assets/lexicon/sfx_en_pt.json``); a token is matched after collapsing
 repeated letters ("BAAANG" -> "BANG"), and the stretch, case and decoration
 (asterisks, punctuation) of the source are carried onto the result. Unknown
-sounds return ``None`` and go to the provider like any other text.
+sounds return ``None``; the pipeline then keeps the source lettering (a
+provider turns an unknown sound into a dictionary word, "PRESS" -> "IMPRENSA").
 """
 from __future__ import annotations
 

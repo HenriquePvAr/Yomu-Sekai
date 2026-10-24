@@ -1,5 +1,9 @@
 # Better Auth migration rollback plan
 
+> **Status: PARCIAL / not activated** (reviewed 2026-10-24, base `5f482ce1`). The Better Auth
+> cutover never happened; Supabase is the default and active provider. `migrate.ts` still throws.
+> See `docs/BETTER_AUTH_MIGRATION.md`.
+
 This task prepares migration tooling only. Do not run a remote cutover without an
 operator-approved backup and a dry-run report for the exact target environment.
 

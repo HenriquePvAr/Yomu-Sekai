@@ -1,5 +1,13 @@
 # Comunidade e armazenamento privado no Google Drive
 
+> **Revisado em:** 2026-10-24 · **Base verificada:** `5f482ce1`.
+> **Estado:** backend IMPLEMENTADO (`yomu/community/`, `yomu/community/storage/`). A tela
+> "Comunidade" está desligada no cliente (`COMMUNITY_ENABLED = false` em
+> `static/social_community.js`; a aba mostra "EM BREVE" e a view "EM DESENVOLVIMENTO"). O
+> botão "Publicar na comunidade" do histórico continua no código (`publicationAction` em
+> `static/tradutor_ui.js`, que chama `POST /api/community/publish`). Nenhum upload real ao
+> Drive foi verificado nesta revisão.
+
 O modelo de identidade, sessões, CSRF, políticas de visibilidade e bind seguro está em
 [`COMMUNITY_AUTHORIZATION.md`](COMMUNITY_AUTHORIZATION.md). Autorização sempre ocorre
 antes da construção do provider descrito neste documento.
@@ -12,7 +20,7 @@ mais antigo. Não confundir os dois:
 1. **Legado (SQLite + Drive)** — é o que este documento descreve: `/api/community/*`,
    `community_posts`/`community_files` em `.cache/runtime/community.sqlite3`, PDFs no
    Google Drive privado. Continua funcional e é o provider `local` na seleção abaixo.
-2. **Social (Supabase)** — `social_repository.py`/`social_http.py`/`supabase_social.py`,
+2. **Social (Supabase)** — `yomu/community/social_repository.py`/`social_http.py`/`supabase_social.py`,
    tabelas `public.works`/`public.chapters`/`private.chapter_assets` no Postgres do
    Supabase via Data API + RLS. É a arquitetura canônica alvo: **Supabase** é a fonte de
    verdade para autenticação, usuários, ownership, metadados de obra/capítulo,
@@ -27,7 +35,7 @@ Qual dos dois a interface do usuário mostra é decidido por `COMMUNITY_SOCIAL_P
 (`supabase` ou `local`) no backend — **nunca inferido pelo frontend** a partir de um
 elemento DOM (o painel `#communityFeed` em `ui/ui_shell.html` existe sempre, seja qual for
 o provider configurado) nem apenas pelo provider de autenticação (autenticação Supabase
-não implica provider social Supabase). `app_ui.py` calcula esse estado uma vez na
+não implica provider social Supabase). `yomu/ui/app.py` calcula esse estado uma vez na
 inicialização e o expõe, saneado, em `community.social` no `/api/ui/bootstrap`
 (`{provider, available, reason_code}` — nunca URL, chave, caminho ou exceção crua); o
 `reason_code` é um de `social_provider_not_configured`, `social_provider_unknown` ou
@@ -35,7 +43,9 @@ inicialização e o expõe, saneado, em `community.social` no `/api/ui/bootstrap
 monta a UI Supabase só quando `provider="supabase" && available`; quando `provider="local"`
 não toca no painel (a UI legada continua dona dele); em qualquer outro caso (indisponível
 ou desconhecido) falha fechado com um erro visível — nunca mostra o feed local
-silenciosamente como se fosse o remoto. Ver `docs/SOCIAL_COMMUNITY_UI.md`.
+silenciosamente como se fosse o remoto. Ver `docs/SOCIAL_COMMUNITY_UI.md`. Na base
+verificada, `static/social_community.js` retorna antes dessa decisão e mostra apenas o
+estado "EM DESENVOLVIMENTO", porque `COMMUNITY_ENABLED = false`.
 
 **Publicações do sistema legado não migram sozinhas.** `community_posts`/`community_files`
 não têm equivalente em `public.works`/`public.chapters`/`private.chapter_assets` — corrigir
@@ -67,7 +77,7 @@ explicitamente** para publicação são enviados ao Google Drive privado do admi
 
 ## Storage abstraction
 
-`community_storage.StorageProvider` define a interface (upload resumable, stream/range,
+`yomu/community/community_storage.py::StorageProvider` define a interface (upload resumable, stream/range,
 stat, trash, delete, exists, health). Implementações: `FakeStorageProvider` e
 `FilesystemStorageProvider` (testes/local), `GoogleDriveStorageProvider` (produção). Trocar
 por S3/R2 no futuro não exige mudar posts nem APIs.
@@ -170,19 +180,22 @@ tente controlar isso (`force_new_version`) é rejeitado com
 
 O storage pertence à conta Google do administrador, então usa **OAuth 2.0 de usuário**
 (não service account, que não pode ser dona de arquivos no Meu Drive). Use uma credencial
-OAuth do tipo **Desktop app**. `drive_auth.py` roda o fluxo oficial `InstalledAppFlow` com
+OAuth do tipo **Desktop app**. `yomu/community/storage/drive_auth.py` roda o fluxo oficial `InstalledAppFlow` com
 **redirect de loopback em `127.0.0.1` numa porta efêmera**, PKCE e acesso offline —
 **nunca** OOB/copiar-colar, porta fixa nem webview embutida. O backend **nunca** dispara
 OAuth durante uma requisição web.
 
 ```
-python drive_auth.py authorize            # reutiliza o refresh token salvo; login só se ainda não houver token
-python drive_auth.py authorize --force-consent # reparo/rotação explícita do refresh token
-python drive_auth.py status               # presenca/validade do token e config (nunca imprime valores)
-python drive_auth.py create-root-folder   # cria a pasta privada do app e imprime so o ID
-python drive_auth.py test-access          # confirma acesso a pasta raiz (nao faz upload)
-python drive_auth.py revoke --yes         # revoga online quando possivel e remove o token local
+python -m yomu.community.storage.drive_auth authorize            # reutiliza o refresh token salvo; login só se ainda não houver token
+python -m yomu.community.storage.drive_auth authorize --force-consent # reparo/rotação explícita do refresh token
+python -m yomu.community.storage.drive_auth status               # presenca/validade do token e config (nunca imprime valores)
+python -m yomu.community.storage.drive_auth create-root-folder   # cria a pasta privada do app e imprime so o ID
+python -m yomu.community.storage.drive_auth test-access          # confirma acesso a pasta raiz (nao faz upload)
+python -m yomu.community.storage.drive_auth revoke --yes         # revoga online quando possivel e remove o token local
 ```
+
+(Não existe mais `drive_auth.py` na raiz; o comentário de `.env.example` que cita
+`python drive_auth.py create-root-folder` está desatualizado.)
 
 Escopo mínimo `drive.file` (o app só vê arquivos que ele criou) — por isso a pasta raiz
 deve ser **criada pelo próprio app** (`create-root-folder`); uma pasta criada manualmente
@@ -197,7 +210,7 @@ backend não abre navegador sozinho.
 
 ## Reconciliação
 
-`community_storage_reconcile.py --community-db … --jobs-db … --mode scan|report|repair-safe`.
+`python -m yomu.community.community_storage_reconcile --community-db … --jobs-db … --mode scan|report|repair-safe`.
 Detecta post publicado sem arquivo, publishing sem job, upload em estado terminal,
 tamanho divergente, arquivo ausente/na lixeira, duplicatas. `scan`/`report` não alteram
 nada; `repair-safe` faz só correções não destrutivas. Ações destrutivas exigem confirmação
@@ -207,7 +220,7 @@ explícita separada. Não lista o Drive inteiro.
 
 `COMMUNITY_STORAGE_PROVIDER=google_drive`, `COMMUNITY_DRIVE_ROOT_FOLDER_ID`,
 `GOOGLE_OAUTH_CLIENT_ID/SECRET`, `GOOGLE_OAUTH_TOKEN_PATH`, e uma autorização única via
-`drive_auth.py authorize`. Localmente, o padrão `filesystem` mantém tudo privado em
+`python -m yomu.community.storage.drive_auth authorize`. Localmente, o padrão `filesystem` mantém tudo privado em
 `.cache/` sem Drive.
 
 ## Privacidade e moderação

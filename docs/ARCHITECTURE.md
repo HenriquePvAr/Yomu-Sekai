@@ -1,12 +1,13 @@
 # Arquitetura
 
-> **Base verificada:** `49eb66a` (branch `main`) · **Revisado em:** 2026-09-29
+> **Base verificada:** `5f482ce1` (branch `main`) · **Revisado em:** 2026-10-24
 
-> **Nota de reconciliação (2026-10-14):** o corpo abaixo descreve o runtime do layout raiz
-> daquele snapshot e não deve ser usado como mapa do pacote consolidado `yomu/`. Para o
-> estado desta candidata local, consulte [estado atual](consolidation/YOMU_CURRENT_PRODUCT_STATE.md),
-> [matriz de reconciliação](consolidation/YOMU_SOURCE_RECONCILIATION_MATRIX.md) e
-> [plano](consolidation/YOMU_CONSOLIDATION_PLAN.md). A candidata não é release.
+> **Caminhos de módulo.** A implementação vive no pacote `yomu/`. Na raiz restam apenas shims
+> de compatibilidade (`app_ui.py` → `yomu.ui.app`, `run_webtoon.py` → `yomu.commands.run_webtoon`,
+> `worker_service.py` → `yomu.runtime.worker_service`, `start_tradutor.py` →
+> `yomu.commands.start_tradutor`, `down.py` → `yomu.download.down`, entre outros). Este
+> documento cita os shims somente quando eles são o comando público; os demais módulos aparecem
+> pelo caminho real. Mapa completo em [Estrutura do repositório](architecture/REPOSITORY_STRUCTURE.md).
 
 Este documento descreve a arquitetura implementada no repositório. Ideias futuras aparecem somente quando identificadas como roadmap.
 
@@ -35,52 +36,62 @@ O Tradutor.IA é um pipeline orientado a artefatos. Cada etapa recebe dados veri
 
 ```mermaid
 flowchart LR
-    UI[app_ui.py] --> Bridge[ui_bridge.py]
-    Bridge --> Queue[(job_store.py)]
-    Queue --> Worker[worker_service.py]
-    Worker --> Runner[job_runner.py]
-    Runner --> CLI[run_webtoon.py]
-    CLI --> Orchestrator[benchmark_pipeline.py]
-    Launcher[process_launcher.py] -. supervisão opcional .-> CLI
-    Orchestrator --> Discovery[chapter_source.py + http_source_discovery.py]
-    Discovery --> Download[down.py]
-    Download --> Split[pdf.py: smart split]
-    Split --> OCR[ocr_engine.py]
-    OCR --> Groups[ocr_balloon.py]
-    Groups --> Translation[translator_deepl.py / translator_nvidia.py]
-    Translation --> Context[session_context.py: ledger e entidades]
-    Context --> Validation[semantic_fidelity.py + validação e retries]
-    Validation --> Art[art_text_inpainting.py / advanced_art_inpainting.py]
+    UI["yomu/ui/app.py<br/>(shim app_ui.py)"] --> Bridge["yomu/ui/ui_bridge.py"]
+    Bridge --> Queue[("yomu/runtime/job_store.py<br/>jobs.sqlite3")]
+    Queue --> Worker["yomu/runtime/worker_service.py<br/>(shim worker_service.py)"]
+    Worker --> Runner["yomu/runtime/job_runner.py"]
+    Runner --> CLI["run_webtoon.py<br/>(yomu/commands/run_webtoon.py)"]
+    CLI --> Orchestrator["yomu/pipeline/benchmark_pipeline.py"]
+    Launcher["yomu/runtime/process_launcher.py"] -. supervisão opcional .-> CLI
+    Orchestrator --> Discovery["yomu/download/sources/chapter_source.py<br/>+ yomu/download/http_source_discovery.py"]
+    Discovery --> Download["yomu/download/down.py"]
+    Download --> Split["yomu/export/pdf.py: smart split"]
+    Split --> OCR["yomu/ocr/ocr_engine.py"]
+    OCR --> Groups["yomu/ocr/ocr_balloon.py"]
+    Groups --> Translation["yomu/translation/providers/yomu_backend_provider.py<br/>(backend autenticado)"]
+    Translation --> Context["yomu/pipeline/session_context.py: ledger e entidades"]
+    Context --> Validation["yomu/translation/semantic_fidelity.py<br/>+ validação e retries"]
+    Validation --> Art["yomu/clean/inpainting/<br/>art_text_inpainting.py / advanced_art_inpainting.py"]
     Art --> Render[Tipografia e redraw]
     Render --> PostRender[Validação pós-render]
-    PostRender --> PDF[pdf.py: PDF e relatórios]
+    PostRender --> PDF["yomu/export/pdf.py: PDF e relatórios"]
     PDF --> Gate[Quality gate]
-    Gate --> Reader[pdf_reader.py: Leitor e Histórico]
+    Gate --> Reader["yomu/export/pdf_reader.py: Leitor e Histórico"]
 ```
 
 ## Entradas públicas
 
 ### Interface local
 
-`app_ui.py` inicia uma aplicação NiceGUI na porta `8080` por padrão. O frontend conversa com `ui_bridge.py`, que:
+`app_ui.py` (shim de `yomu.ui.app`) inicia uma aplicação NiceGUI na porta `8080` por padrão
+(`TRADUTOR_UI_PORT` sobrescreve). O frontend conversa com `yomu/ui/ui_bridge.py`, que:
 
-- valida URLs, modos e nomes de saída;
-- cria o job persistido no `job_store` e monta o comando de `run_webtoon.py` como lista de argumentos;
+- valida URLs, modos, plano de saída e nomes de saída;
+- cria o job persistido no `JobStore` (`yomu/runtime/job_store.py`) e monta o comando de
+  `run_webtoon.py` como lista de argumentos (`yomu.ui.ui_helpers.build_run_command`; no
+  executável congelado, `--internal-child pipeline`);
 - acompanha progresso, histórico, revisão e cancelamento lendo o banco;
 - mascara segredos antes de expor logs à interface.
 
-> **A UI não executa o pipeline.** Ela cria linhas em `.cache/runtime/jobs.sqlite3`; quem
-> reivindica e executa é o `worker_service.py`, num processo independente, que por sua vez
-> cria um `job_runner.py` isolado por capítulo. Fechar o navegador ou reiniciar `app_ui.py`
-> não interrompe um capítulo em andamento. Veja
+> **A UI não executa o pipeline.** Ela cria linhas em `jobs.sqlite3` dentro do runtime root
+> (`yomu.runtime.runtime_paths.runtime_root()`: padrão `%LOCALAPPDATA%\TradutorIA\runtime\`;
+> `TRADUTOR_RUNTIME_ROOT` sobrescreve). Quem reivindica e executa é o worker
+> (`yomu/runtime/worker_service.py`), num processo independente, que por sua vez cria um runner
+> isolado por capítulo (`python -u -m yomu.runtime.job_runner`). Fechar o navegador ou
+> reiniciar a UI não interrompe um capítulo em andamento. Veja
 > [Fila de worker persistente](WORKER_QUEUE.md) e
 > [Documentação Técnica §4–§9](technical/DOCUMENTACAO_TECNICA.md#4-arquitetura-de-execução).
 
-A UI tem seu próprio bridge assíncrono. Ela não usa automaticamente `process_launcher.py`.
+A UI tem seu próprio bridge assíncrono. Ela não usa automaticamente
+`yomu/runtime/process_launcher.py`.
 
 ### CLI
 
-`run_webtoon.py` é a entrada simplificada para o pipeline atual. Ele valida os argumentos, configura o modo de OCR, resolve a pasta de saída e chama `benchmark_pipeline.run_benchmark()`.
+`run_webtoon.py` (shim de `yomu.commands.run_webtoon`) é a entrada simplificada para o
+pipeline atual. Ele valida os argumentos, configura o modo de OCR, resolve a pasta de saída e
+chama `yomu.pipeline.benchmark_pipeline.run_benchmark()`. Flags reais:
+`python run_webtoon.py --help` (inclui `--local-folder`, `--output-format`,
+`--typesetting-mode`, `--download-only` e `--translation-provider`).
 
 Na interface, o usuário escolhe **Qualidade** ou **Download-only**. `fast` permanece aceito
 pela CLI como modo técnico/compatibilidade, mas não é uma opção da interface.
@@ -99,12 +110,14 @@ Sem `--force`, caches e progresso compatíveis podem ser reutilizados. `--downlo
 
 ### Launcher supervisionado
 
-`process_launcher.py` é o launcher rastreado para execuções CLI que precisam de supervisão fora da UI e de metadados claros de processo.
+`yomu/runtime/process_launcher.py` é o launcher rastreado para execuções CLI que precisam de
+supervisão fora da UI e de metadados claros de processo. Não há shim na raiz: ele é executado
+como módulo (`python -m yomu.runtime.process_launcher --help`).
 
 ```mermaid
 flowchart LR
-    L[process_launcher.py] --> J[Windows Job Object]
-    J --> P[Python: run_webtoon.py]
+    L["yomu/runtime/process_launcher.py"] --> J[Windows Job Object]
+    J --> P["Python: run_webtoon.py"]
     P --> D[Chrome, OCR e demais descendentes]
     L --> R[Diretório de runtime]
     R --> O[stdout e stderr]
@@ -121,7 +134,7 @@ $repo = (Get-Location).Path
 $runtime = ".cache\e2e_runtime\minha_execucao"
 $python = "$repo\.venv\Scripts\python.exe"
 
-& $python process_launcher.py `
+& $python -m yomu.runtime.process_launcher `
   --runtime-directory $runtime `
   --cwd $repo `
   --stdout-path "$runtime\stdout.log" `
@@ -149,13 +162,17 @@ flowchart LR
     Browser --> Done
 ```
 
-`down.discover_chapter_source` é o ponto de entrada usado tanto pelo preflight da UI
-(`ui_bridge.py`) quanto pela fase de fonte do worker (`worker_service.py`). Ele:
+`yomu.download.down.discover_chapter_source` é o ponto de entrada usado tanto pela análise
+pré-job da UI (`POST /api/ui/source/analyze` → `UiBridge.analyze_source_candidate` em
+`yomu/ui/ui_bridge.py`, executada numa thread do processo da UI com limite de 180 s) quanto
+pela fase de fonte do worker (`yomu/runtime/worker_service.py`). Ele:
 
 1. seleciona o adapter por host e valida/normaliza a URL;
-2. chama `http_source_discovery.discover_via_http`, que faz **um GET limitado e sem cookies**
-   e pede ao adapter para ler o HTML estático;
+2. chama `yomu.download.http_source_discovery.discover_via_http`, que faz **um GET limitado e
+   sem cookies** e pede ao adapter para ler o HTML estático;
 3. só inicia Chrome/Selenium (`analyze_chapter_source`) quando o passo 2 retorna `None`.
+   Na análise pré-job isso significa que o navegador pode subir no processo da UI; o
+   `start` do job em si não executa análise.
 
 O passo 2 retorna `None` — nunca levanta erro para um caso comum de "isto não se aplica" —
 quando o adapter não implementa coletor de HTML estático, quando o fetch limitado falha
@@ -196,7 +213,7 @@ Hello.
 
 ## Download e validação de entrada
 
-Quando o caminho de navegador é usado, `down.py` opera Selenium e Chrome headless para
+Quando o caminho de navegador é usado, `yomu/download/down.py` opera Selenium e Chrome headless para
 coletar os recursos do viewer. O downloader:
 
 - deduplica URLs e preserva a ordem observada;
@@ -210,14 +227,14 @@ Quando habilitado, o cache de download evita nova coleta para a mesma origem. O 
 
 ### Fonte específica e fallback controlado
 
-`chapter_source.py` sempre tenta primeiro um adapter específico. Quando não há adapter
+`yomu/download/sources/chapter_source.py` sempre tenta primeiro um adapter específico. Quando não há adapter
 registrado, uma URL HTTP(S) pública pode passar por `UniversalChapterAdapter`; isso é uma
 análise controlada, não uma declaração de suporte ao site. A URL, DNS e redirects são
 validados antes do navegador. Os recursos de imagem só são autorizados em memória depois
 de um cluster vencedor observado no leitor, e cada redirect de imagem volta a ser
 validado.
 
-O analisador em `universal_chapter_adapter.py` observa DOM, lazy loading, recursos já
+O analisador em `yomu/download/sources/universal_chapter_adapter.py` observa DOM, lazy loading, recursos já
 vistos pelo navegador, JSON inline, metadados CDP/performance sanitizados e canvas capturável.
 JSON pequeno e reconhecido de respostas que o navegador já recebeu pode ser analisado em memória;
 texto não é executado nem persistido. A decisão é explícita: score
@@ -245,9 +262,10 @@ O sistema não aciona load more, handlers de botão, carrosséis,
 APIs privadas nem usa miniaturas remotas; a única prévia possível é uma data URI local e limitada
 derivada de imagem DOM já carregada. Leitores que dependam desses mecanismos pedem adapter
 específico. A validação protege a navegação e as imagens selecionadas, mas não é
-um sandbox de todos os subrecursos que o navegador pode carregar ao renderizar uma página,
-nem fixa o IP final de `requests`; para URLs não confiáveis, o deploy precisaria de uma
-política de egress/interceptação adicional. Consulte [Adaptador universal de capítulos](UNIVERSAL_CHAPTER_ADAPTER.md)
+um sandbox de todos os subrecursos que o navegador pode carregar ao renderizar uma página.
+Os transportes `requests` fixam o socket TCP na resposta DNS pública validada
+(`yomu/download/pinned_requests.py`), mas isso não cobre o tráfego do navegador; para URLs
+não confiáveis, o deploy precisaria de uma política de egress/interceptação adicional. Consulte [Adaptador universal de capítulos](UNIVERSAL_CHAPTER_ADAPTER.md)
 para limites, perfis de evidência e limitações.
 
 O roteamento de fonte é decidido pelo adapter selecionado por host antes de qualquer
@@ -261,8 +279,8 @@ adapter/host seguro e classe de falha. O shell normal da aba "Nova tradução" p
 a superfície azul de processamento não deve aparecer em erro pré-job.
 
 Para Webtoons, a análise específica resolve slots lazy antes de formar `source_selection`.
-`webtoons_reader_bridge.py` adapta o driver Selenium já aberto para
-`lazy_slot_resolver.resolve_lazy_reader_slots`, relendo apenas imagens descendentes do reader e
+`yomu/download/webtoons_reader_bridge.py` adapta o driver Selenium já aberto para
+`yomu.download.lazy_slot_resolver.resolve_lazy_reader_slots`, relendo apenas imagens descendentes do reader e
 rolando somente dentro dos bounds do container. Placeholders 1x1 permanecem pendentes, nunca
 autorizam o host `webtoons-static.pstatic.net` e nunca entram no manifesto. Se a resolução fica
 incompleta, a fase de fonte termina como `incomplete_source_coverage`, sem iniciar runner e sem
@@ -279,22 +297,23 @@ normais do pipeline. Consulte [Entrada por pasta local](LOCAL_FOLDER_INPUT.md).
 
 ## Páginas lógicas
 
-Webtoons podem fornecer fatias muito altas ou com divisões inadequadas para OCR e PDF. `pdf.py` implementa o smart split, que reconstrói páginas lógicas com limites configuráveis de altura e preserva um relatório das fronteiras escolhidas.
+Webtoons podem fornecer fatias muito altas ou com divisões inadequadas para OCR e PDF. `yomu/export/pdf.py` implementa o smart split (`prepare_smart_webtoon_pages`; a variante incremental fica em `yomu/ocr/splitting/smart_split_incremental.py`), que reconstrói páginas lógicas com limites configuráveis de altura e preserva um relatório das fronteiras escolhidas.
 
-Essa transformação ocorre antes do OCR quando `SMART_WEBTOON_PDF_SPLIT=True`.
+Essa transformação ocorre antes do OCR quando `SMART_WEBTOON_PDF_SPLIT=True` (padrão).
 
 ## OCR híbrido
 
-`ocr_engine.py` fornece uma interface comum para RapidOCR, PaddleOCR completo, PaddleOCR Mobile e o caminho opcional de Tesseract.
+`yomu/ocr/ocr_engine.py` fornece uma interface comum para RapidOCR, PaddleOCR completo, PaddleOCR Mobile e o caminho opcional de Tesseract.
 
 Nos modos `fast` e `quality`, RapidOCR é o OCR primário da configuração Beta. O modo `quality`
 mantém os recursos de recuperação e validação mais caros, mas Paddle só participa como fallback
 opcional se o pacote estiver disponível e se a política de fallback o selecionar. Um fallback
 vazio ou destrutivo não pode apagar uma leitura útil do RapidOCR.
 
-O engine primário não depende do modo: `config.effective_ocr_engine()` retorna
-`config.BETA_OCR_ENGINE` (`"rapidocr"`) a menos que `TRADUTOR_OCR_ENGINE_OVERRIDE` nomeie
-explicitamente outro engine suportado. `run_webtoon.py` aplica essa resolução antes do
+O engine primário não depende do modo: `yomu.config.settings.effective_ocr_engine()` retorna
+`BETA_OCR_ENGINE` (`"rapidocr"`) a menos que `TRADUTOR_OCR_ENGINE_OVERRIDE` nomeie
+explicitamente outro engine do conjunto suportado (`BETA_OCR_ENGINES`, hoje só `rapidocr`).
+`run_webtoon.py` aplica essa resolução antes do
 download e falha fechado se o engine primário não estiver disponível — em vez de coletar o
 capítulo inteiro e só então produzir um erro de OCR por página.
 
@@ -302,7 +321,7 @@ No caminho RapidOCR:
 
 1. RapidOCR processa a página;
 2. reparos conservadores podem normalizar problemas estruturais sem traduzir o texto;
-3. grupos individuais recebem score em `ocr_balloon.py`;
+3. grupos individuais recebem score em `yomu/ocr/ocr_balloon.py`;
 4. uma região com leitura duvidosa pode executar **recuperação regional limitada com
    RapidOCR** sobre o recorte da própria região;
 5. se a leitura continuar ambígua, a região vai para revisão em vez de render;
@@ -313,12 +332,12 @@ O escalonamento legacy para Paddle (página ou região) é opt-in por
 regiões suspeitas e não é requisito para fechar qualidade Beta.
 
 Os metadados registram engine original, engine final, confidences, motivos de fallback,
-reparos e scores (`ocr_line_provenance.py`). O fallback solicita comparação; ele não fabrica
+reparos e scores (`yomu/ocr/ocr_line_provenance.py`). O fallback solicita comparação; ele não fabrica
 a leitura correta.
 
 ## Agrupamento e classificação
 
-`ocr_balloon.py` agrupa linhas visualmente relacionadas e classifica o grupo usando evidências textuais e de container. As classes principais são:
+`yomu/ocr/ocr_balloon.py` agrupa linhas visualmente relacionadas e classifica o grupo usando evidências textuais e de container. As classes principais são:
 
 - `speech`;
 - `narration`;
@@ -326,19 +345,38 @@ a leitura correta.
 - `decorative`;
 - `unknown`, quando a evidência não permite decisão segura.
 
-SFX são preservados por padrão (`TRANSLATE_SFX=False`). Elementos decorativos e grupos ignorados não entram automaticamente na tradução. A classificação também informa a estratégia de máscara e redraw.
+SFX são traduzidos por padrão (`TRANSLATE_SFX=True`): `yomu/translation/sfx_glossary.py` aplica o
+glossário local `assets/lexicon/sfx_en_pt.json` ("BANG" → "BAM"); um som que o glossário não conhece
+mantém o texto de origem e não é enviado ao provider. `TRANSLATE_SFX=0` preserva todos os SFX
+(a suíte de testes usa `0` no `conftest.py` raiz). Elementos decorativos e grupos ignorados não entram automaticamente na tradução. A classificação também informa a estratégia de máscara e redraw.
 
 ## Tradução e contexto
 
-O pipeline atual chama `get_translator("3")`, correspondente a texto-fonte em inglês.
+**IMPLEMENTADO — tradução sempre pelo backend autenticado.** Um job com tradução habilitada
+sempre atravessa o provider `yomu_backend` (`YomuBackendTranslationProvider`,
+`yomu/translation/providers/yomu_backend_provider.py`), injetado em
+`get_translator("3", translation_provider=...)` por
+`yomu.pipeline.benchmark_pipeline._resolve_translation_runtime`. O backend chama o provider do
+lado do servidor (a Edge Function `supabase/functions/translation-execute` usa a chave DeepL do
+servidor); a chave DeepL nunca fica no cliente. Se o backend não puder ser montado, o job falha
+com `yomu_backend_provider_unavailable` — não há fallback para um tradutor local. Jobs Quality
+exigem o UUID do dispositivo comercial verificado; sem ele a UI recusa o job antes de persistir
+(`commercial_device_id_missing`). Download-only e o plano `Apenas Clean` não traduzem e não
+inicializam provider.
 
-O provider padrão do produto é o **DeepL** (`ui_helpers.DEFAULT_TRANSLATION_PROVIDER = "deepl"`), resolvido por `translator_deepl.py`. `TRANSLATION_MODE` (default `nvidia`) é um eixo mais antigo e ortogonal: ele seleciona a *família* local/Google/NVIDIA, e um job sem provider explícito só recebe o default DeepL quando `TRANSLATION_MODE == "nvidia"` — assim uma instalação que roda deliberadamente `google` não é sequestrada por um default no qual nunca optou. Um provider pedido explicitamente sempre vence, e não há fallback silencioso entre providers: um job DeepL que não alcança a DeepL falha, não vira job Riva.
+`deepl` (`yomu.ui.ui_helpers.DEFAULT_TRANSLATION_PROVIDER`) é o rótulo do *motor remoto*
+registrado na proveniência; `--translation-provider` e `NVIDIA_TRANSLATION_PROVIDER` viraram
+metadado do pedido. `normalize_translation_provider_provenance` aceita `deepl` → `yomu_backend` e
+falha com `provider_mismatch` para qualquer outra combinação divergente.
 
-`translator_nvidia.py` atende `nemotron` (API compatível com OpenAI) e `riva` (contrato de prompt nativo). Os tradutores operam em lotes, respeitam limite de requisições, usam retry/backoff para falhas temporárias e gravam cache por entrada e configuração. Modos Google e NLLB permanecem como caminhos de compatibilidade no código, mas não são o fluxo recomendado da UI e da CLI atuais.
+**DEPRECIADO para jobs habilitados:** `translator_deepl.py`, `translator_nvidia.py`
+(`nemotron`/`riva`) e `translator_nllb.py` (Google/NLLB), em `yomu/translation/providers/`,
+continuam no código, mas a fábrica legada não é usada por um job habilitado. `TRANSLATION_MODE`
+(default `nvidia`) só afeta esses caminhos legados.
 
-Quando o contexto está habilitado, `session_context.py` mantém informações do capítulo em `session_context.json`. `--no-context` desativa esse comportamento; `--delete-context-after` remove o arquivo somente após a geração bem-sucedida do PDF.
+Quando o contexto está habilitado, `yomu/pipeline/session_context.py` mantém informações do capítulo em `session_context.json`. `--no-context` desativa esse comportamento; `--delete-context-after` remove o arquivo somente após a geração bem-sucedida do PDF.
 
-O refinamento natural PT-BR (`natural_ptbr_refinement.py`, provider NVIDIA/Nemotron) **não
+O refinamento natural PT-BR (`yomu/translation/natural_ptbr_refinement.py`, provider NVIDIA/Nemotron) **não
 faz parte do fluxo automático**. Ele é exposto como uma sugestão linguística explícita na
 superfície de revisão (`POST /api/ui/human-translation/refinement`), exige autorização
 explícita do dono do job e nunca aplica uma tradução por conta própria.
@@ -346,7 +384,7 @@ explícita do dono do job e nunca aplica uma tradução por conta própria.
 ## Memória de capítulo: terminologia e entidades
 
 Um capítulo não é uma sequência de regiões independentes: o mesmo nome precisa sair com a
-mesma forma da primeira à última página. `session_context.py` mantém duas memórias
+mesma forma da primeira à última página. `yomu/pipeline/session_context.py` mantém duas memórias
 deliberadamente separadas, com autoridades distintas.
 
 **Ledger de terminologia.** Um mapa compacto `origem → alvo`, uma entrada por termo único,
@@ -400,12 +438,12 @@ sequência de gates independentes:
 | --- | --- |
 | Qualidade lexical | candidato vazio, truncado, malformado ou fora do formato pedido |
 | Resíduo de origem | texto-fonte remanescente (inglês/espanhol) ou fragmento parcialmente traduzido |
-| Fidelidade semântica | `semantic_fidelity.py`: se o alvo preserva o sentido da fonte; um veredito inutilizável (`REVIEW_UNUSABLE`) impede o render |
+| Fidelidade semântica | `yomu/translation/semantic_fidelity.py`: se o alvo preserva o sentido da fonte; um veredito inutilizável (`REVIEW_UNUSABLE`) impede o render |
 | Terminologia | conflito com uma ligação autoritativa do ledger do capítulo |
 | Nome próprio e entidade | alteração de uma entidade já estabelecida no registro de personagens |
 | Proveniência de OCR | de qual engine e de qual recuperação veio a fonte que originou o candidato |
 
-Candidatos inválidos podem receber retries seletivos (`selective_review_retry.py`). Se
+Candidatos inválidos podem receber retries seletivos (`yomu/clean/ownership/selective_review_retry.py`). Se
 continuarem inválidos, o texto-fonte é preservado e o grupo é marcado para revisão. Não há
 reescrita silenciosa da resposta do provider.
 
@@ -413,15 +451,19 @@ reescrita silenciosa da resposta do provider.
 
 A reconstrução ocorre em duas camadas, com uma política de preservação acima de ambas.
 
-1. **Remoção do lettering de origem** (`art_text_inpainting.py`): máscara restrita ao texto,
+1. **Remoção do lettering de origem** (`yomu/clean/inpainting/art_text_inpainting.py` e o
+   caminho de limpeza em `yomu/ocr/ocr_balloon.py`): máscara restrita ao texto,
    análise de background, e preenchimento compatível ou inpainting local. `STRICT_MASK_BOUNDS`
    e os limites de expansão impedem que a máscara cresça sobre a arte.
-2. **Reconstrução avançada opcional** (`advanced_art_inpainting.py`): para regiões
+2. **Reconstrução avançada** (`yomu/clean/inpainting/advanced_art_inpainting.py`): para regiões
    texturizadas difíceis, um modelo local do tipo LaMa
    (`ADVANCED_ART_INPAINT_MODEL_ID`, hoje `anime_manga_lama_large_jit`). Contrato de runtime:
    os arquivos de modelo são **assets externos**, nunca código versionado; o modelo só é
    carregado após correspondência exata de SHA256; a inferência é estritamente local; e
-   **falha significa indisponível/revisão, nunca render forçado**.
+   **falha significa indisponível/revisão, nunca render forçado**. Com o asset presente, o
+   preenchimento aprendido de textura (`CLEAN_LEARNED_TEXTURE_FILL`, padrão ligado) e o último
+   recurso (`CLEAN_LEARNED_LAST_RESORT`) usam esse modelo; detalhes, gates e limites medidos em
+   [Clean strategy](architecture/clean_strategy.md).
 
 **Política de preservação.** Uma reconstrução pode ser comprovadamente não destrutiva e ainda
 assim ser visivelmente mais suave que a arte que substituiu. Esses são dois eixos distintos:
@@ -438,17 +480,19 @@ original visível a uma página com um alvo inseguro apresentado como correto.
 A tipografia é derivada da fonte, não escolhida arbitrariamente:
 
 - o estilo é inferido da lettering de origem da região
-  (`source_glyph_envelope.py`: envelope determinístico e fail-closed a partir dos pixels);
-- a seleção de fonte é consciente do papel da região (`font_fidelity.ROLE_FONT_FILES`): cada
+  (`yomu/clean/ownership/source_glyph_envelope.py`: envelope determinístico e fail-closed a partir dos pixels);
+- a seleção de fonte é consciente do papel da região (`yomu.clean.ownership.font_fidelity.ROLE_FONT_FILES`): cada
   papel semântico tem sua própria cadeia de candidatos de fonte **local**, em vez de
   colapsar num único bucket compartilhado, preservando hierarquia visual;
-- `font_fidelity.py` nunca baixa fonte e nunca chama provider: ele resolve apenas os
+- `font_fidelity` nunca baixa fonte e nunca chama provider: ele resolve apenas os
   candidatos disponíveis localmente, registra o arquivo que o Pillow realmente abriu e
   pontua o raster por pixels, não pelo nome da fonte;
 - o encaixe usa quebra de linha automática (`AUTO_LINE_WRAP`), redução de fonte
   (`AUTO_FONT_SHRINK`) entre `MIN_FONT_SIZE` e `MAX_FONT_SIZE`, e espaçamento de linha
   proporcional;
-- a colocação respeita `TEXT_SAFE_PADDING` e o envelope da região original.
+- a colocação respeita `TEXT_SAFE_PADDING` e o envelope da região original; dentro de um balão
+  fechado, `RENDER_FIT_BALLOON_SHAPE` (padrão ligado) quebra o texto na forma do balão, e
+  `RENDER_MATCH_SOURCE_SLANT` (padrão ligado) inclina o texto quando a fonte original é itálica.
 
 Depois do redraw, a validação visual mede alterações fora da máscara
 (`MAX_OUTSIDE_CHANGE_RATIO`), dano de borda de balão, overflow
@@ -460,9 +504,9 @@ Isto **não** é reprodução pixel-perfect da tipografia original, e o pipeline
 
 ## PDF
 
-`pdf.py` reúne as páginas finais válidas. A contagem do PDF é comparada com a contagem
-esperada pelo quality gate. `pdf_naming.py` é a única fonte do nome do arquivo, e
-`pdf_reader.py` lê as páginas de volta para o leitor interno sem nenhuma dependência de
+`yomu/export/pdf.py` reúne as páginas finais válidas. A contagem do PDF é comparada com a contagem
+esperada pelo quality gate. `yomu/export/pdf_naming.py` é a única fonte do nome do arquivo, e
+`yomu/export/pdf_reader.py` lê as páginas de volta para o leitor interno sem nenhuma dependência de
 renderização de PDF — o PDF é gerado com uma forma estreita e conhecida (uma imagem
 `/DCTDecode` por página), e servir uma página é entregar ao navegador o JPEG que já está
 dentro do artefato. Qualquer coisa fora dessa forma levanta `UnsupportedPdf` e o chamador cai
@@ -470,7 +514,7 @@ para o visualizador de PDF do próprio navegador.
 
 ## Cache e resume
 
-`pipeline_cache.py` separa os caches de download, precheck sem texto, OCR, tradução e página renderizada. As chaves incorporam hashes de imagem, engine, configuração relevante e versões internas do formato.
+`yomu/pipeline/pipeline_cache.py` separa os caches de download, precheck sem texto, OCR, tradução e página renderizada. As chaves incorporam hashes de imagem, engine, configuração relevante e versões internas do formato.
 
 Os JSONs críticos usam escrita atômica. O `run_signature` em `progress.json` permite reutilizar páginas concluídas apenas quando a execução é compatível. `--force` ignora os caches de download, OCR, tradução e renderização; ele não apaga o cache global.
 
@@ -479,7 +523,7 @@ Os JSONs críticos usam escrita atômica. O `run_signature` em `progress.json` p
 Uma execução completa cria, conforme a configuração:
 
 ```text
-output/<slug>/<run_id>/
+<output_root>/<slug>/<run_id>/
 ├── input/                       # imagens de origem ativas
 ├── pages/                       # páginas finais
 ├── progress.json                # progresso, status e run signature
@@ -494,8 +538,10 @@ output/<slug>/<run_id>/
 └── *.pdf                        # documento final
 ```
 
-Novos jobs da UI usam o nível `<run_id>` para manter reprocessamentos do mesmo capítulo
-separados. Saídas legadas em `output/<slug>/` permanecem aceitas pelo histórico.
+`<output_root>` é `yomu.runtime.runtime_paths.output_root()`: padrão
+`%LOCALAPPDATA%\TradutorIA\output`, sobrescrito por `TRADUTOR_OUTPUT_ROOT`. Novos jobs da UI
+usam o nível `<run_id>` para manter reprocessamentos do mesmo capítulo separados. Saídas legadas
+em `<output_root>/<slug>/` permanecem aceitas pelo histórico.
 
 O Artifact Contract V2 também define localizações canônicas para PDF, imagens e PSD; alguns
 writers mantêm aliases/saídas legadas. Consulte [Saídas e artefatos](OUTPUT_ARTIFACTS.md) e use
@@ -511,39 +557,46 @@ O PDF de um capítulo completo é nomeado pela obra e pelo capítulo, de modo qu
 <obra>_capitulo_<numero>.pdf
 ```
 
-`pdf_naming.py` é a única fonte do nome. A obra vem do título da série quando o pipeline o conhece e, caso contrário, do slug da série na URL do capítulo — o segmento do episódio nunca é usado como nome da obra. O número vem da metadata do capítulo, depois da URL, e só recorre ao identificador da execução quando o capítulo não tem número. O nome é sanitizado para o Windows: minúsculas, sem acentos, sem caracteres inválidos, sem travessia de caminho, sem nomes reservados e com tamanho limitado.
+`yomu/export/pdf_naming.py` é a única fonte do nome. A obra vem do título da série quando o pipeline o conhece e, caso contrário, do slug da série na URL do capítulo — o segmento do episódio nunca é usado como nome da obra. O número vem da metadata do capítulo, depois da URL, e só recorre ao identificador da execução quando o capítulo não tem número. O nome é sanitizado para o Windows: minúsculas, sem acentos, sem caracteres inválidos, sem travessia de caminho, sem nomes reservados e com tamanho limitado.
 
 A execução registra o caminho do PDF no `run_manifest.json` (`pdf_path`, `pdf_filename`), e a UI abre o arquivo por esse caminho em vez de remontar o nome. Saídas antigas continuam funcionando: elas usavam um nome genérico e são descobertas pelo caminho persistido ou pelo PDF presente na pasta. A convenção nova vale apenas para novas execuções — nenhum PDF existente é renomeado.
 
 ## Recursos e paralelismo
 
-`ocr_parallel.py` coordena workers de OCR. `adaptive_scheduler.py` pode ajustar concorrência a partir da memória e CPU observadas, enquanto `resource_monitor.py` registra amostras e relatórios. Os defaults mantêm paralelismo adaptativo e monitoramento detalhado desativados; ambos são opt-in pelo `.env`.
+`yomu/ocr/ocr_parallel.py` coordena workers de OCR. `yomu/runtime/adaptive_scheduler.py` pode ajustar concorrência a partir da memória e CPU observadas, enquanto `yomu/runtime/resource_monitor.py` registra amostras e relatórios. Os defaults mantêm paralelismo adaptativo e monitoramento detalhado desativados; ambos são opt-in pelo `.env`.
 
 ## Ciclo de vida do job
 
-A UI **não executa o pipeline**. Ela grava um job em `.cache/runtime/jobs.sqlite3`
-(`job_store.py`); `worker_service.py`, num processo independente, reivindica esse job
-atomicamente e cria um `job_runner.py` isolado por capítulo, que por sua vez executa
-`run_webtoon.py` como subprocesso com log próprio, progresso e heartbeat.
+A UI **não executa o pipeline**. Ela grava um job em `jobs.sqlite3` no runtime root
+(`yomu/runtime/job_store.py`); o worker (`yomu/runtime/worker_service.py`), num processo
+independente, reivindica esse job atomicamente e cria um runner isolado por capítulo
+(`yomu/runtime/job_runner.py`), que por sua vez executa `run_webtoon.py` como subprocesso com
+log próprio, progresso e heartbeat.
 
-`job_store.JobStatus` define **14 estados**, dos quais 4 são terminais:
+`yomu.runtime.job_store.JobStatus` define **15 estados**, dos quais 4 são terminais
+(`finished`, `review_required`, `failed`, `cancelled`). As transições permitidas estão em
+`ALLOWED_TRANSITIONS`; qualquer outra é rejeitada:
 
 ```text
 staging → queued → claiming → starting → running → { finished | review_required | failed | cancelled }
                                               ↑
         awaiting_source_review / source_analysis_ready   (revisão de páginas antes do OCR)
+        waiting_source_verification                       (fonte pediu verificação humana, ex.: challenge Comix)
         cancelling                                        (cancelamento em andamento)
         interrupted / resumable                           (crash duro, reconciliado na volta)
 ```
+
+O diagrama completo de transições está em [Fila de worker persistente](WORKER_QUEUE.md#estados-do-job).
 
 Consequências arquiteturais:
 
 - fechar o navegador ou reiniciar `app_ui.py` não interrompe um capítulo em andamento;
 - um worker que morre deixa o job em estado reconciliável, não em `running` fantasma;
 - a supervisão do worker pelo launcher é limitada por política (2s/5s/15s, 3 tentativas,
-  depois `degraded`), e o `process_launcher.py` persiste o exit code real controlando a
-  árvore de processos no Windows;
-- `resumable` tem API (`POST /api/ui/resume`) mas **ainda não tem controle na interface**.
+  depois `degraded`; `yomu/runtime/worker_supervisor.py`), e `yomu/runtime/process_launcher.py`
+  persiste o exit code real controlando a árvore de processos no Windows;
+- **IMPLEMENTADO:** a retomada usa `POST /api/ui/resume` e aparece na interface como o botão
+  **Retomar** no painel `#interruptedJobsPanel`, exibido só quando o backend marca `can_resume`.
 
 Detalhe completo em [Fila de worker persistente](WORKER_QUEUE.md) e
 [Documentação Técnica §8](technical/DOCUMENTACAO_TECNICA.md#8-máquina-de-estados-do-job).

@@ -1,6 +1,6 @@
 # Política de Manutenção da Documentação
 
-> **Base verificada:** commit `c81c798` · **Revisado em:** 2026-08-19
+> **Base verificada:** commit `5f482ce1` · **Revisado em:** 2026-10-24 (versão original: `c81c798`, 2026-08-19)
 > Esta política é obrigatória para qualquer mudança no projeto — humana ou automatizada.
 
 ---
@@ -21,7 +21,7 @@ A ordem de autoridade é sempre esta:
 2. Testes atuais
 3. Configuração atual (`.env.example`, `pytest.ini`, CI)
 4. UI atual (`ui/`, `static/`)
-5. Contratos de banco/migração (`supabase/migrations/`, `job_store.SCHEMA_VERSION`)
+5. Contratos de banco/migração (`supabase/migrations/`, `SCHEMA_VERSION` em `yomu/runtime/job_store.py`)
 6. Arquitetura de runtime local observada
 
 **Documentação histórica não é automaticamente autoritativa.** Quando um documento existente
@@ -36,7 +36,10 @@ corrigido. Não se preserva silenciosamente uma afirmação obsoleta.
 | [`docs/user/GUIA_DO_USUARIO.md`](user/GUIA_DO_USUARIO.md) | Guia do usuário final | Quem muda instalação, UI, fluxo, recursos, erros ou textos visíveis |
 | [`docs/README.md`](README.md) | Índice da documentação | Quem cria, move ou remove um documento |
 | `docs/*.md` (temas específicos) | Aprofundamento por assunto | Quem mexe naquele subsistema |
-| [`docs/DOCUMENTATION_AUDIT.md`](DOCUMENTATION_AUDIT.md) | Registro de auditoria | Quem executa uma auditoria de documentação |
+| [`docs/architecture/clean_strategy.md`](architecture/clean_strategy.md) | Fluxo atual de limpeza, reconstrução e diagramação | Quem muda máscara, preenchimento, portões de reconstrução ou render |
+| [`docs/consolidation/YOMU_CURRENT_PRODUCT_STATE.md`](consolidation/YOMU_CURRENT_PRODUCT_STATE.md) | Snapshot do estado do produto e da evidência | Quem fecha integração ou muda nível de evidência |
+| [`docs/DOCUMENTATION_AUDIT.md`](DOCUMENTATION_AUDIT.md) | Registro de auditoria (histórico) | Quem executa uma auditoria de documentação |
+| Registros de missão/auditoria (`M16_*`, `M20_*`, `PSD_*`, `beta_quality_revalidation.md` etc.) | Registro histórico datado | Ninguém reescreve; só se corrige o que induziria erro sobre o presente (§16) |
 | `README.md` (raiz) | Visão geral curta + links | Quem muda o posicionamento do projeto |
 | `CLAUDE.md` | Contrato permanente para agentes | Somente por decisão explícita |
 
@@ -103,6 +106,11 @@ Regras para capturas:
 | **PLANEJADO** | Não existe. **Jamais** descrito como disponível |
 | **DEPRECIADO** | Existe por compatibilidade; não é o caminho recomendado |
 
+Para evidência, use também os níveis do `CLAUDE.md`: `IMPLEMENTED`, `INTEGRATED`,
+`TESTED_OFFLINE`, `TESTED_FROZEN`, `PHYSICALLY_VERIFIED`, `EXTERNAL_GATE` e `DEFERRED`.
+Código ou mocks não autorizam status físico; medição por harness de desenvolvedor não é E2E
+de produto.
+
 Regras invioláveis:
 
 1. Nunca documentar um recurso como disponível porque foi planejado, existiu no passado,
@@ -117,7 +125,7 @@ Regras invioláveis:
 | --- | --- |
 | Comando | Executá-lo (ou pelo menos `--help`) contra o repositório |
 | Caminho de módulo/arquivo | Confirmar que existe no índice do Git |
-| Estado ou transição | Ler `job_store.py` |
+| Estado ou transição | Ler `yomu/runtime/job_store.py` |
 | Variável de ambiente | Confirmar em `.env.example` e no consumidor |
 | Rótulo de UI | Ler `ui/ui_shell.html` ou `static/*.js` |
 | Mensagem de erro | Ler o mapa de mensagens no frontend/backend |
@@ -166,6 +174,23 @@ repetidos. Reporte a SHA do commit de documentação separadamente, no relatóri
 ## 11. Portão de revisão antes do commit
 
 Antes de qualquer commit que mude comportamento:
+
+```mermaid
+flowchart TD
+    A["git diff"] --> B{"Toca gatilho da §4?"}
+    B -->|sim| C["Atualizar doc técnica"]
+    B -->|não| D{"Toca gatilho da §5?"}
+    C --> D
+    D -->|sim| E["Atualizar guia do usuário"]
+    D -->|não| F{"UI documentada mudou?"}
+    E --> F
+    F -->|sim| G["Capturar tela real<br/>ou documentar a lacuna"]
+    F -->|não| H["Verificar contra o repositório<br/>(§8) e marcar IMPLEMENTADO /<br/>PARCIAL / PLANEJADO / DEPRECIADO"]
+    G --> H
+    H --> I["Metadados: Base verificada /<br/>Revisado em"]
+    I --> J["git diff --check, links,<br/>Mermaid, segredos"]
+    J --> K["Declaração DOCUMENTATION IMPACT<br/>(§12)"]
+```
 
 1. Inspecionar `git diff`;
 2. Determinar o impacto em documentação;
@@ -216,6 +241,13 @@ Exemplos resolvidos, para calibrar o julgamento.
 | Adicionar índice numa tabela SQLite, sem mudança de contrato | Talvez | NÃO | NÃO |
 
 ## 14. Contratos de atualização futura
+
+> Estado em `5f482ce1`: o núcleo do updater (`yomu/runtime/update_manifest.py`,
+> `update_transport.py`, `update_installer.py`, `update_bootstrap.py`) e a licença Beta
+> (`yomu/auth/beta_license.py`) já existem; specs de build (`packaging/`) e
+> `tools/build_installer.py` também. Os contratos abaixo valem a partir de cada superfície
+> visível ao usuário (Setup, UI de atualização, tela de licença). O estado de cada um está na
+> [Documentação Técnica §30](technical/DOCUMENTACAO_TECNICA.md#30-empacotamento-updater-e-prontidão-para-beta).
 
 ### Quando o instalador (`Setup.exe`) existir
 
@@ -270,6 +302,19 @@ mover deliberadamente e registrar em [`DOCUMENTATION_AUDIT.md`](DOCUMENTATION_AU
 
 Documentação histórica com valor **não é apagada sem justificativa registrada**.
 
+### Registros históricos
+
+Relatórios de missão, auditoria ou E2E descrevem uma data e um commit. Eles não são
+reescritos. Quando um deles puder ser lido como estado atual, ganha no topo um banner curto:
+
+```markdown
+> **Registro histórico de <data>.** O estado atual está em <link>.
+```
+
+Corrige-se no corpo apenas o que induziria erro sobre o presente (caminho de módulo movido,
+default que mudou), sempre marcado como nota datada. Documentos vivos carregam os
+metadados da §10 e são verificados por inteiro.
+
 ## 17. Verificações leves
 
 Mudanças somente de documentação não exigem regressão completa da aplicação. Rodar:
@@ -279,7 +324,10 @@ git diff --check
 ```
 
 e conferir manualmente: links relativos válidos, imagens existentes, âncoras coerentes,
-zero segredos. Não adicionar dependências novas só para validar documentação.
+zero segredos. Diagramas Mermaid novos ou alterados devem renderizar; uma forma de checar
+sem adicionar dependência ao repositório é extrair o bloco para um arquivo temporário e rodar
+`npx --yes @mermaid-js/mermaid-cli@11.4.2 -i <arquivo.mmd> -o <saida.svg>`. Rótulos com
+caracteres especiais vão entre aspas. Não adicionar dependências novas só para validar documentação.
 
 O Markdown é a fonte de verdade. Exportar PDF/HTML é opcional e só se já existir um
 mecanismo limpo no repositório.

@@ -1,5 +1,14 @@
 # ayeT Rewarded Video (local integration)
 
+> **Status: PLANEJADO / desligado.** Reviewed 2026-10-24 · Verified base `5f482ce1`.
+> Verified in code: both Edge Functions `supabase/functions/rewarded-ad-session` and
+> `supabase/functions/rewarded-ad-callback` return HTTP 503 `rewarded_ads_disabled`
+> unconditionally (since commit `6fa7f203`, 2026-09-16); the HMAC/session logic below that
+> early return in the callback is currently unreachable. No client code (`static/`, `yomu/`)
+> calls these functions, and the rewards screen shows "Assistir anúncio" as "Em breve".
+> The text below describes the intended contract, not running behaviour. Provider facts
+> (SDK, `ads.txt`, CMP, hash format) come from ayeT documentation and were not re-verified here.
+
 The closed-beta rewarded flow is server-authoritative and remains disabled in
 production until the provider account and Supabase migration are explicitly
 configured. The client only requests a short-lived session; it never credits

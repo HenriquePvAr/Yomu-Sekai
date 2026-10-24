@@ -1,5 +1,12 @@
 # Retenção, restauração, lixeira e reconciliação dos PDFs sociais
 
+> **Revisado em:** 2026-10-24 · **Base verificada:** `5f482ce1`.
+> **Estado:** IMPLEMENTADO no backend (`yomu/community/social_asset_retention.py`,
+> `social_asset_reconcile.py`, `chapter_asset_repository.py`,
+> `scripts/social_asset_maintenance_cli.py`), coberto por `tests/test_social_asset_retention.py`.
+> A UI social que oferece "Desvincular"/restaurar está desligada no cliente
+> (`COMMUNITY_ENABLED = false` em `static/social_community.js`).
+
 Quando um PDF deixa de ser o arquivo ativo de um capítulo (**substituição** ou
 **desvinculação**), ele **não é apagado**. Passa a ser um *asset retido*, com prazo. O owner
 pode restaurá-lo dentro do prazo; só depois disso uma varredura manual pode movê-lo para a
@@ -9,7 +16,7 @@ pode restaurá-lo dentro do prazo; só depois disso uma varredura manual pode mo
 
 | Regra | Onde é garantida |
 | --- | --- |
-| Nunca apagar imediatamente em replace/unlink | `social_pdf_publishing.py` chama `retain_superseded_asset` / `retain_unlinked_asset` |
+| Nunca apagar imediatamente em replace/unlink | `yomu/community/social_pdf_publishing.py` chama `retain_superseded_asset` / `retain_unlinked_asset` |
 | Nunca apagar permanentemente | nenhum caminho chama `delete_file`; teste `test_no_permanent_delete_anywhere_in_the_retention_code` |
 | Nunca esvaziar a lixeira | idem |
 | Nunca mover para a lixeira arquivo ainda referenciado | `evaluate_for_trash` → `still_referenced` |
@@ -38,6 +45,9 @@ repositório** (fail-closed), de modo que um chamador que ignore a camada de ser
 barrado. Toda transição usa trava otimista (`version`) e grava no `social_asset_audit_log`.
 
 ## Configuração
+
+As duas variáveis são lidas por `yomu/community/social_asset_retention.py`, mas **não** estão
+listadas em `.env.example`.
 
 | Variável | Padrão | Efeito |
 | --- | --- | --- |
@@ -70,12 +80,16 @@ provider atual não implementa *untrash* e o sistema não finge que o arquivo vo
 ## CLI de manutenção (nunca automático)
 
 ```
-python social_asset_maintenance_cli.py retention-scan
-python social_asset_maintenance_cli.py retention-sweep            # dry-run
-python social_asset_maintenance_cli.py retention-sweep --apply
-python social_asset_maintenance_cli.py reconcile                  # dry-run
-python social_asset_maintenance_cli.py reconcile --apply
+python -m scripts.social_asset_maintenance_cli retention-scan
+python -m scripts.social_asset_maintenance_cli retention-sweep            # dry-run
+python -m scripts.social_asset_maintenance_cli retention-sweep --apply
+python -m scripts.social_asset_maintenance_cli reconcile                  # dry-run
+python -m scripts.social_asset_maintenance_cli reconcile --apply
 ```
+
+Execute a partir da raiz do repositório. `python scripts/social_asset_maintenance_cli.py`
+direto falha com `ModuleNotFoundError: yomu` (verificado com `--help`); o opcional `--db`
+aponta outro banco SQLite.
 
 Sem `--apply` nada é modificado. Cada execução grava um registro em
 `social_asset_reconcile_runs` com contagens (`scanned`, `safe`, `ambiguous`, `changed`,

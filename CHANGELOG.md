@@ -3,7 +3,29 @@
 All notable changes to Yomu Sekai (Tradutor IA) are recorded here. Dates are ISO-8601.
 This file records source-level changes; it is not a release/tag log.
 
-## [Unreleased] — 0.9.1 quality-freeze consolidation — 2026-09-25
+## [Unreleased] — main — 2026-10-24 (`5f482ce1`)
+
+### Changed — clean, render & SFX
+- Sound effects are translated by default (`TRANSLATE_SFX=True`) using a pt-BR onomatopoeia
+  glossary (`assets/lexicon/sfx_en_pt.json`); unknown sounds keep their original lettering.
+- New render flags (default `True`, code-only in `yomu/config/settings.py`):
+  `RENDER_FIT_BALLOON_SHAPE` (wrap to the balloon shape) and `RENDER_MATCH_SOURCE_SLANT`
+  (match measured source slant).
+- Evidence-based cleanup/reconstruction gates; `tests/test_cleanup_fixed_mask_reconstruction_red.py`
+  now passes and is a regular contract.
+
+### Changed — repository
+- Requirement profiles moved to `requirements/` (`requirements.txt` stays at the root;
+  `requirements/requirements-beta.txt` includes it via `-r ../requirements.txt`).
+- Root pointer stubs `PRODUCTION_SECRETS_REQUIRED.md` and `SEMANTIC_CLASSIFICATION_AUDIT.md`
+  removed; canonical copies live in `docs/operations/` and `docs/architecture/`.
+
+### Notes
+- Enabled translation jobs always go through the authenticated `yomu_backend` provider; the
+  CLI never calls DeepL directly (`--translation-provider` is metadata/guard).
+- Hermetic suite: ~6160 passed, 0 failed (`python -m pytest -q`).
+
+## 0.9.1 quality-freeze consolidation — 2026-09-25 (source-level, untagged)
 
 Consolidation of the Beta 0.9.1 quality-freeze work. No pinned image/CV dependency changed;
 the production behavior contract of the freeze is preserved. See

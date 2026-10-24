@@ -1,5 +1,11 @@
 # PSD editor compatibility matrix — Mission 15
 
+> **Registro histórico de 2026-09-29 (Missão 15).** O writer citado vive hoje em
+> `yomu/export/editable_psd_writer.py` (`write_editable_psd`); o caminho legacy é
+> `yomu/export/professional_psd.py`. Contrato atual do PSD:
+> [Documentação Técnica §26.3](technical/DOCUMENTACAO_TECNICA.md#263-psd-profissional-editável-v2--type-layers-nativas-missão-6).
+> Os PSDs atuais vêm do CLEAN reescrito em 2026-10-23/24, não revalidado neste registro. **Revisado em:** 2026-10-24 · **Base verificada:** `5f482ce1`
+
 **Status: PASS (owner-reported physical acceptance).** Structural validation
 passed on 2026-09-29. The physical results below were supplied by the owner
 after the original audit commit; no screenshots or additional observations were

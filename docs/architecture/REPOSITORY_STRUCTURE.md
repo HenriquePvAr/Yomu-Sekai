@@ -1,5 +1,7 @@
 # Estrutura do repositório Yomu
 
+> **Base verificada:** `5f482ce1` (branch `main`) · **Revisado em:** 2026-10-24
+
 Este documento descreve a organização atual do código e dos dados versionados. A auditoria
 linha a linha da raiz e o mapa de consumidores estão em [ROOT_STRUCTURE_AUDIT.md](ROOT_STRUCTURE_AUDIT.md)
 e [ROOT_DEPENDENCY_MAP.md](ROOT_DEPENDENCY_MAP.md). `main` é a linha de integração, não uma
@@ -21,7 +23,8 @@ flowchart TD
     R --> A[assets/<br/>lexicon, fontes, branding]
     R --> E[reports/ + research/ + experiments/<br/>evidências e estudos]
     R --> L[shims na raiz<br/>start_tradutor.py, run_webtoon.py,<br/>run_local_folder.py, desktop_app.py, ...]
-    Y --> Y1[ocr/] & Y2[clean/] & Y3[translation/] & Y4[pipeline/] & Y5[ui/] & Y6[download/] & Y7[export/]
+    Y --> Y1["ocr/"] & Y2["clean/"] & Y3["translation/"] & Y4["pipeline/"] & Y5["ui/"] & Y6["download/"] & Y7["export/"]
+    Y --> Y8["runtime/<br/>worker, JobStore, updater"] & Y9["review/"] & Y10["auth/ + community/"] & Y11["commands/ + desktop/<br/>implementação dos shims"]
 ```
 
 ## Árvore versionada

@@ -1,5 +1,17 @@
 # Yomu — plano seguro de organização/arquivamento
 
+> **REGISTRO HISTÓRICO — não é o estado atual.** O SHA "publicado" recomendado abaixo
+> (`ec9ca9e4`) foi superado; o checkout recomendado segue em `main`, hoje `5f482ce1`. Este arquivo registra a consolidação de
+> 2026-10-14/16 e é preservado como proveniência; seus HEADs, contagens de testes/builds e
+> recomendações valem para aquela data. Revisado em 2026-10-24 sobre `5f482ce1`: `main` e o ref
+> local `origin/main` estão em `5f482ce1`, 9 commits após `ec9ca9e4` (sem fetch nesta revisão);
+> desde então os perfis `requirements-*.txt` foram para `requirements/` e os ponteiros de raiz
+> `PRODUCTION_SECRETS_REQUIRED.md`/`SEMANTIC_CLASSIFICATION_AUDIT.md` foram removidos. Para o
+> estado vigente use a [Documentação Técnica](../technical/DOCUMENTACAO_TECNICA.md), a
+> [estrutura do repositório](../architecture/REPOSITORY_STRUCTURE.md) e o
+> [board](../status/board/index.html). Caminhos locais aparecem como placeholders
+> (`<PRIVATE_BACKUP_ROOT>`, `<LOCAL_YOMU_EXPERIMENTS>`, `<LOCAL_PROJECTS>`, `<CODEX_WORKTREES>`).
+
 **Estado:** plano, não execução. Nenhuma branch/worktree foi movida, arquivada ou removida. Toda limpeza física exige aprovação explícita posterior do owner.
 
 ## Checkout oficial recomendado

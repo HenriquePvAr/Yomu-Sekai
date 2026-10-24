@@ -1,5 +1,7 @@
 # Capturas de tela do Guia do Usuário
 
+> **Base verificada:** `5f482ce1` · **Revisado em:** 2026-10-24
+
 Diretório reservado para as imagens de [`docs/user/GUIA_DO_USUARIO.md`](../../user/GUIA_DO_USUARIO.md).
 
 **Vazio hoje.** Nenhuma captura foi feita: as telas reais só existem depois do login em um
@@ -17,7 +19,7 @@ Ver [Política de Documentação §6](../../DOCUMENTATION_POLICY.md#6-quando-as-
 - Legenda descritiva no guia, sempre;
 - Nome de arquivo estável e descritivo (`acesso.png`, `nova-traducao.png`,
   `progresso-pipeline.png`, `revisao-paginas.png`, `revisao-qualidade.png`,
-  `biblioteca.png`, `resultado-pdf.png`);
+  `biblioteca.png`, `resultado-pdf.png`, `capitulo-interrompido.png`, `atualizacoes.png`);
 - **Nunca fabricar** uma captura.
 
 ## Telas previstas
@@ -25,10 +27,12 @@ Ver [Política de Documentação §6](../../DOCUMENTATION_POLICY.md#6-quando-as-
 | Arquivo previsto | Tela |
 | --- | --- |
 | `acesso.png` | Tela de acesso / login |
-| `nova-traducao.png` | Nova tradução, com origem e opções |
+| `nova-traducao.png` | Nova tradução, com origem (URL pública / Pasta do capítulo / Imagens) e "O que você quer gerar?" |
 | `origem-validada.png` | Origem validada, botão de iniciar habilitado |
 | `progresso-pipeline.png` | Painel Pipeline durante a execução |
 | `revisao-paginas.png` | Páginas encontradas, aguardando confirmação |
 | `revisao-qualidade.png` | Revisão de qualidade com filtros |
 | `biblioteca.png` | Capítulos traduzidos |
 | `resultado-pdf.png` | Capítulo concluído com PDF disponível |
+| `capitulo-interrompido.png` | Painel "Processamento interrompido" com o botão Retomar |
+| `atualizacoes.png` | Aba Atualizações (Verificar atualizações) |

@@ -1,5 +1,7 @@
 # Segurança e limites de confiança
 
+> **Revisado em:** 2026-10-24 · **Base verificada:** `5f482ce1`.
+
 Este documento descreve as fronteiras implementadas no Tradutor.IA e, igualmente importante,
 o que elas **não** garantem. O projeto lida com URLs, páginas renderizadas, imagens e pastas
 locais; nenhuma dessas entradas deve ser considerada confiável só porque veio de uma UI local ou
@@ -11,7 +13,11 @@ de um host público.
 - Não inclua chaves, cookies, tokens, URLs assinadas ou caminhos pessoais em issues, relatórios
   ou commits.
 - Não há bypass de login, paywall, CAPTCHA, Turnstile, DRM, proteção de canvas ou bloqueio
-  anti-bot. Barreiras desse tipo terminam o fluxo com um estado codificado.
+  anti-bot. Barreiras desse tipo terminam o fluxo com um estado codificado. Exceção
+  controlada (IMPLEMENTADO): no Comix, o próprio usuário pode concluir a verificação
+  Cloudflare num Chrome real com perfil dedicado; o app apenas reutiliza localmente o
+  `cf_clearance` obtido por ele, sem solver automático (ver
+  [Documentação Técnica](technical/DOCUMENTACAO_TECNICA.md), "Clearance Cloudflare").
 - Um adapter específico ou um score alto são evidência de estrutura de leitor; não são prova de
   autorização, disponibilidade futura ou qualidade de tradução.
 - O modo padrão de testes é offline. Smokes com rede são manuais, opt-in e separados da coleta
@@ -40,11 +46,12 @@ como confiável e autorizada.
 
 ## Adapters de fonte
 
-`chapter_source.py` resolve primeiro adapters registrados e só então usa o fallback universal.
+`yomu/download/sources/chapter_source.py` resolve primeiro adapters registrados e só então usa o fallback universal.
 
 | Fonte | Fronteira |
 | --- | --- |
 | Webtoons | adapter específico com hosts e seletores próprios |
+| Comix | adapter específico com hosts próprios; pode reutilizar o clearance Cloudflare obtido pelo usuário, guardado só localmente em `%LOCALAPPDATA%\YomuSekai\` |
 | VortexScans | host literal `vortexscans.org` e path de capítulo restrito; instância nova por execução para que autorizações de recursos não vazem entre jobs |
 | Universal | fallback para URL pública não reclamada; exige evidência agrupada e completa antes de download |
 | Pasta local | fonte distinta, sem URL, com política de caminhos e snapshot interno |
@@ -102,7 +109,7 @@ Os transportes compartilham orçamento de capítulo: timeout, redirects, bytes p
 totais, quantidade de arquivos e duração. Cada resposta é validada por tipo e bytes; páginas HTML,
 desafios e dados que não decodificam como imagem não entram como páginas.
 
-`BrowserSessionTransport` pode copiar cookies do domínio literal do leitor para memória durante a
+`BrowserSessionTransport` (`yomu/download/download_transport.py`) pode copiar cookies do domínio literal do leitor para memória durante a
 mesma execução. Eles não são gravados em banco ou relatório e são limpos no fechamento.
 `CloudscraperTransport` é opcional, exige exatamente `ENABLE_CLOUDSCRAPER_TRANSPORT=1`, usa os
 mesmos limites e não altera a política de challenge. Ele não é um mecanismo de evasão e uma flag

@@ -1,5 +1,16 @@
 # Fundação do banco social (Supabase / PostgreSQL)
 
+> **Estado:** schema IMPLEMENTADO como migrations versionadas; recurso de Comunidade **não
+> disponível ao usuário** (a UI está desligada — `COMMUNITY_ENABLED = false` em
+> `static/social_community.js`; a aba "Comunidade" mostra "EM BREVE"/"EM DESENVOLVIMENTO").
+> **Revisado em:** 2026-10-24 · **Base verificada:** `5f482ce1`.
+> Este documento descreve a fase inicial (migrations `20260716120000_social_schema.sql` e
+> `20260716120100_social_rls.sql`). Migrations posteriores, ainda ativas, alteraram o que segue:
+> `20260717120000_fix_chapter_read_policy.sql` (policy de `SELECT` de `chapters`),
+> `20260722120000_public_profile_identity.sql` (colunas extras em `profiles`) e as migrations
+> de agosto de publicação/legado, que criaram mais tabelas no schema `private`. Não foi
+> verificado, nesta revisão, se o projeto Supabase ativo tem essas migrations aplicadas.
+
 Esta fase cria **apenas o banco**: schema, constraints, índices, triggers, RLS e testes.
 Nenhuma interface, upload, Storage, migração de dados locais ou role administrativa é
 introduzida aqui. As migrations são **puramente aditivas** (sem `DROP`/`TRUNCATE`).
@@ -50,8 +61,11 @@ erDiagram
 - **draft / private**: legível **somente pelo owner** da obra.
 - **archived**: não aparece para não-owners.
 - **anônimo nunca lê** conteúdo community nem private.
-- Capítulo é visível quando `public.can_read_chapter(id)` — owner da obra, ou obra e
-  capítulo ambos `community`, ambos não deletados.
+- Capítulo é visível para o owner da obra, ou quando obra e capítulo são ambos `community`,
+  ambos não deletados. Desde `20260717120000_fix_chapter_read_policy.sql`, a policy de
+  `SELECT` de `chapters` avalia as próprias colunas do capítulo mais uma subquery em `works`
+  (para funcionar em `INSERT ... RETURNING`); `public.can_read_chapter(id)` continua usada
+  pelas policies de `comments` e `comment_likes`.
 
 ## Regras de propriedade
 
@@ -75,6 +89,10 @@ erDiagram
 
 ## Schema privado e Google Drive
 
+- Migrations posteriores adicionaram ao schema `private`: `legacy_migration_sources`,
+  `legacy_publication_migrations`, `legacy_publication_migration_events`,
+  `legacy_storage_upload_reservations`, `community_publication_artifacts`,
+  `community_source_work_mappings` e `community_source_chapter_mappings`.
 - `private.chapter_assets` guarda `storage_provider`, `storage_file_id`, `mime_type`,
   `byte_size`, `checksum_sha256`. **Nenhum file id do Drive existe no schema público.**
 - `anon` e `authenticated` **não têm** `USAGE` no schema `private` nem grants nas suas
@@ -118,6 +136,8 @@ supabase db push              # aplica as migrations aditivas
 
 - `supabase/tests/database/00_structure_test.sql` — tabelas, schemas, colunas/tipos, PKs,
   FKs, unique, RLS habilitada, policies esperadas, e privilégios do schema privado.
+- `supabase/tests/database/02_…` a `05_…` cobrem a proveniência de publicações legadas
+  (fora do escopo desta fase).
 - `supabase/tests/database/01_rls_policies_test.sql` — 35 cenários comportamentais com
   `USER_A`, `USER_B` e anônimo (troca de role + claims JWT), tudo em transação com
   `rollback` (não deixa dados). Cobre leitura community/private, propriedade, comentários e

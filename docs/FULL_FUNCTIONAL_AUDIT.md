@@ -1,5 +1,13 @@
 # Auditoria funcional — fontes de capítulo e submissão de jobs
 
+> **Revisado em:** 2026-10-24 · **Base verificada:** `5f482ce1` · Documento vivo (auditoria
+> documental; nenhuma fonte externa foi executada). Módulos citados: `yomu/download/sources/chapter_source.py`
+> (registro `ADAPTERS`/`select_adapter`), `yomu/download/sources/universal_chapter_adapter.py`,
+> `yomu/download/down.py`, `yomu/ui/ui_bridge.py`, `yomu/runtime/job_store.py`,
+> `yomu/runtime/job_runner.py`, `yomu/export/output_manifest.py`; `app_ui.py` (→ `yomu/ui/app.py`),
+> `run_webtoon.py` e `run_local_folder.py` (→ `yomu/commands/`) existem na raiz como entry
+> points de compatibilidade.
+
 ## Escopo e método
 
 Esta é uma auditoria documental da implementação atual do caminho de fonte de capítulo, da
@@ -31,6 +39,23 @@ homologação de uma fonte externa.
 6. O worker recebe comando em lista de argumentos e somente inicia o pipeline depois de o job
    atingir estado enfileirado.
 
+```mermaid
+flowchart TD
+    A["UI/CLI: uma única origem"] --> B{"URL ou pasta local?"}
+    B -->|pasta local| L["Validação de bytes + snapshot<br/>referência opaca"]
+    B -->|URL| C{"Adapter específico?<br/>Webtoons / VortexScans / Comix"}
+    C -->|sim| E["Análise com contrato comum<br/>coleta, cluster, score, manifesto"]
+    C -->|não, URL pública| U["UniversalChapterAdapter"] --> E
+    E --> F{"Resultado"}
+    F -->|alta confiança| Q["Seleção automática"]
+    F -->|média| R["awaiting_source_review<br/>antes de OCR"]
+    F -->|"incompleto / challenge /<br/>auth / canvas / cross-origin"| X["Falha codificada<br/>sem capítulo parcial"]
+    R -->|aprovado| Q
+    Q --> J["Job em queued"]
+    L --> J
+    J --> W["Worker inicia o pipeline<br/>(argv em lista)"]
+```
+
 Nenhuma etapa converte uma URL genérica em fonte “homologada”, nem converte caminho local em URL
 de arquivo.
 
@@ -38,14 +63,15 @@ de arquivo.
 
 | Área | Comportamento atual | Evidência disponível | Status |
 | --- | --- | --- | --- |
-| Registro HTTP(S) | Webtoons e VortexScans são específicos; outros hosts públicos podem seguir para UniversalChapterAdapter | testes de seleção/host em tests/test_chapter_sources.py | COBERTO_HERMETICAMENTE |
+| Registro HTTP(S) | Webtoons, VortexScans e Comix são específicos (`ADAPTERS` em `chapter_source.py`); outros hosts públicos podem seguir para UniversalChapterAdapter. `GenericImageChapterAdapter` é só um template, não registrado nem usado como fallback | testes de seleção/host em tests/test_chapter_sources.py e tests/test_comix_adapter.py | COBERTO_HERMETICAMENTE |
 | Contrato de adapter | hooks para espera, coletores DOM/rede/JSON, cluster, score, manifesto, comando e erro sanitizado | testes de contrato/fixtures em tests/test_chapter_sources.py e tests/test_universal_chapter_adapter.py | COBERTO_HERMETICAMENTE |
 | Análise específica | adapters específicos passam pelo mesmo contrato de análise e manifesto aceito, sem atalho DOM legado | inspeção de chapter_source.py e down.py; testes de adapter | IMPLEMENTADO |
 | Resolução lazy Webtoons | slots `pending_lazy` são resolvidos com o driver Selenium já aberto antes de `source_selection`; placeholders não entram no manifesto | tests/test_webtoons_reader_bridge.py com driver falso, progresso, timeout, cancelamento e E2E sintético | COBERTO_HERMETICAMENTE |
+| Comix | adapter específico com resolver dinâmico por browser quando o preflight HTTP não acha imagens; challenge Cloudflare pode ser resolvido **pelo owner** em Chrome real e o `cf_clearance` reutilizado localmente — sem solver automático (ver [Adapters de fonte](SOURCE_ADAPTERS.md#comix) e Documentação Técnica §11) | tests/test_comix_*.py (adapter, materialização, challenge, clearance) | COBERTO_HERMETICAMENTE |
 | VortexScans | host literal vortexscans.org, path de capítulo restrito, seletores próprios e grants de recurso por instância | fixtures/DNS falso em tests/test_chapter_sources.py | COBERTO_HERMETICAMENTE |
 | Fallback universal | DOM, lazy attributes, JSON reconhecido, Shadow DOM aberto, iframe same-origin, canvas exportável e eventos de rede já observados | fixtures/driver fake em tests/test_universal_chapter_adapter.py | COBERTO_HERMETICAMENTE |
 | CDP/performance | metadados sanitizados e JSON pequeno já recebido podem contribuir; texto não é executado e corpos não são persistidos | fixtures de performance/CDP no teste do adapter universal | COBERTO_HERMETICAMENTE |
-| Revisão visual de fonte | somente data URI local e limitada derivada de imagem DOM já carregada; sem URL/fetch remoto; CORS/tainted ou fonte apenas de rede ficam sem miniatura, mas mantêm metadados | test_review_thumbnails_are_bounded_data_uris_and_never_source_urls e contrato estático de UI em tests/test_ui_integration.py | COBERTO_HERMETICAMENTE |
+| Revisão visual de fonte | somente data URI local e limitada derivada de imagem DOM já carregada; sem URL/fetch remoto; CORS/tainted ou fonte apenas de rede ficam sem miniatura, mas mantêm metadados | test_review_thumbnails_are_bounded_data_uris_and_never_source_urls em tests/test_universal_chapter_adapter.py e contrato estático de UI em tests/test_ui_integration.py | COBERTO_HERMETICAMENTE |
 | Polling da revisão | para o mesmo job aguardando revisão, não rerenderiza o DOM e preserva exclusão/reordenação na aba atual; reload/troca de job não é persistência | contrato estático de shouldRenderSourceReview em tests/test_ui_integration.py | COBERTO_HERMETICAMENTE |
 | Paginação genérica limitada | somente fallback universal: href same-origin/same-path com query numérica N+1, sem click; limite de 24 avanços/45 s e agregação de candidatos aceitos | PaginatedReaderSafetyTests em tests/test_downloader_regressions.py | COBERTO_HERMETICAMENTE |
 | Perfil universal | dica por host exato, expira, não aumenta score nem concede acesso; criação depende de opt-in de configuração e seleção fresca | tests/test_source_profile.py e lógica de job_runner.py | COBERTO_HERMETICAMENTE |
@@ -85,7 +111,7 @@ resultados explícitos:
 | review_required_medium_confidence | permanece em awaiting_source_review antes de OCR |
 | incomplete_download | não oferece capítulo parcial |
 | unsupported_low_confidence | não baixa páginas |
-| challenge/authentication/canvas/cross-origin reader | encerra de modo codificado, sem contorno |
+| challenge/authentication/canvas/cross-origin reader | encerra de modo codificado, sem contorno (no Comix, o challenge vira o estado recuperável `waiting_source_verification` até o owner concluir a verificação) |
 
 O browser pode ajudar a observar recursos que já foram carregados, mas o fallback não tenta APIs
 privadas, não executa JSON/texto extraído nem atravessa iframe cross-origin. Ele só tem paginação
@@ -144,7 +170,7 @@ de produção para URLs não confiáveis ainda requer política de egress/isolam
 | Clicar em controles, load more, carrossel ou slider | não implementado; adapter específico necessário |
 | Paginação além do href same-origin/same-path com query N+1 | não implementado; adapter específico necessário |
 | Ler iframe cross-origin ou Shadow DOM fechado | não implementado; não há contorno |
-| Resolver CAPTCHA/login/DRM/paywall | não implementado; fluxo para com motivo codificado |
+| Resolver CAPTCHA/login/DRM/paywall | não implementado; fluxo para com motivo codificado. O Comix só reaproveita um clearance obtido pelo próprio owner |
 | Homologar qualquer site público | não prometido |
 | Confirmar Vortex contra site real | NÃO_EXECUTADO_AQUI; requer smoke autorizado separado |
 | Confirmar OCR/tradução/PDF reais com pasta local | NÃO_EXECUTADO_AQUI; o teste integrado é sintético |

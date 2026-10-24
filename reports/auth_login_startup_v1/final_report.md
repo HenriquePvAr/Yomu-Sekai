@@ -30,7 +30,7 @@ Resultado: todo build limpo (worktree, CI, clone) passa a empacotar a arte → l
 - Regressão completa de 5807 testes: N/A — nenhuma lógica de código mudou (apenas 2 binários versionados + negação de gitignore).
 
 ## Entregável físico
-EXE buildado do worktree (com a arte) via `.venv-beta` PyInstaller 6.22.2 → `C:\Users\henri\YomuExperimental\auth-login-startup-physical-v1\dist\YomuSekai\`. Aberto com profile de teste limpo e isolado para confirmação visual do owner.
+EXE buildado do worktree (com a arte) via `.venv-beta` PyInstaller 6.22.2 → `<LOCAL_YOMU_EXPERIMENTS>\auth-login-startup-physical-v1\dist\YomuSekai\`. Aberto com profile de teste limpo e isolado para confirmação visual do owner.
 
 **AWAITING_OWNER_CONFIRMATION** — não declarar PASS físico antes do owner ver o login com a arte.
 

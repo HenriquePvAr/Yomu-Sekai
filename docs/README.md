@@ -1,16 +1,28 @@
 # Documentação do Tradutor IA
 
-> **Base publicada revalidada:** `121d6285a487a3e2b1a43bc5b504f79e696a75ed` (`origin/main`) · **Código consolidado testado:** `9e8bdfa` · **Revisado em:** 2026-10-15
+> **Base verificada:** `5f482ce1` (`main`) · **Revisado em:** 2026-10-24
 >
-> O comportamento de produção está sob **[Quality Freeze](QUALITY_FREEZE.md)**.
+> O [Quality Freeze](QUALITY_FREEZE.md) continua nominal: a limpeza e o render de `5f482ce1`
+> mudaram o comportamento de produção e ainda não passaram pelo E2E de produto que o freeze exige.
 
-> A branch de reconciliação é trabalho local, não release nem atualização remota. O estado vigente, a matriz de proveniência e o plano estão em [estado atual](consolidation/YOMU_CURRENT_PRODUCT_STATE.md), [matriz](consolidation/YOMU_SOURCE_RECONCILIATION_MATRIX.md) e [plano](consolidation/YOMU_CONSOLIDATION_PLAN.md); o [board por domínio](status/board/index.html) é um mapa operacional, não substitui os contratos técnicos.
-
-> O código validado no snapshot `9e8bdfa` passou em 6.011 testes Python e 48 frontend; build onedir inspecionada e selftest interno RapidOCR passou. A branch local não é release nem atualização remota. O estado atual registra a distância contra `origin/main`, as disposições seletivas e os gates físicos ainda sem prova.
+> Os documentos de [consolidação](consolidation/YOMU_CURRENT_PRODUCT_STATE.md) e o
+> [board por domínio](status/board/index.html) são registros operacionais e históricos; o estado
+> vigente está nos documentos primários abaixo e na tabela do [`CLAUDE.md`](../CLAUDE.md).
 
 > Estados de evidência: `IMPLEMENTED` descreve código; `INTEGRATED` descreve composição no snapshot; `TESTED_OFFLINE` e `TESTED_FROZEN` identificam o tipo exato de validação; `PHYSICALLY_VERIFIED` exige artefato/operação física correlacionada; `EXTERNAL_GATE` depende de serviço, identidade ou autorização externa; `DEFERRED` não está habilitado como produto.
 
 Esta é a página inicial da documentação. Comece pelo documento certo para o seu papel.
+
+```mermaid
+flowchart LR
+    U[Usuário / tester] --> G[Guia do Usuário]
+    U --> T[Guia do tester · Bug reporting · Known issues]
+    D[Desenvolvedor] --> TD[Documentação Técnica]
+    D --> INS[Instalação · Configuração · Desenvolvimento · Testes]
+    D --> ARQ[Arquitetura · Worker · Fontes · Clean]
+    A[Agente automatizado] --> C[CLAUDE.md + Política de Documentação]
+    R[Release] --> REL[Release · Update e signing · E2E máquina limpa]
+```
 
 ---
 
@@ -49,12 +61,15 @@ Esta é a página inicial da documentação. Comece pelo documento certo para o 
 
 ### Arquitetura e execução
 
-- [Arquitetura histórica do layout raiz](ARCHITECTURE.md) — snapshot de 2026-09-29; para o pacote consolidado, consulte o [estado atual](consolidation/YOMU_CURRENT_PRODUCT_STATE.md) e a [matriz de reconciliação](consolidation/YOMU_SOURCE_RECONCILIATION_MATRIX.md)
+- [Arquitetura](ARCHITECTURE.md) — processos, pacote `yomu/`, tradução via backend e caminhos de runtime
 - [Desenvolvimento](DEVELOPMENT.md) — setup, execução, testes, dependências externas, empacotamento e riscos conhecidos
 - [Estrutura do projeto](architecture/REPOSITORY_STRUCTURE.md) — localização do código, contratos da raiz, testes, ferramentas e pesquisa
 - [Fluxo de desenvolvimento](DEVELOPMENT_WORKFLOW.md) — comandos de validação após mudanças
 - [Política de artefatos](ARTIFACT_POLICY.md) — conteúdo versionado e outputs externos
 - [Fila de worker persistente](WORKER_QUEUE.md) — processos, estados, cancelamento e recuperação
+- [Estratégia de limpeza (Clean)](architecture/clean_strategy.md) — máscaras, preenchimento, LaMa, gates e fallback
+- [Modos de saída](product/output_modes.md) — o que cada perfil entrega
+- [Operação](operations/comix_source_challenge.md) — desafio Cloudflare do Comix; demais notas em [`operations/`](operations/)
 
 ### Fontes de capítulo
 
@@ -76,8 +91,13 @@ Esta é a página inicial da documentação. Comece pelo documento certo para o 
 - [M20 — cobertura de tradução e integridade CLEAN](M20_RC_BLOCKER_HOTFIX.md) — ordem de reservation/retry, falhas sistêmicas e remoção independente do texto-fonte
 - [Quality Freeze](QUALITY_FREEZE.md) — o que está congelado, a evidência e como sair do freeze
 - [Taxonomia semântica e auditoria linguística](architecture/SEMANTIC_CLASSIFICATION_AUDIT.md)
+- Pesquisa (fora do produto): [Gemini safe fallback v2](research/GEMINI_SAFE_FALLBACK_V2.md), [metadados de Clean seguro](research/SAFE_CLEAN_QUALITY_METADATA_V1.md), [contrato de candidatos de treino](research/TRAINING_CANDIDATE_CONTRACT_V1.md)
 
 ### Comunidade, autenticação e armazenamento
+
+> A UI da Comunidade está desligada no cliente (**EM BREVE**); o backend existe. O login Supabase
+> só funciona com a UI aberta em `http://127.0.0.1:8080` — origem liberada no projeto de auth.
+
 
 - [Autenticação Supabase](SUPABASE_AUTH.md)
 - [Autorização da comunidade](COMMUNITY_AUTHORIZATION.md)
@@ -119,41 +139,24 @@ em que foram escritos e **não** substituem os documentos primários:
 
 ---
 
-## Estado resumido do produto — snapshot histórico
-
-> A tabela abaixo veio de uma avaliação anterior e não foi revalidada como estado atual na M18.
-> Suas afirmações de licenciamento, distribuição, instalador, updater e OpenCV são contexto
-> histórico, não status de release. A M18 não executou uma auditoria de release. Capacidades
-> atuais de fontes e outputs estão nos documentos primários acima.
+## Estado resumido do produto (2026-10-24, `5f482ce1`)
 
 | Área | Estado |
 | --- | --- |
-| Pipeline ponta a ponta | ✅ implementado, sob [Quality Freeze](QUALITY_FREEZE.md) |
-| Descoberta de fonte HTTP-first | ✅ implementado — usada pelas fontes cujo adapter a suporta |
-| Fallback de navegador (Chrome/Selenium) | ✅ implementado — caminho normal das demais fontes |
-| OCR RapidOCR como engine primário | ✅ implementado |
-| PaddleOCR | ⛔ desligado por padrão — compatibilidade legacy opt-in |
-| Tradução DeepL como provider padrão | ✅ implementado |
-| Ledger de terminologia e registro de personagens | ✅ implementado |
-| Fila persistente e worker independente | ✅ implementado |
-| Detecção de crash duro e reconciliação | ✅ implementado |
-| Supervisão do worker pelo launcher | ✅ implementado |
-| Isolamento hermético dos testes | ✅ implementado |
-| Reconstrução visual de arte | ⚠️ funcional; fidelidade em regiões texturizadas continua eixo aberto |
-| Qualidade semântica/natural PT-BR | ⚠️ aberta — tradução gramatical pode perder sentido sem gate automático |
-| Refinamento natural PT-BR (Nemotron) | ⚠️ **não automático** — sugestão manual e explicitamente autorizada na revisão |
-| Leitor PDF integrado | ✅ implementado (aba **Leitor**, ação **LER** no Histórico) |
-| Histórico | ✅ implementado |
-| Comunidade (Supabase + Drive) | ✅ implementado, fail-closed se não configurado |
-| Licenciamento de tester | ✅ schema/RLS/RPC remotos aplicados; primeiro tester real ainda não criado |
-| Retomada de job interrompido pela UI | ✅ implementada (TDD #56) — botão **Retomar** para os jobs marcados `can_resume` |
-| Instalador para usuário final | ⛔ não existe — sem spec de build no repositório |
-| Atualizador | ⚠️ parcial — staging/ativação atômica/rollback existem; canal assinado e UI pendentes |
+| Pipeline ponta a ponta | ✅ implementado; Clean/render reescritos em `5f482ce1` (ver [Quality Freeze](QUALITY_FREEZE.md)) |
+| OCR | ✅ RapidOCR primário; PaddleOCR só como legacy opt-in (`OCR_LEGACY_PADDLE_FALLBACK`) |
+| Tradução | ✅ todo job habilitado usa o backend Yomu (`yomu_backend`), que chama a DeepL no servidor |
+| SFX | ✅ traduzidos por glossário local (`TRANSLATE_SFX=True`); sons desconhecidos mantêm o original |
+| Fila persistente, worker e supervisão | ✅ implementados |
+| Retomada de job interrompido pela UI | ✅ botão **Retomar** para jobs `can_resume` |
+| Leitor PDF e Histórico | ✅ implementados |
+| Comunidade | ⚠️ parcial — backend existe; UI desligada no cliente |
+| Licença de tester | ⚠️ parcial — gate fail-closed; nenhum entitlement real validado |
+| Atualizador | ✅ código e aba **Atualizações**; manifest assinado no canal é gate externo |
+| Instalador | ⚠️ parcial — spec/script existem; nenhum `Setup.exe` validado |
 | Validação em Windows limpo | ⛔ não provada |
-| Variante única de OpenCV em runtime | ⛔ não convergida — ver `OPENCV-VARIANT-SHADOWING-001` |
 
-Detalhamento em [Desenvolvimento](DEVELOPMENT.md),
-[Documentação Técnica §2](technical/DOCUMENTACAO_TECNICA.md#2-escopo-atual-do-produto)
+Detalhamento em [Documentação Técnica §2](technical/DOCUMENTACAO_TECNICA.md#2-escopo-atual-do-produto)
 e [§29 Dívida técnica](technical/DOCUMENTACAO_TECNICA.md#29-dívida-técnica-conhecida).
 
 ---

@@ -1,5 +1,7 @@
 # Autenticação Supabase (community)
 
+> **Estado:** IMPLEMENTADO (provedor padrão). **Revisado em:** 2026-10-24 · **Base verificada:** `5f482ce1`.
+
 ## Backend ativo após o cutover local (2026-09-29)
 
 O runtime local do Yomu Sekai usa o projeto **Yomu Sekai** (`ybxwjiycujminbwbdtlb`)
@@ -13,12 +15,14 @@ O novo projeto não possui a Edge Function `profile-media`. Profile Media també
 removida do runtime local e seu source órfão não permanece neste repositório. O backend
 legado continua preservado como rollback; nenhuma remoção foi feita nele.
 
-Os provedores de autenticação são selecionados por `COMMUNITY_AUTH_PROVIDER`
-(resolvido em `community_auth.build_auth_provider`):
+Os provedores de autenticação são selecionados por `AUTH_PROVIDER` (tem precedência; lido
+pelo código, não listado em `.env.example`) ou `COMMUNITY_AUTH_PROVIDER`, resolvidos em
+`yomu/community/community_auth.py::build_auth_provider` (sem valor → `supabase`):
 
 - `supabase` — **padrão**; JWT de usuário verificado criptograficamente por JWKS;
 - `local` — sessão de operador em loopback, sem dependência de rede;
-- `better_auth` — serviço em `apps/auth-service/`, atrás de proxy same-origin;
+- `better_auth` — opcional, PARCIAL/não ativado; serviço em `apps/auth-service/`, atrás de
+  proxy same-origin (ver [BETTER_AUTH_MIGRATION.md](BETTER_AUTH_MIGRATION.md));
 - `local_test` — provedor exclusivo de teste.
 
 Configuração incompleta **falha fechada**: nunca há queda silenciosa para o provedor local.
@@ -49,6 +53,11 @@ Você precisa ter feito no painel (não é automatizado por este projeto):
     SUPABASE_SITE_URL=http://127.0.0.1:8080
     SUPABASE_REDIRECT_URL=http://127.0.0.1:8080/auth/callback
 
+- No runtime desktop/empacotado, `yomu/desktop/app.py` lê `config/public-runtime.json`
+  (apenas `supabase_url` e `publishable_key`) e injeta `SUPABASE_URL`,
+  `SUPABASE_PUBLISHABLE_KEY`, `SUPABASE_EXPECTED_AUDIENCE=authenticated` e
+  `BETA_LICENSE_PROVIDER=supabase` no ambiente do processo filho da UI, sem sobrescrever
+  valores já definidos. Nenhum segredo de servidor é lido desse arquivo.
 - A **URL** e a **publishable key** são públicas por design — o backend as expõe em
   `GET /api/community/auth/config` só para o browser criar o cliente do SDK.
 - A **secret key nunca** chega ao frontend, nunca é retornada por endpoint, nunca
@@ -61,6 +70,8 @@ Você precisa ter feito no painel (não é automatizado por este projeto):
 
 `SupabaseAuthProvider` recebe `Authorization: Bearer <access token>` e:
 
+Implementação: `yomu/auth/supabase_auth.py` (`SupabaseAuthConfig`, `SupabaseAuthProvider`).
+
 1. faz o parsing estrito do header (um único Bearer, formato JWS compacto, tamanho
    limitado);
 2. lê o header do JWT e exige `alg` na allow-list (`ES256`/`RS256`) e um `kid`;
@@ -71,15 +82,19 @@ Você precisa ter feito no painel (não é automatizado por este projeto):
 5. só então cria `RequestPrincipal(authenticated=True, auth_source="supabase")` com
    `user_id = sub` e **role comum** (nunca admin/moderator vindos de metadata editável).
 
-O JWKS é buscado sob demanda (nunca no import), com timeout, cache com TTL, limite de
+O JWKS é buscado sob demanda (nunca no import), com timeout, cache com TTL (300 s), limite de
 tamanho e no máximo um refresh por rotação de `kid` (sem loop de refresh). Qualquer falha
 de JWKS **falha fechado**: a requisição fica não autenticada, nunca aceita.
 
 ## Fluxo do frontend
 
 1. o browser busca `/api/community/auth/config` e cria o cliente oficial do SDK
-   (`@supabase/supabase-js`, versão fixada) com URL + publishable key;
-2. login/cadastro/logout pela UI mínima no cabeçalho;
+   (`@supabase/supabase-js` 2.58.0, empacotado localmente em `static/vendor/`, sem CDN)
+   com URL + publishable key (`static/supabase_auth.js`, carregado por
+   `static/auth_provider.js`);
+2. login/cadastro/recuperação pela tela de autenticação em página cheia
+   (`#authSurface` em `ui/ui_shell.html`, lógica em `static/auth_ui.js`); o cabeçalho
+   mostra estado e botões `Entrar`/`Sair`;
 3. o SDK guarda e renova a sessão; o token corrente é anexado como `Bearer` nas chamadas
    ao backend (nunca persistido manualmente, nunca logado);
 4. Cadastro usa confirmação de endereço como etapa separada: o redirect de signup marca

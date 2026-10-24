@@ -1,8 +1,9 @@
 # Modos de saída e pipeline seletivo
 
-> Estado: os **cinco modos executam de verdade** e agora têm **interface de presets**:
-> `Tradução pronta`, `Apenas Clean`, `Apenas tradução`, `Tradução + Clean`, `Profissional`
-> e `Personalizado`. Base verificada: `b4da199`. Revisado em: 2026-10-04.
+> Estado: **IMPLEMENTADO** — os presets executam de verdade e têm **interface**:
+> `Tradução pronta`, `Apenas Clean`, `Completo` (preset `profissional`), `Apenas tradução`,
+> `Tradução + Clean` e `Personalizado`; `Apenas download` é escolhido em "Modo de processamento".
+> **Base verificada:** `5f482ce1` · **Revisado em:** 2026-10-24.
 
 ## Interface — "O que você quer gerar?" (divulgação progressiva)
 
@@ -54,8 +55,8 @@ chamado, se há consumo de YK, qual perfil de artefatos é produzido e qual o fo
 
 | Preset | Etapas | Tradução/YK | Estado |
 | --- | --- | --- | --- |
-| **Tradução pronta** | traduz + limpa + aplica texto + PDF | sim (1 YK/pág.) | IMPLEMENTADO (perfil `automatic`) |
-| **Profissional** | tudo + PSD editável + QC + revisão | sim | IMPLEMENTADO (perfil `professional_qc`) |
+| **Tradução pronta** | traduz + limpa + aplica texto + PDF | sim (1 YK por capítulo, custo padrão) | IMPLEMENTADO (perfil `automatic`) |
+| **Completo** (preset `profissional`) | tudo + PSD editável + QC + revisão | sim | IMPLEMENTADO (perfil `professional_qc`) |
 | **Apenas Clean** | remove o texto, entrega páginas limpas (PNG) | **não — 0 provedor, 0 YK** | IMPLEMENTADO (render clean, sem typeset) |
 | **Tradução + Clean** | traduz e limpa, **sem aplicar o texto** (PNG) | sim | IMPLEMENTADO (CLEAN/TYPESET desacoplados) |
 | **Apenas tradução** | só os dados de tradução (JSON), sem imagens | sim | IMPLEMENTADO (`output_format=translation`) |
@@ -86,7 +87,7 @@ como um job **concluído e útil**, não como falha por ausência de PDF/PNG.
 ## Por que "Apenas Clean" não cobra YK
 
 `Apenas Clean` define `translation_enabled=false`. No limite real do provedor
-(`benchmark_pipeline._resolve_translation_runtime`) isso significa **nenhum objeto de
+(`yomu/pipeline/benchmark_pipeline.py`, `_resolve_translation_runtime`) isso significa **nenhum objeto de
 provedor é instanciado** e o commit de carteira (único ponto de consumo de YK) está dentro
 do ramo `if translation_enabled` — portanto um run de limpeza nunca chama o provedor nem
 consome YK. Provado em `tests/test_output_plan.py`.
@@ -119,13 +120,14 @@ automáticos não têm esse env e tomam exatamente o caminho de antes (zero regr
 job com plano explícito ativa os gates (render clean-only, persistência só de CLEAN, PDF
 desligado, manifesto com artefatos pedidos pelo plano).
 
-## Próximos passos (PLANEJADOS — não implementados)
+## Itens antes listados como próximos passos
 
-1. **UI de presets**: superfície para escolher o preset/etapas, reusando o componente de
-   cartão `output-profile-card`; envia `output_plan` no payload. O backend já aceita, valida
-   e **executa** os cinco modos de qualquer cliente.
-2. **Tela de conclusão / progresso**: exibir só os artefatos solicitados e marcar os demais
-   como `NÃO SOLICITADO` (não como ausente/falha), lendo `effective_operations`.
-3. **Re-export**: a partir de um `Apenas tradução`/`Tradução + Clean` concluído, gerar outro
-   formato (typeset/PSD) reutilizando a tradução persistida — 0 provedor, 0 YK adicional.
-
+1. **UI de presets** — **IMPLEMENTADO**: a superfície "O que você quer gerar?" descrita acima
+   (`ui/ui_shell.html`, `#outputPlanField`) envia `output_plan` no payload.
+2. **Tela de conclusão / progresso plan-aware** — **IMPLEMENTADO**: etapas e artefatos não
+   solicitados simplesmente não aparecem (não há rótulo `NÃO SOLICITADO`), lendo
+   `effective_operations` / `completion_summary.artifacts`.
+3. **Re-export** — **PARCIAL**: a Revisão de qualidade oferece **GERAR NOVAMENTE** em PNG, PDF
+   ou PSD reutilizando a tradução persistida, com "custo adicional: 0 YK". Não foi verificado
+   neste documento um fluxo dedicado de re-export a partir de um job `Apenas tradução`/`Tradução +
+   Clean` concluído.

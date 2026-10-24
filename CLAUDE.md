@@ -4,6 +4,7 @@ Instruções permanentes para agentes (Claude, Codex e equivalentes) que trabalh
 repositório.
 
 > **Criado em:** 2026-08-19, sobre o commit `c81c798`.
+> **Revisado em:** 2026-10-24 · **Base verificada:** `5f482ce1` (branch `main`).
 > Este arquivo é aditivo. Ao editá-lo, **preserve** as seções existentes; não substitua
 > instruções de agente não relacionadas.
 
@@ -87,7 +88,8 @@ commit**.
 
 Nada entra na documentação sem verificação contra o repositório: comandos devem ser
 executados (ao menos `--help`), caminhos de módulo devem existir no índice do Git, estados
-devem ser lidos de `job_store.py`, variáveis devem estar em `.env.example` e no consumidor,
+devem ser lidos de `yomu/runtime/job_store.py` (`JobStatus`), variáveis devem estar em `.env.example` e no consumidor
+(ajustes finos de CLEAN/render, como `RENDER_FIT_BALLOON_SHAPE`, existem só em `yomu/config/settings.py` por decisão),
 rótulos de UI devem ser lidos de `ui/ui_shell.html` ou `static/*.js`. Um comando que o
 repositório não suporta mais **não pode** aparecer na documentação.
 
@@ -118,17 +120,42 @@ WHY: <motivo — ex.: refatoração interna sem mudança de comportamento, API, 
 - Quando `Setup.exe` existir: o guia do usuário ganha download, instalação, primeira
   execução, avisos do Windows, atalhos, desinstalação, reparo e atualização — na **mesma**
   mudança — e as instruções temporárias de instalação por repositório saem do guia.
-- Quando o updater assinado existir: doc técnica ganha manifest, verificação de assinatura
-  e de SHA, versão mínima, substituição atômica, rollback e estados de falha; o guia do
-  usuário ganha apenas como a atualização aparece, o que clicar e o que fazer se falhar.
+- Updater assinado: **já existe** no código e na UI (aba **Atualizações**). Esta obrigação
+  está em vigor: doc técnica cobre manifest, verificação de assinatura e de SHA, versão
+  mínima, substituição atômica, rollback e estados de falha; o guia do usuário cobre apenas
+  como a atualização aparece, o que clicar e o que fazer se falhar. A publicação do manifest
+  no canal continua gate externo.
+- `Setup.exe`: o script Inno Setup (`packaging/TradutorIA.iss`) e `tools/build_installer.py`
+  existem, mas nenhum instalador foi gerado/validado nem é versionado; a obrigação acima
+  dispara quando houver instalador distribuído.
 - Quando o licenciamento de tester existir: doc técnica ganha arquitetura, fronteira de
   confiança e expiração/revogação/dispositivo; o guia do usuário ganha login, status,
   expiração e mensagem de renovação. Nenhum segredo administrativo em nenhum dos dois.
 
 ### Estado do produto e evidência
 
-O texto de estado abaixo era específico de um commit antigo e foi removido para não contradizer
-o runtime modular. Consulte o [snapshot atual da reconciliação](docs/consolidation/YOMU_CURRENT_PRODUCT_STATE.md),
+O snapshot de 2026-10-10 (outra branch) foi substituído pela tabela abaixo, reverificada no
+código. Ela envelhece: confira o código antes de assumir que um valor não mudou.
+
+> **Snapshot verificado em:** 2026-10-24, branch `main` @ `5f482ce1`.
+
+| Recurso | Estado verificado |
+| --- | --- |
+| Tradução | **IMPLEMENTADO** — todo job habilitado usa `yomu_backend` (`yomu/translation/providers/yomu_backend_provider.py`, `benchmark_pipeline._resolve_translation_runtime`), motor remoto DeepL na Edge Function `supabase/functions/translation-execute`. O cliente nunca chama a DeepL; `--translation-provider` é metadado/guard; `riva`/`nemotron` num job habilitado → `provider_mismatch`. `ui_helpers.DEFAULT_TRANSLATION_PROVIDER = "deepl"` é só rótulo; o seletor de provider da UI está oculto |
+| Provider de auth padrão | **supabase** no código (`community_auth.build_auth_provider`); o `.env.example` traz `local` para desenvolvimento. Este snapshot **não** afirma que o projeto Supabase remoto está acessível (problema operacional, não de código) |
+| Estados de job | 15 em `yomu/runtime/job_store.py` `JobStatus.ALL`; terminais `finished`, `review_required`, `failed`, `cancelled` |
+| Supervisão do worker | implementada em `yomu/runtime/worker_supervisor.py`: 2s/5s/15s, 3 tentativas, `degraded`, reset em 120s |
+| Retomada de job interrompido na UI | **implementada** — `#interruptedJobsPanel` + botão `Retomar` em `static/tradutor_ui.js`, exibido só com `can_resume` |
+| SFX e tipografia | `TRANSLATE_SFX=True` por padrão (glossário `assets/lexicon/sfx_en_pt.json`); `RENDER_FIT_BALLOON_SHAPE` e `RENDER_MATCH_SOURCE_SLANT` padrão `True`, só em `yomu/config/settings.py` |
+| Updater | **IMPLEMENTADO** (código + UI): `yomu/runtime/update_manifest.py` (Ed25519 + SHA-256, chave `beta-2026-10`), `update_transport.py`, `update_installer.py`, `installer_update.py`, `update_bootstrap.py` (`DEFAULT_MANIFEST_URL` configurada), aba **Atualizações** e rotas `/api/update/*` em `yomu/ui/app.py`. Manifest publicado no canal: `EXTERNAL_GATE` |
+| Instalador | **PARCIAL** — `packaging/tradutor_ia.spec`, `packaging/TradutorIA.iss`, `tools/build_installer.py`; nenhum `Setup.exe` versionado/validado |
+| Licença de tester Beta | **PARCIAL** — `yomu/auth/beta_license.py`; gate em `UiBridge.start()`/`resume()`; `_build_ui_beta_access_authorizer` (`yomu/ui/ui_bridge.py`): dev → local; empacotado sem provider → `production` → `RemoteBetaLicenseConfigError` (fail-closed); `supabase` → authorizer remoto com fingerprint. Nenhum entitlement real validado |
+| Instalação limpa em Windows | **não provada** (`CLEAN-INSTALL-NOT-YET-PROVEN`) |
+| CF clearance (comix.to) | o persistidor `_save_comix_cf_clearance` do branch `feat/comix-cloudflare-clearance-v1` **não está** na `main`; só o posicionamento oculto do CloakBrowser existe (`yomu/download/readers/scrapling_reader_resolver.py`) |
+| Requisitos | `requirements.txt` na raiz; perfis em `requirements/` (`requirements-beta.txt` inclui `-r ../requirements.txt`) |
+| Suíte hermética | `python -m pytest -q`: ~6160 passed, 0 failed (~10 min) |
+
+Para proveniência e níveis de evidência, consulte também o [snapshot da reconciliação](docs/consolidation/YOMU_CURRENT_PRODUCT_STATE.md),
 a [matriz de proveniência](docs/consolidation/YOMU_SOURCE_RECONCILIATION_MATRIX.md) e o
 [board operacional](docs/status/board/index.html). Esses documentos distinguem código integrado,
 testes offline/frozen, verificação física, gates externos e itens deferred. A branch de

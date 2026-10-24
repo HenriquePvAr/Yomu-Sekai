@@ -1,5 +1,13 @@
 # Adapters de fonte de capítulo
 
+> **Base verificada:** `5f482ce1` (branch `main`) · **Revisado em:** 2026-10-24
+>
+> Código: `yomu/download/sources/chapter_source.py` (contrato, adapters e `UniversalChapterAdapter`),
+> `yomu/download/sources/universal_chapter_adapter.py`, `yomu/download/down.py`,
+> `yomu/download/lazy_slot_resolver.py`, `yomu/download/webtoons_reader_bridge.py`,
+> `yomu/download/readers/` (resolver dinâmico Comix) e `yomu/download/local/` (pasta local).
+> `down.py` na raiz é apenas shim de `yomu.download.down`.
+
 ## Escopo
 
 Esta camada decide como analisar uma URL pública de capítulo. Ela não concede direito de
@@ -54,6 +62,36 @@ Para uma submissão, a resolução é determinística:
 Um adapter específico sempre vence o fallback universal. A presença de um host no fallback não
 o transforma em fonte homologada nem cria allowlist global.
 
+### Da análise ao download (IMPLEMENTADO)
+
+```mermaid
+flowchart TD
+    U["URL submetida na UI"] --> A["POST /api/ui/source/analyze<br/>UiBridge.analyze_source_candidate<br/>(thread do processo da UI, até 180 s)"]
+    A --> D["down.discover_chapter_source"]
+    D --> H{"adapter tem coletor<br/>de HTML estático?"}
+    H -->|sim| G["discover_via_http<br/>GET limitado, sem cookies"]
+    G -->|"análise utilizável"| R["SourceAnalysis + source_analysis_result_id"]
+    G -->|"None"| B["analyze_chapter_source<br/>Chrome/Selenium ou resolver dinâmico Comix"]
+    H -->|não| B
+    B --> R
+    R --> S["start: valida resultado fresco,<br/>cria job queued, ensure_worker"]
+    S --> W["Worker._prepare_source<br/>source_analysis_phase"]
+    W -->|"ready_for_runner"| RUN["job_runner → run_webtoon.py"]
+    W -->|"confiança média"| REV["awaiting_source_review<br/>usuário confirma IDs opacos"]
+    W -->|"challenge_required"| VER["waiting_source_verification"]
+    W -->|"cobertura incompleta / falha"| F["failed<br/>(ex.: incomplete_source_coverage)"]
+    REV --> S2["queued; worker reanalisa o leitor"]
+    VER --> S2
+    S2 --> W
+    RUN --> DL["download_images: build_transports<br/>requests → browser_session → cloudscraper opcional"]
+    DL --> V["validação por bytes + download gate"]
+    V -->|completo| OCR["Smart Split e OCR"]
+    V -->|parcial| ID["incomplete_download"]
+```
+
+O resultado da análise pré-job só autoriza criar o job; os candidatos aceitos viram um manifesto
+com IDs opacos, e cada URL efetivamente buscada é revalidada pelo transporte no download.
+
 O adapter escolhido também é dono da canonicalização específica. `vortexscans.org` não passa pelo
 canonicalizer Webtoons, e um timeout ou indisponibilidade de Webtoons não pode bloquear uma URL
 VortexScans suportada. Falhas pré-job de source analysis devem ser expostas como erro recuperável
@@ -70,9 +108,9 @@ herméticas correspondentes.
 O reader Webtoons usa lazy loading por slots. A coleta inicial registra todos os elementos do
 reader, mas placeholders 1x1 em `webtoons-static.pstatic.net` permanecem `pending_lazy` e nunca
 entram em `source_selection`, manifesto ou download. Enquanto o mesmo driver Selenium da análise
-ainda está aberto, `webtoons_reader_bridge.py` fornece ao resolvedor operações injetadas
+ainda está aberto, `yomu/download/webtoons_reader_bridge.py` fornece ao resolvedor operações injetadas
 (`read_slots`, `scroll_to`, `reader_bounds`, cancelamento, progresso, clock e sleep) e
-`lazy_slot_resolver.resolve_lazy_reader_slots` relê os mesmos índices DOM até resolver o leitor
+`yomu.download.lazy_slot_resolver.resolve_lazy_reader_slots` relê os mesmos índices DOM até resolver o leitor
 ou esgotar o orçamento.
 
 O scroll é limitado aos bounds do reader, não ao fim do documento, para não entrar em
@@ -83,11 +121,18 @@ rotulado como `incomplete_download`, porque nenhum byte de página foi baixado n
 ### Comix
 
 `ComixAdapter` reconhece o host e encaminha a resolução do reader ao resolver dinâmico quando o
-preflight HTTP não encontra imagens utilizáveis. O resolver pode usar as dependências de browser
-declaradas no perfil Beta; isso é implementação interna, não uma opção separada na UI. A coleta
-continua sujeita a limites e a estados explícitos de acesso negado, challenge, timeout ou reader
-incompatível. Não há evasão de CAPTCHA/DRM/login nem garantia de que mudanças externas do site
-continuarão compatíveis.
+preflight HTTP não encontra imagens utilizáveis. O resolver
+(`yomu/download/readers/scrapling_reader_resolver.py`, Scrapling/Playwright) roda num processo
+filho supervisionado (`python -m yomu.download.readers.dynamic_resolver_process`, prazo único de
+180 s, até 400 páginas); isso é implementação interna, não uma opção separada na UI. Se o pacote
+opcional `cloakbrowser` estiver instalado no ambiente (não consta dos perfis em `requirements/`),
+o resolver usa esse navegador, não-headless e com a janela fora da tela; caso contrário usa o
+Chrome do sistema em modo headless. A coleta continua sujeita a limites e a estados explícitos
+de acesso negado, challenge, timeout ou reader incompatível. Um challenge visível vira
+`challenge_required` e o job fica em `waiting_source_verification` até o dono concluir a
+verificação; o clearance obtido pelo dono pode ser reutilizado. Veja
+[Comix: fluxo com challenge](operations/comix_source_challenge.md). Não há garantia de que
+mudanças externas do site continuarão compatíveis.
 
 ### VortexScans
 
@@ -203,9 +248,11 @@ URL completa, query, cookie, token, imagem ou conteúdo do capítulo.
 ## Limitações de segurança
 
 Validação de URL e redirect recusa esquemas não HTTP(S), credenciais, hosts locais e endereços
-não globais, e revalida DNS. Isso protege a navegação pré-validada e downloads selecionados, mas
-**não é garantia completa de SSRF para URLs arbitrárias não confiáveis**: um navegador pode pedir
-subrecursos antes da análise e uma conexão HTTP comum ainda possui janela DNS TOCTOU. Produção que
+não globais, e revalida DNS. Os transportes `requests` fixam o socket TCP na resposta DNS pública
+validada (`yomu/download/pinned_requests.py`; `Host`/TLS continuam no hostname e proxy é recusado).
+Isso protege a navegação pré-validada e downloads selecionados, mas
+**não é garantia completa de SSRF para URLs arbitrárias não confiáveis**: o navegador pode pedir
+subrecursos antes da análise e não passa por esse pinning. Produção que
 aceite URLs arbitrárias precisa de proxy/firewall de egress ou política de rede equivalente; sem
 isso, use somente fontes confiáveis e autorizadas.
 
@@ -242,7 +289,7 @@ Um submit real aceitou 167 candidatos e então falhou com `incomplete_download` 
 coletor (`page_limit_exceeded`, `scroll_incomplete`, `pagination_incomplete`) é legítimo,
 mas descreve o que o coletor conseguiu enxergar, não bytes que nunca foram buscados. O
 rótulo passou a ser `incomplete_source_coverage`; `incomplete_download` continua sendo
-produzido apenas pelo downloader (`down.py`).
+produzido apenas pelo downloader (`yomu/download/down.py`).
 
 ### Estado verificado do Webtoons
 
@@ -256,12 +303,12 @@ testes herméticos, `TRADUTOR_ALLOW_DRIVER_DOWNLOAD=1` permite exercitar esse re
 transformar a suíte padrão em uma dependência de rede. Se todos os caminhos falharem, o
 submit falha com erro categorizado de driver.
 
-### Dívida técnica registrada
+### Dívida técnica registrada — RESOLVIDA
 
-`ui_bridge.start()` roda a análise de fonte com Selenium **sincronamente dentro do submit**.
-Isso prende a requisição, arrisca timeout e inicia um driver no processo web. Separar isso
-(criar o job `queued` e analisar no worker) é uma migração arquitetural com testes próprios,
-deliberadamente fora do escopo desta correção.
+> **Histórico.** Quando este trecho foi escrito, `ui_bridge.start()` rodava a análise com
+> Selenium dentro do submit. Hoje `UiBridge.start()` (`yomu/ui/ui_bridge.py`) não analisa: a
+> análise pré-job acontece em `POST /api/ui/source/analyze` (thread do processo da UI) e o worker
+> reanalisa antes do download. Veja [Análise de fonte pertence ao worker](#análise-de-fonte-pertence-ao-worker).
 
 ## Estratégia de cobertura por adapter
 
@@ -363,13 +410,11 @@ diagnóstico traz `total`, `resolved`, `pending`, `rejected` e os índices pende
 código é `incomplete_source_coverage` — nunca `incomplete_download`, já que nenhum download
 ocorreu.
 
-### Limitação
+### Limitação — SUPERADA
 
-A classificação por estado está implementada e testada. O **laço de resolução** — rolar o
-leitor em passos, reler os slots e esperar o lazy loading concluir — não foi implementado
-nesta tarefa: percorrer o leitor inteiro força o carregamento das 167 imagens e produz o
-manifesto completo do capítulo, que é a peça imediatamente anterior à captura. A arquitetura
-está pronta para receber esse laço quando ele for aplicado a uma fonte com direitos.
+> **Histórico.** Este trecho registrava que o laço de resolução ainda não existia. Ele foi
+> implementado depois em `yomu.download.lazy_slot_resolver.resolve_lazy_reader_slots` e
+> integrado ao Webtoons (seções seguintes).
 
 ## Resolvedor de slots lazy
 
@@ -413,8 +458,11 @@ worker  → source_validation → browser_loading → source_analysis
         → source_lazy_resolution → source_selection → runner
 ```
 
-O navegador nunca sobe no processo web. `ensure_worker` roda **depois** de o payload estar
-durável, para que um worker que reivindique cedo não analise uma linha pela metade.
+O `start` do job não abre navegador. A análise pré-job (`POST /api/ui/source/analyze`) roda
+numa thread do processo da UI e **pode** iniciar Chrome lá quando o caminho HTTP não se aplica;
+o resultado só autoriza criar o job, e o worker reanalisa antes do download. `ensure_worker`
+roda **depois** de o payload estar durável, para que um worker que reivindique cedo não analise
+uma linha pela metade.
 
 Falha de análise não volta mais como exceção do submit: ela chega pelo job e pelo polling,
 que é onde uma operação de 90 segundos pertence.
@@ -423,9 +471,9 @@ que é onde uma operação de 90 segundos pertence.
 
 | Camada | Responsabilidade |
 | --- | --- |
-| `ui_bridge.start()` | validação, fingerprint, duplicidade, criar job `queued`, devolver `job_id` |
-| `source_analysis_phase` | a decisão: `ready_for_runner`, `awaiting_source_review`, `failed`, `cancelled` |
-| `Worker._prepare_source` | executa a fase antes do spawn e suprime o runner quando a decisão não permite |
+| `UiBridge.start()` (`yomu/ui/ui_bridge.py`) | validação, fingerprint, duplicidade, criar job `queued`, devolver `job_id` |
+| `yomu/review/source_analysis_phase.py` | a decisão: `ready_for_runner`, `awaiting_source_review`, `failed`, `cancelled` |
+| `Worker._prepare_source` (`yomu/runtime/worker_service.py`) | executa a fase antes do spawn e suprime o runner quando a decisão não permite; `challenge_required` vira `waiting_source_verification` |
 
 `should_spawn_runner` deriva do outcome, então revisão ou estado terminal não conseguem
 iniciar processo filho por acidente. Job com seleção utilizável pula a reanálise em vez de
@@ -496,10 +544,15 @@ entrada por pasta local continua sem navegador; Universal e Vortex não usam ess
 
 Nenhum capítulo real foi processado: análises falsas, banco temporário, zero rede.
 
-## Dívida técnica: análise de fonte no submit
+## Dívida técnica: análise de fonte no submit — DEPRECIADO (resolvida)
 
-`ui_bridge.start` continua executando a análise com Selenium dentro da requisição HTTP, o que
-mede 93–101s na prática e deixa a UI em "Analisando fonte" durante o await.
+> **Histórico.** O texto abaixo descreve o estado anterior à migração para o worker e não vale
+> mais: `UiBridge.start` não executa análise e o worker executa `source_validation` →
+> `browser_loading` → `source_analysis` → `source_lazy_resolution` → `source_selection`
+> (veja [Análise de fonte pertence ao worker](#análise-de-fonte-pertence-ao-worker)).
+
+`ui_bridge.start` executava a análise com Selenium dentro da requisição HTTP, o que
+media 93–101s na prática e deixava a UI em "Analisando fonte" durante o await.
 
 A migração para o worker não foi feita: `start` tem 532 linhas e 23 pontos ligados ao caminho
 síncrono, e mover isso significa mudar o contrato STAGING→QUEUED, levar a análise para o laço

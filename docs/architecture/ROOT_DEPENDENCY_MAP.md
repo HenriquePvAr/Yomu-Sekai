@@ -1,11 +1,15 @@
 # Mapa de dependências da raiz
 
+> **Base verificada:** `5f482ce1` (branch `main`) · **Revisado em:** 2026-10-24
+>
 > **Atualização 2026-10-24:** os ponteiros `PRODUCTION_SECRETS_REQUIRED.md` e
 > `SEMANTIC_CLASSIFICATION_AUDIT.md` foram removidos da raiz (conteúdo canônico em
 > `docs/operations/` e `docs/architecture/`), e os perfis `requirements-*.txt` foram movidos
-> para `requirements/` (a base `requirements.txt` continua na raiz). As tabelas abaixo
-> registram o estado auditado na época; a estrutura vigente está em
-> [REPOSITORY_STRUCTURE.md](REPOSITORY_STRUCTURE.md).
+> para `requirements/` (a base `requirements.txt` continua na raiz). As tabelas de shims e de
+> bootstrap/manifests já usam os caminhos atuais (CI em `.github/workflows/tests.yml` instala
+> `requirements/requirements-beta.txt` e `requirements/requirements-dev.txt`). A tabela de
+> movimentações de documentação e o "Critério de movimentação" são registro histórico da
+> auditoria; a estrutura vigente está em [REPOSITORY_STRUCTURE.md](REPOSITORY_STRUCTURE.md).
 
 **Escopo:** caminhos diretamente na raiz do checkout `main`, incluindo imports, execução,
 configuração, CI, packaging, testes e links de documentação. A fonte primária de shims é
@@ -68,9 +72,9 @@ subprocessos, cwd e PyInstaller.
   valida esse caminho. `.github/workflows/tests.yml` chama `compileall` sobre shims e hooks.
 - `AGENTS.md`/`CLAUDE.md` são descobertos pelas ferramentas; `README.md`, `CHANGELOG.md`,
   `CONTRIBUTING.md` e `THIRD_PARTY_NOTICES.txt` possuem convenções externas usuais.
-- `PRODUCTION_SECRETS_REQUIRED.md` agora é só ponteiro compatível; conteúdo canônico em
-  `docs/operations/`. `SEMANTIC_CLASSIFICATION_AUDIT.md` é ponteiro; links do índice e técnico
-  apontam para `docs/architecture/`.
+- `PRODUCTION_SECRETS_REQUIRED.md` e `SEMANTIC_CLASSIFICATION_AUDIT.md` não existem mais na
+  raiz (ponteiros removidos em 2026-10-24); o conteúdo canônico está em `docs/operations/` e
+  `docs/architecture/`, e os links do índice e da documentação técnica apontam para lá.
 - `config/repository_root_allowlist.json` e `tools/repository/check_root_policy.py` definem e
   testam a política de raiz Python; `tests/test_repository_root_policy.py` lê essa configuração.
 

@@ -2,14 +2,18 @@
 
 Esta referência descreve as opções reais do `.env.example` e as poucas variáveis adicionais consumidas diretamente pelo código atual.
 
+> **Base verificada:** `5f482ce1` (branch `main`) · **Revisado em:** 2026-10-24
+>
 > [Voltar ao README](../README.md)
 
 ## Como a configuração é carregada
 
-`local_environment.py` carrega exclusivamente o `.env` localizado na raiz real do projeto,
-sem procurar arquivos em diretórios pais. Variáveis já presentes no ambiente do processo
-têm precedência (`override=False`); valores ausentes ou vazios usam o default do código.
-Os entrypoints chamam esse helper antes de consultar a configuração.
+`yomu/runtime/local_environment.py` carrega exclusivamente o `.env` localizado na raiz real
+do projeto, sem procurar arquivos em diretórios pais, e depois o `.env.local` opcional (também
+não versionado), que pode sobrescrever valores do `.env`. Variáveis já presentes no ambiente
+do processo antes do carregamento sempre têm precedência; valores ausentes ou vazios usam o
+default do código (`yomu/config/settings.py`, que chama esse helper ao ser importado). Em
+testes herméticos (`TRADUTOR_IA_HERMETIC_TEST_ENV=1`) nenhum arquivo é carregado.
 
 Valores booleanos verdadeiros aceitos: `1`, `true`, `yes` e `on`, sem distinção de caixa. Qualquer outro valor não vazio é interpretado como falso.
 
@@ -25,6 +29,7 @@ Valores booleanos verdadeiros aceitos: `1`, `true`, `yes` e `on`, sem distinçã
 - [Precheck, observabilidade e debug](#precheck-observabilidade-e-debug)
 - [Páginas lógicas e PDF](#páginas-lógicas-e-pdf)
 - [Contexto e UI](#contexto-e-ui)
+- [Auth, licença, raízes e navegador](#auth-licença-raízes-e-navegador)
 
 Comece sempre pelo template:
 
@@ -36,30 +41,48 @@ Não versione o `.env` e nunca use uma chave real em exemplos, issues ou logs.
 
 ## Tradução
 
+Todo job com tradução habilitada usa o provider interno `yomu_backend`
+(`yomu/translation/providers/yomu_backend_provider.py`), autenticado pelo JWT do usuário, que
+chama o motor remoto **DeepL** no servidor (Edge Function
+`supabase/functions/translation-execute`). O cliente nunca chama a DeepL diretamente e
+`--translation-provider`/`DEFAULT_TRANSLATION_PROVIDER = "deepl"` (`yomu/ui/ui_helpers.py`)
+são apenas metadado/guard: pedir `riva` ou `nemotron` num job habilitado falha fechado
+(`provider_mismatch`). A base do backend é `YOMU_BACKEND_URL` ou, sem ela, `SUPABASE_URL`
+(`YOMU_BACKEND_URL` não está no template). Com `YOMU_ENV=local`/`test` e `YOMU_TEST_BACKEND`
+vazio/`mock`, um backend mock é usado.
+
+As variáveis abaixo existem no template e em `yomu/config/settings.py`, mas as de DeepL/NVIDIA
+só são lidas por caminhos legados/experimentais do cliente; `DEEPL_API_KEY` é, na prática,
+segredo do servidor (Edge Function).
+
 | Variável | Default do template | Obrigatória? | Finalidade |
 | --- | --- | --- | --- |
-| `NVIDIA_API_KEY` | `sua_chave_aqui` | Sim, no modo NVIDIA | Credencial da API; substitua o placeholder localmente |
+| `DEEPL_API_KEY` | `sua_chave_aqui` | Não no cliente | Segredo do servidor de tradução; não necessário para jobs habilitados do cliente |
+| `DEEPL_API_BASE_URL` | `https://api-free.deepl.com` | Não | Endpoint DeepL do caminho legado local |
+| `DEEPL_MODEL_TYPE` | `quality_optimized` | Não | Tipo de modelo DeepL do caminho legado local |
+| `NVIDIA_API_KEY` | `sua_chave_aqui` | Não | Credencial NVIDIA para caminhos legados (Riva/Nemotron) e OCR NVIDIA opcional |
 | `NVIDIA_BASE_URL` | `https://integrate.api.nvidia.com/v1` | Não | Endpoint compatível com OpenAI |
 | `NVIDIA_TRANSLATION_MODEL` | `nvidia/nemotron-3-super-120b-a12b` | Não | Modelo usado nas requisições |
 | `NVIDIA_TRANSLATION_BATCH_SIZE` | `20` | Não | Quantidade máxima de grupos por lote |
 | `NVIDIA_MAX_REQUESTS_PER_MINUTE` | `20` | Não | Limite global aplicado pelo cliente |
-| `TRANSLATION_MODE` | `nvidia` | Não | Provedor: `nvidia`, `google`, `huggingface`, `local` ou `nllb` |
-| `TRANSLATE_SFX` | `True` | Não | Traduz SFX (glossário pt-BR de onomatopeias, depois o provider); `False` preserva os grupos classificados como SFX |
+| `TRANSLATION_MODE` | `nvidia` | Não | Eixo legado de família de tradução (factory `get_translator`); não seleciona o provider de um job habilitado |
+| `TRANSLATE_SFX` | `True` | Não | Traduz SFX (glossário pt-BR de onomatopeias em `assets/lexicon/sfx_en_pt.json`, depois o provider; sons desconhecidos mantêm o lettering); `False` preserva os grupos classificados como SFX |
 
-NVIDIA é o provedor padrão e o único exposto como fluxo principal pela UI. Os modos Google e NLLB permanecem como compatibilidade; exigem dependências ou modelos próprios e não têm o mesmo contrato de validação end-to-end auditado.
+O seletor de provider da UI (`#translationProviderField`) está oculto; o único fluxo de produto é o backend autenticado com DeepL. Os modos Google/NLLB/NVIDIA permanecem como compatibilidade legada, sem o contrato de validação end-to-end auditado.
 
 ## OCR e classificação
 
 | Variável | Default | Finalidade |
 | --- | --- | --- |
-| `OCR_ENGINE` | `paddle` | Engine base carregada por `config.py`; a CLI sobrescreve para `rapidocr` no modo `fast` e para `paddle` no modo `quality`, então definir esta variável não muda a engine de um job |
-| `TRADUTOR_OCR_ENGINE_OVERRIDE` | vazio | Único ponto de controle da engine por ambiente (`rapidocr`, `paddle` ou `paddle_mobile`): `run_webtoon._configure_mode` a respeita antes do mapeamento modo→engine. Ambientes sem `paddleocr` instalado precisam de `rapidocr` aqui para rodar o modo `quality`, e o guard continua falhando fechado se a engine escolhida não tiver dependência |
-| `OCR_FALLBACK_ENGINE` | `paddle` | Família usada quando a leitura inicial precisa de fallback |
-| `OCR_HYBRID_FALLBACK` | `True` | Permite combinar engines em vez de aceitar apenas a inicial |
-| `RAPIDOCR_ENABLED` | `False` | Habilita RapidOCR; a CLI `fast` define `True` durante a execução |
+| `OCR_ENGINE` | `paddle` (código: `rapidocr`) | Valor cru do módulo; `_configure_mode` (`yomu/commands/run_webtoon.py`) o substitui por `effective_ocr_engine()` — RapidOCR nos dois modos — então definir esta variável não muda a engine de um job |
+| `TRADUTOR_OCR_ENGINE_OVERRIDE` | vazio (fora do template) | Override por ambiente lido por `effective_ocr_engine()`; no Beta só `rapidocr` é aceito (`BETA_OCR_ENGINES`), qualquer outro valor é ignorado. O guard falha fechado se o engine não estiver instalado |
+| `OCR_FALLBACK_ENGINE` | `paddle` (código: vazio) | Forçado para vazio pela CLI: fallback entre engines não faz parte do contrato Beta |
+| `OCR_HYBRID_FALLBACK` | `True` (código: `False`) | Forçado para `False` pela CLI |
+| `RAPIDOCR_ENABLED` | `False` (código: `True`) | Forçado para `True` pela CLI quando o engine é RapidOCR (sempre, no Beta) |
+| `OCR_LEGACY_PADDLE_FALLBACK` | fora do template (código: `False`) | Opt-in de compatibilidade legacy do Paddle; não instalado no perfil Beta |
 | `RAPIDOCR_MIN_CONFIDENCE` | `0.55` | Confidence mínima usada nos sinais de suspeita |
 | `RAPIDOCR_SUSPICIOUS_TEXT_FALLBACK` | `True` | Aciona fallback diante de texto estruturalmente suspeito |
-| `RAPIDOCR_PAGE_FALLBACK` | `True` | Permite fallback da página para Paddle Mobile |
+| `RAPIDOCR_PAGE_FALLBACK` | `True` | Recuperação de página no modo `quality`; a CLI a desliga no modo `fast` |
 | `FAST_OCR_HEAVY_FALLBACK` | `False` | Opt-in para fallbacks nativos pesados no modo `fast`; o padrão preserva previsibilidade |
 | `FAST_OCR_PAGE_TIMEOUT_SECONDS` | `45` | Limite de uma tentativa pesada por página no modo `fast` |
 | `FAST_OCR_REGION_TIMEOUT_SECONDS` | `12` | Limite de uma tentativa pesada por região no modo `fast` |
@@ -110,6 +133,12 @@ quiser permitir explicitamente a resolução no ambiente de teste.
 | `TEXTURED_CAPTION_OVERLAY` | `True` | Usa overlay controlado em captions texturizadas |
 | `CAPTION_OVERLAY_OPACITY` | `0.94` | Opacidade do overlay, limitada internamente a 0,35–0,95 |
 
+Duas flags de tipografia existem só no código (fora do template, como os demais ajustes
+finos de CLEAN/render), ambas com default `True`: `RENDER_FIT_BALLOON_SHAPE` quebra a tradução
+seguindo o formato do balão fechado quando isso permite uma fonte maior, e
+`RENDER_MATCH_SOURCE_SLANT` inclina o texto como o lettering original quando a fonte escolhida
+é reta.
+
 `FONT_PATH` também é suportada fora do template. Quando vazia, o código usa a resolução de fonte existente; quando definida, deve apontar para um arquivo local válido.
 
 ## Validação visual
@@ -144,7 +173,7 @@ quiser permitir explicitamente a resolução no ambiente de teste.
 | `REJECT_DARK_BLOTCH_ON_TEXTURED_ART` | `True` | Rejeita manchas escuras novas sobre arte |
 | `MAX_NEW_DARK_COMPONENT_AREA` | `120` | Área máxima de componente escuro novo |
 | `MAX_NEW_DARK_PIXEL_RATIO` | `0.04` | Proporção máxima de pixels escuros novos |
-| `MAX_FLAT_FILL_RING_SPREAD` | `30.0` | Spread de luminância (p5–p95) do anel limpo em volta da máscara acima do qual o fundo **não** é considerado plano; sem essa prova, preenchimento de cor única e máscara de quadrilátero OCR ficam proibidos. Balões reais medem até ~24, fumaça/tecido/ilustração a partir de ~43 |
+| `MAX_FLAT_FILL_RING_SPREAD` | `30.0` (fora do template, como as demais linhas desta tabela a partir daqui) | Spread de luminância (p5–p95) do anel limpo em volta da máscara acima do qual o fundo **não** é considerado plano; sem essa prova, preenchimento de cor única e máscara de quadrilátero OCR ficam proibidos. Balões reais medem até ~24, fumaça/tecido/ilustração a partir de ~43 |
 | `FLAT_FILL_RING_RADIUS` | `12` | Raio do anel de contexto usado nessa medição |
 | `MIN_FLAT_FILL_RING_PIXELS` | `64` | Pixels mínimos de anel para a medição valer |
 | `REJECT_FLAT_PATCH_ON_TEXTURED_ART` | `True` | Rejeita reconstrução que virou bloco chapado sobre arte texturizada |
@@ -159,7 +188,7 @@ quiser permitir explicitamente a resolução no ambiente de teste.
 | `MAX_SEAM_BOUNDARY_HALO_DELTA` | `18.0` | Desvio de luminância de um anel que acompanha o contorno e diverge dos **dois** lados — halo de inpaint. Um contorno de origem diverge de apenas um lado |
 | `SEAM_HIGH_CONFIDENCE_SCORE` | `1.0` | Um sinal isolado só retém a reconstrução ao atingir o dobro do próprio limite; abaixo disso é preciso um segundo sinal corroborando. Existe porque #81 provou que uma razão de textura ingênua gera falsos positivos |
 
-`POST_RENDER_OCR_VALIDATION=False` no template. O modo CLI `fast` o habilita automaticamente para procurar texto-fonte que ainda permaneça visível depois do redraw.
+`POST_RENDER_OCR_VALIDATION=False` no template, mas `_configure_mode` o liga automaticamente sempre que o engine é RapidOCR — ou seja, nos dois modos — para procurar texto-fonte que ainda permaneça visível depois do redraw.
 
 ## Cache e resume
 
@@ -171,7 +200,7 @@ quiser permitir explicitamente a resolução no ambiente de teste.
 | `ENABLE_IMAGE_PROCESS_CACHE` | `True` | Reutiliza páginas renderizadas compatíveis |
 | `ENABLE_DOWNLOAD_CACHE` | `True` | Reutiliza o manifest e imagens de download válidos |
 
-O diretório padrão é `.cache`, configurável por `CACHE_ROOT` mesmo que essa variável não esteja no template. As chaves incluem hashes e versões internas. Não edite manifests nem apague todo o cache como primeira tentativa de diagnóstico; prefira `--force` quando precisar de reprocessamento controlado.
+O diretório padrão é `%LOCALAPPDATA%\TradutorIA\cache` (`yomu/runtime/runtime_paths.py`), configurável por `CACHE_ROOT` (presente no template, vazio por padrão). As chaves incluem hashes e versões internas. Não edite manifests nem apague todo o cache como primeira tentativa de diagnóstico; prefira `--force` quando precisar de reprocessamento controlado.
 
 ## Paralelismo e recursos
 
@@ -235,7 +264,7 @@ O contexto do capítulo é controlado por flags da CLI, não por variáveis do t
 - `--delete-context-after`: remove o contexto somente depois que o PDF existe;
 - `--keep-context`: explicita o comportamento padrão.
 
-A porta da UI pode ser alterada com uma variável suportada por `app_ui.py`:
+A porta da UI pode ser alterada com uma variável lida por `yomu/ui/app.py` (e pelo shell desktop `yomu/desktop/app.py`):
 
 ```dotenv
 TRADUTOR_UI_PORT=8080
@@ -250,7 +279,6 @@ Estas opções existem no código, mas foram omitidas do `.env.example` para man
 | `CHROMEDRIVER_PATH` | vazio | Driver explícito quando a descoberta automática falha |
 | `TESSERACT_CMD` | caminho convencional do Windows | Executável opcional de Tesseract; não é necessário no fluxo principal |
 | `FONT_PATH` | vazio | Fonte local opcional para redraw |
-| `CACHE_ROOT` | `.cache` | Raiz dos caches versionados |
 | `MAX_RETRIES_DOWNLOAD` | `5` | Tentativas por download |
 | `OCR_CONF_THRESHOLD` | `15` | Threshold legado usado por caminhos compatíveis |
 | `TRANSLATION_VALIDATION` | `True` | Habilita o validator textual |
@@ -261,12 +289,31 @@ Estas opções existem no código, mas foram omitidas do `.env.example` para man
 
 Evite configurar opções legadas ou avançadas sem uma razão reproduzível. Mudanças em thresholds alteram o contrato do cache e podem dificultar comparações.
 
+## Auth, licença, raízes e navegador
+
+Seções do template não detalhadas acima (consumidores em `yomu/`):
+
+| Variável | Default do template | Finalidade |
+| --- | --- | --- |
+| `COMMUNITY_AUTH_PROVIDER` | `local` (código: `supabase`) | `local` (sessão loopback de desenvolvimento) ou `supabase` (JWT verificado por JWKS) |
+| `SUPABASE_URL`, `SUPABASE_PUBLISHABLE_KEY` | vazio | Configuração **pública** do projeto Supabase; usada pelo login, licença e backend de tradução |
+| `SUPABASE_SECRET_KEY` | vazio | Somente scripts administrativos locais; **nunca** no cliente distribuído, no frontend ou no Git |
+| `SUPABASE_JWKS_URL`, `SUPABASE_EXPECTED_ISSUER`, `SUPABASE_EXPECTED_AUDIENCE` | vazio / `authenticated` | Verificação do JWT; derivadas de `SUPABASE_URL` quando vazias |
+| `SUPABASE_SITE_URL`, `SUPABASE_REDIRECT_URL` | `http://127.0.0.1:8080`, `…/auth/callback` | URLs de retorno do fluxo de e-mail |
+| `BETA_LICENSE_PROVIDER` | `local_development` | `local_development` (dev) ou `supabase` (Beta). Num runtime empacotado/desktop sem provider remoto o gate falha fechado; nunca faz downgrade silencioso |
+| `TRADUTOR_UI_HOST`, `TRADUTOR_ALLOW_EXTERNAL_BIND` | `127.0.0.1`, `0` | Servidor permanece em loopback salvo opt-in explícito |
+| `COMMUNITY_STORAGE_PROVIDER` | `filesystem` | `filesystem` ou `google_drive` para PDFs publicados |
+| `TRADUTOR_USER_DATA_ROOT`, `TRADUTOR_RUNTIME_ROOT`, `TRADUTOR_OUTPUT_ROOT` | vazio | Overrides das raízes mutáveis; vazio = `%LOCALAPPDATA%\TradutorIA\{runtime,output}` |
+| `SOURCE_BROWSER_ENGINE`, `SOURCE_BROWSER_EXECUTABLE`, `SOURCE_BROWSER_HEADLESS`, … | vazio / `1` | Navegador isolado usado somente na análise segura da fonte |
+| `TRADUTOR_IA_UPDATE_MANIFEST_URL` | fora do template | Override da URL do manifest do updater (`yomu/runtime/update_bootstrap.py`, `yomu/ui/app.py`); ausente usa `DEFAULT_MANIFEST_URL`, definida vazia desliga a verificação (`not_configured`) |
+
 ## Exemplo mínimo recomendado
 
 ```dotenv
-NVIDIA_API_KEY=sua_chave_real
-NVIDIA_BASE_URL=https://integrate.api.nvidia.com/v1
-NVIDIA_TRANSLATION_MODEL=nvidia/nemotron-3-super-120b-a12b
+SUPABASE_URL=<url-do-projeto>
+SUPABASE_PUBLISHABLE_KEY=<chave-publishable>
+COMMUNITY_AUTH_PROVIDER=supabase
+BETA_LICENSE_PROVIDER=supabase
 
 OCR_QUALITY_CONTROL=True
 OCR_REGION_SELECTIVE_FALLBACK=True

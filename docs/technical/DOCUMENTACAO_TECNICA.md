@@ -1,9 +1,9 @@
 # Tradutor IA — Documentação Técnica
 
-> **Base verificada:** `0ae4bac` (branch `main`); §16 (gate espacial / correções de Clean) e
-> o parágrafo de créditos da §17 verificados sobre `c994426f` + working tree em 2026-10-23;
-> §16 (sexta a oitava passadas, diagramação, SFX) e §25 verificados sobre `c994426f` + working
-> tree em 2026-10-24
+> **Base verificada:** `5f482ce1` (branch `main`) em 2026-10-24 — caminhos de módulo, estados
+> de job, schema, comandos (`--help`), variáveis de ambiente, rotas e status reconferidos contra
+> o código. §16 e §25 foram verificados antes sobre `c994426f` + working tree (2026-10-23/24).
+> Seções marcadas como *snapshot histórico* (§28.1, §29, parte da §30) não foram revalidadas.
 > **Última revisão:** 2026-10-24
 > **Público:** desenvolvedores, mantenedores, suporte técnico e agentes automatizados.
 
@@ -56,9 +56,10 @@ base. Recursos que ainda não existem aparecem marcados explicitamente:
 26. [Logs, saúde e diagnóstico](#26-logs-saúde-e-diagnóstico)
 27. [Ambiente de desenvolvimento e comandos](#27-ambiente-de-desenvolvimento-e-comandos)
 28. [Troubleshooting técnico](#28-troubleshooting-técnico)
-29. [Dívida técnica conhecida](#29-dívida-técnica-conhecida)
+29. [Snapshot histórico de dívida técnica](#29-snapshot-histórico-de-dívida-técnica-não-revalidado-na-m18)
 30. [Empacotamento, updater e prontidão para Beta](#30-empacotamento-updater-e-prontidão-para-beta)
-31. [Glossário](#31-glossário)
+31. [Economia de YK e anúncios](#31-economia-de-yk-e-anúncios--parcial)
+32. [Glossário](#32-glossário)
 
 ---
 
@@ -69,10 +70,11 @@ O Tradutor IA é uma **aplicação local** que transforma um capítulo ilustrado
 final e relatórios de qualidade.
 
 Não é um serviço hospedado. Todo o pipeline — download, OCR, tradução, reconstrução
-visual e geração de PDF — roda na máquina do usuário. As únicas saídas de rede em
-operação normal são: o site de origem do capítulo, o provedor de tradução, o serviço de
-autenticação (Supabase) e, quando o usuário publica explicitamente, o armazenamento da
-comunidade.
+visual e geração de PDF — roda na máquina do usuário. As saídas de rede em operação normal
+são: o site de origem do capítulo; o backend Yomu no Supabase (autenticação, licença Beta,
+carteira YK e a Edge Function `translation-execute`, que chama a DeepL **do lado do
+servidor** — a chave DeepL não fica no cliente, §15); o manifest/pacote do updater (§23); e,
+quando o usuário publica explicitamente, o armazenamento da comunidade.
 
 Ambiente auditado: **Windows 64 bits, Python 3.11**. Outros sistemas operacionais não
 fazem parte do contrato validado.
@@ -93,86 +95,110 @@ O produto caminha para a **primeira beta externa com Scans**. Estado por área:
 | Reconstrução visual de arte | **REVISÃO** — TDD #81 fechou os defeitos sistêmicos (preenchimento plano só com fundo comprovadamente plano, quadrilátero OCR nunca vira máscara sobre ilustração, footprint de glifo cobre corpo/contorno/halo, detector de patch plano). Arte muito estruturada agora cai em `REVIEW_REQUIRED_ART_RECONSTRUCTION` em vez de receber retângulo destrutivo |
 | Qualidade semântica/natural PT-BR | **REVISÃO** — TDD #82 separou confiança na fonte OCR, fidelidade de significado e naturalidade PT-BR em três severidades (`blocked`/`verify`/`review`). Replay offline sobre 542 regiões reais persistidas: 531 limpas, 8 em revisão por fonte OCR suspeita, 3 bloqueadas por divergência semântica. Regiões sem candidato alternativo persistido dependem de um E2E real com provedor |
 | Leitor PDF integrado | **IMPLEMENTADO** — TDD #83: **LER** é a ação primária do card do Histórico e abre o capítulo na aba **Leitor**, dentro do shell, com paginação, zoom, ajuste à largura/página, miniaturas preguiçosas, teclado e tela cheia. Sem dependência nova: as páginas são os JPEGs já contidos no PDF da execução. Abrir externamente permanece como ação secundária |
-| Comunidade social (Supabase + Drive) | **IMPLEMENTADO**, fail-closed se não configurado |
+| Comunidade social (Supabase + Drive) | **PARCIAL** — rotas de backend existem (fail-closed se não configurado), mas a UI está desligada no cliente (`COMMUNITY_ENABLED = false` em `static/social_community.js`; a aba aparece como "EM BREVE"/"EM DESENVOLVIMENTO") |
+| Tradução no cliente | **IMPLEMENTADO** — todo job com tradução habilitada usa o provider interno autenticado `yomu_backend` (Edge Function `translation-execute`); providers locais DeepL/NVIDIA/NLLB só no pipeline legado (§15) |
 | Licenciamento / expiração de tester | **SCHEMA/RPC REMOTOS IMPLEMENTADOS** — TDD #78 aplica Supabase schema/RLS/RPC atômica, nega usuário sem entitlement e mantém primeiro grant real pendente |
 | Retomada de job interrompido | **IMPLEMENTADO** — TDD #56: `POST /api/ui/resume` mais o painel `#interruptedJobsPanel` e o botão `Retomar`, renderizado apenas para os jobs que o backend marca `can_resume` (`static/tradutor_ui.js`, `tests/test_interrupted_job_resume_ui.py`/`.mjs`) |
-| Instalador para usuário final (Setup) | **PLANEJADO** |
-| Atualizador automático assinado | **PARCIAL** — integração remota/launcher implementada, sem canal/chave/UI de produção |
-| Validação em VM Windows limpa | **PLANEJADO** |
+| Instalador para usuário final (Setup) | **PARCIAL** — plumbing de build existe (`packaging/tradutor_ia.spec` → `YomuSekai.exe` a partir de `desktop_app.py`, `packaging/TradutorIA.iss`, `tools/build_installer.py`); nenhum instalador validado/publicado para usuário final consta do repositório |
+| Atualizador automático assinado | **PARCIAL** — núcleo de confiança, transporte, chave pública `beta-2026-10` e URL de manifest padrão configurados; a aba **Atualizações** e as rotas `/api/update/*` existem; fluxo ponta a ponta não foi verificado nesta revisão (§23) |
+| Validação em VM Windows limpa | **PLANEJADO** (não provada) |
 
 > **Aviso.** Nada em `PLANEJADO` deve ser descrito como disponível em nenhum documento,
 > release note ou mensagem de UI.
 
 ## 3. Arquitetura de repositório e mapa de componentes
 
-O repositório é **flat**: quase todos os módulos Python vivem na raiz (≈310 arquivos
-versionados, dos quais 178 são `test_*.py`). Não há pacote instalável; os entrypoints são
-executados diretamente a partir da raiz.
+O código vive no pacote **`yomu/`** (≈220 módulos em subpacotes por domínio). Os `*.py`
+da raiz são **shims de compatibilidade** de poucas linhas: cada um importa o módulo real e
+se substitui em `sys.modules` (por exemplo `app_ui.py` → `yomu.ui.app`, `start_tradutor.py`
+→ `yomu.commands.start_tradutor`). Não há pacote instalável; os entrypoints são executados
+a partir da raiz. Testes ficam em `tests/` (419 arquivos `test_*.py` versionados) e os
+helpers de teste em `test_support/`.
 
 ```text
 <repo>/
-├── start_tradutor.py         # launcher canônico (worker + UI + supervisão)
-├── start_tradutor.bat        # atalho Windows para o launcher
-├── app_ui.py                 # servidor NiceGUI/FastAPI + rotas HTTP
-├── ui_bridge.py              # camada de aplicação da UI (estado, jobs, revisão)
-├── ui/                       # ui_shell.html, auth_callback.html
-├── static/                   # JS/CSS do frontend + catálogos i18n
-├── worker_service.py         # worker independente que drena a fila
-├── worker_supervisor.py      # política de reinício limitado do worker
-├── job_runner.py             # executa exatamente um job, em subprocesso isolado
-├── job_store.py              # SQLite: jobs, leases, transições
-├── benchmark_pipeline.py     # orquestrador do pipeline ponta a ponta
-├── run_webtoon.py            # entrada CLI simplificada
-├── docs/                     # documentação
-├── apps/auth-service/        # serviço Better Auth (TypeScript, opcional)
-├── supabase/                 # migrations SQL + testes de banco
-└── scripts/                  # smokes manuais e migração de auth
+├── start_tradutor.py   → yomu.commands.start_tradutor   # launcher canônico (worker + UI + supervisão)
+├── start_tradutor.bat                                   # atalho Windows para o launcher
+├── desktop_app.py      → yomu.desktop.app               # shell WebView2 (entry do build YomuSekai.exe)
+├── app_ui.py           → yomu.ui.app                    # servidor NiceGUI/FastAPI + rotas HTTP
+├── worker_service.py   → yomu.runtime.worker_service    # worker independente que drena a fila
+├── run_webtoon.py      → yomu.commands.run_webtoon      # CLI de capítulo
+├── run_local_folder.py → yomu.commands.run_local_folder # CLI de snapshot local
+├── main.py             → yomu.commands.legacy_gui       # GUI/pipeline legado
+├── down.py             → yomu.download.down             # shim de import do downloader
+├── conftest.py, sitecustomize.py                        # bootstrap hermético de testes
+├── yomu/               # código de produção (ver mapa abaixo)
+├── ui/                 # ui_shell.html, auth_callback.html
+├── static/             # JS/CSS do frontend + catálogos i18n
+├── tests/  test_support/
+├── requirements.txt  requirements/   # núcleo + perfis (beta, dev, rapidocr, ui, optional, paddle, gemini-vps)
+├── packaging/          # spec PyInstaller, perfis de runtime, scripts Inno Setup
+├── tools/              # build_installer.py, admin/, harnesses/
+├── scripts/            # sign_release.py, smokes manuais, migração de auth
+├── supabase/           # migrations SQL, Edge Functions, testes de banco
+├── apps/auth-service/  # serviço Better Auth (TypeScript, nunca ativado em produção)
+└── docs/
 ```
 
 ### Mapa de componentes por domínio
 
-| Domínio | Módulos principais |
+| Domínio | Módulos principais (caminho a partir de `yomu/`) |
 | --- | --- |
-| Launcher / processos | `start_tradutor.py`, `worker_supervisor.py`, `process_launcher.py`, `process_tree.py`, `process_options.py` |
-| UI | `app_ui.py`, `ui_bridge.py`, `ui_helpers.py`, `ui_history.py`, `ui/`, `static/` |
-| Fila e jobs | `job_store.py`, `worker_service.py`, `job_runner.py`, `runner_start_gate.py`, `job_failure_diagnostic.py` |
-| Fonte de capítulo | `chapter_source.py`, `universal_chapter_adapter.py`, `source_analysis_phase.py`, `source_profile.py`, `source_readiness.py`, `source_support_report.py`, `canonical_source_identity.py`, `webtoons_reader_bridge.py`, `lazy_slot_resolver.py`, `local_folder_*.py` |
-| Download | `down.py`, `download_transport.py`, `browser_runtime.py`, `image_validation.py`, `google_drive_transport.py` |
-| OCR | `ocr_engine.py`, `ocr_balloon.py`, `ocr_parallel.py`, `ocr_memory_policy.py`, `fast_ocr_policy.py`, `ocr_line_provenance.py` |
-| Tradução | `translator_deepl.py`, `translator_nvidia.py`, `translator_nllb.py`, `provider_execution.py`, `provider_transport.py`, `session_context.py`, `natural_ptbr_refinement.py` |
-| Reconstrução | `art_text_inpainting.py`, `multiscale_patch_synthesis.py`, `reference_guided_reconstruction.py`, `selective_artifact_reconstruction.py`, `font_fidelity.py` |
-| Qualidade | `chapter_quality_revision.py`, `preview_gates.py`, `source_completeness.py`, `source_glyph_envelope.py`, `residual_*.py`, `semantic_fidelity.py`, `linguistic_audit.py`, `region_taxonomy.py` |
-| Saída | `pdf.py`, `pdf_naming.py`, `output_manifest.py`, `chapter_asset_repository.py` |
-| Comunidade | `community_*.py`, `social_*.py`, `supabase_social.py`, `publish_authorization.py`, `canonical_social_identity.py` |
-| Auth | `community_auth.py`, `supabase_auth.py`, `local_test_auth.py`, `apps/auth-service/` |
-| Armazenamento legado | `google_drive_*.py`, `legacy_publication_*.py`, `legacy_storage_upload_reservation.py` |
-| Updater assinado | `app_version.py`, `update_manifest.py`, `update_installer.py`, `update_transport.py`, `update_bootstrap.py`, `scripts/sign_release.py` |
-| Infra de testes | `hermetic_runtime.py`, `offline_test_guard.py`, `conftest.py`, `_test_bootstrap.py`, `sitecustomize.py` |
+| Launcher / processos | `commands/start_tradutor.py`, `runtime/worker_supervisor.py`, `runtime/process_launcher.py`, `runtime/process_tree.py`, `runtime/process_options.py`, `desktop/app.py` |
+| UI | `ui/app.py`, `ui/ui_bridge.py`, `ui/ui_helpers.py`, `ui/ui_history.py`, `ui/progress.py`, `ui/local_media_registry.py` + `ui/`, `static/` na raiz |
+| Fila e jobs | `runtime/job_store.py`, `runtime/worker_service.py`, `runtime/job_runner.py`, `runtime/runner_start_gate.py`, `runtime/job_failure_diagnostic.py`, `runtime/job_completion.py`, `runtime/runtime_paths.py` |
+| Fonte de capítulo | `download/sources/chapter_source.py`, `download/sources/universal_chapter_adapter.py`, `download/sources/source_profile.py`, `download/sources/canonical_source_identity.py`, `review/source_analysis_phase.py`, `review/source_readiness.py`, `review/source_support_report.py`, `download/webtoons_reader_bridge.py`, `download/lazy_slot_resolver.py`, `download/readers/*`, `download/local/*` |
+| Download | `download/down.py`, `download/download_transport.py`, `download/browser_runtime.py`, `download/image_validation.py`, `download/comix_session.py`, `download/pinned_requests.py` |
+| OCR | `ocr/ocr_engine.py`, `ocr/ocr_balloon.py`, `ocr/ocr_parallel.py`, `ocr/ocr_memory_policy.py`, `ocr/fast_ocr_policy.py`, `ocr/ocr_line_provenance.py`, `ocr/source_completeness.py`, `ocr/splitting/smart_split_incremental.py` |
+| Tradução | `translation/providers/yomu_backend_provider.py`, `translation/providers/translator_deepl.py`, `translation/providers/translator_nvidia.py`, `translation/providers/translator_nllb.py`, `translation/providers/provider_execution.py`, `translation/providers/provider_transport.py`, `pipeline/session_context.py`, `translation/natural_ptbr_refinement.py`, `translation/sfx_glossary.py` |
+| Limpeza / reconstrução | `clean/orchestrator.py`, `clean/inpainting/*`, `clean/reconstruction/*`, `clean/ownership/*` (inclui `font_fidelity.py`, `source_glyph_envelope.py`), `clean/gemini_fallback/*` |
+| Qualidade / revisão | `review/chapter_quality_revision.py`, `review/preview_gates.py`, `review/region_taxonomy.py`, `review/review_item.py`, `review/review_manifest.py`, `review/workflows/*`, `translation/semantic_fidelity.py`, `translation/linguistic_audit.py` |
+| Saída | `export/pdf.py`, `export/pdf_naming.py`, `export/pdf_reader.py`, `export/output_manifest.py`, `export/editable_psd_writer.py`, `export/professional_psd.py`, `runtime/artifact_contract.py` |
+| Pipeline | `pipeline/benchmark_pipeline.py`, `pipeline/pipeline_cache.py`, `pipeline/pipeline_streaming.py`, `pipeline/pipeline_telemetry.py` |
+| Comunidade | `community/community_*.py`, `community/social_*.py`, `community/supabase_social.py`, `community/publish_authorization.py`, `community/storage/*` (Google Drive), `community/legacy/*` |
+| Auth / licença | `community/community_auth.py` (seleção do provider), `auth/supabase_auth.py`, `auth/beta_license.py`, `auth/secure_auth_context.py`, `auth/desktop_identity.py`, `auth/device_control.py`; `test_support/local_test_auth.py` (só testes) |
+| Updater assinado | `runtime/version.py`, `runtime/update_manifest.py`, `runtime/update_installer.py`, `runtime/update_transport.py`, `runtime/update_bootstrap.py`, `runtime/installer_update.py`, `scripts/sign_release.py` (raiz) |
+| Configuração | `config/settings.py` (importado como `config`), `runtime/local_environment.py` |
+| Infra de testes | `test_support/hermetic_runtime.py`, `test_support/offline_test_guard.py`, `test_support/_test_bootstrap.py`, `conftest.py`, `sitecustomize.py` |
 
 ## 4. Arquitetura de execução
 
-Três processos independentes, mais um subprocesso por capítulo:
+Três processos independentes, mais um subprocesso por job. Em execução por código-fonte o
+launcher é `start_tradutor.py`; no build congelado (`YomuSekai.exe`, entry `desktop_app.py`) os
+mesmos papéis rodam como `YomuSekai.exe --internal-child <papel>`
+(`worker`, `ui`, `job-runner`, `community-publish-runner`, `review-rerun-runner`,
+`review-reexport-runner`, `dynamic-resolver`, `comix-cf-capture`).
 
 ```mermaid
 flowchart TD
-    U([Usuário]) --> L[start_tradutor.py<br/>launcher]
-    L -->|spawn detached| W[worker_service.py]
-    L -->|spawn| UI[app_ui.py<br/>NiceGUI + FastAPI]
-    L -. supervisiona .-> W
-    U -->|WebView2 desktop ou UI local de desenvolvimento<br/>127.0.0.1:8080| UI
-    UI --> B[ui_bridge.py]
-    B --> DB[(.cache/runtime/jobs.sqlite3)]
+    U([Usuário]) --> L["start_tradutor.py all<br/>(yomu.commands.start_tradutor)"]
+    U --> D["desktop_app.py<br/>shell WebView2"]
+    L -->|"1. update_bootstrap.check_before_start"| UPD[(manifest assinado)]
+    L -->|"2. spawn detached + supervisão"| W["worker_service.py<br/>(yomu.runtime.worker_service)"]
+    L -->|"3. spawn e espera"| UI["app_ui.py<br/>(yomu.ui.app) NiceGUI + FastAPI"]
+    D -->|spawn| UI
+    U -->|"http://127.0.0.1:8080"| UI
+    UI --> B["yomu.ui.ui_bridge"]
+    B -->|"ensure_worker() se não houver worker saudável"| W
+    B --> DB[("&lt;runtime&gt;/jobs.sqlite3")]
     W --> DB
-    W -->|spawn 1 por job| R[job_runner.py]
-    R --> P[benchmark_pipeline.py]
-    P --> O[(output/&lt;slug&gt;/&lt;run_id&gt;/)]
+    W -->|"spawn 1 por job: python -u -m yomu.runtime.job_runner"| R[job_runner]
+    R --> P["yomu.pipeline.benchmark_pipeline"]
+    P --> O[("&lt;output&gt;/&lt;slug&gt;/&lt;run_id&gt;/")]
+    P -->|"tradução: yomu_backend"| SB[(Supabase Edge Functions)]
     R --> DB
 ```
+
+`<runtime>` e `<output>` são resolvidos por `yomu/runtime/runtime_paths.py` (§10): por padrão
+`%LOCALAPPDATA%\TradutorIA
+untime` e `%LOCALAPPDATA%\TradutorIA\output`.
 
 Pontos de contrato:
 
 - **A UI nunca executa o pipeline.** Ela cria linhas no banco; o worker as consome. Fechar
-  o navegador ou reiniciar `app_ui.py` não interrompe um capítulo.
+  o navegador ou reiniciar `app_ui.py` não interrompe um capítulo. Se não houver worker
+  saudável, `UiBridge.ensure_worker()` inicia um (via `start_worker`) — esse worker **não** é
+  supervisionado; só o worker criado por `start_tradutor.py all` tem supervisor.
 - **O worker é destacado do launcher** (`DETACHED_PROCESS` + `CREATE_NEW_PROCESS_GROUP` +
   `CREATE_NO_WINDOW` no Windows; `start_new_session` no POSIX).
 - **Concorrência de jobs = 1.** O worker reivindica um job por vez com claim atômico.
@@ -182,19 +208,41 @@ Pontos de contrato:
 
 ## 5. Ciclo de vida do launcher e supervisão do worker
 
-`start_tradutor.py` aceita cinco comandos (verificados no código):
+`start_tradutor.py` (implementação em `yomu/commands/start_tradutor.py`) aceita estes
+comandos posicionais — não há `--help`; um comando desconhecido imprime `unknown command` e sai
+com código `2`:
 
 | Comando | Efeito |
 | --- | --- |
-| `all` (padrão) | Inicia o worker (se não houver um saudável), **supervisiona-o**, e roda a UI em primeiro plano |
-| `worker` | Inicia apenas o worker, destacado, e sai — **sem supervisão** |
-| `ui` | Inicia apenas a UI |
-| `status` | Imprime saúde do worker e da fila (`worker_service.py --status`) |
+| `all` (padrão) | Checa update assinado (`update_bootstrap.check_before_start`); se houver release nova ativada, faz handoff; senão inicia o worker (se não houver um saudável), **supervisiona-o** e roda a UI como filho, esperando-a. Ao fechar a UI, para o worker que **ele** iniciou |
+| `worker` | Inicia apenas o worker, destacado, e sai — **sem supervisão** (`--force` ignora o worker saudável existente) |
+| `ui` | Inicia apenas a UI (filho com stdout/stderr em `<runtime>/ui.log`) |
+| `status` | Imprime saúde do worker e da fila (`worker_service.py --status --db <runtime>/jobs.sqlite3`) |
 | `stop` / `stop-worker` | Pede parada graciosa pelo banco; `--force` derruba a árvore validada |
+| `selftest` | Importa UI, worker e job store sem iniciar nada (usado pelo updater após ativação) |
 
-Antes de qualquer comando, o launcher carrega `.env` (e `.env.local` como override) via
-`local_environment.load_local_environment_for_entrypoint()`. Um `.env` malformado faz o
+Em `all`, um update obrigatório que não pode ser aplicado faz o launcher sair com código `3`
+(`update_required: <estado>`). Argumentos internos `--internal-child <papel>` e
+`--internal-selftest <nome>` servem ao build congelado e não são interface de usuário.
+
+Antes dos comandos públicos, o launcher carrega `<repo>/.env` (e `.env.local` como override)
+via `local_environment.load_local_environment_for_entrypoint()`. Um `.env` malformado faz o
 launcher sair com código `2` e mensagem `configuration_error:` **sem imprimir valores**.
+
+```mermaid
+flowchart TD
+    S([start_tradutor.py all]) --> E{".env válido?"}
+    E -->|não| X2[exit 2: configuration_error]
+    E -->|sim| C[update_bootstrap.check_before_start]
+    C -->|"can_launch = false"| X3[exit 3: update_required]
+    C -->|"payload novo ativado"| H["handoff: start_tradutor.py all<br/>do novo payload (TRADUTOR_IA_UPDATE_CHECKED=1)"]
+    C -->|"not_configured / up_to_date"| HW{worker saudável<br/>já registrado?}
+    HW -->|sim| UI[start_ui: filho app_ui, espera]
+    HW -->|não| SW[spawn_worker_process detached] --> SUP[WorkerSupervisor em thread daemon] --> UI
+    UI -->|UI encerrou| STOP{"este launcher<br/>criou o worker?"}
+    STOP -->|sim| SW2[stop_worker] --> F([fim])
+    STOP -->|não| F
+```
 
 ### Supervisão (`worker_supervisor.py`, TDD #53) — IMPLEMENTADO
 
@@ -244,14 +292,26 @@ Componente separado e independente do anterior: executa **um** processo filho e 
 exit code real. No Windows o filho nasce suspenso, é associado a um Job Object com
 `KILL_ON_JOB_CLOSE` e só então é retomado; no POSIX usa nova sessão e grupo de processos.
 Grava `exit_code.txt`, `launcher_events.jsonl`, stdout e stderr no diretório de runtime
-indicado. É usado para execuções CLI supervisionadas fora da UI; **não** é o launcher da
-aplicação.
+indicado. Destina-se a execuções CLI supervisionadas fora da UI; **não** é o launcher da
+aplicação. Em `5f482ce1` nenhum módulo de produção o importa — só `tests/test_process_launcher.py`
+o exercita.
 
 ## 6. Ciclo de vida da UI
 
-`app_ui.py` sobe um app FastAPI/NiceGUI:
+`app_ui.py` (shim de `yomu/ui/app.py`) sobe um app FastAPI/NiceGUI:
 
-- Porta: `TRADUTOR_UI_PORT` (padrão `8080`); host: `configured_bind_host()`.
+- Porta: `TRADUTOR_UI_PORT` (padrão `8080`; lida em `yomu/ui/app.py` e `yomu/desktop/app.py`,
+  ausente do `.env.example`); host: `community_auth.configured_bind_host()` (`TRADUTOR_UI_HOST`,
+  padrão loopback).
+- **Origem canônica: `http://127.0.0.1:8080`.** O frontend monta os redirects de auth
+  (confirmação de cadastro, recuperação de senha, callback) a partir de `window.location.origin`
+  (`static/supabase_auth.js`, `static/auth_ui.js`), e o projeto Supabase de auth só aceita a
+  origem `http://127.0.0.1:8080` (configuração do projeto, fora do repositório). Abrir a UI por
+  `localhost:8080`, outra porta ou outro host gera redirects que o Supabase recusa. O
+  `.env.example` documenta `SUPABASE_SITE_URL=http://127.0.0.1:8080` e
+  `SUPABASE_REDIRECT_URL=http://127.0.0.1:8080/auth/callback` como referência para configurar o
+  projeto (nenhum módulo Python as lê). O shell desktop usa `127.0.0.1` e a porta 8080 por
+  padrão e só aceita loopback (`--host`).
 - Bind externo exige o opt-in explícito `TRADUTOR_ALLOW_EXTERNAL_BIND=1` **e** um provider
   de auth que declare `supports_external_bind`. O provider local nunca satisfaz isso.
 - A porta é verificada antes do `ui.run` (`_assert_startup_port_available`).
@@ -261,8 +321,10 @@ aplicação.
 
 ### Superfície HTTP
 
-Todas as rotas de aplicação estão sob `/api/ui/*`, `/api/community/*` e `/api/auth/*`.
-Duas exceções deliberadamente não autenticadas:
+As rotas de aplicação estão sob `/api/ui/*`, `/api/community/*` e `/api/auth/*`; a
+superfície de atualização usa `/api/update/*` (§23) e o login desktop usa
+`/api/auth/desktop/handoff/*`, cada uma com contrato próprio. Exceções deliberadamente não
+autenticadas da família `/api/ui`:
 
 | Rota | Motivo |
 | --- | --- |
@@ -321,6 +383,20 @@ retradução deliberada mais tarde.
 
 ### Tela de prontidão e painel Pipeline
 
+O retorno bem-sucedido de `runStartTranslation` usa `activateTab('nova', {preservePipeline: true})`:
+navegar até o job criado não pode reiniciar o formulário nem ativar `suppressHistoricalResult`.
+O início usa o mesmo polling de análise do preflight isolado, encerrado em `finally`.
+Os eventos canônicos `translation` e `rendering` mapeiam para `translate` e `render` na UI.
+O ETA usa contadores canônicos da etapa e suspende a estimativa após 120 segundos sem evento;
+heartbeat do runner não renova artificialmente a data de progresso.
+
+`GET /api/ui/sources/preview/{source_key}` exige o principal da UI e aceita somente as três
+chaves de `SUPPORTED_SOURCE_URLS`. `yomu.ui.source_previews` mantém cache local com TTL de
+60 segundos, uma captura por chave em voo e um único navegador de captura por vez. Reutiliza
+o browser runtime e o teardown limitado existentes, com perfil temporário sem autenticação.
+A UI consulta somente enquanto Fontes estiver visível. Falhas preservam a captura anterior e
+seu horário, sem divulgar detalhes internos. Bloqueios do site não são contornados.
+
 `#loadingSurface` fica **dentro da coluna de "Nova tradução"**, logo acima do painel
 Pipeline. `renderBootstrapSurface()` só desenha enquanto o boot está de fato acontecendo:
 `closeBoot()` trava `bootHasClosed` e, a partir daí, nenhum `refreshBootstrap()` posterior
@@ -337,12 +413,12 @@ superfície visual deixou de invadir a aplicação já iniciada. Uma falha real 
 ainda chega a `setBootFailed()` e ao overlay `#boot`, com ação de recuperação.
 
 O painel Pipeline em si é dirigido por estado real (`renderProgress`), com as etapas de
-produção atuais — `source_analysis`, `awaiting_source_review`, `download`, `validation`,
+produção atuais — `source_analysis`, `awaiting_source_review`, `waiting_source_verification`, `download`, `validation`,
 `ocr`, `translate`, `render`, `pdf`, `quality_review` — e nunca por animação sintética.
 
 ## 7. Ciclo de vida do worker e do runner
 
-`worker_service.py` roda um laço:
+`worker_service.py` (`yomu/runtime/worker_service.py`) roda um laço:
 
 | Constante | Valor |
 | --- | --- |
@@ -351,6 +427,8 @@ produção atuais — `source_analysis`, `awaiting_source_review`, `download`, `
 | `STALE_SECONDS` | `30.0` |
 | `STAGING_GRACE_SECONDS` | `5.0` |
 | `COMMUNITY_RUNNER_MAX_ATTEMPTS` | `3` |
+| `SOURCE_VALIDATION_TIMEOUT_SECONDS` | `180.0` |
+| `SOURCE_ANALYSIS_REUSE_TTL_SECONDS` | `900` (15 min) |
 
 Sequência por ciclo:
 
@@ -360,13 +438,16 @@ Sequência por ciclo:
 3. Reivindica **um** job `queued` com UPDATE guardado por `status='queued'`.
 4. Para fonte por URL, roda a fase de análise (`_prepare_source` →
    `source_analysis_phase`) enquanto segura o claim.
-5. Cria o runner: `python -u job_runner.py --job-id ... --db ... --worker-id ... --log ...`.
+5. Cria o runner conforme o tipo do job (`translation` → `yomu.runtime.job_runner`,
+   `community_publish`, `review_rerun`, `review_reexport` → seus runners):
+   `python -u -m yomu.runtime.job_runner --job-id ... --db ... --worker-id ... --log ... --start-gate ...`
+   (no build congelado: `YomuSekai.exe --internal-child job-runner ...`).
 6. Acompanha o runner, honra cancelamento cooperativo e reconcilia a saída
    (`_reconcile_runner_exit`).
 
 `job_runner.py` executa **um** capítulo: escreve o manifest inicial imediatamente (para que
 uma execução interrompida ainda deixe registro), marca `running`, lança o comando do
-pipeline com stdout redirecionado para `.cache/runtime/logs/<job_id>.log`, atualiza
+pipeline com stdout redirecionado para `<runtime>/logs/<job_id>.log`, atualiza
 progresso e heartbeat, e deriva o status terminal a partir dos artefatos produzidos. Um
 crash no runner fica contido em um job — o worker continua.
 
@@ -379,11 +460,67 @@ classificado como evidência de qualidade do commit atual.
 
 Modos: `worker_service.py --once` processa no máximo um job e sai; `--status` imprime saúde
 e sai; `--db` aponta para outro banco (usado por testes e manutenção — nesse caso os logs
-vão para o diretório do banco, nunca para o cache de produção).
+vão para o diretório do banco, nunca para o runtime de produção); `--poll-interval` ajusta o
+intervalo de polling.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant UI as UiBridge (processo da UI)
+    participant DB as jobs.sqlite3
+    participant W as worker_service
+    participant R as job_runner (subprocesso)
+    participant P as benchmark_pipeline
+    UI->>DB: cria job (staging → queued)
+    UI->>W: ensure_worker() se nenhum saudável
+    loop a cada POLL_SECONDS
+        W->>DB: heartbeat do lease + _reconcile_stale
+        W->>DB: claim atômico (queued → claiming)
+    end
+    W->>W: _prepare_source (análise de fonte)
+    alt confiança média
+        W->>DB: claiming → awaiting_source_review
+    else challenge da fonte
+        W->>DB: claiming → waiting_source_verification
+    else pronto
+        W->>DB: claiming → starting
+        W->>R: spawn (--job-id --db --worker-id --log --start-gate)
+        R->>DB: starting → running
+        R->>P: comando do pipeline (stdout → logs/job_id.log)
+        P-->>R: artefatos + run_manifest.json
+        R->>DB: finished / review_required / failed
+    end
+```
+
+### Fluxo de um capítulo (visão geral)
+
+Etapas na ordem em que `benchmark_pipeline.run_benchmark` as executa (nomes de estágio de
+`resource_monitor.set_stage`); detalhes nas §11–§18. `--download-only` é tratado antes, em
+`yomu/commands/run_webtoon.py`, e para depois da validação das imagens.
+
+```mermaid
+flowchart LR
+    A["Análise de fonte<br/>(worker, §11)"] -->|"score >= 0,85"| DL
+    A -->|"0,60–0,84"| RV[awaiting_source_review] -->|usuário confirma| DL
+    A -->|challenge| WV[waiting_source_verification]
+    A -->|"< 0,60 / bloqueio"| FX[failed]
+    DL["downloading<br/>(§12)"] --> VA[validation]
+    VA -->|download-only| DO([fim: só imagens])
+    VA --> SS["smart_split<br/>(§13)"] --> PC[precheck sem texto]
+    PC --> OCR["ocr + classification<br/>(§14)"]
+    OCR --> TR["translation<br/>yomu_backend (§15)"]
+    TR --> RE["rendering: limpeza +<br/>diagramação (§16)"]
+    RE --> PDF["pdf (§18)"]
+    PDF --> REP["reports + quality gate (§17)<br/>PNG/PSD/QC conforme perfil (§26)"]
+    REP --> T{veredito}
+    T --> FIN[finished]
+    T --> RR[review_required]
+    T --> FL[failed]
+```
 
 ## 8. Máquina de estados do job
 
-`job_store.JobStatus` define **14 estados**. Transições não listadas em
+`yomu/runtime/job_store.py` — `JobStatus` define **15 estados**. Transições não listadas em
 `ALLOWED_TRANSITIONS` são rejeitadas com `TransitionError` (fail-closed).
 
 | Estado | Classe | Significado |
@@ -395,6 +532,7 @@ vão para o diretório do banco, nunca para o cache de produção).
 | `running` | em voo | Pipeline em execução |
 | `cancelling` | em voo | Cancelamento pedido; runner derrubando a árvore |
 | `awaiting_source_review` | pausa | Análise de confiança média: usuário precisa confirmar as páginas |
+| `waiting_source_verification` | pausa | A fonte exige verificação no navegador (`reason_code=challenge_required`, gravado pelo worker); saídas permitidas: `queued`, `cancelled`, `failed` |
 | `source_analysis_ready` | pausa | Fonte analisada; pendência de política de workspace |
 | `interrupted` | recuperação | Execução perdida (crash/parada); artefatos preservados |
 | `resumable` | recuperação | Interrompido e elegível para novo attempt |
@@ -405,6 +543,9 @@ vão para o diretório do banco, nunca para o cache de produção).
 
 `TERMINAL = {cancelled, failed, finished, review_required}`.
 `IN_FLIGHT = {claiming, starting, running, cancelling}` — apenas estes exigem heartbeat.
+`DEDUPE_ACTIVE` = `IN_FLIGHT` + `staging`, `queued`, `awaiting_source_review`,
+`waiting_source_verification`, `source_analysis_ready` — os estados que bloqueiam submissão
+duplicada do mesmo capítulo (§6, §10).
 
 `review_required` mantém o enum persistido por compatibilidade, mas seu significado é
 **sucesso estrutural com revisão recomendada**. O child termina com código `0`; erro
@@ -416,6 +557,7 @@ stateDiagram-v2
     [*] --> staging
     staging --> queued
     staging --> awaiting_source_review
+    staging --> waiting_source_verification
     staging --> cancelled
     staging --> failed
     queued --> claiming
@@ -423,6 +565,7 @@ stateDiagram-v2
     claiming --> starting
     claiming --> queued
     claiming --> awaiting_source_review
+    claiming --> waiting_source_verification: challenge_required
     claiming --> source_analysis_ready
     claiming --> interrupted
     claiming --> cancelling
@@ -430,6 +573,9 @@ stateDiagram-v2
     awaiting_source_review --> queued: usuário confirma páginas
     awaiting_source_review --> cancelled
     awaiting_source_review --> failed
+    waiting_source_verification --> queued
+    waiting_source_verification --> cancelled
+    waiting_source_verification --> failed
     source_analysis_ready --> queued
     source_analysis_ready --> cancelled
     source_analysis_ready --> failed
@@ -544,7 +690,7 @@ clique real, duplo clique, rejeição do backend, exclusão mútua com **Cancela
 
 ## 10. Job store (SQLite) e sistema de arquivos de runtime
 
-`job_store.py` — `SCHEMA_VERSION = 10`, SQLite em modo WAL com `busy_timeout`.
+`yomu/runtime/job_store.py` — `SCHEMA_VERSION = 17`, SQLite em modo WAL com `busy_timeout`.
 
 Índices únicos parciais impõem, no próprio banco, invariantes que código de aplicação não
 consegue garantir sob concorrência:
@@ -554,9 +700,10 @@ consegue garantir sob concorrência:
 | `uq_jobs_active_review_rerun_parent` | um rerun de revisão ativo por job pai |
 | `uq_jobs_retry_parent` | um retry por job anterior |
 | `uq_jobs_active_owner_chapter` | uma tradução ativa por owner e capítulo (v10) |
+| `uq_jobs_active_idempotency_key` | uma tradução ativa por `configuration_json.$.idempotency_key` |
 
-Tabelas: `jobs`, `workers`, `meta`, `quality_review_item_revisions` e tabelas auxiliares
-de revisão. Timestamps são epoch em segundos (`REAL`); `NULL` significa "ainda não".
+Tabelas: `jobs`, `workers`, `meta`, `quality_review_item_revisions` e
+`quality_review_region_overrides`. Timestamps são epoch em segundos (`REAL`); `NULL` significa "ainda não".
 
 **Review = QC linguístico (Missão 8).** A Revisão é uma ferramenta de QC **linguístico**: localizar
 pendências, comparar fonte × tradução, editar a tradução e aprovar/resolver. O QC **visual/
@@ -569,9 +716,9 @@ esses valores efetivos, sem chamar provider. O módulo `review_item.py` normaliz
 warnings, confidence, status) e traduz os códigos de aviso para rótulos PT-BR (`WARNING_LABELS`),
 desacoplando a UI do `quality_report` grande e preparando a Missão 10. O status de QC do item
 (`pending`/`approved`/`resolved`) é **separado** do status terminal do job — a integração disso é a
-Missão 9, não alterada aqui. `review_manifest` continua PLANNED.
+Missão 9, não alterada aqui. O `review_manifest` foi implementado depois, na Missão 10 (§26.2).
 
-A linha de job (~70 colunas explícitas em `_JOB_COLUMNS`) agrupa:
+A linha de job (89 colunas explícitas em `_JOB_COLUMNS`) agrupa, entre outras:
 
 - **identidade**: `id`, `owner_id`, `run_id`, `operation_kind`, `parent_job_id`, `attempt`,
   `previous_job_id`, `commit_hash`, `branch`;
@@ -579,7 +726,8 @@ A linha de job (~70 colunas explícitas em `_JOB_COLUMNS`) agrupa:
   `transport_name`, `source_score`, `candidate_count`, `snapshot_ref`,
   `input_root_fingerprint`, `source_analysis_json`, `source_selection_json`;
 - **progresso**: `stage`, `progress_current`, `progress_total`, `progress_message`,
-  `progress_counter_stage`, `stage_started_at`;
+  `progress_counter_stage`, `stage_started_at` e o contrato de eventos de progresso
+  (`progress_version`, `progress_last_event_seq`, `progress_event_id`, `progress_phase`, ...);
 - **posse de processo**: `worker_id`, `worker_pid`, `worker_create_time`, `runner_pid`,
   `runner_create_time`, `exit_code`;
 - **artefatos**: `manifest_path`, `progress_path`, `quality_report_path`, `pdf_path`,
@@ -593,29 +741,38 @@ canvas. Análise de fonte é sanitizada antes de persistir.
 
 ### Estrutura de runtime
 
+Os caminhos vêm de `yomu/runtime/runtime_paths.py`. A raiz gravável por usuário é
+`%LOCALAPPDATA%\TradutorIA` (fallback `XDG_STATE_HOME/TradutorIA` ou `~/.tradutoria`),
+sobrescrevível por `TRADUTOR_USER_DATA_ROOT`; cada sub-raiz também tem override próprio
+(`TRADUTOR_RUNTIME_ROOT`, `TRADUTOR_OUTPUT_ROOT`, `CACHE_ROOT`, `TEMP_FOLDER`, `TEMP_OUT`).
+Um build instalado pode viver em local somente leitura, por isso nada mutável fica ao lado do
+código.
+
 ```text
-<repo>/.cache/
-├── runtime/
+%LOCALAPPDATA%\TradutorIA├── runtime/                  # TRADUTOR_RUNTIME_ROOT
 │   ├── jobs.sqlite3          # fila e leases (WAL)
 │   ├── logs/<job_id>.log     # log por job
-│   └── ui.log                # stdout/stderr da UI
-├── ui_history.json           # histórico local da UI
-└── ...                       # caches de pipeline
-
-<repo>/output/<slug>/<run_id>/
-├── input/                    # imagens de origem ativas
-├── pages/                    # páginas finais renderizadas
-├── run_manifest.json         # manifest autodescritivo da execução
-├── progress.json             # progresso + run_signature
-├── downloaded_images.json    # manifest ativo do download
-├── download_report.json|html
-├── timing_report.json|txt
-├── quality_report.json|html
-├── resource_report.json|html # só com monitoramento habilitado
-└── <obra>_capitulo_<n>.pdf
+│   ├── ui.log                # stdout/stderr da UI
+│   ├── ui_history.json       # histórico local da UI
+│   └── diagnostics/          # trilhas JSONL (transições de job, rotas, app)
+├── cache/                    # CACHE_ROOT — caches de pipeline
+├── temp/input, temp/output   # TEMP_FOLDER / TEMP_OUT
+└── output/<slug>/<run_id>/   # TRADUTOR_OUTPUT_ROOT
+    ├── input/                # imagens de origem ativas
+    ├── pages/                # páginas finais renderizadas
+    ├── run_manifest.json     # manifest autodescritivo da execução
+    ├── progress.json         # progresso + run_signature
+    ├── downloaded_images.json
+    ├── download_report.json|html
+    ├── timing_report.json|txt
+    ├── quality_report.json|html
+    ├── artifact_manifest.json  # Artifact Contract V2 (§26.1)
+    ├── resource_report.json|html # só com monitoramento habilitado
+    └── <obra>_capitulo_<n>.pdf
 ```
 
-Ambos são ignorados pelo Git.
+Clones antigos podem ter `<repo>/.cache/runtime` e `<repo>/output`; o guard hermético continua
+protegendo esses caminhos legados (§24), mas eles não são mais o padrão.
 
 Novos jobs criados pela UI usam uma pasta endereçada por execução
 (`output/<chapter_slug>/<run_id>/`). Isso preserva dois reprocessamentos do mesmo capítulo
@@ -675,7 +832,11 @@ a loopback (`_local_folder_submit_allowed`).
 
 ## 12. Download de imagens
 
-`down.py` usa Selenium + Chrome headless. O downloader deduplica URLs preservando a ordem
+`yomu/download/down.py` usa Selenium com um navegador Chromium local resolvido por
+`browser_runtime.BrowserRuntimeResolver` (configurado → gerenciado → do sistema, sem download
+de driver salvo `TRADUTOR_ALLOW_DRIVER_DOWNLOAD=1`; headless por padrão,
+`SOURCE_BROWSER_HEADLESS`). Fontes com leitor dinâmico (ex.: Comix) passam pelo resolver
+isolado em `download/readers/` (§29, "Resolver dinâmico Comix"). O downloader deduplica URLs preservando a ordem
 observada, valida os bytes das imagens (`image_validation.py`), compara o conjunto esperado
 com o disponível, produz um **download gate** com motivos de falha e executa teardown
 limitado do navegador registrando o mecanismo usado.
@@ -689,11 +850,13 @@ Detalhes em [`docs/DOWNLOAD_TRANSPORTS.md`](../DOWNLOAD_TRANSPORTS.md).
 
 ## 13. Smart Split e páginas lógicas
 
-Webtoons entregam fatias muito altas ou com divisões inadequadas para OCR e PDF. `pdf.py`
-implementa o **smart split**, que reconstrói páginas lógicas com limites configuráveis
+Webtoons entregam fatias muito altas ou com divisões inadequadas para OCR e PDF.
+`yomu/export/pdf.py` implementa o **smart split** (com o agendamento incremental de
+`yomu/ocr/splitting/smart_split_incremental.py` usado pelo pipeline), que reconstrói páginas lógicas com limites configuráveis
 (`SMART_PDF_TARGET_HEIGHT`, `SMART_PDF_MIN_HEIGHT`, `SMART_PDF_MAX_HEIGHT`) e preserva um
 relatório das fronteiras escolhidas. Ocorre **antes** do OCR quando
-`SMART_WEBTOON_PDF_SPLIT=True`. Para pasta local (arquivos já são páginas lógicas
+`SMART_WEBTOON_PDF_SPLIT=True` (padrão) e o relatório de download indica
+`requires_smart_split`. Para pasta local (arquivos já são páginas lógicas
 completas) o smart split faz passthrough.
 
 O relatório `smart_split_report.json` preserva a soma das alturas de origem, a contagem de
@@ -736,6 +899,11 @@ linguagem visual de `Motor de tradução: DeepL (Qualidade)`, e as Configuraçõ
 silêncio, o campo é **informativo e não selecionável**: não há opção Paddle exposta, porque
 Paddle não é exigido nem instalado nesta beta.
 
+> **Estado em `5f482ce1`:** o campo `#ocrEngineField` da tela de nova tradução está marcado
+> `hidden` em `ui/ui_shell.html` e nenhum script o reexibe; hoje o motor aparece apenas no
+> painel **Motor de OCR** das Configurações (`RapidOCR` + selo `Ativo`). Os parágrafos de TDD
+> abaixo descrevem o comportamento do campo quando visível.
+
 **Controles da beta (TDD #84F10).** O campo do OCR perdeu a seta de dropdown
 (`#ocrEngineSelect { appearance: none }`): uma seta em um campo de opção única promete
 alternativas que não existem. O rótulo deixou de ser fixo — `applyOcrEngineStatus()` o
@@ -746,7 +914,8 @@ afirmar um motor que o run não vai usar.
 **Proveniência efetiva do OCR (TDD #84F19).** O processo da UI não lê mais
 `config.OCR_ENGINE` como fonte de verdade para o painel de configuração: esse valor pode ser
 apenas o default do processo e não o motor efetivo da beta. `ui_bridge` passa a reportar
-`settings.ocr_engine` por `config.effective_ocr_engine()`, o mesmo resolvedor usado antes de
+`settings.ocr_engine` por `config.effective_ocr_engine()` (`config` = `yomu/config/settings.py`;
+o default é `OCR_ENGINE=rapidocr`), o mesmo resolvedor usado antes de
 iniciar um run. Com o default canônico da beta, a UI mostra `RapidOCR · Ativo`; um override
 explícito e suportado continua sendo reportado pelo próprio id. O campo segue informativo:
 sem opção Paddle/Tesseract exposta e sem seta de seletor.
@@ -791,55 +960,72 @@ origem não poderia ser reconstruído depois. O módulo **apenas observa**.
 
 ### Resolução do provider
 
-Dois eixos ortogonais, deliberadamente:
+**Caminho de produção — `yomu_backend` (IMPLEMENTADO).** Todo job com tradução habilitada usa
+o provider interno autenticado `yomu_backend`, independentemente do rótulo pedido.
+`benchmark_pipeline._resolve_translation_runtime()` constrói `YomuBackendTranslationProvider`
+(`yomu/translation/providers/yomu_backend_provider.py`) e o injeta em `get_translator()`; os
+rótulos `deepl`/`nemotron`/`riva` que chegam pela CLI ou pelo job viram apenas metadado. A
+validação de proveniência (`normalize_translation_provider_provenance`) aceita `deepl → yomu_backend` (o "motor" exibido ao usuário é a
+DeepL, executada do lado do servidor) e falha com `provider_mismatch` para qualquer outra
+combinação. Jobs sem tradução (`download_only`, saída sem tradução) não constroem provider.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant UI as UiBridge.start()
+    participant R as job_runner
+    participant P as pipeline (YomuBackendTranslationProvider)
+    participant EF as Supabase Edge Functions
+    participant DL as DeepL (servidor)
+    UI->>UI: principal autenticado + licença Beta ACTIVE
+    UI->>R: job + envelope de auth DPAPI por job (secure_auth_context)
+    R->>P: comando do pipeline
+    P->>EF: POST /functions/v1/wallet-reserve (JWT do usuário)
+    P->>EF: POST /functions/v1/translation-execute
+    EF->>DL: tradução com DEEPL_API_KEY do servidor
+    DL-->>EF: textos
+    EF-->>P: traduções
+    R->>EF: wallet-settle-job / wallet-finalize (consumo ou liberação do YK)
+```
+
+A URL base é `YOMU_BACKEND_URL` ou, na ausência dela, `SUPABASE_URL`. Em `YOMU_ENV=local|test`
+o pipeline usa `MockBackendClient` (padrão `YOMU_TEST_BACKEND=mock`). O token do usuário nunca
+entra em linha de comando, ambiente, log ou metadado de job: vai cifrado com DPAPI num
+envelope por job. Falhas de reserva, auth, transporte ou settlement são
+`SystemicTranslationFailure` (job inteiro), nunca achado por região.
+
+**Fábrica legada — `translator_nllb.get_translator()` (DEPRECIADO para jobs).** Só é usada
+sem provider injetado pelo pipeline da GUI legada (`main.py` → `yomu/pipeline/legacy_gui_pipeline.py`).
+Dois eixos ortogonais:
 
 - `TRANSLATION_MODE` (padrão `nvidia`) — eixo **antigo**, seleciona a família
   local/Google/NVIDIA.
-- `ui_helpers.DEFAULT_TRANSLATION_PROVIDER` (**`deepl`**) — o resolvedor único que a UI, a
-  criação de job e o runner leem.
+- `ui_helpers.DEFAULT_TRANSLATION_PROVIDER` (**`deepl`**); `TRANSLATION_PROVIDERS =
+  {"deepl", "nemotron", "riva"}` e `INTERNAL_TRANSLATION_PROVIDERS = {"yomu_backend"}`.
 
-`TRANSLATION_PROVIDERS = {"deepl", "nemotron", "riva"}`.
+Regra: provider explícito vence; ausente **e** `TRANSLATION_MODE == "nvidia"` →
+`DEFAULT_TRANSLATION_PROVIDER`; `deepl` é resolvido antes de `TRANSLATION_MODE`; pedir
+`yomu_backend` sem instância injetada levanta `yomu_backend_provider_requires_injected_instance`.
+Nunca há fallback silencioso entre providers.
 
-Regra em `translator_nllb.get_translator()`:
+### DeepL local (`translator_deepl.py`) — DEPRECIADO no cliente
 
-1. Provider explícito no job vence sempre.
-2. Provider ausente **e** `TRANSLATION_MODE == "nvidia"` → `DEFAULT_TRANSLATION_PROVIDER`
-   (**DeepL**). O escopo é a família NVIDIA de propósito: uma instalação que roda
-   deliberadamente `TRANSLATION_MODE=google` não é sequestrada por um default no qual nunca
-   optou.
-3. `deepl` é resolvido **antes** de `TRANSLATION_MODE`.
+O cliente HTTP DeepL local continua no código (contrato HTTP próprio, `translate_many` /
+`translate` / `stats` / `model`, sem `translate_strict`, sem naturalizador, sem fallback) e
+só é alcançável pela fábrica legada. A DeepL da Beta roda na Edge Function
+`supabase/functions/translation-execute`, que lê `DEEPL_API_KEY`/`DEEPL_API_BASE_URL` do
+ambiente **do servidor**. As variáveis `DEEPL_*` do `.env.example` só afetam o caminho legado.
 
-> **O default efetivo do produto hoje é DeepL.** Um job DeepL que não alcança a DeepL
-> **falha**; ele não vira job Riva. Nunca há fallback silencioso entre providers.
+### NVIDIA (`translator_nvidia.py`) — DEPRECIADO no cliente
 
-### DeepL (`translator_deepl.py`) — provider padrão da Beta
-
-Provider de primeira classe, não variante dos outros: possui todo o contrato HTTP
-(construção de request, validação de resposta, normalização de erro, telemetria de
-caracteres cobrados) e expõe só a interface que o pipeline já fala
-(`translate_many` / `translate` / `stats` / `model`).
-
-Ausências deliberadas, cada uma um contrato:
-
-- **Sem `translate_strict`** → o quality gate nunca pede à DeepL para re-traduzir uma
-  região.
-- **Sem naturalizador anexado** → a saída de benchmark não precisou de um, e acoplar um
-  passe de LLM a um caminho de ~2s transformaria silenciosamente o provider num pipeline
-  multi-provider lento.
-- **Sem fallback** → chave ausente produz nenhuma tradução e nenhum provider substituto.
-
-Variáveis: `DEEPL_API_KEY`, `DEEPL_API_BASE_URL`, `DEEPL_MODEL_TYPE`.
-
-### NVIDIA (`translator_nvidia.py`)
-
-Duas variantes selecionáveis: `nemotron` (API compatível com OpenAI) e `riva` (contrato de
-prompt nativo de tradução). Opera em lotes, respeita `NVIDIA_MAX_REQUESTS_PER_MINUTE`, usa
-retry/backoff para falhas temporárias e grava cache por entrada e configuração.
+Duas variantes: `nemotron` (API compatível com OpenAI) e `riva`. Opera em lotes, respeita
+`NVIDIA_MAX_REQUESTS_PER_MINUTE`, usa retry/backoff e grava cache. Alcançável só pela fábrica
+legada.
 
 ### Google / NLLB — DEPRECIADO
 
 `translator_nllb.py` mantém caminhos Google Translate e NLLB local por compatibilidade. Não
-são o fluxo recomendado da UI nem da CLI atuais.
+são o fluxo da UI nem da CLI atuais.
 
 ### Contexto de capítulo
 
@@ -1985,19 +2171,49 @@ artefato. O arquivo é aberto em modo binário de leitura e lido por offset.
 
 ## 19. Autenticação e autorização
 
-`community_auth.build_auth_provider()` — **o default é `supabase`**. Providers suportados:
+`community_auth.build_auth_provider()` (`yomu/community/community_auth.py`) — **o default é
+`supabase`**. O nome vem de `AUTH_PROVIDER` (alias com precedência, ausente do `.env.example`)
+ou `COMMUNITY_AUTH_PROVIDER`. Providers suportados:
 
 | Valor de `COMMUNITY_AUTH_PROVIDER` | Descrição |
 | --- | --- |
 | `supabase` (**padrão**) | JWT de usuário verificado criptograficamente contra o JWKS do projeto |
 | `local` | Sessão de operador em loopback, sem dependência de rede |
-| `better_auth` | Serviço Better Auth em `apps/auth-service/`, atrás de proxy same-origin |
-| `local_test` | Provider exclusivo de teste |
+| `better_auth` | **PARCIAL / nunca ativado** — `BetterAuthProvider` e o serviço em `apps/auth-service/` existem (origem padrão `http://127.0.0.1:8080`), mas nenhum ambiente usa esse provider; não há `BETTER_AUTH_*` no `.env.example` |
+| `local_test` | Provider exclusivo de teste (`test_support/local_test_auth.py`) |
 
 Configuração incompleta **falha fechada**: nunca há queda silenciosa para o provider local.
 
 Trocar de provider não altera nenhuma regra de autorização — o boundary em
 `community_authorization.py` continua decidindo acesso a partir de um `RequestPrincipal`.
+
+### Fluxo de login e autorização de um job
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant B as Navegador / WebView2 em http://127.0.0.1:8080
+    participant SA as Supabase Auth
+    participant API as yomu.ui.app (FastAPI)
+    participant V as SupabaseAuthProvider
+    participant L as Autorizador Beta (beta_license)
+    B->>SA: login (supabase-js), redirect = window.location.origin + /auth/callback
+    SA-->>B: GET /auth/callback (página estática) → sessão JWT no cliente
+    B->>API: /api/ui/* com Authorization: Bearer JWT (+ CSRF em mutações)
+    API->>V: _ui_principal() → verifica JWS contra o JWKS (kid, alg, iss, aud, exp)
+    V-->>API: RequestPrincipal(user_id = sub, role comum)
+    B->>API: POST /api/ui/run
+    API->>L: UiBridge.start() → authorize (RPC authorize_beta_tester_device)
+    alt decisão ACTIVE
+        API->>API: cria job + envelope DPAPI com o token, escopado ao job
+    else qualquer outro estado
+        API-->>B: recusa fail-closed (sem job)
+    end
+```
+
+No shell desktop o login usa ainda as rotas `/api/auth/desktop/handoff/*` para entregar o
+resultado do callback à janela WebView2. A origem do navegador **precisa** ser
+`http://127.0.0.1:8080` (ver §6).
 
 ### Verificação do token Supabase (`supabase_auth.py`)
 
@@ -2048,7 +2264,11 @@ não coleta serial de disco, MAC address, chave do Windows ou inventário amplo 
 política atual, reinstalar pode consumir novo slot se a identidade de instalação mudar.
 
 O gate autoritativo local fica antes da criação/retomada de jobs em `UiBridge.start()` e
-`UiBridge.resume()`. A UI é apenas camada de experiência; segurança não depende de botão
+`UiBridge.resume()`. O autorizador é composto por `_build_ui_beta_access_authorizer`
+(`yomu/ui/ui_bridge.py`): checkout de desenvolvimento sem `BETA_LICENSE_PROVIDER` usa o
+autorizador local de desenvolvimento; build congelado ou `TRADUTOR_RUNTIME_MODE=desktop` sem
+provider força `production` e falha fechado se a configuração faltar (nunca rebaixa em
+silêncio); os demais modos recebem fingerprint estável de instalação. A UI é apenas camada de experiência; segurança não depende de botão
 desabilitado. O runner tem defesa em profundidade:
 `job_runner._assert_beta_authorization_metadata()` recusa jobs protegidos cujo metadado de
 autorização não seja `ACTIVE` e completo, sem fazer lookup privilegiado nem ler segredo.
@@ -2059,7 +2279,9 @@ O contrato remoto está nas migrations:
 - `20260824130000_beta_tester_authorization_rpc.sql`
 - `20260824140000_beta_tester_grants_hardening.sql`
 
-No Supabase remoto `Tradutor IA Community` (`mimrsxnhqbqkffsekxuw`), o conector registrou:
+No Supabase remoto `Tradutor IA Community` (`mimrsxnhqbqkffsekxuw` — hoje o projeto legado
+mantido como rollback, ver §26; o registro abaixo não foi revalidado no backend ativo), o
+conector registrou:
 
 - `20260824192515 beta_tester_licensing_foundation`
 - `20260824192601 beta_tester_authorization_rpc`
@@ -2106,7 +2328,13 @@ imagens do capítulo.
 
 ## 20. Comunidade e armazenamento
 
-**IMPLEMENTADO**, montado de forma fail-closed: se `build_social_repository()` levantar
+**PARCIAL.** O backend está **implementado** e montado de forma fail-closed, mas a
+**UI está desligada no cliente**: `static/social_community.js` define `COMMUNITY_ENABLED = false`
+e a aba renderiza apenas o estado de desenvolvimento (selo "EM BREVE" no menu e
+"EM DESENVOLVIMENTO" na tela). Nenhum fluxo social é alcançável pela interface atual; o texto
+abaixo descreve o backend.
+
+Backend: se `build_social_repository()` levantar
 `SocialConfigError`, o router social simplesmente não é montado e `_SOCIAL_STATUS` reporta
 um `reason_code` de um conjunto fechado — nunca a `SUPABASE_URL`, chave ou exceção crua.
 
@@ -2158,8 +2386,9 @@ de download, OCR, tradução e renderização; **não apaga** o cache global.
 
 ## 22. Configuração e variáveis de ambiente
 
-`.env` (não versionado) na raiz; `.env.local` (também ignorado) refina toggles de
-desenvolvimento local. `local_environment.py` carrega ambos de forma determinística:
+`.env` (não versionado) na raiz do repositório; `.env.local` (também ignorado) refina toggles
+de desenvolvimento local. `yomu/runtime/local_environment.py` carrega ambos de forma
+determinística e a configuração tipada vive em `yomu/config/settings.py`:
 
 - O `.env` base é conservador e **nunca substitui** valores já presentes no processo.
 - O `.env.local` pode sobrescrever, mas valores que existiam antes do loader rodar
@@ -2168,12 +2397,17 @@ desenvolvimento local. `local_environment.py` carrega ambos de forma determinís
   absoluto.
 - `TRADUTOR_IA_HERMETIC_TEST_ENV=1` impede o carregamento — usado pelo runtime de testes.
 
-`.env.example` documenta ~150 variáveis. As categorias principais:
+`.env.example` documenta ~160 variáveis. Algumas variáveis lidas pelo código **não** estão
+no `.env.example`: `TRADUTOR_UI_PORT`, `AUTH_PROVIDER`, `NVIDIA_TRANSLATION_PROVIDER`,
+`LOCAL_INPUT_ROOTS`, `YOMU_BACKEND_URL`, `YOMU_ENV`, `YOMU_TEST_BACKEND`,
+`TRADUTOR_IA_UPDATE_MANIFEST_URL`, `TRADUTOR_IA_INSTALL_ROOT`. As categorias principais:
 
 | Grupo | Exemplos | Obrigatório? |
 | --- | --- | --- |
-| Tradução DeepL | `DEEPL_API_KEY`, `DEEPL_API_BASE_URL`, `DEEPL_MODEL_TYPE` | `DEEPL_API_KEY` obrigatório no default atual |
-| Tradução NVIDIA | `NVIDIA_API_KEY`, `NVIDIA_BASE_URL`, `NVIDIA_TRANSLATION_MODEL`, `NVIDIA_TRANSLATION_BATCH_SIZE`, `NVIDIA_MAX_REQUESTS_PER_MINUTE`, `NVIDIA_TRANSLATION_PROVIDER` | Só se usar `nemotron`/`riva` |
+| Backend de tradução | `YOMU_BACKEND_URL` (fallback `SUPABASE_URL`), `YOMU_ENV`, `YOMU_TEST_BACKEND` | A URL do Supabase basta no caminho padrão |
+| Tradução DeepL local (legado) | `DEEPL_API_KEY`, `DEEPL_API_BASE_URL`, `DEEPL_MODEL_TYPE` | **Não** no fluxo atual — a DeepL roda na Edge Function com a chave do servidor (§15) |
+| Tradução NVIDIA (legado) | `NVIDIA_API_KEY`, `NVIDIA_BASE_URL`, `NVIDIA_TRANSLATION_MODEL`, `NVIDIA_TRANSLATION_BATCH_SIZE`, `NVIDIA_MAX_REQUESTS_PER_MINUTE`, `NVIDIA_TRANSLATION_PROVIDER` | Só no pipeline legado |
+| OCR NVIDIA | `NVIDIA_OCR_*` | Opcional, desligado por padrão |
 | Modo de tradução | `TRANSLATION_MODE`, `TRANSLATE_SFX`, `PRIORITIZE_ENCLOSED_TEXT` | Opcional |
 | OCR | `OCR_ENGINE`, `OCR_FALLBACK_ENGINE`, `OCR_HYBRID_FALLBACK`, `RAPIDOCR_*`, `FAST_OCR_*`, `OCR_TEXT_REPAIR*`, `OCR_QUALITY_CONTROL`, `OCR_GROUP_*` | Opcional |
 | Máscara / render | `TEXT_MASK_PADDING`, `MAX_MASK_EXPANSION`, `STRICT_MASK_BOUNDS`, `MIN_FONT_SIZE`, `MAX_FONT_SIZE`, `AUTO_LINE_WRAP`, `AUTO_FONT_SHRINK` | Opcional |
@@ -2181,10 +2415,12 @@ desenvolvimento local. `local_environment.py` carrega ambos de forma determinís
 | Caches | `ENABLE_*_CACHE`, `FULL_FAST_MODE` | Opcional |
 | Recursos | `OCR_PARALLEL`, `OCR_WORKERS`, `ADAPTIVE_PARALLELISM`, `RESOURCE_MONITORING`, `MIN/MAX_OCR_WORKERS`, `MEMORY_*`, `CPU_PRESSURE_HIGH_PERCENT` | Opcional |
 | PDF | `SMART_WEBTOON_PDF_SPLIT`, `SMART_PDF_TARGET_HEIGHT`, `SMART_PDF_MIN_HEIGHT`, `SMART_PDF_MAX_HEIGHT` | Opcional |
-| Auth | `COMMUNITY_AUTH_PROVIDER`, `SUPABASE_URL`, `SUPABASE_PUBLISHABLE_KEY`, `SUPABASE_SECRET_KEY`, `SUPABASE_JWKS_URL`, `SUPABASE_EXPECTED_ISSUER`, `SUPABASE_EXPECTED_AUDIENCE`, `SUPABASE_SITE_URL`, `SUPABASE_REDIRECT_URL` | Obrigatório para login |
+| Licença Beta | `BETA_LICENSE_PROVIDER` | Ver §19 |
+| Auth | `COMMUNITY_AUTH_PROVIDER`, `SUPABASE_URL`, `SUPABASE_PUBLISHABLE_KEY`, `SUPABASE_SECRET_KEY`, `SUPABASE_JWKS_URL`, `SUPABASE_EXPECTED_ISSUER`, `SUPABASE_EXPECTED_AUDIENCE`, `SUPABASE_SITE_URL`, `SUPABASE_REDIRECT_URL` | Obrigatório para login (`SUPABASE_SITE_URL`/`SUPABASE_REDIRECT_URL` são referência para o projeto Supabase — origem `http://127.0.0.1:8080` —, não lidas pelo Python) |
 | Comunidade | `COMMUNITY_SOCIAL_PROVIDER`, `COMMUNITY_STORAGE_PROVIDER`, `COMMUNITY_DRIVE_ROOT_FOLDER_ID`, `COMMUNITY_LOCAL_*` | Só para comunidade |
 | Google Drive | `GOOGLE_OAUTH_CLIENT_ID`, `GOOGLE_OAUTH_CLIENT_SECRET`, `GOOGLE_OAUTH_TOKEN_PATH`, `GOOGLE_OAUTH_SCOPES` | Só com storage Drive |
-| Rede / UI | `TRADUTOR_UI_HOST`, `TRADUTOR_UI_PORT`, `TRADUTOR_ALLOW_EXTERNAL_BIND` | Opcional |
+| Rede / UI | `TRADUTOR_UI_HOST`, `TRADUTOR_UI_PORT`, `TRADUTOR_ALLOW_EXTERNAL_BIND` | Opcional (mudar host/porta quebra o login: §6) |
+| Caminhos | `TRADUTOR_USER_DATA_ROOT`, `TRADUTOR_RUNTIME_ROOT`, `TRADUTOR_OUTPUT_ROOT`, `CACHE_ROOT`, `TEMP_FOLDER`, `TEMP_OUT` | Opcional (§10) |
 | Navegador | `SOURCE_BROWSER_ENGINE`, `SOURCE_BROWSER_EXECUTABLE`, `SOURCE_BROWSER_HEADLESS`, `SOURCE_BROWSER_STARTUP_TIMEOUT`, `SOURCE_BROWSER_NAVIGATION_TIMEOUT`, `SOURCE_BROWSER_PROFILE_MODE`, `TRADUTOR_ALLOW_DRIVER_DOWNLOAD` | Opcional |
 | Selenium | `SELENIUM_QUIT_TIMEOUT_SECONDS`, `SELENIUM_CLEANUP_TIMEOUT_SECONDS` | Opcional |
 | Debug | `DEBUG_VISUAL`, `SAVE_FULL_DEBUG`, `SAVE_COMPARE_SAMPLES`, `SAVE_DEBUG_ONLY_ERRORS`, `CLASSIFICATION_PROFILING`, `POST_RENDER_OCR_VALIDATION` | Opcional |
@@ -2192,7 +2428,6 @@ desenvolvimento local. `local_environment.py` carrega ambos de forma determinís
 Formato seguro para exemplos em documentação:
 
 ```dotenv
-DEEPL_API_KEY=<sua-chave-deepl>
 SUPABASE_URL=<url-do-seu-projeto-supabase>
 SUPABASE_PUBLISHABLE_KEY=<sua-publishable-key>
 ```
@@ -2215,9 +2450,12 @@ Fronteiras implementadas — e o que elas **não** garantem
   uso.
 - `SUPABASE_URL` e `SUPABASE_PUBLISHABLE_KEY` são públicas por design e expostas em
   `GET /api/community/auth/config` só para o browser construir o cliente do SDK.
-- Chaves de provider de tradução (`DEEPL_API_KEY`, `NVIDIA_API_KEY`) vivem no `.env`, são
-  lidas em processo e **mascaradas antes de qualquer log chegar à interface**
-  (`ui_helpers.sanitize_diagnostic_text`).
+- A chave DeepL de produção vive só no ambiente da Edge Function `translation-execute`; o
+  cliente nunca a recebe. Chaves dos providers legados (`DEEPL_API_KEY`, `NVIDIA_API_KEY`),
+  quando presentes no `.env`, são lidas em processo e **mascaradas antes de qualquer log chegar
+  à interface** (`ui_helpers.sanitize_diagnostic_text`).
+- O token do usuário usado pelo runner viaja num envelope DPAPI por job
+  (`yomu/auth/secure_auth_context.py`), nunca em argv, ambiente, log ou banco.
 - Token OAuth do Drive fica no caminho indicado por `GOOGLE_OAUTH_TOKEN_PATH`, fora do Git.
   Nunca é enviado ao browser nem persistido no banco de jobs.
 - Diagnósticos persistidos em `jobs.sqlite3` são sanitizados: sem URL completa, query
@@ -2236,18 +2474,34 @@ Fronteiras implementadas — e o que elas **não** garantem
 
 - Nenhuma terminação por nome de processo. Sempre PID + `create_time` + linha de comando.
 - Job Object com `KILL_ON_JOB_CLOSE` no `process_launcher.py` (Windows) impede descendentes
-  órfãos.
+  órfãos nas execuções que usam esse launcher (§5).
 
-### Updater assinado — PARCIAL (TDD #57/#58)
+### Updater assinado — PARCIAL (TDD #57/#58 + superfície de UI)
 
-**O que existe:** o núcleo de confiança e instalação (`tests/test_signed_update.py`) e a integração
-remota de startup (`tests/test_remote_update.py`): versão canônica do produto, transporte HTTPS
-delimitado, fetch de manifest, download de pacote, verificação por assinatura/SHA, staging,
-ativação atômica, health-check do payload, rollback e handoff pelo launcher antes de worker/UI.
-**O que ainda não existe:** canal de release de produção, chave pública de release embutida,
-UI de atualização e empacotamento final. Nenhuma chave de release de produção existe ainda, e
-por isso a raiz de confiança embutida está **deliberadamente vazia** — o updater falha fechado
-em vez de confiar numa chave inventada.
+**O que existe:** o núcleo de confiança e instalação (`tests/test_signed_update.py`) e a
+integração remota de startup (`tests/test_remote_update.py`): versão canônica do produto
+(`yomu/runtime/version.py`: `PRODUCT_VERSION = "0.9.0"`, `BUILD_VERSION = "0.9.1-beta.18"`),
+transporte HTTPS delimitado, fetch de manifest, download de pacote, verificação por
+assinatura/SHA, staging, ativação atômica, health-check do payload, rollback e handoff pelo
+launcher antes de worker/UI. Desde então também existem:
+
+- **Raiz de confiança populada**: `update_manifest.TRUSTED_PUBLIC_KEYS` contém a chave pública
+  `beta-2026-10` (a privada fica fora do repositório).
+- **Canal padrão configurado**: `update_bootstrap.DEFAULT_MANIFEST_URL` aponta para o manifest
+  beta em um repositório GitHub de releases (`.../YomuSekai-Releases/main/updates/beta/latest.json`);
+  `TRADUTOR_IA_UPDATE_MANIFEST_URL` sobrescreve.
+- **Dois tipos de artefato** no manifest: `zip` (payload versionado, aplicado pelo bootstrap
+  do launcher) e `windows-installer` (Setup `*-Setup-x64.exe`, aplicado por
+  `yomu/runtime/installer_update.py`).
+- **Superfície de UI**: aba **Atualizações** (`ui/ui_shell.html`: "Verificar atualizações",
+  "Baixar e instalar", selo "↑ Atualizar"), servida pelas rotas `GET /api/update/manifest`,
+  `POST /api/update/download`, `GET /api/update/download/status`,
+  `POST /api/update/download/cancel` e `POST /api/update/install` em `yomu/ui/app.py`. A
+  instalação só executa o instalador previamente baixado e verificado (token de handoff), depois
+  que os processos do app saem.
+
+**O que não foi verificado nesta revisão:** a publicação de um manifest assinado válido no canal
+e uma atualização ponta a ponta numa instalação real. Até lá, o status permanece **PARCIAL**.
 
 #### Fronteira de confiança
 
@@ -2263,7 +2517,7 @@ flowchart TD
     key["Chave privada Ed25519<br/>FORA do repositório"]
     manifest["Manifest assinado<br/>payload canônico + assinatura + key_id"]
     pkg["Pacote .zip + SHA-256"]
-    host["Hospedagem HTTPS<br/>(Supabase / GitHub Releases / R2 — a decidir)"]
+    host["Hospedagem HTTPS<br/>(manifest beta padrão em repositório GitHub de releases)"]
     transport["update_transport.py<br/>HTTPS + limites + redirects validados"]
     bootstrap["update_bootstrap.py<br/>startup check + handoff"]
     client["Cliente instalado"]
@@ -2365,7 +2619,8 @@ Formato: `MAJOR.MINOR.PATCH` estrito, convertido para tupla de inteiros — `1.1
 Downgrade remoto ≠ rollback local: o rollback opera sobre uma release **já instalada e já
 verificada** localmente, nunca sobre uma versão antiga rebaixada.
 
-A versão autoritativa do payload local é `app_version.PRODUCT_VERSION` (`MAJOR.MINOR.PATCH`).
+A versão autoritativa do produto é `yomu/runtime/version.py` (`PRODUCT_VERSION`, `MAJOR.MINOR.PATCH`);
+a superfície de UI compara o manifest com `BUILD_VERSION` (linha beta ordenada).
 Constantes `*_SCHEMA_VERSION` continuam sendo versões de formatos de dados, não do produto.
 O campo opcional assinado `minimum_bootstrap_version` permite que uma release recuse launchers
 antigos sem tentar uma auto-substituição insegura.
@@ -2431,6 +2686,27 @@ selftest falhar, faz rollback para a versão anterior. Se passar, o launcher ant
 para o `start_tradutor.py` da nova versão com `TRADUTOR_IA_UPDATE_CHECKED=1`, evitando loop e
 mantendo exatamente um dono da supervisão do worker.
 
+```mermaid
+flowchart TD
+    S["check_before_start(payload_dir)"] --> H{"TRADUTOR_IA_UPDATE_CHECKED=1?"}
+    H -->|sim| SK[skipped]
+    H -->|não| R{"layout instalado?<br/>versions/ + current.json"}
+    R -->|"não (clone)"| NC[not_configured]
+    R -->|sim| T{"chave confiável?"}
+    T -->|não| TNC[trust_not_configured]
+    T -->|sim| F[fetch do manifest via HTTPS]
+    F -->|falha de rede| NE[network_error]
+    F --> V{"assinatura + schema"}
+    V -->|inválido| VF[verification_failed]
+    V --> D{decide_update}
+    D -->|"igual / mais antigo"| UTD[up_to_date]
+    D -->|bootstrap antigo| BTO[bootstrap_too_old]
+    D -->|nova| I["download + SHA-256 → stage → activate"]
+    I --> ST{"selftest do novo payload"}
+    ST -->|falhou| RB[rollback → update_failed /<br/>mandatory_update_required]
+    ST -->|ok| UP["updated → handoff"]
+```
+
 O launcher em execução **não** se sobrescreve. Auto-substituição do bootstrap/binário está
 adiada para a fase de Setup; até lá, o updater atualiza payloads versionados e bloqueia
 releases que exigem um bootstrap mais novo (`bootstrap_too_old`).
@@ -2464,22 +2740,23 @@ chave antiga, e no pior caso reinstalação manual), não criptográfica.
 
 Não existe flag, variável de ambiente ou modo de desenvolvimento que pule a verificação de
 assinatura. `update_manifest.py` e `update_installer.py` não leem `os.environ` (há teste que
-prova isso). Os testes injetam uma chave efêmera explícita via parâmetro `trusted_keys`, em
+prova isso). A URL do manifest pode ser trocada por ambiente, mas a assinatura continua
+exigida. Os testes injetam uma chave efêmera explícita via parâmetro `trusted_keys`, em
 vez de enfraquecer o gate de produção.
 
 #### O que ainda falta
 
-- **Canal e chave de produção**: `TRUSTED_PUBLIC_KEYS` continua vazio até existir uma chave
-  pública de release real; sem ela, o updater reporta `trust_not_configured` e não confia em
-  nenhum manifest.
+- **Prova ponta a ponta**: chave e URL já estão configuradas, mas a atualização real a partir
+  do canal não foi verificada nesta revisão. Sem chave, `load_trusted_keys()` continuaria
+  falhando fechado (`UpdateTrustNotConfigured`).
 - **Empacotamento/Setup**: o layout de instalação final, permissões e bootstrap estável
   dependem do instalador. O código atual não finge auto-substituição do launcher em execução.
 - **Diretório de instalação final e permissões**: depende do instalador. O updater não exige
   privilégios de administrador desde que o local escolhido não exija.
 - **Espaço em disco e limite de tamanho de pacote**: adiados de propósito — sem o tamanho real
   do bundle de runtime, qualquer limite seria arbitrário.
-- **UI de atualização**: inexistente. Quando existir, mapeia as classes de erro para mensagens
-  como *"Não foi possível verificar a atualização."*, sem expor detalhe criptográfico.
+- **UI de atualização**: a aba **Atualizações** existe (ver acima); o mapeamento completo das
+  classes de erro para mensagens ao usuário não foi reauditado nesta revisão.
 
 Eventos estruturados já emitidos (nunca com chave, token ou URL com segredo):
 `update_manifest_fetched`, `update_manifest_verified`, `update_available`,
@@ -2489,15 +2766,18 @@ Eventos estruturados já emitidos (nunca com chave, token ou URL com segredo):
 
 ## 24. Arquitetura de testes
 
-178 arquivos `test_*.py` versionados + 12 arquivos `test_*.mjs` de frontend
-(`node --check` e testes Node) + testes SQL em `supabase/tests/database/` + a suíte
-TypeScript de `apps/auth-service/`.
+419 arquivos `test_*.py` versionados em `tests/` (mais dois em `experiments/`, também em
+`testpaths`) + 18 arquivos `test_*.mjs` de frontend (testes Node) + testes SQL em
+`supabase/tests/` + a suíte TypeScript de `apps/auth-service/`. Última execução completa
+registrada da suíte hermética: **~6160 passed / 0 failed / 141 skipped**.
 
 `pytest.ini`:
 
 ```ini
 [pytest]
 addopts = -m "not network and not manual"
+testpaths = tests experiments
+norecursedirs = output .cache .git .venv tmp node_modules __pycache__ .local-audit
 markers =
     unit / integration / network / manual / slow
 ```
@@ -2506,9 +2786,9 @@ Testes de rede e smokes manuais são **excluídos por padrão** e exigem opt-in 
 
 ### Isolamento hermético (TDD #51, ampliado no TDD #55, `hermetic_runtime.py`)
 
-O estado real do projeto vive em `<repo>/.cache/runtime`. Antes do guard, código de teste
-que construísse um componente de runtime sem raiz explícita caía exatamente nesse
-diretório — um `python -m unittest discover` podia abrir a fila real, mutar linhas de job
+O estado real do projeto vive em `%LOCALAPPDATA%\TradutorIA` (e, em clones antigos, em
+`<repo>/.cache/runtime`). Antes do guard, código de teste que construísse um componente de
+runtime sem raiz explícita caía exatamente nesse diretório — um `python -m unittest discover` podia abrir a fila real, mutar linhas de job
 reais e lançar o worker real.
 
 O guard dá ao processo de teste **uma raiz temporária única por processo** e transforma
@@ -2523,6 +2803,7 @@ efeito colateral. Ele intercepta `sqlite3.connect`, `open`, `mkdir`, `unlink`, `
 | `<repo>/.cache/runtime/**` (fila, leases, logs) | `sqlite3.connect`, `open`, `mkdir`, `unlink`, `rename`, spawn | `REAL_RUNTIME_ROOT` |
 | `<repo>/output/**` (capítulos traduzidos do usuário) | `open`, `mkdir`, `unlink`, `rename`, `scandir`/`listdir` | `REAL_OUTPUT_ROOT` |
 | `<repo>/.cache/ui_history.json`, `ui_hidden_history.json` | `open`, `unlink`, `rename` | `REAL_UI_HISTORY_PATHS` |
+| `%LOCALAPPDATA%\TradutorIA` (dados do Beta instalado) | idem | `REAL_BETA_USER_ROOT` |
 
 **Normalização de caminho.** A comparação é canônica: caminhos relativos, separadores
 mistos, maiúsculas/minúsculas de volume Windows e junções normalizam para a mesma forma.
@@ -2551,7 +2832,7 @@ usa-se fakes e artefatos temporários.
 
 Um teste **não pode**:
 
-- tocar o banco de jobs de produção (`.cache/runtime/jobs.sqlite3`);
+- tocar o banco de jobs de produção (`<runtime>/jobs.sqlite3`);
 - lançar o worker de produção;
 - chamar provider de tradução real;
 - alcançar Drive ou Supabase remoto de forma inesperada.
@@ -2569,11 +2850,14 @@ terminação forçada parecem para o banco.
 
 ### CI (`.github/workflows/tests.yml`)
 
-`windows-latest`, Python 3.11 + Node 24. Etapas: instalar `requirements.txt` +
-`requirements/requirements-dev.txt`, **confirmar que os opt-ins de smoke de rede estão desligados**
-(`ALLOW_NETWORK_TESTS`, `ALLOW_WEBTOON_SMOKE`, `ALLOW_NVIDIA_SMOKE`), coletar e rodar
-pytest, `node --check` em cada JS, typecheck/test/build do serviço Better Auth, e
-`py_compile` dos módulos centrais.
+`windows-latest`, Python 3.11 + Node 24, timeout de 60 min. Etapas: instalar
+`requirements/requirements-beta.txt` (que inclui `requirements.txt` e o perfil RapidOCR) +
+`requirements/requirements-dev.txt`, `scripts/check_runtime_profile.py` (perfil de runtime
+Beta, ex.: conflito de OpenCV), **confirmar que os opt-ins de smoke de rede estão desligados**
+(`ALLOW_NETWORK_TESTS`, `ALLOW_WEBTOON_SMOKE`, `ALLOW_NVIDIA_SMOKE`), coletar e rodar pytest
+(JUnit enviado como artifact), `node --check` nos JS principais e de i18n, typecheck/test/build
+do serviço Better Auth, e `python -m compileall` sobre `yomu`, `test_support` e os shims da
+raiz. As suítes `.mjs` não rodam na CI.
 
 Detalhes em [`docs/TESTING.md`](../TESTING.md).
 
@@ -2603,8 +2887,9 @@ relevantes tendem a vir daí, não da orquestração Python.
 
 | Superfície | Local |
 | --- | --- |
-| Log por job | `.cache/runtime/logs/<job_id>.log` |
-| Log da UI | `.cache/runtime/ui.log` |
+| Log por job | `<runtime>/logs/<job_id>.log` |
+| Log da UI | `<runtime>/ui.log` |
+| Trilha de transições de job | `<runtime>/diagnostics/job_<hash>.jsonl` (evento `JOB_STATE_TRANSITION`) |
 | Eventos do supervisor | linha JSON em `stderr` do launcher |
 | Eventos do `process_launcher` | `<runtime>/launcher_events.jsonl` + `exit_code.txt` |
 | Saúde do worker/fila | `python start_tradutor.py status` |
@@ -2617,7 +2902,7 @@ Todo texto que chega à interface passa por `sanitize_diagnostic_text`. `request
 e `job_failure_diagnostic.py` normalizam diagnóstico de falha em códigos fechados.
 
 Os fluxos `*_current.jsonl` são append-only e agora têm rotação por tamanho
-(`_append_diagnostic_log` em `app_ui.py`): ao passar de 16 MiB o arquivo vira
+(`_append_diagnostic_log` em `yomu/ui/app.py`): ao passar de 16 MiB o arquivo vira
 `<nome>.previous.jsonl` e um novo `current` continua a escrita — teto de 16 MiB por
 fluxo mais uma cópia anterior, espelhando a rotação de `runtime.log`. A falha de rotação
 é best-effort e nunca interrompe a gravação do diagnóstico (antes eram ilimitados: uma
@@ -2635,7 +2920,7 @@ preservados. Caches/arquivos locais antigos não são apagados automaticamente.
 `mimrsxnhqbqkffsekxuw` e sua Edge Function/secrets permanecem intactos como rollback
 temporário; aposentadoria destrutiva do rollback requer missão e autorização separadas.
 
-## 26.1 Artifact Contract V2 (ativo, com compatibilidade legada)
+### 26.1 Artifact Contract V2 (ativo, com compatibilidade legada)
 
 `artifact_contract.py` (`ARTIFACT_CONTRACT_VERSION = 2`) é consumido pelo pipeline, pelos
 exporters canônicos e pelo writer do Review Manifest. Define tipos, perfis, caminhos canônicos
@@ -2694,7 +2979,7 @@ e publicado por `os.replace`; o Artifact Contract V2 só marca `PRODUCED` depois
 de re-export valida novamente o schema/coverage antes de publicar a geração. A integração não
 chama provider, OCR ou wallet: re-export mantém provider calls=0 e YK adicional=0.
 
-## 26.3 PSD Profissional editável v2 — Type Layers nativas (Missão 6)
+### 26.3 PSD Profissional editável v2 — Type Layers nativas (Missão 6)
 
 `editable_psd_writer.py` (`write_editable_psd(...)`) emite **um PSD por página lógica** em
 `psd/<page>.psd` (resolver do contrato), **somente no perfil `PROFESSIONAL_QC`**. AUTOMATIC e
@@ -2755,7 +3040,7 @@ resolvido nunca escapa do `output_root`).
 capacidades e `logical_page_count`. Runs antigos sem `contract_version` são lidos como
 **V1 (legado)** sem erro — nada histórico é migrado, invalidado ou apagado nesta missão.
 
-## 26.2 Persistência canônica de CLEAN / TRANSLATED por página (Missão 4)
+### 26.4 Persistência canônica de CLEAN / TRANSLATED por página (Missão 4)
 
 `benchmark_pipeline.run_benchmark` integra o resolver do contrato ao pipeline real: depois
 que `completed_states` é fechado (mesmas páginas lógicas que alimentam o PDF), uma passada
@@ -2810,8 +3095,8 @@ placeholder.
 (`contract_version = 2`) registra `output_profile`, `logical_page_count`,
 `produced/unavailable_artifacts`, e um bloco `coverage` com as listas de páginas lógicas
 `produced` / `missing` / `failed` por tipo, além de `byte_totals`
-(`translated`/`clean`) e `io_seconds`. `editable_psd` permanece `requested + unavailable`
-em `PROFESSIONAL_QC` — nunca declarado produzido.
+(`translated`/`clean`) e `io_seconds`. Na Missão 4, `editable_psd` ficava `requested +
+unavailable`; desde a Missão 6 o PSD editável é produzido em `PROFESSIONAL_QC` (§26.3).
 
 **Compatibilidade legada (estratégia A — aditiva).** Os artefatos legados
 (`pages/page_NNN.png` traduzido e `*_cleaned.png`) permanecem intactos; os canônicos são
@@ -2822,7 +3107,7 @@ cópias adicionais. Histórico, retry, re-export, PDF, PSD raster legado, fixtur
 1 decode de validação cada); `PROFESSIONAL_QC` ≈ 4,7 s (416 cópias) — pequeno frente a
 OCR + tradução + render (minutos).
 
-## 26.3 Resumo de conclusão do job (Missão 12)
+### 26.5 Resumo de conclusão do job (Missão 12)
 
 `UiBridge._job_record()` anexa `completion_summary`, produzido por
 `job_completion.build_job_completion_summary(record, output_root)`. O DTO concentra estado
@@ -2847,15 +3132,18 @@ arquivo registrado ainda existe.
 
 ## 27. Ambiente de desenvolvimento e comandos
 
-Todos os comandos abaixo foram executados ou validados contra o commit base.
+Os comandos abaixo foram validados contra `5f482ce1` (CLIs com `--help`; o launcher não tem
+`--help` e foi conferido no código).
 
 ### Pré-requisitos
 
 - Windows 64 bits
 - Python 3.11
 - Git
-- Google Chrome (para fontes por URL)
-- Chave do provider de tradução em uso (DeepL no default atual)
+- Navegador Chromium local (Google Chrome/Edge) para fontes por URL
+- WebView2 (shell desktop) — `pywebview` já está em `requirements.txt`
+- Conta no projeto Supabase de auth com licença Beta ativa (a tradução usa o backend Yomu;
+  nenhuma chave DeepL local é necessária)
 
 ### Instalação
 
@@ -2866,24 +3154,27 @@ cd Tradutor.Ia
 py -3.11 -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install --upgrade pip
-pip install -r requirements.txt
-pip install -r requirements/requirements-rapidocr.txt
-pip install -r requirements/requirements-ui.txt
+pip install -r requirements/requirements-beta.txt   # inclui requirements.txt + RapidOCR + scrapling + psd-tools
+pip install -r requirements/requirements-dev.txt    # para rodar testes
 
 Copy-Item .env.example .env
 ```
 
-Depois edite `.env` e preencha, no mínimo, `DEEPL_API_KEY` e as variáveis do Supabase.
+Depois edite `.env` e preencha, no mínimo, as variáveis do Supabase (`SUPABASE_URL`,
+`SUPABASE_PUBLISHABLE_KEY` e afins) com placeholders substituídos pelos valores do projeto.
 
 Arquivos de dependências:
 
 | Arquivo | Conteúdo |
 | --- | --- |
-| `requirements.txt` | Núcleo: numpy, Pillow, opencv-python, selenium, paddleocr/paddlepaddle, torch/transformers, psutil, nicegui, psycopg, PyJWT, google-auth |
+| `requirements.txt` | Núcleo: numpy, Pillow, opencv-python (pinados), selenium, webdriver-manager, torch/transformers, psutil, nicegui, pywebview, psycopg, PyJWT, cryptography, google-auth. **Sem** PaddleOCR |
+| `requirements/requirements-beta.txt` | `-r ../requirements.txt`, `-r requirements-rapidocr.txt`, `scrapling[fetchers]==0.4.15`, `psd-tools==1.10.9` — perfil usado pela CI e pelo build |
 | `requirements/requirements-rapidocr.txt` | `rapidocr-onnxruntime==1.4.4`, `onnxruntime==1.27.0` |
-| `requirements/requirements-ui.txt` | `nicegui` |
+| `requirements/requirements-ui.txt` | `nicegui==3.15.0` |
 | `requirements/requirements-dev.txt` | `pytest>=9,<10`, `fastapi`, `httpx` |
-| `requirements/requirements-optional.txt` | `cloudscraper` (transporte opcional, desligado por padrão) |
+| `requirements/requirements-optional.txt` | `cloudscraper`, `scrapling[fetchers]`, `psd-tools` |
+| `requirements/requirements-paddle.txt` | `paddlepaddle`, `paddleocr` — fallback legado opcional, separado por conflito de OpenCV |
+| `requirements/requirements-gemini-vps.txt` | dependências do worker remoto de pesquisa (VPS), não do app |
 
 ### Executar a aplicação
 
@@ -2894,11 +3185,15 @@ python start_tradutor.py ui         # só a UI
 python start_tradutor.py status     # saúde do worker e da fila
 python start_tradutor.py stop       # parada graciosa do worker
 python start_tradutor.py stop --force
+python start_tradutor.py selftest   # prova que o payload importa, sem iniciar nada
+python desktop_app.py               # shell WebView2 (sobe a UI e abre a janela)
 ```
 
 No Windows há também `start_tradutor.bat`, que prefere `.venv\Scripts\python.exe`.
 
-A UI escuta em `http://127.0.0.1:8080` por padrão.
+A UI escuta em `http://127.0.0.1:8080` por padrão e **deve ser acessada exatamente por essa
+origem**: o projeto Supabase de auth só aceita `http://127.0.0.1:8080` nos redirects
+(`localhost:8080` ou outra porta quebram o login — §6).
 
 ### CLI direta
 
@@ -2910,10 +3205,14 @@ python run_webtoon.py --local-folder "<PASTA_PERMITIDA>" --mode fast
 python run_webtoon.py --help
 ```
 
-Flags reais: `--local-folder`, `--mode {fast,quality}`, `--cache | --force`, `--output`,
-`--no-context`, `--keep-context`, `--delete-context-after`, `--open-output`,
-`--max-images`, `--download-only`, `--source-candidate-id`,
-`--translation-provider {deepl,nemotron,riva}`.
+Flags reais (`--help`): `--local-folder`, `--mode {fast,quality}`, `--cache | --force`,
+`--output`, `--output-format {pdf,png,psd,translation}`, `--typesetting-mode {on,off}`,
+`--no-context`, `--keep-context`, `--delete-context-after`, `--open-output`, `--max-images`,
+`--download-only`, `--source-candidate-id`,
+`--translation-provider {deepl,nemotron,riva,yomu_backend}`. Com tradução habilitada, a execução
+usa sempre `yomu_backend` (§15), portanto exige sessão/licença válidas.
+`run_local_folder.py --snapshot-ref <ref> --output <pasta>` processa um snapshot local já criado
+pelo aplicativo (uso interno).
 
 ### Worker direto
 
@@ -2922,6 +3221,7 @@ python worker_service.py            # roda até ser parado
 python worker_service.py --once     # processa no máximo um job e sai
 python worker_service.py --status   # imprime saúde e sai
 python worker_service.py --db <caminho>
+python worker_service.py --poll-interval <segundos>
 ```
 
 ### Testes
@@ -2941,8 +3241,8 @@ npm ci
 npm run typecheck; npm test; npm run build
 ```
 
-> `python -m unittest discover` também funciona graças ao `sitecustomize`, mas `pytest` é o
-> caminho usado pela CI.
+> `pytest` é o caminho usado pela CI; `python -m unittest discover` não foi revalidado nesta
+> revisão.
 
 ## 28. Troubleshooting técnico
 
@@ -2958,11 +3258,13 @@ npm run typecheck; npm test; npm run build
 | Banco bloqueado | Operação concorrente momentânea | WAL + `busy_timeout` resolvem; **não apagar o banco** |
 | Processo órfão após crash | Runner sobreviveu ao worker | Iniciar um worker; ele reconcilia e encerra a árvore validada |
 | Falha em `test_worker_process_loss` | Interpretador *trampoline* | Usar o Python do venv do projeto (ver §24) |
-| `ModuleNotFoundError: psycopg` na coleta | Venv sem `requirements.txt` completo | `pip install -r requirements.txt` |
+| `ModuleNotFoundError` (ex.: `psycopg`, `scrapling`) na coleta | Venv sem o perfil Beta completo | `pip install -r requirements/requirements-beta.txt` |
+| Login redireciona para página inválida / Supabase recusa o redirect | UI aberta por origem diferente de `http://127.0.0.1:8080` (ex.: `localhost`, outra porta) | Abrir exatamente `http://127.0.0.1:8080`; não mudar `TRADUTOR_UI_HOST`/`TRADUTOR_UI_PORT` |
+| Job em `waiting_source_verification` | A fonte exige verificação humana no navegador (`challenge_required`) | Concluir a verificação indicada pela UI; não há solver automático |
 
 Guia mais amplo: [`docs/TROUBLESHOOTING.md`](../TROUBLESHOOTING.md).
 
-## 28.1 Snapshot histórico das frentes — 2026-09-27 (superado)
+### 28.1 Snapshot histórico das frentes — 2026-09-27 (superado)
 
 Registro do estado verificado em 2026-09-27, antes da conclusão das missões M16/M17. É mantido
 para contexto histórico; estados de PSD, Auth, YK, artifacts e gates abaixo não descrevem o
@@ -2970,7 +3272,7 @@ produto presente quando conflitarem com seções posteriores ou com [M15 — com
 [M17 — performance PSD](../PSD_PERFORMANCE_REPORT.md) e [Saídas e artefatos](../OUTPUT_ARTIFACTS.md).
 Não usar este snapshot como status atual.
 
-### Quality Review (R1–R4) — IMPLEMENTADO
+#### Quality Review (R1–R4) — IMPLEMENTADO
 
 - **R1**: DTO da Review com identidade de página (`index` sobre `sequence_index`), `bounding_box`
   no item, ordenação física canônica (`page_index → bbox.y → bbox.x → region_id`) e preview de
@@ -2985,7 +3287,7 @@ Não usar este snapshot como status atual.
   subprocess, com recovery e lineage. **Zero OCR/provider/YK adicionais** no re-export
   (`review_reexport.py`, `review_reexport_runner.py`). `PHYSICAL_REVIEW_UI` = gate do executável.
 
-### Professional PSD (P1–P4) — registro histórico supersedido por M15/M17
+#### Professional PSD (P1–P4) — registro histórico supersedido por M15/M17
 
 - As afirmações abaixo registram a implementação P1–P4 daquele snapshot; não são o contrato
   atual de `EDITABLE_PSD`.
@@ -2998,7 +3300,7 @@ Não usar este snapshot como status atual.
   Probe 30k ON: ~502 MB de delta (~920 MB absoluto), redução ~87%. `PSD_RUNTIME_MEMORY_RISK=LOW`.
   Os números do probe **não** são garantia universal de RAM em toda máquina.
 
-### Webtoon — progresso/cancel (source analysis)
+#### Webtoon — progresso/cancel (source analysis)
 
 - Registry de progresso vivo + endpoint de poll durante `/api/ui/source/analyze`, com estágios
   reais e contador de tempo (`source_analysis_progress.py`), e **cancelamento cooperativo** da
@@ -3007,7 +3309,7 @@ Não usar este snapshot como status atual.
   design (não é thread-safe) e a segunda descoberta permanece por freshness/privacidade
   (o snapshot é um gate de IDs opacos, sem URLs). Webtoon **live** = gate do executável/RC.
 
-### Comix — validado ao vivo
+#### Comix — validado ao vivo
 
 - Descoberta atual: HTTP preflight → `source_access_denied` → resolver dinâmico (navegador via
   scrapling/patchright) → PASS. Sem 522/CAPTCHA/challenge/`no_reader_images`. Download-only real
@@ -3016,33 +3318,42 @@ Não usar este snapshot como status atual.
   empacotado). Sem essa dependência, falha fechado com `capability_unavailable` (correto). Não
   fixar contagens de página (105/51) como regra permanente — são observações do smoke.
 
-### Auth
+#### Auth
 
 - Watchdog de ~12 s **antes** do boot do módulo (`PRE_MODULE_SPINNER_GAP` fechado); depois do
   boot, os timeouts internos de callback continuam sendo a autoridade. Código: 353/353 testes
   PASS. Teste físico de magic-link fresco (`FRESH_MAGIC_LINK_PHYSICAL_TEST`) = gate do executável.
 
-### YK — local PASS, Postgres PENDENTE
+#### YK — local PASS, Postgres PENDENTE
 
 - Comportamento local (reserva → consumo no sucesso do provider com recovery → settlement)
   passa em 70/70 unit/mock; auditoria estática forte. Mas **`POSTGRES_RUNTIME_VALIDATION=PENDING`**
   (Docker indisponível) e **`REMOTE_DEPLOY=PENDING`** — **não** declarar production-ready. Migration
   e functions existem localmente e **não** foram aplicadas remotamente.
 
-### Quality diagnostics
+#### Quality diagnostics
 
 - Harness de regressão de diagnóstico com fixtures **sintéticas** versionadas e um caso real
   negativo (SFX `SLURP` preservado; a imagem/crop real **não** é versionada). Casos I→1, missed
   balloon e outside-balloon **não** têm correção automática implementada — dependem de reprodução
   real segura futura.
 
-### Portões deliberadamente adiados para o executável novo (RC)
+#### Portões deliberadamente adiados para o executável novo (RC)
 
 `PHYSICAL_REVIEW_UI` · `PHYSICAL_AUTH_MAGIC_LINK` · `PHYSICAL_SCROLL_BUG` (permanece **OPEN**;
 não declarar corrigido) · `WEBTOON_LIVE_RC` · `COMIX_FULL_QUALITY_WORKER_RC` · instalação
 limpa/updater · `YK_POSTGRES_VALIDATION`.
 
+<a id="29-dívida-técnica-conhecida"></a>
+
 ## 29. Snapshot histórico de dívida técnica (não revalidado na M18)
+
+> **Superado em `5f482ce1` (verificado no código):** `UPDATE-TRUST-ROOT-EMPTY` (a chave
+> `beta-2026-10` está em `TRUSTED_PUBLIC_KEYS`); a parte "canal" e "UI" de
+> `UPDATER-RELEASE-CHANNEL-PENDING` (URL de manifest padrão e aba **Atualizações** existem —
+> §23); `UI-COPY-NAMES-NVIDIA` e `PROVIDER-HTTP-TELEMETRY-GAP` não foram reconferidos. A
+> evidência `config.py` dos itens abaixo corresponde hoje a `yomu/config/settings.py`; os
+> demais módulos citados vivem sob `yomu/` (§3).
 
 Esta lista foi auditada contra um commit anterior às missões M16/M17. Ela é mantida para
 histórico, não constitui inventário atual de blockers. Em especial, status de Auth/licença,
@@ -3153,32 +3464,38 @@ Os estados abaixo registram uma avaliação antiga. O owner confirmou a distribu
 pelo updater e usou conta/licença no E2E M16; os itens de release continuam fora do escopo M18 e
 precisam de verificação própria antes de qualquer decisão operacional.
 
-### Empacotamento — PLANEJADO (histórico)
+### Empacotamento — PARCIAL
 
-Não há artefato de build. Distribuição atual = clone do repositório + venv + `.env`.
+O plumbing existe: `packaging/tradutor_ia.spec` (PyInstaller onedir, executável `YomuSekai`
+a partir de `desktop_app.py`), perfis `packaging/runtime_profile_*.py`, script Inno Setup
+`packaging/TradutorIA.iss` (instala por usuário em `{localappdata}\Programs\YomuSekai`, saída
+`YomuSekai-<versão>-Setup-x64`) e `tools/build_installer.py`. Nenhum instalador validado em VM
+limpa nem artefato publicado consta do repositório; para desenvolvimento a distribuição continua
+sendo clone + venv + `.env`.
 
 ### Updater — PARCIAL
 
 O núcleo de confiança está fechado e documentado em
-[§23 › Updater assinado](#updater-assinado--parcial-tdd-5758): manifest assinado, verificação
+[§23 › Updater assinado](#updater-assinado--parcial-tdd-5758--superfície-de-ui): manifest assinado, verificação
 Ed25519, SHA-256 do pacote, política de versão/versão mínima, versão canônica do produto,
 transporte HTTPS, extração segura, staging, ativação atômica, selftest, handoff pelo launcher e
 rollback — hermético e testado.
 
-Falta para uma atualização real de Beta: hospedagem escolhida, chave pública de release de
-produção, pacote/Setup final e UI. **Enquanto isso, o Guia do Usuário continua dizendo que a
-atualização automática está em desenvolvimento** — nada de "o programa se atualiza sozinho".
+Estado em `5f482ce1`: chave pública `beta-2026-10`, URL de manifest padrão e a aba
+**Atualizações** existem (§23). Falta prova ponta a ponta de atualização a partir do canal e um
+Setup final validado. O Guia do Usuário não deve prometer atualização automática além do que
+for verificado.
 
 **Bloqueador de empacotamento:** um launcher em execução não pode se sobrescrever com segurança
 no Windows. A auto-atualização do próprio launcher exige bootstrapper estável ou helper externo
 e só pode ser decidida junto com o formato do Setup.
 
-### Licenciamento de tester — PLANEJADO
+### Licenciamento de tester — PARCIAL
 
-Quando existir: documentação técnica ganha arquitetura, fronteira de confiança
-servidor/cliente e comportamento de expiração/revogação/dispositivo. O Guia do Usuário
-ganha login, status de licença, expiração, mensagem de renovação/revogação e comportamento
-de dispositivo. Nenhum segredo administrativo em nenhum dos dois.
+Implementado no cliente e no schema remoto (§19: `beta_license.py`, gate em
+`UiBridge.start()`/`resume()`, reforço no runner, RPC `authorize_beta_tester_device`). A
+concessão real de entitlements a testers é operação administrativa fora do cliente e não foi
+verificada nesta revisão. Nenhum segredo administrativo em nenhum documento.
 
 ### Checklist de release da Beta externa
 
@@ -3191,11 +3508,11 @@ de dispositivo. Nenhum segredo administrativo em nenhum dos dois.
 | Detecção de crash duro do worker | ✅ fechada |
 | Supervisão do launcher | ✅ fechada |
 | Documentação técnica + guia do usuário | ✅ (este documento) |
-| Instalador para usuário final | ⬜ pendente |
+| Instalador para usuário final | 🟨 plumbing de build existe; instalador validado pendente |
 | Updater assinado — núcleo de confiança (manifest, assinatura, SHA, staging, ativação, rollback) | ✅ fechado (TDD #57) |
 | Updater assinado — transporte remoto + seam do launcher | ✅ fechado (TDD #58) |
-| Updater assinado — canal/chave de produção + UI | ⬜ pendente |
-| Licenciamento de tester | ⬜ pendente |
+| Updater assinado — chave, URL de canal e aba Atualizações | 🟨 configurados; prova ponta a ponta pendente |
+| Licenciamento de tester | 🟨 parcial (§19) |
 | Validação em VM Windows limpa | ⬜ pendente |
 | Screenshots reais no guia do usuário | ⬜ pendente |
 
@@ -3277,14 +3594,14 @@ anti-replay. Um cliente nunca pode afirmar "assisti" e receber moeda.
 O modelo executável dessas regras vive em `commercial_foundation.YKWallet` e é
 verificado por `tests/test_yk_ads_foundation.py`.
 
-## 31. Glossário
+## 32. Glossário
 
 | Termo | Significado |
 | --- | --- |
 | **Job / Trabalho** | Uma unidade de trabalho persistida no banco: um capítulo (ou uma publicação de comunidade) do início ao estado terminal |
 | **Worker** | Processo independente que drena a fila; um por instalação, concorrência 1 |
 | **Runner** | Subprocesso criado pelo worker para executar exatamente um job |
-| **Launcher** | `start_tradutor.py`; inicia worker + UI e supervisiona o worker que criou |
+| **Launcher** | `start_tradutor.py` (`yomu.commands.start_tradutor`); checa update, inicia worker + UI e supervisiona o worker que criou |
 | **Supervisor** | `worker_supervisor.WorkerSupervisor`; reinicia o worker sob política limitada |
 | **Lease** | Linha em `workers` com `worker_id`, PID e `create_time`, provando posse do processo |
 | **Attempt** | Nova tentativa de um job interrompido, reusando o mesmo diretório de saída |
@@ -3293,6 +3610,9 @@ verificado por `tests/test_yk_ads_foundation.py`.
 | **Quality gate** | Conjunto de verificações que decide entre `finished` e `review_required` |
 | **`review_required`** | Terminal: PDF existe, mas há itens pendentes de revisão |
 | **`awaiting_source_review`** | Pausa antes do OCR: usuário confirma as páginas encontradas |
+| **`waiting_source_verification`** | Pausa antes do download: a fonte exige verificação humana no navegador |
+| **`yomu_backend`** | Provider interno autenticado que leva toda tradução às Edge Functions do Supabase (§15) |
+| **Shim** | Arquivo `*.py` da raiz que apenas reexporta o módulo real em `yomu/` |
 | **Smart Split** | Reconstrução de páginas lógicas a partir das fatias do webtoon |
 | **Proveniência** | Cadeia de evidência que liga o pixel de origem ao texto final renderizado |
 | **Fail-closed** | Diante de evidência insuficiente, recusar em vez de prosseguir |

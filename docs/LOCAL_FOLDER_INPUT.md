@@ -1,5 +1,7 @@
 # Entrada por pasta local
 
+> **Base verificada:** `5f482ce1` · **Revisado em:** 2026-10-24
+
 Esta fonte permite processar imagens de capítulo que já estão no computador. Ela é uma
 alternativa à URL pública: não abre Webtoon, não cria Selenium, não usa `file://` e não usa o
 downloader HTTP para obter as páginas de origem. Depois de a entrada ser aceita, as etapas
@@ -28,16 +30,45 @@ Selecione uma subpasta de capítulo dentro dessa raiz, e não a raiz em si. A po
 caminhos relativos, `..`, `file:`, UNC, dispositivos Windows, links simbólicos, junctions e
 qualquer caminho que escape da raiz depois de resolvido.
 
-### Pela UI local
+### Pela UI local (aplicativo desktop)
 
-Na tela **Nova tradução**, escolha **Pasta local**, informe a pasta e mantenha o escopo completo.
-A API aceita essa modalidade somente quando **tanto** o endereço em que a UI está ligada quanto o
-navegador conectado são loopback. Uma UI ligada em rede não pode transformar uma requisição
-remota em leitura de arquivos locais; nesse caso a solicitação falha com
-`local_folder_requires_loopback_ui`.
+Na tela **Nova tradução** há duas origens locais:
 
-O campo mostra a pasta apenas no formulário de envio. O histórico não reconstrói nem exibe esse
-caminho depois: ele conserva somente o nome final da pasta, contagens e referências opacas.
+- **Pasta do capítulo** — **Selecionar pasta do capítulo** abre o seletor nativo do Windows. O app
+  lista somente as imagens `.png`, `.jpg` e `.jpeg` que estão diretamente na pasta (sem subpastas),
+  em ordem natural, até 400 páginas;
+- **Imagens** — **Adicionar imagens** abre o seletor de arquivos (PNG ou JPG, uma ou várias);
+  **Limpar** esvazia a seleção.
+
+A lista **Páginas do capítulo** mostra prévia e **Ampliar** antes de iniciar. Com origem local, o
+escopo fica fixo em **completo** e **Download-only** fica indisponível. Os seletores só existem
+dentro do aplicativo desktop; num navegador comum a pasta não pode ser escolhida ("O seletor de
+pasta está disponível somente no aplicativo Yomu.").
+
+Na UI, `LOCAL_INPUT_ROOTS` **não** é exigido: o seletor nativo autoriza os arquivos escolhidos, o
+navegador recebe apenas identificadores opacos de mídia, e o backend copia as páginas para uma
+seleção temporária com nomes ordinais antes de passar pela mesma validação e snapshot descritos
+abaixo. `LOCAL_INPUT_ROOTS` continua valendo para a CLI e para o envio direto de um caminho de
+pasta. A API aceita a origem local somente quando **tanto** o endereço em que a UI está ligada
+quanto o cliente conectado são loopback; caso contrário a solicitação falha com
+`local_folder_requires_loopback_ui` (pasta) ou `local_images_requires_loopback_ui` /
+`local_media_requires_loopback_ui` (imagens/seleção do seletor).
+
+O histórico não reconstrói nem exibe o caminho escolhido: ele conserva somente o nome final da
+pasta, contagens e referências opacas.
+
+```mermaid
+flowchart TD
+    A["Nova tradução"] --> B{"Origem local"}
+    B -->|"Pasta do capítulo"| C["Selecionar pasta do capítulo"]
+    B -->|"Imagens"| D["Adicionar imagens"]
+    C --> E["Páginas do capítulo: conferir ordem e prévia"]
+    D --> E
+    E --> F["Iniciar tradução (escopo completo)"]
+    F --> G["Validação das imagens e snapshot interno"]
+    G -->|"imagem inválida, duplicada ou limite excedido"| H["Entrada recusada, nada é enfileirado"]
+    G -->|"ok"| I["Fila do worker: OCR, tradução e saída escolhida"]
+```
 
 ### Pela linha de comando
 
@@ -65,7 +96,7 @@ de imagem conhecidos, mas não aceitos, falham fechados em vez de serem omitidos
 | Controle | Comportamento |
 | --- | --- |
 | Ordem | ordenação natural e determinística (`1`, `2`, `10`) |
-| Extensões | `.png`, `.jpg`, `.jpeg`, `.webp`, `.avif` |
+| Extensões | `.png`, `.jpg`, `.jpeg`, `.webp`, `.avif` na CLI/pasta direta; os seletores da UI oferecem só `.png`, `.jpg`, `.jpeg` |
 | Formato real | assinatura, MIME/decodificação e coerência com a extensão |
 | Integridade | `Pillow.verify()`, carregamento completo e `cv2.imdecode()` |
 | Limites | até 32 MiB por arquivo, 1 GiB no capítulo e 400 páginas |
@@ -137,7 +168,7 @@ Webtoon, NVIDIA, Chrome, Selenium ou downloader remoto.
 - `tests/test_local_folder_cli.py`: referência opaca, rota CLI/runner e confinamento da saída;
 - `tests/test_logical_pages.py`: passthrough do Smart Split para páginas lógicas;
 - `tests/test_local_pipeline_e2e.py`: encadeamento sintético de pasta, snapshot, job, worker e PDF
-  com `fake_pipeline.py`.
+  com `test_support/fake_pipeline.py`.
 
 O E2E sintético comprova o contrato de encadeamento, não a qualidade de OCR/tradução nem a
 execução de um capítulo real. Nenhum smoke externo de fonte, OCR de capítulo ou provider de

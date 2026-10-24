@@ -1,5 +1,13 @@
 # Qualidade e validação
 
+> **Base verificada:** `5f482ce1` (branch `main`) · **Revisado em:** 2026-10-24
+>
+> Documento **vivo**. Os parágrafos que citam TDDs e E2Es numerados (#60–#84F53) são o
+> registro histórico de como cada gate foi fechado; os números deles descrevem aqueles runs,
+> não a saída atual. A limpeza/reconstrução foi reescrita em 2026-10-23/24: o fluxo atual está
+> em [Clean strategy](architecture/clean_strategy.md) e na
+> [Documentação Técnica §16](technical/DOCUMENTACAO_TECNICA.md#16-limpeza-inpainting-e-renderização).
+
 ## Política operacional da closed beta
 
 `finished` indica execução técnica concluída e quality gate aprovado. `review_required` indica
@@ -67,10 +75,14 @@ Uma reprovação do download impede que um capítulo incompleto seja tratado com
 
 Cada linha de OCR carrega texto, confidence, caixa, engine e metadados. Depois do agrupamento, `score_group_ocr_quality()` avalia o texto e produz razões específicas para sinais suspeitos.
 
-No modo `fast`, há dois níveis de fallback:
-
-1. **Fallback de página:** RapidOCR pode ser substituído por Paddle Mobile quando a página inteira não atende às salvaguardas.
-2. **Fallback regional:** grupos suspeitos são recortados e comparados com Paddle Mobile; Paddle completo é usado apenas quando ainda pode melhorar a decisão.
+RapidOCR é o engine primário e também o de recovery regional. A releitura seletiva
+(linhas fracas, continuações, redescoberta na página mascarada — `OCR_MASKED_REDISCOVERY`,
+divisão em bordas cruzadas — `OCR_SPLIT_AT_CROSSING_BORDERS` e glifo cortado na borda —
+`OCR_EXTEND_CLIPPED_EDGE_GLYPHS`, todos default `True` em `yomu/config/settings.py`) está
+descrita em [Clean strategy](architecture/clean_strategy.md). O fallback para Paddle
+(página inteira ou regional) só existe como compatibilidade legacy, opt-in por
+`OCR_LEGACY_PADDLE_FALLBACK` (default `False`); ver a política Beta em
+[Limites conhecidos](#limites-conhecidos).
 
 A seleção considera score de qualidade, confidence, coerência lexical e penalidades do candidato. Confidence alta isolada não garante vitória. O sinal de discordância lexical entre linhas, por exemplo, combina contexto confiável e queda relativa de confidence para pedir comparação entre engines.
 
@@ -94,11 +106,16 @@ O reparo em modo `conservative` trata padrões estruturais limitados, como junç
 
 Os grupos recebem classe, confidence, motivo e evidências. As classes principais são fala, narração, SFX, decorative e unknown.
 
-A decisão usa texto, geometria, proximidade, orientação e características do container. Isso evita regras simplistas como “todo texto curto é SFX”. Com o default `TRANSLATE_SFX=False`, SFX confirmados são preservados e não enviados ao provedor de tradução.
+A decisão usa texto, geometria, proximidade, orientação e características do container. Isso evita regras simplistas como “todo texto curto é SFX”. Com o default atual `TRANSLATE_SFX=True` (`yomu/config/settings.py`, desde 2026-10-24), SFX
+confirmados recebem a onomatopeia PT-BR do glossário `yomu/translation/sfx_glossary.py`
+(`assets/lexicon/sfx_en_pt.json`); um som que o glossário não conhece mantém o texto de origem.
+Em nenhum dos dois casos o SFX é enviado ao provedor de tradução. Com `TRANSLATE_SFX=False`,
+todo SFX confirmado é preservado. A suíte hermética fixa `TRANSLATE_SFX=0` no `conftest.py` raiz.
 
 Elementos decorativos também podem ser ignorados. Fala, narração, texto de sistema e
-`unknown` com evidência semântica de história seguem para tradução; SFX, logos, créditos,
-promos, URLs e entidades preservadas continuam excluídos por política.
+`unknown` com evidência semântica de história seguem para tradução; logos, créditos,
+promos, URLs e entidades preservadas continuam excluídos por política; SFX seguem a regra
+de `TRANSLATE_SFX` acima.
 
 ## Validator de tradução
 
@@ -138,7 +155,35 @@ O fluxo é:
 
 Os registros incluem candidate, razão, tentativa e resultado. Eles alimentam o relatório de qualidade e a agregação de itens multilíngues.
 
+### Decisão de render por região
+
+Tradução, remoção da fonte e reconstrução da arte são eixos separados. A decisão final é de
+`render_disposition()` (`yomu/ocr/ocr_balloon.py`):
+
+```mermaid
+flowchart TD
+    A["Região story com candidato"] --> B{"Tradução = reject?"}
+    B -->|sim| X["do_not_render<br/>(semantic_reject)"]
+    B -->|não| C{"Fonte removida?"}
+    C -->|não| Y["do_not_render<br/>(source_text_not_removed)"]
+    C -->|sim| D{"Arte = fail?"}
+    D -->|sim| Z["do_not_render<br/>(unsafe_art_reconstruction)"]
+    D -->|não| E{"Tradução clean<br/>e arte clean?"}
+    E -->|sim| R["render_clean"]
+    E -->|não| W["render_with_review<br/>conta como revisão estruturada"]
+    X --> Q["Capítulo: review_required"]
+    Y --> Q
+    Z --> Q
+    W --> Q
+```
+
 ## Validação da reconstrução
+
+> Desde 2026-10-23/24 a limpeza escolhe entre preenchimento clássico e LaMa local, compara
+> cada candidato com o anel ao redor da máscara, tenta o outro candidato quando um portão
+> reprova e confirma a remoção relendo o recorte com OCR. O fluxo e os nomes dos portões
+> estão em [Clean strategy](architecture/clean_strategy.md); esta seção resume apenas o que
+> o relatório de qualidade registra.
 
 Depois da tradução, o redraw precisa caber na região segura e não degradar a arte. As verificações incluem:
 
@@ -201,6 +246,12 @@ item revertido por risco visual entra em revisão estruturada, não em sucesso. 
 filhas sem palavra lexical podem pertencer à limpeza física de um grupo story pai quando a
 geometria prova o mesmo container; nesse caso, elas ficam fora do texto de tradução, mas as
 caixas renderizadas em `cleanup_line_boxes` contam para fechar o resíduo físico.
+
+### Histórico de fechamento da qualidade de story text (#60–#76)
+
+> Registro histórico (2026-08-20 a 2026-08-24). Os números abaixo descrevem aqueles runs; a
+> evidência atual de cada gate está nas seções seguintes e em
+> [Limites conhecidos](#limites-conhecidos).
 
 Nos artefatos reais #60/#63/#65, essa camada é apenas forense/offline: os PDFs históricos
 continuam intactos. O #65 terminou `review_required` com 15 resíduos físicos observados:
@@ -531,7 +582,8 @@ Arquivos legados ausentes, vazios ou inválidos são lidos como código desconhe
   (`render_clean`, `render_with_review`, `do_not_render`). A confirmação visual real de
   P5/P6 ainda depende de um novo E2E; não declarar fechamento real antes disso.
 - `ART-RECON-002`: patches brancos/cinzas planos sobre textura são visualmente
-  inaceitáveis. Sentinela planejada para #80: página 25.
+  inaceitáveis. Sentinela: página 25 — detectada pelo `ART-SEAM-DETECTOR-001` e validada
+  no E2E de #84 (ver abaixo).
 - `PAGE-ERROR-OBSERVABILITY-001` (**fechado em #84F10**): o erro persistido de uma página
   deixou de ser `"str"` e passou a ser um registro estruturado com estágio, classe de
   exceção, código seguro, mensagem sanitizada e traceback local. A raiz das cinco páginas
@@ -821,6 +873,9 @@ Arquivos legados ausentes, vazios ou inválidos são lidos como código desconhe
   baseline preservada. Ver
   [Desenvolvimento](DEVELOPMENT.md#opencv-contrato-e-inconsistência-conhecida).
 
-O comportamento de produção está atualmente congelado: ver [Quality Freeze](QUALITY_FREEZE.md).
+O [Quality Freeze](QUALITY_FREEZE.md) continua nominalmente ativo, mas a reescrita da limpeza
+de 2026-10-23/24 mudou o comportamento de produção e foi medida por harness de
+desenvolvedor, não pelo E2E de produto que o freeze exige; ver o estado em
+[Quality Freeze](QUALITY_FREEZE.md#estado-em-2026-10-24).
 
 Para investigar uma execução sem apagar evidências, consulte [Troubleshooting](TROUBLESHOOTING.md).

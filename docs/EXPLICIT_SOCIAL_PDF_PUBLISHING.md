@@ -1,5 +1,12 @@
 # Publicação explícita de PDFs sociais + leitor autenticado
 
+> **Revisado em:** 2026-10-24 · **Base verificada:** `5f482ce1`.
+> **Estado:** backend IMPLEMENTADO (`yomu/community/social_pdf_http.py`,
+> `social_pdf_publishing.py`, `chapter_asset_repository.py`, `social_content.py`), coberto por
+> testes offline. A UI social que expõe esses controles está **desligada** no cliente
+> (`COMMUNITY_ENABLED = false` em `static/social_community.js`). Smoke real no Google Drive
+> não foi executado.
+
 Todo conteúdo do tradutor (imagens, OCR, traduções, PDFs) permanece **somente local por
 padrão**. Nada é publicado ao concluir tradução, exportar, salvar ou reiniciar. O único
 caminho para um arquivo sair da máquina é a ação **explícita e autenticada** "Publicar na
@@ -27,7 +34,7 @@ criado. Uma **idempotency intent** impede que duplo clique/retry crie dois uploa
 
 O frontend **nunca** envia caminho. O identificador é o **`source_job_id`** (id de 32 hex
 de um job de tradução registrado pelo app). O backend resolve `job_id → registro → PDF em
-raiz autorizada` com o mesmo saneamento já existente (`community_api._resolve_translation_job`:
+raiz autorizada` com o mesmo saneamento já existente (`yomu/community/community_api.py::_resolve_translation_job`:
 job finished/exit0, manifest coincidente, PDF dentro de `output/`, magic bytes). Sem
 `file://`, sem caminho absoluto/relativo, sem symlink/UNC, sem varredura de diretório.
 `GET /local-pdf-results` lista apenas jobs registrados e concluídos do owner (DTO:
@@ -53,7 +60,7 @@ retornado.
 
 ## `SocialPdfPublishingService`
 
-Orquestra a publicação transacional reutilizando `community_api.publish` (upload assíncrono
+Orquestra a publicação transacional reutilizando `CommunityApi.publish` (`yomu/community/community_api.py`) (upload assíncrono
 via worker). `publish-status` conclui o vínculo + status **só** quando a publicação está
 `verified`; falha mantém o chapter invisível. Prova a propriedade do chapter pela obra
 (owner via RLS do usuário) antes de qualquer coisa.
@@ -61,13 +68,18 @@ via worker). `publish-status` conclui o vínculo + status **só** quando a publi
 ## Endpoints (`/api/community/social`)
 
 - `GET /local-pdf-results` — resultados locais publicáveis do owner (sem path/Drive).
-- `POST /chapters/{id}/publish-pdf` — body `{source_job_id, target_status: private|community}`.
+- `POST /chapters/{id}/publish-pdf` — body `{source_job_id, target_status: private|community,
+  publish_consent, idempotency_key}` (`publish_consent` precisa ser `true`; demais campos são
+  descartados).
 - `GET /chapters/{id}/publish-status` — `pending|published|failed`.
 - `GET /chapters/{id}/asset` — owner: `{linked, available, updated_at, mime_type}`; leitor:
   `{linked, available}`. **Nunca** `storage_file_id`/publication_id/checksum/byte_size/path/URL.
-- `POST /chapters/{id}/asset/replace` — body `{source_job_id}`, troca atômica.
+- `POST /chapters/{id}/asset/replace` — body `{source_job_id, publish_consent, idempotency_key}`, troca atômica.
 - `DELETE /chapters/{id}/asset` — desvincula (idempotente, não apaga arquivo).
 - `HEAD|GET /chapters/{id}/content` — leitura protegida.
+- Retenção/restauração (`GET /retained-assets`, `GET /chapters/{id}/asset/retention`,
+  `POST /chapters/{id}/asset/restore`) — ver
+  [SOCIAL_ASSET_RETENTION_RECONCILIATION.md](SOCIAL_ASSET_RETENTION_RECONCILIATION.md).
 
 Todos rejeitam `path`/`owner_id`/`storage_file_id`/`role`/`status` etc. no body (422).
 

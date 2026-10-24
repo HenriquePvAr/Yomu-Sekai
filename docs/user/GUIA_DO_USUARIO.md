@@ -1,6 +1,6 @@
 # Yomu Sekai — Guia do Usuário
 
-> **Base da revisão:** `49eb66a` · **Revisado em:** 2026-09-29
+> **Base verificada:** `5f482ce1` · **Revisado em:** 2026-10-24
 > **Para quem é:** Scans, tradutores, editores e testadores da Beta. Nenhum conhecimento
 > técnico é necessário.
 
@@ -65,17 +65,20 @@ ação explicitamente.
 | Recurso | Disponível? |
 | --- | --- |
 | Traduzir um capítulo a partir de um endereço da internet | ✅ Sim |
-| Traduzir imagens que já estão numa pasta do seu computador | ✅ Sim |
+| Traduzir imagens que já estão no seu computador (pasta do capítulo ou imagens avulsas) | ✅ Sim, no aplicativo desktop |
 | Fila com vários capítulos em sequência | ✅ Sim |
 | Continuar processando com a janela do Yomu fechada | ✅ Sim, o worker é independente da interface |
 | Biblioteca com os capítulos já traduzidos | ✅ Sim |
 | PDF do capítulo | ✅ Sim |
-| Pacote Professional/QC com imagens limpas, PSD editável, relatório e índice de revisão | ✅ Sim |
+| Escolher o que gerar (Tradução pronta, Apenas Clean, Completo e outras opções) | ✅ Sim |
+| Pacote Completo com imagens limpas, PSD editável, relatório e índice de revisão | ✅ Sim |
 | Tela de revisão de qualidade | ✅ Sim |
-| Publicar um PDF na comunidade | ✅ Sim (ação explícita, nunca automática) |
-| Instalação Beta preparada | ✅ Disponível conforme o pacote fornecido pelo owner |
-| Atualização | ✅ O updater foi usado para distribuir a Beta 17; a disponibilidade de novas versões depende do canal |
-| Conta/licença de tester | ✅ Fluxo de conta e entitlement foi usado no E2E real M16 |
+| Efeitos sonoros (SFX) traduzidos para onomatopeias em português | ✅ Sim, por padrão (ver [seção 14](#14-revisão-necessária-o-que-significa)) |
+| Comunidade (descobrir e publicar traduções) | ⚠️ Parcial — a aba mostra **EM DESENVOLVIMENTO** |
+| Scan Studio (ajuste manual de cada etapa) | ⏳ Planejado — a aba **Scans** mostra **EM DESENVOLVIMENTO** |
+| Instalação para usuário final | ⚠️ Parcial — não há instalador público para baixar; use o pacote entregue por quem coordena a Beta ou a instalação pelo repositório |
+| Atualização pelo aplicativo | ⚠️ Parcial — a tela **Atualizações** existe, mas só encontra algo quando há uma versão assinada publicada no canal Beta |
+| Conta/licença de tester | ⚠️ Parcial — o programa verifica o acesso Beta ao iniciar uma tradução; a liberação de acesso depende de quem coordena a Beta |
 
 ## 3. O que você precisa no computador
 
@@ -89,10 +92,14 @@ ação explicitamente.
 
 ## 4. Como instalar hoje
 
-Use o pacote/atalho do Yomu Sekai fornecido para sua instalação. Se você recebeu uma instalação
-Beta pronta, não precisa clonar o repositório nem preparar Python. Para executar a partir do
-código-fonte, siga o procedimento técnico em [Instalação](../INSTALLATION.md); a M18 não valida
-instalação limpa nem o processo de release.
+Ainda **não existe um instalador público** (`Setup.exe`) para baixar. Há dois caminhos:
+
+- se quem coordena a Beta te entregou um pacote/atalho do Yomu Sekai já preparado, use-o — você
+  não precisa clonar o repositório nem preparar Python;
+- caso contrário, a instalação é feita a partir do repositório, seguindo o procedimento técnico
+  em [Instalação](../INSTALLATION.md).
+
+A instalação limpa em um Windows novo ainda não foi comprovada de ponta a ponta.
 
 Se você recebeu um computador ou uma pasta já preparada, pule direto para a
 [seção 5](#5-abrindo-o-programa-pela-primeira-vez).
@@ -135,8 +142,8 @@ a biblioteca.
 Na tela de acesso você verá:
 
 - campos **E-mail** e **Senha**;
-- a opção **Lembrar de mim**;
-- o botão **Entrar no painel**;
+- a opção **Lembrar de mim** e o link **Esqueci minha senha**;
+- o botão **Entrar**;
 - um indicador de conexão: *verificando serviço…*, *serviço conectado* ou
   *sem conexão com o serviço*.
 
@@ -163,12 +170,17 @@ Na lateral existe um menu com as áreas do programa:
 | **Fila** | Vários capítulos enfileirados para processar em sequência |
 | **Capítulos traduzidos** | Sua biblioteca local: ler, abrir pasta e ver relatórios |
 | **Leitor** | Lê o capítulo escolhido dentro do próprio programa |
-| **Comunidade** | Descobrir traduções e publicar as suas |
+| **Recompensas** | Acompanha seus Yomu Keys e seu progresso (rank e XP) |
+| **Scans** | Scan Studio — ainda **em desenvolvimento**; a aba só apresenta o que está planejado |
+| **Comunidade** | Ainda **em desenvolvimento**: a aba avisa que "A comunidade ainda não está disponível nesta versão." |
+| **Atualizações** | Mostra sua versão e permite **Verificar atualizações** (ver [seção 19](#19-configurações)) |
 | **Configurações** | Preferências do programa |
-| **Logs** | Registro técnico do que aconteceu |
 
-> 💡 Atalhos: as teclas **1 a 9** trocam de aba, e **Enter** inicia a análise da URL na
-> tela de nova tradução.
+No topo da janela aparecem também seu saldo de **YK** (Yomu Keys), seu rank e, quando houver uma
+atualização disponível, o selo **↑ Atualizar**.
+
+> 💡 Atalhos: as teclas numéricas trocam de aba na ordem do menu, e **Enter** inicia a análise
+> da URL na tela de nova tradução.
 
 A aba **Fontes** é só um atalho: ela mostra os sites com atalho integrado — **Webtoon**
 (https://www.webtoons.com/en/), **Comix** (https://comix.to/browse?genres_in=101137) e
@@ -182,49 +194,48 @@ ao ser aberta.
 
 O caminho normal é este:
 
-```
-Abrir o Tradutor IA
-   ↓
-Entrar na conta
-   ↓
-Nova tradução → colar o endereço do capítulo
-   ↓
-Iniciar tradução
-   ↓
-O programa analisa a fonte automaticamente
-   ↓
-Acompanhar o progresso
-   ↓
-(se aparecer) revisar os avisos
-   ↓
-Abrir o PDF
+```mermaid
+flowchart TD
+    A["Abrir o Yomu Sekai e entrar na conta"] --> B["Nova tradução: colar a URL do capítulo"]
+    B --> C["Escolher o que gerar (padrão: Tradução pronta)"]
+    C --> D["Iniciar tradução"]
+    D --> E{"Análise segura da fonte"}
+    E -->|"link inválido ou site não compatível"| X["Mensagem explica o motivo; nada é criado"]
+    E -->|"lista de páginas incerta"| F["Páginas encontradas: Confirmar páginas"]
+    E -->|"fonte reconhecida"| G["Processamento: download, leitura, tradução, reconstrução"]
+    F --> G
+    G --> H{"Resultado"}
+    H -->|"Concluído"| I["Abrir PDF ou LER na biblioteca"]
+    H -->|"Concluído — revisão recomendada"| J["Revisão de qualidade: conferir os itens"]
+    J --> I
+    H -->|"Falhou ou cancelado"| K["Tentar novamente, quando recuperável"]
 ```
 
 Detalhando:
 
 **1. Abra a aba "Nova tradução".**
 
-**2. Escolha a origem do capítulo.** Há dois cartões:
+**2. Escolha a origem do capítulo.** Há três cartões:
 
-- **URL pública** — você cola o endereço do capítulo;
-- **Pasta local** — você indica uma pasta do computador que já contém as imagens do
-  capítulo. Essa opção só aparece quando o programa está rodando no seu próprio
-  computador.
+- **URL pública** — você cola o endereço do capítulo no campo **URL do capítulo**;
+- **Pasta do capítulo** — clique em **Selecionar pasta do capítulo** e escolha uma pasta que
+  já contém as imagens. O Yomu carrega as imagens PNG/JPG/JPEG que estão diretamente nessa
+  pasta (subpastas não entram);
+- **Imagens** — clique em **Adicionar imagens** e escolha uma ou várias páginas (PNG ou JPG);
+  **Limpar** esvazia a seleção.
 
-**3. Cole o endereço** no campo **URL do capítulo**.
+Nas duas opções locais aparece a lista **Páginas do capítulo**, com prévia e **Ampliar**, para
+conferir a ordem antes de iniciar. O seletor de pasta e de imagens só funciona dentro do
+aplicativo desktop do Yomu. Com origem local, o escopo fica sempre em **completo** e o modo
+**Download-only** não está disponível.
 
-**4. Confira os campos automáticos.** O **Nome do capítulo** e a **Pasta de saída** são
+**3. Confira os campos automáticos.** O **Nome do capítulo** e a **Pasta de saída** são
 sugeridos sozinhos; você pode ajustá-los.
 
-**5. Escolha o motor de tradução.** O padrão é **DeepL (Qualidade)**. Também existem
-**Riva — mais rápido** e **Nemotron — alternativo**. A escolha vale só para este capítulo.
+**4. Escolha o que você quer gerar** (veja a [seção 9](#9-escolhendo-o-modo-e-o-escopo)). O
+padrão é **Tradução pronta**. A escolha fica lembrada neste computador.
 
-**6. Escolha o perfil de saída.** **Automático** entrega PDF e imagens traduzidas, prontos
-para leitura ou publicação. **QC Profissional** inclui também imagens limpas, PSD com textos
-editáveis para Photoshop/Photopea e relatório QC; esse modo gera arquivos adicionais e pode
-usar mais espaço em disco. O padrão é **Automático**. A escolha fica lembrada neste computador.
-
-**7. Clique em "Iniciar tradução".** O programa analisa a fonte automaticamente antes de
+**5. Clique em "Iniciar tradução".** O programa analisa a fonte automaticamente antes de
 criar o processamento. Se o link for inválido, a página não existir, a fonte estiver
 temporariamente indisponível ou o site ainda não for compatível, nenhum processamento é
 criado e a mensagem explica o motivo.
@@ -240,9 +251,8 @@ capítulo.
 
 ### Modo de processamento
 
-Uma lista suspensa, no mesmo formato dos campos **Idioma original**, **Motor de tradução**
-e **Motor de OCR**. O padrão é **Qualidade**. Abaixo dela, uma linha curta descreve o modo
-selecionado.
+Uma lista suspensa, logo abaixo de **Idioma original** (fixo em inglês). O padrão é
+**Qualidade**. Abaixo dela, uma linha curta descreve o modo selecionado.
 
 | Modo | Quando usar |
 | --- | --- |
@@ -252,20 +262,39 @@ selecionado.
 `Rápido` não é oferecido como escolha na interface atual. A CLI ainda aceita `fast` para uso
 técnico/compatibilidade.
 
-### Perfil de saída
+### O que você quer gerar?
 
-O perfil é separado do modo:
+Os cartões se adaptam à largura da tela. A seleção fica destacada e o resultado entregue
+aparece no rodapé de cada cartão. O painel Pipeline acompanha o job sem limpar o progresso
+ao voltar à aba. O tempo restante é uma estimativa **da etapa atual**, calculada após haver
+progresso suficiente; se os eventos pararem, o painel informa que aguarda atualização.
 
-| Perfil | Use quando | Arquivos principais |
-| --- | --- | --- |
-| **Automático** | Quer ler ou publicar o resultado | PDF traduzido e imagens traduzidas. |
-| **QC Profissional** | Vai revisar e finalizar detalhes | Os mesmos arquivos, mais imagens limpas, PSD com Type Layers editáveis, Quality Report e Review Manifest. |
+Em **Fontes**, as miniaturas são capturas novas dos sites públicos, atualizadas a cada minuto
+enquanto a aba está aberta e visível. O horário identifica a captura. Em caso de falha, a última
+prévia permanece com aviso; ela não é apresentada como atual. A primeira captura pode demorar
+alguns segundos. Nenhuma conta dos sites é usada nas capturas.
 
-Download-only desativa os perfis e coleta somente o conteúdo original. Para localizar cada
+A escolha do resultado é separada do modo. Três cartões aparecem primeiro; **Mais opções**
+mostra os outros três:
+
+| Cartão | O que você recebe |
+| --- | --- |
+| **Tradução pronta** (Recomendado, padrão) | Traduz, remove o texto original e aplica a tradução: **PDF pronto para ler**. |
+| **Apenas Clean** | Remove os textos e entrega as **imagens limpas**, sem traduzir (não chama o serviço de tradução nem consome YK). |
+| **Completo** | **Todos os arquivos**: PDF, imagens limpas, PSD editável (Photoshop/Photopea) e revisão. Gera arquivos adicionais e usa mais espaço em disco. |
+| **Apenas tradução** (Mais opções) | **Só os textos traduzidos**, sem modificar as imagens. Ao terminar, use **Ver tradução**. |
+| **Tradução + Clean** (Mais opções) | Traduz e gera as imagens limpas **sem aplicar a tradução** — para diagramar depois. |
+| **Personalizado** (Mais opções) | Você marca as etapas: **Traduzir textos**, **Gerar imagens limpas**, **Aplicar texto traduzido**, **Gerar PDF**, **Gerar PSD profissional**, **Gerar relatório/revisão QC**. Etapas necessárias são acrescentadas e explicadas automaticamente. |
+
+Download-only ignora essa escolha e salva somente o conteúdo original. Para localizar cada
 arquivo, veja [Onde ficam o PDF e os arquivos](#15-onde-ficam-o-pdf-e-os-arquivos).
 
-Uma tradução nova em **Qualidade** consome 1 YK somente depois de o provider concluir e a
-tradução válida ficar persistida. Falha antes desse ponto consome 0; uma falha posterior ao
+O serviço de tradução usado é o configurado para a sua instalação (padrão: DeepL); não há
+escolha de motor de tradução nem de OCR na tela, e o programa **nunca** troca de serviço por
+conta própria.
+
+Uma tradução nova em **Qualidade** consome 1 YK por capítulo somente depois de o provider
+concluir e a tradução válida ficar persistida. Falha antes desse ponto consome 0; uma falha posterior ao
 salvar a tradução ou gerar os arquivos não devolve automaticamente o YK. Retry/re-export
 reutiliza a tradução salva, sem outra chamada ao provider nem outro YK.
 
@@ -281,11 +310,14 @@ escolher.
 
 | Opção | O que faz |
 | --- | --- |
-| **Usar cache** | Reaproveita download, leitura e tradução já validados. Deixe ligado. |
-| **Forçar reprocessamento** | Ignora o que já foi feito e refaz tudo. Mais lento. |
+| **Usar cache** | Reaproveita download, OCR e tradução já validados. |
+| **Forçar reprocessamento** | Ignora o cache de OCR, tradução e renderização e refaz tudo. Mais lento. |
 | **Contexto temporário do capítulo** | Mantém nomes e termos consistentes entre os balões. |
 | **Abrir pasta ao terminar** | Mostra os arquivos assim que o capítulo ficar pronto. |
-| **Registrar perfil local da fonte** | Opcional; guarda apenas evidências sem dados sensíveis, e só depois de uma revisão manual concluída. |
+
+Ao abrir uma tradução nova, o formulário começa com **Forçar reprocessamento** ligado e
+**Usar cache** desligado, para processar a fonte de novo. Inverta as duas opções se quiser
+reaproveitar o que já foi validado antes.
 
 ## 10. Acompanhando o progresso
 
@@ -296,22 +328,28 @@ O painel **Pipeline** mostra as etapas na ordem. Em linguagem simples:
 | **Análise segura da fonte** | O programa está descobrindo quais são as páginas do capítulo |
 | **Revisão das páginas** | Ele encontrou as páginas, mas quer que você confirme antes de continuar |
 | **Download das páginas** | Está baixando as imagens e conferindo se chegaram inteiras |
-| **Detecção de balões** | Está localizando os balões e as áreas de texto |
-| **Leitura do texto** | Está lendo o que está escrito nas imagens |
+| **Identificando regiões** | Está localizando os balões e as áreas que podem conter texto |
+| **Lendo textos** | Está lendo o que está escrito nas imagens |
 | **Tradução** | Está traduzindo os textos para português |
-| **Redesenho dos balões** | Está apagando o texto original e escrevendo a tradução |
-| **Geração do PDF** | Está montando o arquivo final |
-| **Revisão de qualidade** | Está conferindo o resultado e separando o que merece sua atenção |
+| **Reconstruindo páginas** | Está apagando o texto original e escrevendo a tradução, preservando a arte |
+| **Preparando documento** | Está montando o arquivo final |
+| **Verificando resultado** | Está conferindo o resultado e separando o que merece sua atenção |
 
-Você também verá mensagens curtas como *"Na fila…"*, *"Iniciando o worker…"*,
-*"Carregando páginas do leitor"*, *"Baixando as páginas…"* e *"Lendo o texto…"*, além de
-uma estimativa de tempo.
+Só aparecem as etapas que o resultado escolhido realmente usa: **Apenas tradução** não mostra
+*Reconstruindo páginas* nem *Preparando documento*, e **Apenas Clean** não mostra *Tradução*.
+
+Você também verá mensagens curtas como *"Na fila..."*, *"Iniciando o worker..."*,
+*"Obtendo as páginas..."*, *"Lendo textos..."*, *"Traduzindo o capítulo..."* e
+*"Reconstruindo a arte..."*, além de uma estimativa de tempo. Em algumas fontes pode aparecer
+*"Aguardando verificação da fonte no navegador..."*: o site pediu uma verificação e o programa
+espera que ela seja concluída no navegador antes de seguir.
 
 > 💡 **"Worker"** é o nome do serviço que faz o processamento em segundo plano. Quando uma
 > mensagem fala em worker, ela está falando dessa parte do programa.
 
-O status geral aparece com nomes simples: *na fila*, *analisando fonte*, *rodando*,
-*revisão das páginas*, *finalizado*, *revisão necessária*, *cancelado*, *erro*.
+O status geral aparece com nomes simples: *na fila · aguardando*, *processando*,
+*confirme as páginas*, *fonte analisada*, *concluído*, *concluído — revisão recomendada*,
+*revisão concluída*, *cancelado*, *falhou*.
 
 ## 11. Revisão das páginas encontradas
 
@@ -336,8 +374,9 @@ O que acontece: o programa avisa o serviço de processamento, encerra o trabalho
 segurança e **preserva o que já tinha sido produzido**. Nada é apagado por trás.
 
 Um capítulo cancelado aparece como **cancelado**. Quando ele é recuperável, o botão
-**Tentar novamente** fica disponível: ele cria uma nova tentativa vinculada, preservando a
-execução anterior e seus arquivos.
+**Tentar novamente** fica disponível: o programa pede **Confirmar nova tentativa** e, ao
+confirmar em **CRIAR RETRY**, cria uma nova tentativa vinculada, preservando a execução
+anterior e seus arquivos.
 
 ## 13. Se o programa fechar ou travar no meio
 
@@ -410,11 +449,32 @@ Motivos comuns:
 - uma leitura **incerta** de uma palavra pequena, borrada ou estilizada;
 - um **nome próprio** que o programa preferiu não alterar;
 - um trecho de texto original que a verificação **não conseguiu provar** que foi tratado;
-- um **efeito sonoro** — por padrão os efeitos sonoros são preservados, não traduzidos.
+- uma região em que a **reconstrução da arte ficou incerta**: a tradução é desenhada mesmo
+  assim — para a página não voltar com o texto em inglês — e o trecho entra na revisão para
+  você conferir;
+- um **efeito sonoro** que o programa não soube converter com segurança.
+
+### Efeitos sonoros (SFX)
+
+Por padrão, efeitos sonoros conhecidos **são traduzidos** para a onomatopeia usada em
+português — por exemplo, "BANG" vira "BAM" e "\*bite\*" vira "\*morde\*". Letras esticadas,
+maiúsculas e asteriscos do original são mantidos. Um som que o programa não conhece
+**mantém o letreiro original**, em vez de receber uma tradução literal. Esse comportamento
+não tem um botão na tela de configurações; se a sua instalação precisar manter todos os
+efeitos sonoros em inglês, peça a quem preparou a instalação.
+
+### Texto dentro dos balões
+
+Dentro de balões fechados, a tradução é quebrada no formato do balão (linhas mais largas no
+meio, mais estreitas nas pontas), sem diminuir a fonte em relação ao encaixe normal.
+
+### A tela de revisão
 
 Na tela de **Revisão de qualidade** você pode filtrar por **Pendentes**, **Todos**,
-**Concluídos**, **Rejeitados**, **Revisão manual** e outros; aceitar itens de baixo risco,
-aceitar todos, desfazer a última ação em massa ou **Reprocessar pendências**.
+**Concluídos**, **Rejeitados**, **Aplicados**, **Revisão manual** e outros; marcar
+**Selecionar todos do filtro atual**, **Desfazer última ação em massa**, **Reprocessar
+pendências**, **Revisar capítulo inteiro**, **Confirmar revisão** ou gerar uma nova saída em
+PNG, PDF ou PSD com **GERAR NOVAMENTE** (sem custo adicional de YK).
 
 **A Revisão é um controle de qualidade linguístico.** Para cada pendência ela mostra o
 **texto original** detectado, a **tradução** atual e um **aviso em português** explicando por
@@ -437,9 +497,11 @@ perfeita.
 
 Quando uma tradução termina, o resultado indica quantas páginas foram processadas e mostra
 somente as ações correspondentes aos arquivos que existem. **Abrir PDF** abre o documento
-no leitor padrão; **Abrir pasta** mostra a saída desta execução. No modo **QC Profissional**,
-também podem aparecer **Abrir Review**, **Abrir PSDs** e **Abrir pasta de QC**, conforme os
-artefatos produzidos. Imagens traduzidas e limpas ficam resumidas no material gerado.
+no leitor padrão; **Abrir pasta** mostra a saída desta execução. Em **Apenas tradução** e
+**Tradução + Clean** aparece **Ver tradução**, que mostra o texto original e a tradução de
+cada página sem você precisar abrir arquivos técnicos. No resultado **Completo** também podem
+aparecer **Abrir Review**, **Abrir PSDs** e **Abrir pasta de QC**, conforme os artefatos
+produzidos. A lista mostra apenas o que foi gerado, com a marca "Pronto".
 
 **Revisão recomendada não significa falha.** O resultado foi gerado normalmente; a Review
 permite conferir os itens sinalizados sem refazer a tradução. Se o processamento falhar, a
@@ -455,6 +517,19 @@ de CLI. Confie nos caminhos gravados nos manifests da execução, não em nomes 
 output/<nome_do_capitulo>/<id_da_execucao>/
 ```
 
+Visão simplificada do que pode existir dentro da pasta de uma execução (só aparece o que o
+resultado escolhido gerou):
+
+```mermaid
+flowchart LR
+    R["output/nome_do_capitulo/id_da_execucao"] --> P["PDF traduzido"]
+    R --> T["images/translated: páginas traduzidas"]
+    R --> C["images/clean: páginas limpas"]
+    R --> S["psd: um PSD editável por página"]
+    R --> Q["qc: quality_report.json e review_manifest.json"]
+    R --> L["translation/translation.json: textos traduzidos"]
+```
+
 Isso permite repetir o mesmo capítulo sem apagar o PDF ou os relatórios da execução
 anterior. Capítulos gerados por versões antigas podem continuar aparecendo diretamente em
 `output/<nome_do_capitulo>/`.
@@ -462,7 +537,8 @@ anterior. Capítulos gerados por versões antigas podem continuar aparecendo dir
 | O que procura | Conteúdo |
 | --- | --- |
 | Resultado para leitura | PDF traduzido e imagens traduzidas. |
-| QC Profissional | Imagens limpas, um PSD por página, Quality Report e Review Manifest. |
+| Completo | Imagens limpas, um PSD por página, Quality Report e Review Manifest. |
+| Apenas tradução | `translation/translation.json` (aberto pela ação **Ver tradução**). |
 | Diagnóstico interno | Manifests de job/run, relatório de download e tempos, quando produzidos. |
 
 O contrato V2 define os caminhos canônicos (`images/translated/`, `images/clean/`, `psd/`,
@@ -479,8 +555,10 @@ pasta para você.
 A aba **Capítulos traduzidos** é sua biblioteca local. Ela tem busca por nome e mostra o
 total de capítulos.
 
-Cada item tem **LER** como ação principal, e ainda permite abrir o PDF no programa do
-computador, abrir a pasta e ver os relatórios da execução.
+Cada item tem **LER** como ação principal e, conforme os arquivos que existem, botões como
+**Abrir PDF**, **Imagens limpas**, **Ver tradução**, **PSDs editáveis**, **Relatório de QC**,
+**Abrir pasta**, **Reprocessar** e **Excluir capítulo**. O botão **Selecionar** permite marcar
+vários capítulos e excluí-los de uma vez (**Excluir selecionados**).
 
 Capítulos traduzidos em versões antigas do programa também aparecem: eles são descobertos
 pela pasta `output/`, mesmo sem registro interno.
@@ -495,6 +573,7 @@ Na barra do leitor você tem:
 | --- | --- |
 | ← (o primeiro, à esquerda) | volta para **Capítulos traduzidos** |
 | Miniaturas | mostra ou esconde a coluna de páginas em miniatura |
+| **Contínuo** / **Página única** | leitura contínua (rolagem) ou uma página por vez |
 | ‹ e › | página anterior e próxima |
 | Caixa de página | digite um número e pressione **Enter** para pular direto |
 | − e + | diminui e aumenta o zoom |
@@ -539,39 +618,64 @@ Os capítulos são processados **um por vez, em sequência**. Você pode **limpa
 
 ## 18. Comunidade
 
-A aba **Comunidade** permite descobrir traduções, acompanhar obras e compartilhar
-projetos.
+**Estado: PARCIAL.** Nesta versão a aba **Comunidade** mostra o selo **EM DESENVOLVIMENTO** e o
+aviso "A comunidade ainda não está disponível nesta versão." — não há feed, favoritos nem
+notificações para usar ali.
+
+Na biblioteca (**Capítulos traduzidos**), um capítulo concluído com PDF pode exibir o botão
+**Publicar na comunidade** (ou **Publicação indisponível** / **Revisão necessária** quando
+ainda não pode ser publicado). Publicar depende do serviço da comunidade estar ativo para a sua
+conta; se não estiver, isso é esperado e não é um erro do seu computador.
 
 > 🔒 **Nada do seu computador vai para a comunidade sozinho.** Terminar uma tradução,
 > exportar, salvar ou reiniciar o programa **não publica nada**. O único caminho para um
 > arquivo sair da sua máquina é você abrir **Publicar na comunidade** e confirmar.
 
-Ao publicar, você escolhe a **visibilidade** e se **permite comentários** naquela
-publicação. A publicação só fica visível para os outros **depois** que o envio do arquivo é
-confirmado.
-
-Se a comunidade não estiver configurada no seu ambiente, a área simplesmente não fica
-disponível — isso é esperado e não é um erro do seu computador.
+Na janela de publicação você informa título, descrição e tags, escolhe a **Visibilidade**
+(**Comunidade** ou **Privado**), decide se quer **Permitir comentários nesta publicação** e
+precisa marcar as duas confirmações (permissão para publicar e revisão do resultado) antes de
+**Publicar**.
 
 ## 19. Configurações
 
 Principais preferências disponíveis:
 
-> Na candidata local de consolidação, a seção Configurações também exibe a disponibilidade
-> técnica do worker remoto de limpeza (API, fila, consumidor, worker e schema). Esse indicador
-> não inicia um job nem comprova login/autenticação na interface Gemini; não é uma capacidade
-> publicada e pode estar ausente em builds anteriores.
+No topo há cartões de resumo (modo padrão, leitura de texto, processamento paralelo, contexto
+de capítulo) e o indicador **Worker remoto de limpeza**, que mostra apenas a disponibilidade
+técnica desse serviço; ele não inicia um job nem comprova login no Gemini.
 
-- **Geral** — idioma da interface (Português, English, Español, Français, 日本語, 한국어),
-  tema, página inicial, abrir pasta ao terminar, notificações locais, confirmar ações
-  destrutivas;
-- **Processamento** — modo padrão, escopo padrão, usar cache quando seguro, contexto
-  temporário, concorrência segura;
+- **Geral** — idioma da interface (Automático — sistema, Português do Brasil, English,
+  Español, Français, 日本語, 한국어), tema, página inicial, abrir pasta ao terminar,
+  notificações no dispositivo, confirmar ações destrutivas;
+- **Processamento** — modo padrão, escopo padrão (capítulo inteiro ou amostra de teste), usar
+  cache quando seguro, usar contexto temporário, concorrência segura;
 - **Arquivos** — retenção de outputs, limite de cache, confirmar antes de apagar, limpeza
   manual de temporários;
 - **Acessibilidade e privacidade** — reduzir animações, aumentar contraste, escala da
-  interface, tooltips, atalhos de teclado, limpar sessão, limpar dados locais;
-- **Comunidade** — notificações de comentários, respostas, moderação e atualizações.
+  interface, mostrar tooltips, atalhos de teclado, **limpar sessão**, **limpar dados deste
+  dispositivo**;
+- **Anúncios** — **Anúncios passivos**: com eles ligados, você pode usar YK diários; YK
+  permanentes continuam disponíveis com os anúncios desligados;
+- **Atualizações** — versão instalada e o botão **Verificar atualizações** (ver abaixo);
+- **Sobre** — botões **Salvar configurações** e **Restaurar padrão**.
+
+### Atualizações
+
+**Estado: PARCIAL.** A verificação existe na aba **Atualizações** (botão **Verificar
+atualizações**) e em **Configurações › Atualizações**. O programa também verifica sozinho
+alguns segundos depois de abrir e, se houver novidade, mostra o selo **↑ Atualizar** no topo.
+
+- *Você está na versão mais recente.* — nada a fazer;
+- *Canal de atualização não configurado.* — sua instalação não recebe atualizações por aqui;
+  fale com quem coordena a Beta;
+- *Atualização disponível: …* — clique em **Baixar atualização** (ou **Baixar e instalar** na
+  aba Atualizações). O download é verificado antes de ser usado; depois clique em **Instalar e
+  reiniciar** (ou **Instalar agora**). O Yomu fecha para concluir a instalação;
+- *Não foi possível verificar atualizações.* — confira a internet e tente de novo.
+
+Só aparece uma versão quando existe uma atualização assinada publicada no canal Beta; este
+guia não garante que haja uma versão mais recente disponível. O fluxo completo de atualização
+ainda não foi comprovado em uma instalação limpa.
 
 ## 20. Mensagens de erro e o que fazer
 
@@ -581,7 +685,7 @@ As mensagens abaixo são as que o programa realmente mostra.
 
 | O que você vê | O que significa | O que fazer |
 | --- | --- | --- |
-| *Serviço de processamento indisponível* | O serviço que faz o trabalho pesado não está ligado | Feche o Yomu e abra novamente pelo atalho do aplicativo. Se voltar a acontecer, veja a [seção 21](#21-como-reiniciar-com-segurança) |
+| *Servico de processamento indisponivel.* | O serviço que faz o trabalho pesado não está ligado | Feche o Yomu e abra novamente pelo atalho do aplicativo. Se voltar a acontecer, veja a [seção 21](#21-como-reiniciar-com-segurança) |
 | Capítulo parado em **na fila** e nada acontece | Não há serviço de processamento ativo | Mesmo procedimento acima |
 
 ### Problemas com a origem do capítulo
@@ -589,7 +693,9 @@ As mensagens abaixo são as que o programa realmente mostra.
 | O que você vê | O que significa | O que fazer |
 | --- | --- | --- |
 | *Não foi possível analisar a fonte.* | O programa não conseguiu entender aquela página | Confira o endereço; tente o link direto do capítulo |
-| *Esta fonte ainda não é suportada.* | O site não é reconhecido | Use um site suportado ou baixe as imagens e use **Pasta local** |
+| *Esta fonte ainda não é compatível com o Yomu Sekai.* | O site não é reconhecido | Use um site suportado (aba **Fontes**) ou baixe as imagens e use **Pasta do capítulo** / **Imagens** |
+| *A página informada não foi encontrada.* | O endereço não leva a um capítulo | Confira o link |
+| *Fontes externas estão bloqueadas até ativar a política.* | A política de fontes deste workspace não autoriza o download | Fale com quem coordena a Beta |
 | *Essa fonte exige autenticação.* | O capítulo está atrás de login | Não é possível seguir por aqui |
 | *A fonte exige uma verificação interativa.* | Há um desafio anti-robô na página | Não é possível seguir por aqui |
 | *A fonte recusou o acesso público.* | O site bloqueou o acesso | Tente mais tarde ou use outra origem |
@@ -615,7 +721,7 @@ As mensagens abaixo são as que o programa realmente mostra.
 | O que você vê | O que fazer |
 | --- | --- |
 | *O site demorou demais para responder.* | Verifique sua internet e tente de novo |
-| *Não foi possível conectar ao site.* | Verifique sua internet |
+| *Nao foi possivel conectar ao site.* | Verifique sua internet |
 | *Ocorreu um problema ao baixar as imagens.* | Tente novamente |
 | *A página ultrapassou o tempo limite de navegação.* | Conexão lenta ou site sobrecarregado |
 
@@ -623,9 +729,14 @@ As mensagens abaixo são as que o programa realmente mostra.
 
 | O que você vê | O que significa | O que fazer |
 | --- | --- | --- |
-| *Disco cheio ao gravar as páginas baixadas.* | Sem espaço | Libere espaço e tente de novo |
+| *Disco cheio ao gravar as páginas baixadas. Libere espaço e tente novamente.* | Sem espaço | Libere espaço e tente de novo |
 | *O processamento foi cancelado.* | Você cancelou | Nada a fazer |
-| *O PDF foi criado, mas alguns itens precisam de revisão.* | Terminou com avisos | Veja a [seção 14](#14-revisão-necessária-o-que-significa) |
+| *Tradução concluída. Há pontos que recomendamos revisar.* | Terminou com avisos | Veja a [seção 14](#14-revisão-necessária-o-que-significa) |
+| *Yomu Keys insuficientes para iniciar esta tradução.* | Seu saldo de YK não cobre a tradução | Veja seu saldo no topo da janela ou na aba **Recompensas** |
+| *Seu acesso à versão beta ainda não está ativo.* / *...ainda não começou.* | O acesso Beta da sua conta não foi liberado | Fale com quem coordena a Beta |
+| *Seu acesso à versão beta expirou.* / *...foi revogado.* | O acesso Beta terminou | Fale com quem coordena a Beta para renovar |
+| *Seu acesso atual não permite iniciar esta tradução.* | Sua conta não tem permissão para esta ação | Fale com quem coordena a Beta |
+| *Este dispositivo não está autorizado para esta conta.* / *O limite de dispositivos autorizados foi atingido.* | O computador não está liberado para a sua conta | Fale com quem coordena a Beta |
 | *Configure o arquivo .env e a NVIDIA_API_KEY antes de processar.* | Falta configurar a chave do serviço de tradução | Peça ajuda a quem preparou sua instalação. **Observação:** esta mensagem cita um serviço antigo; o serviço padrão hoje é o DeepL |
 
 ### Problemas com a leitura do texto ou a tradução
@@ -664,8 +775,8 @@ O que a versão atual realmente faz:
   exige uma configuração deliberada.
 - **Sua senha não é guardada pelo programa.** O login é feito pelo serviço de
   autenticação, e o programa recebe apenas uma sessão temporária.
-- **Chaves e senhas são ocultadas nos registros.** O texto que aparece nos Logs passa por
-  uma limpeza antes de ser mostrado.
+- **Chaves e senhas são ocultadas nos registros.** O registro técnico do processo passa por
+  uma limpeza antes de ser mostrado ou gravado.
 - **A pasta local que você indica não é registrada no histórico** nem copiada para a pasta
   de saída — o programa usa uma cópia temporária interna.
 
@@ -682,12 +793,16 @@ O que a versão atual **não** promete:
 - Idioma de origem: **inglês**;
 - Idioma de destino: **português do Brasil**;
 - É necessária **internet** e uma chave válida do serviço de tradução;
-- É necessário o **Google Chrome** para capítulos vindos de um endereço;
+- O **Google Chrome** pode ser necessário para capítulos vindos de um endereço (algumas fontes
+  usam o navegador; outras, acesso direto);
 - Um site que passa na análise **não é necessariamente um site suportado** — sem um
   adaptador específico, o programa pode pedir sua confirmação ou recusar;
 - Sites com login, verificação anti-robô ou conteúdo protegido **não são contornados**;
 - É possível enfileirar vários capítulos; o processamento segue a capacidade/ordem da fila;
-- Efeitos sonoros são **preservados**, não traduzidos, por padrão;
+- Efeitos sonoros conhecidos são traduzidos por padrão; os desconhecidos mantêm o letreiro
+  original;
+- A Comunidade e o Scan Studio ainda estão **em desenvolvimento**;
+- Não há escolha de motor de tradução ou de OCR na tela;
 - **Retomar** só aparece para capítulos interrompidos que o programa confirmou como
   recuperáveis (ver [seção 13](#13-se-o-programa-fechar-ou-travar-no-meio));
 - A disponibilidade de atualização depende do canal Beta fornecido; esta lista não é um checklist de release.
@@ -709,28 +824,30 @@ minutos. A etapa de leitura do texto costuma ser a mais demorada.
 
 **Por que meu capítulo terminou em "revisão necessária" se está bonito?**
 Porque algum item não pôde ser **provado** correto automaticamente — quase sempre um logo,
-um efeito sonoro ou uma palavra estilizada. O PDF está pronto para uso.
+uma palavra estilizada ou uma região cuja reconstrução da arte ficou incerta. O PDF está
+pronto para uso.
 
 **Posso traduzir imagens que já baixei?**
-Pode. Escolha **Pasta local** na tela de nova tradução. Essa opção só aparece quando o
-programa roda no seu próprio computador.
+Pode. Escolha **Pasta do capítulo** ou **Imagens** na tela de nova tradução. O seletor só
+funciona dentro do aplicativo desktop do Yomu.
 
-**Por que os efeitos sonoros continuam em inglês?**
-É intencional. Efeitos sonoros costumam ser arte desenhada; alterá-los quase sempre piora o
-resultado. Eles ficam registrados na revisão.
+**Por que um efeito sonoro continuou em inglês?**
+Efeitos sonoros conhecidos viram onomatopeias em português ("BANG" → "BAM"). Quando o
+programa não conhece o som, ele mantém o letreiro original em vez de arriscar uma tradução
+literal.
 
 **Posso mudar o serviço de tradução?**
-Pode, no campo **Motor de tradução**, capítulo a capítulo. O padrão é **DeepL
-(Qualidade)**.
+Não pela tela. O serviço é o configurado para a sua instalação (padrão: **DeepL**), e o
+programa nunca troca de serviço por conta própria.
 
 **E o motor de leitura de texto (OCR)?**
-Nesta beta há um só: **RapidOCR**. Ele aparece no campo **Motor de OCR**, logo abaixo do
-motor de tradução, apenas para você saber o que está sendo usado. O campo não abre lista e
-não tem seta: não há troca nesta versão, e o programa nunca troca de motor por conta
-própria. O que o campo mostra é o motor realmente configurado para a execução.
+Nesta beta há um só, **RapidOCR**; não há troca nesta versão. O cartão **Leitura de texto**
+em **Configurações** mostra o estado dele.
 
 **Como recebo uma atualização?**
-Quando uma atualização Beta estiver disponível, use a opção de atualização do aplicativo e siga as instruções apresentadas. A M18 não valida uma nova release nem garante que haja uma versão mais recente no canal.
+Na aba **Atualizações**, clique em **Verificar atualizações** (veja a
+[seção 19](#19-configurações)). O programa só oferece uma versão quando há uma atualização
+assinada publicada no canal Beta.
 
 **Minha tradução aparece para outras pessoas?**
 Só se você publicar explicitamente na aba **Comunidade**.
@@ -747,10 +864,9 @@ horário da última atualização parar de avançar por muito tempo, veja a
 ## 25. Precisa de mais ajuda?
 
 1. Confira a tabela de [mensagens de erro](#20-mensagens-de-erro-e-o-que-fazer);
-2. Veja a aba **Logs** dentro do programa;
-3. Abra o Quality Report e a lista de revisão apontados pela execução; os caminhos também
+2. Abra o Quality Report e a lista de revisão apontados pela execução; os caminhos também
    aparecem no `artifact_manifest.json` e na Review;
-4. Se o problema for técnico, o material para quem dá suporte está em
+3. Se o problema for técnico, o material para quem dá suporte está em
    [Troubleshooting](../TROUBLESHOOTING.md) e na
    [Documentação Técnica](../technical/DOCUMENTACAO_TECNICA.md#28-troubleshooting-técnico).
 
@@ -767,6 +883,7 @@ reais só existem depois do login em um ambiente configurado, e capturá-las exi
 dados de conta. Nenhuma imagem foi inventada ou simulada.
 
 As capturas serão adicionadas em `docs/assets/user/` quando puderem ser feitas com uma
-conta de demonstração segura. As telas previstas são: acesso, nova tradução, origem
-validada, progresso do pipeline, revisão de páginas, revisão de qualidade, biblioteca,
-resultado final e **capítulo interrompido com o botão Retomar**.
+conta de demonstração segura. As telas previstas são: acesso, nova tradução (com "O que você
+quer gerar?"), origem validada, progresso do pipeline, revisão de páginas, revisão de
+qualidade, biblioteca, resultado final, atualizações e **capítulo interrompido com o botão
+Retomar**.

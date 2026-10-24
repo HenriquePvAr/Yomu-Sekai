@@ -1,5 +1,13 @@
 # Interface da comunidade social
 
+> **Estado: DESLIGADA no cliente.** **Revisado em:** 2026-10-24 · **Base verificada:** `5f482ce1`.
+> `static/social_community.js` define `COMMUNITY_ENABLED = false` (desde `1621f9c4`,
+> 2026-09-13): o módulo mostra só o estado "EM DESENVOLVIMENTO" ("A comunidade ainda não está
+> disponível nesta versão.") e retorna antes de montar as abas abaixo; a aba lateral
+> "Comunidade" em `ui/ui_shell.html` exibe o selo "EM BREVE". O código descrito neste
+> documento continua no repositório e é coberto por testes de contrato, mas o usuário não o
+> alcança. Para religar, é preciso mudar o código (não há flag de ambiente).
+
 A área de comunidade consome **exclusivamente** os endpoints do backend social
 (`/api/community/social/*`). O navegador **nunca** fala com a Supabase Data API
 diretamente; o SDK Supabase no frontend é usado **apenas** para autenticação/sessão/refresh/
@@ -82,13 +90,14 @@ testes garantem que chamadas manuais a conteúdo alheio continuam negadas (404).
 `owner_id`/`author_id`/`user_id`/`reporter_id`/`recipient_id`/`role` é montado pela UI; são
 derivados do JWT no backend.
 
-## Ligação com o PDF (pendente)
+## Ligação com o PDF
 
-Não há associação segura entre os `chapters` sociais e os PDFs antigos (SQLite/Google
-Drive): não existe endpoint social de PDF, `private.chapter_assets` está vazio e os
-`chapters` públicos não têm coluna de arquivo. Por isso **não há botão "Ler"**; o owner vê
-um aviso discreto "Arquivo ainda não vinculado" e terceiros não veem detalhes internos. A
-ligação `chapter → PDF` será uma **fase separada**.
+Implementada depois desta UI (ver [EXPLICIT_SOCIAL_PDF_PUBLISHING.md](EXPLICIT_SOCIAL_PDF_PUBLISHING.md)
+e [SOCIAL_ASSET_RETENTION_RECONCILIATION.md](SOCIAL_ASSET_RETENTION_RECONCILIATION.md)): o
+vínculo `chapter → publicação` fica em SQLite server-side, não em `private.chapter_assets`. Em
+`static/social_community.js` (`renderAssetControls`), com asset disponível aparece **"Ler"**
+(e, para o owner, "Substituir PDF"/"Desvincular"); sem asset, o owner vê "Arquivo ainda não
+vinculado" + "Publicar PDF".
 
 ## Estados, acessibilidade e segurança
 
@@ -112,5 +121,5 @@ ligação `chapter → PDF` será uma **fase separada**.
 
 - Sem runner DOM no projeto → testes de frontend são de contrato/fonte; o comportamento em
   runtime é validado por smoke de navegador + e2e do backend.
-- Ligação `chapter → PDF`, Supabase Storage, uploads (avatar/banner/vídeo/capa), Realtime,
-  moderação e migração do SQLite ficam para fases futuras (placeholders visuais nesta fase).
+- Supabase Storage, uploads (avatar/banner/vídeo/capa), Realtime, moderação e migração do
+  SQLite não estão implementados nesta UI.

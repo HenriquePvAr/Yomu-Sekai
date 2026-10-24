@@ -1,5 +1,9 @@
 # M17 — Professional PSD performance and size report
 
+> **Registro histórico (M17, 2026-09-29).** Writer atual: `yomu/export/editable_psd_writer.py`;
+> writer legacy usado pelo probe: `yomu/export/psd_exporter.py`. Tamanhos e tempos descrevem
+> o job M16 daquela data; não foram remedidos após a reescrita da limpeza de 2026-10-23/24. **Revisado em:** 2026-10-24 · **Base verificada:** `5f482ce1`
+
 ## Scope and provenance
 
 This report measures the existing `professional_qc` output from the M16 job

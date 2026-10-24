@@ -1,5 +1,10 @@
 # Fronteira de autenticação e autorização da comunidade
 
+> **Revisado em:** 2026-10-24 · **Base verificada:** `5f482ce1`.
+> **Estado:** fronteira de autorização IMPLEMENTADA no backend (`yomu/community/`). A UI da
+> Comunidade está desligada no cliente (`COMMUNITY_ENABLED = false` em
+> `static/social_community.js`); as rotas `/api/community/*` continuam montadas.
+
 A comunidade não usa identidade escolhida pelo navegador. Toda rota cria um
 `RequestPrincipal` por meio de um `AuthProvider`; quando não há credencial válida, o
 principal é anônimo e explícito. `user_id`, owner e roles são dados confiáveis somente
@@ -16,13 +21,21 @@ depois da validação da sessão pelo backend.
 - `session_id` opcional.
 
 `AuthProvider` define `authenticate_request`, `require_authenticated`, `require_role` e
-`require_csrf`. A implementação atual é `LocalSessionAuthProvider`. Ela é temporária,
-somente para localhost, e mantém em memória o vínculo entre token aleatório, usuário,
-roles, CSRF e expiração. Reiniciar o processo invalida todas as sessões.
+`require_csrf`. `yomu/community/community_auth.py::build_auth_provider` escolhe a
+implementação por `AUTH_PROVIDER` ou `COMMUNITY_AUTH_PROVIDER`; sem valor, o padrão é
+**`supabase`**:
 
-Uma futura `SupabaseAuthProvider` deverá usar biblioteca mantida para verificar assinatura
-JWT, issuer, audience, expiração e `sub`, e obter roles apenas de claims autorizadas ou do
-banco. Esta branch não implementa JWT nem Supabase e não contém validação manual parcial.
+- `SupabaseAuthProvider` (`yomu/auth/supabase_auth.py`) — **padrão**; valida o JWT do
+  Supabase por JWKS (assinatura, `iss`, `aud`, `exp`, `nbf`, `sub`) e cria um principal com
+  role comum. Ver [SUPABASE_AUTH.md](SUPABASE_AUTH.md).
+- `LocalSessionAuthProvider` (`local`) — somente para localhost; mantém em memória o
+  vínculo entre token aleatório, usuário, roles, CSRF e expiração. Reiniciar o processo
+  invalida todas as sessões. Descrito na seção seguinte.
+- `BetterAuthProvider` (`better_auth`) — opcional, não ativado
+  ([BETTER_AUTH_MIGRATION.md](BETTER_AUTH_MIGRATION.md)).
+- `local_test` — apenas testes.
+
+Configuração incompleta falha fechada, sem queda silenciosa para o provider local.
 
 ## Sessão local temporária
 
@@ -164,9 +177,9 @@ explícito; um provider forte, isoladamente, não libera peers externos.
 `TRADUTOR_UI_HOST` usa `127.0.0.1` por padrão. `0.0.0.0` ou outro bind externo exige
 `TRADUTOR_ALLOW_EXTERNAL_BIND=1` e um provider configurado que declare autenticação forte
 para exposição externa. `LocalSessionAuthProvider` nunca satisfaz esse requisito, mesmo
-com a flag explícita. Até a integração completa com Supabase e a proteção das demais
-rotas locais, o servidor deve permanecer em loopback.
+com a flag explícita. `SupabaseAuthProvider` declara `supports_external_bind = True`, mas
+o opt-in continua obrigatório; o uso suportado do app é em loopback.
 
 Além da validação no entrypoint, um middleware global rejeita peers não-loopback quando
 o provider não declara autenticação externa forte. Isso mantém o app fechado mesmo se
-alguém importar `app_ui:app` em outro runner ASGI com um bind inseguro.
+alguém importar o app (`yomu.ui.app`, reexportado por `app_ui.py`) em outro runner ASGI com um bind inseguro.

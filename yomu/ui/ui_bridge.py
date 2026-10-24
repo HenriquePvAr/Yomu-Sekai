@@ -5115,7 +5115,7 @@ class UiBridge:
             "ocr_parallel": os.getenv("OCR_PARALLEL") or values.get("OCR_PARALLEL", "False"),
             "ocr_text_repair_mode": os.getenv("OCR_TEXT_REPAIR_MODE")
             or values.get("OCR_TEXT_REPAIR_MODE", "conservative"),
-            "translate_sfx": os.getenv("TRANSLATE_SFX") or values.get("TRANSLATE_SFX", "False"),
+            "translate_sfx": os.getenv("TRANSLATE_SFX") or values.get("TRANSLATE_SFX", "True"),
             "prioritize_enclosed_text": os.getenv("PRIORITIZE_ENCLOSED_TEXT")
             or values.get("PRIORITIZE_ENCLOSED_TEXT", "True"),
             "rapidocr_available": bool(

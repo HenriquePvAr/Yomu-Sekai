@@ -1,5 +1,14 @@
 # Adaptador universal de capítulos
 
+> **Base verificada:** `5f482ce1` (branch `main`) · **Revisado em:** 2026-10-24
+>
+> Código: `UniversalChapterAdapter` em `yomu/download/sources/chapter_source.py`; coleta,
+> clusterização e limiares (`HIGH_CONFIDENCE = 0.85`, `MEDIUM_CONFIDENCE = 0.60`,
+> `MAX_AUTOMATIC_PAGES = 400`, `MAX_CANVAS_CAPTURE_BYTES`) em
+> `yomu/download/sources/universal_chapter_adapter.py`; paginação limitada
+> (`MAX_PAGINATED_READER_FOLLOWS = 24`, `MAX_PAGINATED_READER_SECONDS = 45`) em
+> `yomu/download/down.py`; perfis em `yomu/download/sources/source_profile.py`.
+
 ## Objetivo e escopo
 
 `UniversalChapterAdapter` é um fallback **controlado** para uma URL pública HTTP(S) que
@@ -49,6 +58,25 @@ de uma edição de revisão após recarregar a página ou trocar de job. Quando 
 ele observa o leitor novamente e confere a seleção contra a nova evidência; uma página que sumiu
 ou mudou não é buscada silenciosamente.
 
+```mermaid
+flowchart TD
+    URL["URL pública HTTP(S)"] --> VAL["Validação de URL, DNS e redirects<br/>(sem cookies)"]
+    VAL -->|recusada| BLK["falha fechada"]
+    VAL --> OBS["Navegador observa o leitor<br/>DOM, lazy, JSON, rede/CDP, canvas"]
+    OBS --> COV{"cobertura comprovada?<br/>fim + estabilização, até 400 páginas,<br/>sem teto de coleta/iframe/paginação"}
+    COV -->|não| INC["incomplete_source_coverage"]
+    COV -->|sim| BAR{"barreira ou reader<br/>não capturável?"}
+    BAR -->|sim| COD["challenge_required, authentication_required,<br/>unsupported_canvas_reader, unsupported_cross_origin_reader"]
+    BAR -->|não| CL["Clusterização e score do melhor cluster"]
+    CL -->|">= 0,85"| AUTO["supported_generic_high_confidence<br/>seleção automática"]
+    CL -->|"0,60 a 0,84"| REV["review_required_medium_confidence<br/>job em awaiting_source_review"]
+    CL -->|"< 0,60"| LOW["unsupported_low_confidence"]
+    REV -->|"usuário confirma IDs opacos"| AUTO
+    AUTO --> MAN["Manifesto com IDs opacos;<br/>hosts do cluster vencedor autorizados em memória"]
+    MAN --> RE["Worker reobserva o leitor e confere a seleção"]
+    RE --> DL["Download pelos transportes,<br/>cada hop revalidado"]
+```
+
 Um resultado de revisão de fonte não é um PDF com `review_required`: é uma pausa anterior
 ao OCR. `review_required` continua sendo o estado terminal de qualidade de uma execução
 que gerou seus artefatos.
@@ -79,8 +107,8 @@ do scroll, a fase de fonte termina como `incomplete_source_coverage`; nunca se a
 subconjunto como um capítulo completo.
 
 No Webtoons, que é um adapter específico de reader-container, placeholders 1x1 são tratados como
-slots `pending_lazy`, não como páginas nem como host de recurso. `webtoons_reader_bridge.py`
-conecta o driver Selenium já aberto a `lazy_slot_resolver.resolve_lazy_reader_slots`: ele relê
+slots `pending_lazy`, não como páginas nem como host de recurso. `yomu/download/webtoons_reader_bridge.py`
+conecta o driver Selenium já aberto a `yomu.download.lazy_slot_resolver.resolve_lazy_reader_slots`: ele relê
 apenas `#_imageList`/`img._images`, rola dentro dos bounds do reader e preserva a ordem DOM. Se
 todos os slots resolvem, a seleção contém somente páginas reais; se sobram pendentes, ocorre
 timeout ou o DOM muda, o runner não inicia e os índices pendentes ficam no diagnóstico público.
@@ -154,10 +182,11 @@ sem tentativa de evasão.
 Essas garantias cobrem a navegação pré-validada e as requisições de imagem selecionadas
 pelo downloader. Elas **não** transformam o Chrome em um sandbox completo de todos os
 subrecursos que uma página pode pedir durante sua renderização: uma página pública pode
-solicitar um subrecurso antes da validação posterior ao carregamento. Além disso, a
-validação DNS do transporte `requests` não fixa o IP da conexão até o fim (há uma janela
-TOCTOU). Sem proxy/firewall de egress ou interceptação de rede no navegador, isso não é
-uma garantia de SSRF de produção para URLs arbitrárias não confiáveis. Iframes de outra
+solicitar um subrecurso antes da validação posterior ao carregamento. Os transportes
+`requests` fixam o socket TCP na resposta DNS pública validada
+(`yomu/download/pinned_requests.py`), mas o navegador não passa por esse pinning. Sem
+proxy/firewall de egress ou interceptação de rede no navegador, isso não é uma garantia de
+SSRF de produção para URLs arbitrárias não confiáveis. Iframes de outra
 origem não são atravessados; a URL deve ser submetida apenas para fontes confiáveis e
 autorizadas.
 
@@ -183,7 +212,8 @@ Nunca persistem URL completa, query string, cookie, header, token ou pixels de c
 
 Após uma execução genérica que termina tecnicamente completa **e** aprovada pelo quality
 gate, o sistema pode guardar uma dica local em
-`.cache/runtime/source_profiles.json`. A dica é por host exato e contém apenas evidência
+`<repo>/.cache/runtime/source_profiles.json` (`DEFAULT_PROFILE_PATH`; fica no checkout, não no
+runtime root do usuário). A dica é por host exato e contém apenas evidência
 sanitizada de container/sinais, score observado, modo de seleção e versão. Ela não contém
 URL, query, cookie, token ou imagem.
 

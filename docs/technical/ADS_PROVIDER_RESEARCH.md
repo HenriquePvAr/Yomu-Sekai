@@ -1,7 +1,18 @@
 # Ad provider research — Windows desktop runtime
 
-> **Revisado em:** 2026-09-15
+> **PESQUISA — não descreve comportamento implementado.** Registro de 2026-09-15.
+> **Revisado em:** 2026-10-24 · **Base verificada:** `5f482ce1`.
 > **Contexto:** Fase B da missão de YK + anúncios, sobre a branch `feat/ads-yk-rewards`.
+>
+> **Atualização posterior a esta pesquisa (verificada no código):** o commit `6fa7f203`
+> (2026-09-16) implementou slots de "anúncio passivo" sem SDK de rede de anúncios: em
+> `static/passive_ad_slot.js` cada tela compatível carrega uma página HTML hospedada em URL fixa
+> (WebView nativo no desktop, iframe no navegador), exibida só com a preferência
+> `passive_ads_enabled` ativa (RPCs `get_passive_ads_preference`/`set_passive_ads_enabled`). O
+> toggle `#passiveAdsSettings` ("Anúncios passivos") em `ui/ui_shell.html` deixou de ser
+> placeholder. O conteúdo dessas páginas e qualquer contrato com provedor não foram verificados
+> nesta revisão. Os stubs `rewarded-ad-session`/`rewarded-ad-callback` continuam 503 e
+> "Assistir anúncio"/"Modo com anúncios" na tela de recompensas continuam "Em breve".
 > **Veredito:** `AD_PROVIDER_BLOCKER = YES` para anúncios passivos.
 > Nenhum provider foi integrado. Nenhuma credencial foi criada.
 
@@ -106,7 +117,7 @@ O que fica pendente de decisão do owner:
 - nenhuma conta criada, nenhuma credencial gerada;
 - os stubs `rewarded-ad-session` e `rewarded-ad-callback` continuam 503;
 - `beta_feature_flags.rewarded_ads_enabled` continua `false`;
-- `#passiveAdsSettings` continua o placeholder "Em breve";
+- `#passiveAdsSettings` continuava o placeholder "Em breve" (superado em `6fa7f203`, ver topo);
 - nenhuma impressão real de anúncio, em sandbox ou produção.
 
 ## Fontes

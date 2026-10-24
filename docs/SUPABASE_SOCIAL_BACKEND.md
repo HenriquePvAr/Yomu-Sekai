@@ -1,5 +1,12 @@
 # Backend social integrado ao Supabase (Data API + RLS)
 
+> **Estado:** backend IMPLEMENTADO (`yomu/community/social_http.py`,
+> `yomu/community/social_repository.py`, `yomu/community/supabase_social.py`; montado por
+> `yomu/ui/app.py` quando o provider social está configurado). A superfície de UI da
+> Comunidade está **desligada** (`COMMUNITY_ENABLED = false` em `static/social_community.js`),
+> então o usuário final não alcança estes endpoints pela interface.
+> **Revisado em:** 2026-10-24 · **Base verificada:** `5f482ce1`.
+
 Esta fase liga o backend do Tradutor.Ia ao Postgres social do Supabase. O navegador **não**
 acessa as tabelas diretamente: chama endpoints autenticados do backend, que encaminham o
 **JWT do próprio usuário** à Data API (PostgREST), onde a **RLS** revalida cada linha.
@@ -59,7 +66,8 @@ sem redirects; sem retry em POST/PATCH/DELETE; falha fechado. Mapa de erros (sem
 
 ## Endpoints (prefixo `/api/community/social`)
 
-- **Perfis**: `GET /profile/me`, `PATCH /profile/me`, `GET /profiles/{username}`.
+- **Perfis**: `GET /profile/me`, `PATCH /profile/me`, `GET /profiles/{username}` (rotas ainda
+  existem no backend; a experiência de perfil social foi removida do cliente em `fa22d413`).
 - **Obras**: `GET /feed`, `GET /my-works`, `POST /works`, `GET/PATCH/DELETE /works/{id}`.
 - **Capítulos**: `GET/POST /works/{id}/chapters`, `GET/PATCH/DELETE /chapters/{id}`.
 - **Comentários**: `GET/POST /chapters/{id}/comments`, `PATCH/DELETE /comments/{id}`.
@@ -106,10 +114,10 @@ recém-criado. `can_read_chapter` segue usada por comentários/likes (o capítul
 
 ```bash
 npx supabase start              # stack local (Docker)
-npx supabase db reset --local   # aplica as 3 migrations
-npx supabase test db            # pgTAP (104 pontos)
+npx supabase db reset --local   # aplica todas as migrations de supabase/migrations/
+npx supabase test db            # pgTAP em supabase/tests/database/
 npx supabase db lint --level error
-.\.venv\Scripts\python.exe -m pytest -q   # 805 offline (fake transport)
+python -m pytest -q             # suíte hermética (fake transport)
 ```
 
 Os testes end-to-end usam JWTs locais reais contra a stack local; nenhum dado é escrito no
@@ -118,8 +126,8 @@ Supabase remoto e o Google Drive não é acessado.
 ## Por que sem secret/service_role e sem acesso direto do navegador
 
 A `SUPABASE_SECRET_KEY`/`service_role` dariam poder administrativo que ignora a RLS — o
-runtime normal (login + validação de JWT + Data API) não precisa dela, então ela foi
-removida do `.env`. O navegador ainda passa pelo backend para: manter uma fronteira única
+runtime normal (login + validação de JWT + Data API) não precisa dela e não deve ficar no
+`.env` do cliente. O navegador ainda passa pelo backend para: manter uma fronteira única
 de validação/DTO/erros, evitar expor detalhes internos e permitir evoluir a política sem
 mudar o cliente.
 

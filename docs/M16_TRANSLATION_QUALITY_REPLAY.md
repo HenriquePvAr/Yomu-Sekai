@@ -1,5 +1,10 @@
 # M16 corpus — offline quality replay
 
+> **Registro histórico de 2026-09-30 (M18.5).** O estado atual dos gates de tradução está em
+> [Qualidade e validação](QUALITY_AND_VALIDATION.md) e na
+> [Documentação Técnica §17](technical/DOCUMENTACAO_TECNICA.md#17-qualidade-validação-física-e-proveniência).
+> Os números abaixo descrevem o corpus M16 daquela data, não a saída atual. **Revisado em:** 2026-10-24 · **Base verificada:** `5f482ce1`
+
 This note records the offline replay used during M18.5. The M16 artifacts were
 read-only; this was not a new translation run, and it made no provider, YK, or
 remote calls. Counts below describe the available persisted job/run metadata,

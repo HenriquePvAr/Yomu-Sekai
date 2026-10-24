@@ -6,6 +6,8 @@
 ![Plataforma auditada: Windows](https://img.shields.io/badge/plataforma%20auditada-Windows-0078D4?logo=windows11&logoColor=white)
 ![Status: beta técnica](https://img.shields.io/badge/status-beta%20t%C3%A9cnica-D97706)
 
+> **Base verificada:** `5f482ce1` (branch `main`) · **Revisado em:** 2026-10-24
+
 Yomu Sekai organiza em um único fluxo a coleta de páginas, o reconhecimento de texto, a classificação semântica, a tradução, a reconstrução visual e a geração do PDF. O projeto preserva evidências de cada etapa e encaminha resultados duvidosos para revisão, em vez de tratá-los silenciosamente como corretos.
 
 O fluxo principal atual é voltado a capítulos web com texto-fonte em inglês e tradução para português brasileiro. Ele pode ser operado por uma interface local ou pela linha de comando.
@@ -20,7 +22,7 @@ O fluxo principal atual é voltado a capítulos web com texto-fonte em inglês e
 - **Análise de fonte controlada:** adapters específicos têm prioridade; uma URL pública sem adapter pode ser analisada por evidências e, conforme o score, seguir, pedir confirmação das páginas ou falhar fechada.
 - **OCR RapidOCR:** RapidOCR é o engine primário da configuração Beta, com recuperação regional limitada. PaddleOCR é compatibilidade legacy, desligada por padrão.
 - **Classificação contextual:** diferencia fala, narração, SFX e elementos decorativos antes de decidir o que deve ser traduzido.
-- **Tradução em lote:** o provedor padrão é o **DeepL**; Riva e Nemotron (NVIDIA) continuam selecionáveis por capítulo. Cache, controle de requisições e retries em todos, e nenhum fallback silencioso entre providers.
+- **Tradução em lote via backend autenticado:** todo job com tradução habilitada passa pelo provider interno `yomu_backend`, que chama o motor remoto **DeepL** no servidor (Edge Function `supabase/functions/translation-execute`). O cliente nunca chama a DeepL diretamente; `--translation-provider` é metadado/guard. Riva e Nemotron são rótulos legados: pedi-los num job habilitado falha fechado (`provider_mismatch`). Não há fallback silencioso entre providers.
 - **Memória de capítulo:** um ledger de terminologia e um registro de personagens preservam nomes próprios e formas canônicas ao longo do capítulo; um candidato que contradiz uma entidade já estabelecida é rejeitado ou marcado para revisão.
 - **Validação multilíngue:** procura texto-fonte residual, traduções parciais e outros sinais de mistura de idiomas sem reescrever a resposta do modelo.
 - **Reconstrução protegida:** aplica máscaras, inpainting, ajuste de fonte e verificações visuais para limitar alterações fora da área de texto.
@@ -52,6 +54,25 @@ flowchart LR
     M --> N
 ```
 
+### Como o aplicativo roda
+
+O launcher canônico verifica atualização, sobe o worker supervisionado e a UI; a UI só cria
+jobs no JobStore, e o worker executa cada job num processo próprio:
+
+```mermaid
+flowchart TD
+    L["python start_tradutor.py (comando all)"] --> U["update_bootstrap.check_before_start"]
+    U -->|can_launch| W["Worker supervisionado<br/>worker_supervisor: 2s/5s/15s, depois degraded"]
+    U -->|can_launch| UI["UI local<br/>yomu/ui/app.py em 127.0.0.1:8080"]
+    UI -->|cria job| DB[("JobStore<br/>jobs.sqlite3")]
+    W -->|claim| DB
+    W --> R["job_runner<br/>um processo por job"]
+    R --> P["Pipeline<br/>download, OCR, CLEAN, render, PDF"]
+    P --> T["yomu_backend autenticado<br/>DeepL no servidor"]
+    R -->|progresso e estado terminal| DB
+    DB -->|status| UI
+```
+
 A ordem detalhada, com os módulos reais de cada etapa, está em
 [Arquitetura](docs/ARCHITECTURE.md).
 
@@ -59,7 +80,7 @@ O pipeline mantém o texto reconhecido, os candidatos de OCR, as decisões de fa
 
 ## Início rápido
 
-O ambiente auditado usa **Windows 64 bits e Python 3.11**. São necessários Git e uma chave do DeepL para o provedor de tradução padrão. Google Chrome é opcional: ele só é usado quando a descoberta HTTP não se aplica à fonte.
+O ambiente auditado usa **Windows 64 bits e Python 3.11**. São necessários Git e uma conta Yomu Sekai (login Supabase com licença Beta) para jobs com tradução: a chave da DeepL fica no backend, não no cliente. Google Chrome é opcional: ele só é usado quando a descoberta HTTP não se aplica à fonte.
 
 O passo a passo completo de ambiente, comandos e testes está em
 [Desenvolvimento](docs/DEVELOPMENT.md).
@@ -71,14 +92,13 @@ cd Tradutor.Ia
 py -3.11 -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install --upgrade pip
-pip install -r requirements.txt
-pip install -r requirements/requirements-rapidocr.txt
-pip install -r requirements/requirements-ui.txt
+python -s -m pip install -r requirements/requirements-beta.txt   # perfil Beta (inclui requirements.txt e RapidOCR)
+python -s scripts/check_runtime_profile.py
 
 Copy-Item .env.example .env
 ```
 
-Edite `.env` e preencha `DEEPL_API_KEY` (provedor padrão) e as variáveis do Supabase, que o login exige. As demais opções possuem defaults conservadores e podem ser ajustadas depois. Nunca versione valores reais de chave.
+Edite `.env` e preencha as variáveis públicas do Supabase (`SUPABASE_URL`, `SUPABASE_PUBLISHABLE_KEY`), que o login e o backend de tradução exigem. `DEEPL_API_KEY` é segredo do servidor (Edge Function) e não é usada por jobs habilitados do cliente. As demais opções possuem defaults conservadores. Nunca versione valores reais de chave.
 
 Para iniciar o sistema local (worker supervisionado + interface):
 
@@ -88,7 +108,8 @@ python start_tradutor.py status     # saúde do worker e da fila
 python start_tradutor.py stop       # parada graciosa do worker
 ```
 
-No Windows há também `start_tradutor.bat`. A aplicação escuta por padrão em `http://127.0.0.1:8080`.
+No Windows há também `start_tradutor.bat`. A aplicação escuta por padrão em `http://127.0.0.1:8080`
+(`TRADUTOR_UI_HOST`/`TRADUTOR_UI_PORT`). Abra sempre **`http://127.0.0.1:8080`**, não `http://localhost:8080`: a origem permitida no projeto Supabase Auth (`SUPABASE_SITE_URL`/`SUPABASE_REDIRECT_URL`) é `127.0.0.1`, e o login pode falhar em outra origem. O servidor da UI não abre navegador nem imprime a URL (`ui.run(show=False)` em `yomu/ui/app.py`); o shell desktop (`python desktop_app.py`) já abre a janela em `http://127.0.0.1:<porta>/`.
 
 > `python app_ui.py` sobe apenas a interface, sem worker; nesse caso os capítulos ficam `queued` até que um worker seja iniciado.
 
@@ -122,7 +143,7 @@ O perfil de saída é separado do modo:
 | **Automático** | PDF traduzido e imagens traduzidas — pronto para ler/publicar. |
 | **QC Profissional** | Tudo do Automático, mais imagens limpas, PSD editável com Type Layers, Quality Report e Review Manifest — pronto para revisar e finalizar. |
 
-Quality chama o provider configurado. O consumo de 1 YK ocorre somente depois de sucesso do
+Quality chama o backend de tradução autenticado (`yomu_backend`). O consumo de 1 YK ocorre somente depois de sucesso do
 provider e persistência válida da tradução. Uma falha posterior ao gerar arquivos não devolve
 automaticamente esse YK. Retry/re-export reutiliza tradução válida persistida, sem novo provider
 ou cobrança.
@@ -136,7 +157,7 @@ o [contrato PSD](docs/PSD_COMPATIBILITY_MATRIX.md) e o [relatório de performanc
 
 ### Modos da CLI
 
-Em ambos os modos o engine primário é **RapidOCR** (`config.BETA_OCR_ENGINE`). O modo não
+Em ambos os modos o engine primário é **RapidOCR** (`yomu.config.settings.BETA_OCR_ENGINE`). O modo não
 troca o engine; ele decide quanto esforço de recuperação é permitido.
 
 | Modo | Estratégia | Indicação |
@@ -153,7 +174,7 @@ Exemplos:
 # CLI: modo técnico rápido com cache (não aparece na UI)
 python run_webtoon.py "<URL_DO_CAPITULO>" --mode fast
 
-# OCR inicial com PaddleOCR e saída nomeada
+# Modo quality com saída nomeada
 python run_webtoon.py "<URL_DO_CAPITULO>" --mode quality --output "meu_capitulo"
 
 # Apenas coleta e auditoria do download
@@ -177,9 +198,9 @@ A referência completa das flags está disponível em `python run_webtoon.py --h
 | `yomu/community/`, `yomu/auth/` | Storage/publicação comunitária, identidade e licenciamento |
 | `tests/`, `test_support/` | Suíte e suporte hermético de teste |
 | `tools/`, `experiments/`, `research/` | Auditorias, harnesses e R&D fora do runtime principal |
-| `pipeline_cache.py`, `resource_monitor.py` | Cache versionado, persistência atômica e métricas de recursos |
-| `pdf.py`, `pdf_naming.py`, `pdf_reader.py` | Páginas lógicas, geração, nomeação e leitura do PDF |
-| `process_launcher.py` | Execução supervisionada de um processo e persistência do exit code |
+| `yomu/pipeline/pipeline_cache.py`, `yomu/runtime/resource_monitor.py` | Cache versionado, persistência atômica e métricas de recursos |
+| `yomu/export/pdf.py`, `pdf_naming.py`, `pdf_reader.py` | Páginas lógicas, geração, nomeação e leitura do PDF |
+| `yomu/runtime/process_launcher.py` | Execução supervisionada de um processo e persistência do exit code |
 
 O desenho completo está em [Documentação Técnica](docs/technical/DOCUMENTACAO_TECNICA.md); a visão por módulos do pipeline continua em [Arquitetura](docs/ARCHITECTURE.md).
 
@@ -217,7 +238,7 @@ render forçado.
 O sistema combina verificações em vários níveis:
 
 - score de qualidade do OCR e comparação entre engines para regiões suspeitas;
-- preservação de SFX por padrão e decisão de tradução baseada em classificação;
+- tradução de SFX por padrão (`TRANSLATE_SFX=True`, glossário pt-BR de onomatopeias em `assets/lexicon/sfx_en_pt.json`; sons desconhecidos mantêm o lettering original; `TRANSLATE_SFX=0` preserva todos) e decisão de tradução baseada em classificação;
 - validação de resíduos em inglês ou espanhol e de fragmentos parcialmente traduzidos;
 - retries controlados, rejeição do candidato inválido e marcação para revisão manual;
 - validação de overflow, bordas, mudanças fora da máscara e páginas inválidas;
@@ -234,7 +255,7 @@ Os estados terminais têm significados distintos:
 | `failed` | Falha técnica ou artefato essencial ausente (exibido como "erro" na interface) |
 | `cancelled` | Cancelamento explícito |
 
-A taxonomia completa (14 estados, incluindo `staging`, `awaiting_source_review`, `interrupted` e `resumable`) está em [Documentação Técnica §8](docs/technical/DOCUMENTACAO_TECNICA.md#8-máquina-de-estados-do-job).
+A taxonomia completa (15 estados em `yomu/runtime/job_store.py` `JobStatus.ALL`, incluindo `staging`, `claiming`, `starting`, `cancelling`, `awaiting_source_review`, `waiting_source_verification`, `source_analysis_ready`, `interrupted` e `resumable`) está em [Documentação Técnica §8](docs/technical/DOCUMENTACAO_TECNICA.md#8-máquina-de-estados-do-job).
 
 Esses mecanismos reduzem falsos positivos, mas não garantem tradução perfeita. Veja [Qualidade e validação](docs/QUALITY_AND_VALIDATION.md) para o contrato completo.
 
@@ -250,6 +271,11 @@ Esses mecanismos reduzem falsos positivos, mas não garantem tradução perfeita
 | PSD | `editable_psd_writer.py`; M15 validou edição física no Photoshop 2025 e Photopea. Cross-editor round-trip direto não foi executado. |
 | Auth/backend | Projeto ativo Yomu Sekai: `ybxwjiycujminbwbdtlb`; fluxo signup/confirmar/login e recovery validados fisicamente. |
 | Profile Media | Removida do produto ativo. |
+| Tradução | **IMPLEMENTADO** — jobs habilitados sempre via `yomu_backend` autenticado (motor remoto DeepL no servidor); seletor de provider oculto na UI. |
+| SFX | **IMPLEMENTADO** — traduzidos por padrão (`TRANSLATE_SFX=True`) com glossário pt-BR; tipografia ajustada ao formato do balão e à inclinação da fonte original (`RENDER_FIT_BALLOON_SHAPE`, `RENDER_MATCH_SOURCE_SLANT`, padrão `True`). |
+| Updater | **IMPLEMENTADO** no código e na UI (aba **Atualizações**, botões **Verificar atualizações** / **Baixar e instalar**); canal assinado publicado é gate externo. Ver [Update e signing](docs/UPDATE_AND_SIGNING.md). |
+| Instalador | **PARCIAL** — script Inno Setup (`packaging/TradutorIA.iss`) e `tools/build_installer.py` existem; nenhum `Setup.exe` versionado; instalação limpa **não provada**. |
+| Licença Beta | **PARCIAL** — gate fail-closed em `yomu/auth/beta_license.py`; nenhum entitlement real de tester validado. |
 | Custo PSD | Medições M17 e estimativas separadas em [PSD_PERFORMANCE_REPORT.md](docs/PSD_PERFORMANCE_REPORT.md). |
 
 Este resumo não substitui uma auditoria de release/packaging. Consulte
@@ -259,7 +285,8 @@ documentos especializados vinculados.
 ## Status de projeto legado — snapshot histórico
 
 > A tabela abaixo é preservada de uma avaliação anterior e não foi revalidada como estado atual
-> na M18. Em particular, licenciamento, instalador, updater e distribuição não devem ser usados
+> na M18. As linhas **Instalador**, **Updater** e **Tradução — DeepL** estão superadas pelo
+> [resumo do produto atual](#produto-atual--resumo-m18) (revisado em 2026-10-24). Em particular, licenciamento, instalador, updater e distribuição não devem ser usados
 > como gate atual; consulte os documentos operacionais próprios. A M18 não executou auditoria de
 > release nem alterou esses sistemas.
 
@@ -352,7 +379,7 @@ Os testes padrão são offline. Smokes que acessam rede ficam em `scripts/`, exi
 explícito e estão documentados em [Testes](docs/TESTING.md).
 
 ```powershell
-python -m pytest                                     # suíte hermética Python
+python -m pytest -q                                  # suíte hermética Python (~6160 passed, ~10 min)
 node --experimental-vm-modules tests/test_chapter_reader.mjs   # suítes de frontend
 ```
 
@@ -399,7 +426,7 @@ Ordenados por dependência. Nenhum é trabalho de qualidade de pipeline — o
 | 3 | Provisionamento de configuração do tester | configuração pública e contratos locais existem; fluxo de entrega ao tester ainda não foi validado em máquina limpa | `TESTER-CONFIG-PROVISIONING-PENDING` |
 | 4 | Ativar e validar o authorizer remoto de licença Beta | implementação local corrigida; deploy e validação remotos ainda pendentes | `BETA-AUTHORIZER-REMOTE-PENDING` |
 | 5 | Validar o primeiro entitlement real de tester | schema/RLS/RPC e correção local existem; LIC-001 remoto ainda não foi executado | `FIRST-TESTER-GRANT-PENDING` |
-| 6 | Canal de release assinado: hospedagem, chave pública e UI de atualização | núcleo de confiança fechado; `TRUSTED_PUBLIC_KEYS` e `DEFAULT_MANIFEST_URL` vazios de propósito | `UPDATER-RELEASE-CHANNEL-PENDING`, `UPDATE-TRUST-ROOT-EMPTY` |
+| 6 | Canal de release assinado: hospedagem, chave pública e UI de atualização | *(histórico — hoje a chave `beta-2026-10` está em `TRUSTED_PUBLIC_KEYS`, `DEFAULT_MANIFEST_URL` está configurada e a aba Atualizações existe; falta publicar/validar o manifest)* | `UPDATER-RELEASE-CHANNEL-PENDING`, `UPDATE-TRUST-ROOT-EMPTY` |
 | 7 | Provar instalação limpa em Windows + E2E real sobre ela | nenhuma validação em máquina limpa | `CLEAN-INSTALL-NOT-YET-PROVEN`, `CLEAN-VM-VALIDATION-PENDING` |
 
 Itens de robustez que acompanham a Beta sem bloqueá-la: executar as suítes `.mjs` na CI

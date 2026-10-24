@@ -1,5 +1,16 @@
 # YomuSekai — estado do snapshot de consolidação
 
+> **REGISTRO HISTÓRICO — não é o estado atual.** Este arquivo registra a consolidação de
+> 2026-10-14/16 e é preservado como proveniência; seus HEADs, contagens de testes/builds e
+> recomendações valem para aquela data. Revisado em 2026-10-24 sobre `5f482ce1`: `main` e o ref
+> local `origin/main` estão em `5f482ce1`, 9 commits após `ec9ca9e4` (sem fetch nesta revisão);
+> desde então os perfis `requirements-*.txt` foram para `requirements/` e os ponteiros de raiz
+> `PRODUCTION_SECRETS_REQUIRED.md`/`SEMANTIC_CLASSIFICATION_AUDIT.md` foram removidos. Para o
+> estado vigente use a [Documentação Técnica](../technical/DOCUMENTACAO_TECNICA.md), a
+> [estrutura do repositório](../architecture/REPOSITORY_STRUCTURE.md) e o
+> [board](../status/board/index.html). Caminhos locais aparecem como placeholders
+> (`<PRIVATE_BACKUP_ROOT>`, `<LOCAL_YOMU_EXPERIMENTS>`, `<LOCAL_PROJECTS>`, `<CODEX_WORKTREES>`).
+
 > **Estado atual — follow-up CI Windows (2026-10-16):** `main` local e `origin/main` estão sincronizadas em `ec9ca9e4acd0849020eb13a089817c1c11aeab7a`. A CI [38830606731](https://github.com/HenriquePvAr/Tradutor.Ia/actions/runs/38830606731) concluiu com sucesso em 30m59s: Python `6013 passed, 141 skipped, 2 xfailed, 736 subtests` (26m13s), Node syntax, Better Auth (4 testes) e compilação Python aprovados; JUnit foi publicado como artifact. O timeout de 60 min no job/50 min no pytest e os diagnósticos verbosos resolvem o timeout anterior sem alterar os gates herméticos. Beta/release continuam não publicadas e os gates de validação física permanecem pendentes. Os snapshots abaixo preservam corretamente o estado histórico em que foram escritos.
 
 **Snapshot histórico pré-publicação:** `integration/yomu-main-consolidation-v1` (estado local registrado abaixo).

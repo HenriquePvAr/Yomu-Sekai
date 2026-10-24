@@ -2,6 +2,8 @@
 
 Este guia reúne problemas comprovados e caminhos de diagnóstico não destrutivos. Preserve os relatórios antes de alterar configuração ou repetir uma execução.
 
+> **Base verificada:** `5f482ce1` (branch `main`) · **Revisado em:** 2026-10-24
+>
 > [Voltar ao README](../README.md)
 
 ## Índice rápido
@@ -10,7 +12,7 @@ Este guia reúne problemas comprovados e caminhos de diagnóstico não destrutiv
 - [Dependências](#import-ou-dependência-ausente)
 - [PaddleOCR](#paddleocr-não-carrega)
 - [RapidOCR](#rapidocr-não-está-disponível)
-- [NVIDIA](#chave-nvidia-ausente-ou-inválida)
+- [Tradução / backend](#a-tradução-falha-ou-não-inicia)
 - [ChromeDriver](#chrome-ou-chromedriver-não-inicia)
 - [Memória](#pouca-memória)
 - [`review_required`](#a-execução-terminou-como-review_required)
@@ -25,7 +27,8 @@ Confirme o ambiente e consulte a ajuda dos entrypoints:
 ```powershell
 python --version
 python run_webtoon.py --help
-python process_launcher.py --help
+python -m yomu.runtime.process_launcher --help
+python start_tradutor.py status
 git status --short
 ```
 
@@ -38,7 +41,7 @@ Depois, procure os artefatos do output ativo:
 - `download_report.html` para coleta e teardown;
 - stdout/stderr do launcher para falhas de processo.
 
-Não apague `.cache` ou `output/` como primeira tentativa. Eles contêm evidências úteis e podem permitir resume seguro.
+Não apague o cache (`%LOCALAPPDATA%\TradutorIA\cache`, ou `CACHE_ROOT`) nem a saída (`%LOCALAPPDATA%\TradutorIA\output`, ou `TRADUTOR_OUTPUT_ROOT`) como primeira tentativa. Eles contêm evidências úteis e podem permitir resume seguro.
 
 ## O ambiente virtual não ativa
 
@@ -52,7 +55,7 @@ Se existir, use o Python do ambiente sem ativação:
 
 ```powershell
 .\.venv\Scripts\python.exe --version
-.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+.\.venv\Scripts\python.exe -s -m pip install -r requirements/requirements-beta.txt
 ```
 
 Isso evita mudanças globais de política no Windows.
@@ -62,9 +65,8 @@ Isso evita mudanças globais de política no Windows.
 Instale o conjunto correspondente dentro da venv:
 
 ```powershell
-python -m pip install -r requirements.txt
-python -m pip install -r requirements/requirements-rapidocr.txt
-python -m pip install -r requirements/requirements-ui.txt
+python -s -m pip install -r requirements/requirements-beta.txt   # inclui requirements.txt, RapidOCR e NiceGUI
+python -s scripts/check_runtime_profile.py
 ```
 
 Não misture o Python global com o da `.venv`. Confira o executável ativo:
@@ -75,7 +77,10 @@ python -c "import sys; print(sys.executable)"
 
 ## PaddleOCR não carrega
 
-Situações comuns:
+PaddleOCR **não** faz parte do perfil Beta: é compatibilidade legacy opt-in
+(`OCR_LEGACY_PADDLE_FALLBACK`, desligado por padrão) e instalá-lo no venv do cliente quebra o
+contrato de OpenCV (ver [Instalação](INSTALLATION.md)). Só investigue esta seção se você o
+habilitou deliberadamente num ambiente separado. Situações comuns:
 
 - primeira inicialização ainda baixando modelos;
 - instalação incompleta de `paddlepaddle==3.2.2` ou `paddleocr`;
@@ -92,43 +97,36 @@ Se o processo encerrar por memória, reduza workers e feche aplicativos de usuá
 
 ## RapidOCR não está disponível
 
-O modo `fast` depende do arquivo separado de requisitos:
+RapidOCR é o engine primário dos dois modos (`fast` e `quality`). Ele vem no perfil Beta ou
+no arquivo separado:
 
 ```powershell
 python -m pip install -r requirements/requirements-rapidocr.txt
 python -c "from rapidocr_onnxruntime import RapidOCR; print('RapidOCR: OK')"
 ```
 
-`--mode quality` também usa RapidOCR como primário no fluxo Beta atual. Instale
-`requirements/requirements-rapidocr.txt` ou configure explicitamente outro OCR disponível; não conte com
-Paddle como substituto silencioso do OCR primário.
+Sem RapidOCR o run falha fechado antes do download (`require_available_engine`). Não há
+outro engine suportado no Beta: `TRADUTOR_OCR_ENGINE_OVERRIDE` só aceita `rapidocr`, e Paddle
+nunca substitui silenciosamente o OCR primário.
 
-## Chave NVIDIA ausente ou inválida
+## A tradução falha ou não inicia
 
-Confirme que `.env` existe e que o valor não é o placeholder:
+Todo job com tradução habilitada passa pelo provider interno `yomu_backend`, que exige sessão
+autenticada e licença Beta válida e chama o motor DeepL no servidor (Edge Function
+`supabase/functions/translation-execute`). O cliente não usa `DEEPL_API_KEY` nem
+`NVIDIA_API_KEY` para isso. Verifique:
 
-```powershell
-Test-Path .env
-```
+- se você está logado e a licença está ativa (o gate de licença bloqueia **Iniciar tradução** e **Retomar**);
+- se `.env` tem `SUPABASE_URL` e `SUPABASE_PUBLISHABLE_KEY` (sem imprimir valores) — `YOMU_BACKEND_URL`, quando definida, substitui `SUPABASE_URL` como base do backend;
+- o motivo no log/`timing_report.json`: `yomu_backend_provider_unavailable` (backend não
+  construído), `provider_mismatch` (um provider diferente de DeepL, como `riva`/`nemotron`, foi
+  pedido para um job habilitado) ou falhas sistêmicas do backend (por exemplo
+  `reservation_missing`).
 
-O arquivo deve conter, localmente:
-
-```dotenv
-NVIDIA_API_KEY=sua_chave_real
-```
-
-Não imprima a chave no terminal. A UI verifica apenas se há um valor configurado; erros de autenticação aparecem no log da execução.
-
-## Rate limit ou falha temporária de tradução
-
-`translator_nvidia.py` aplica limite global e retry/backoff. Se o provedor responder com rate limit:
-
-- preserve stdout e `timing_report.json`;
-- confirme `NVIDIA_MAX_REQUESTS_PER_MINUTE` e o batch configurado;
-- espere a janela do provedor antes de uma nova execução autorizada;
-- reutilize cache em vez de forçar todas as etapas.
-
-Reduzir o limite de requisições é mais seguro do que aumentar retries sem evidência.
+Não há fallback silencioso para outro provider. Preserve stdout e `timing_report.json`,
+aguarde antes de uma nova execução autorizada e reutilize cache em vez de forçar todas as
+etapas. `translator_nvidia.py` (rate limit `NVIDIA_MAX_REQUESTS_PER_MINUTE`) só participa de
+caminhos legados/experimentais, não de jobs habilitados da Beta.
 
 ## Chrome ou ChromeDriver não inicia
 
@@ -147,7 +145,7 @@ Leia `download_report.json`, especialmente o bloco `teardown`. Não encerre todo
 
 ## Pouca memória
 
-PaddleOCR pode consumir vários gigabytes e provocar paginação. Antes de iniciar:
+OCR, reconstrução de arte (incluindo o modelo aprendido opcional) e workers paralelos podem consumir vários gigabytes e provocar paginação. Antes de iniciar:
 
 1. encerre apenas aplicativos comuns cuja propriedade e ausência de trabalho não salvo estejam claras;
 2. preserve UI, terminal, acesso remoto, segurança e processos do sistema;
@@ -233,7 +231,7 @@ Verifique nesta ordem:
 4. arquivos inválidos ou em branco no bloco `quality_validation`;
 5. traceback no stderr ou stdout.
 
-Uma falha técnica deve terminar como `error`, não como `review_required`.
+Uma falha técnica deve terminar como `failed` (exibido como "erro" na interface), não como `review_required`.
 
 ## A UI não abre
 
@@ -246,6 +244,12 @@ python app_ui.py
 ```
 
 Se a porta estiver ocupada, escolha outra porta temporária. Não inicie uma segunda instância na mesma porta.
+
+O servidor não abre o navegador sozinho: acesse `http://127.0.0.1:8080` manualmente.
+
+## O login falha ou volta para a tela de entrada
+
+Confirme que a barra de endereço mostra **`http://127.0.0.1:8080`** e não `localhost`: o projeto Supabase Auth só permite a origem `127.0.0.1` (`SUPABASE_SITE_URL` e `SUPABASE_REDIRECT_URL` do template usam esse host). Se você mudou `TRADUTOR_UI_PORT`, a nova origem também precisa estar permitida no projeto. Use o shell desktop (`python desktop_app.py`), que já abre em `127.0.0.1`.
 
 ## O que anexar a um relatório de bug
 

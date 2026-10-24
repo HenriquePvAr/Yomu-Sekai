@@ -1,5 +1,12 @@
 # Beta quality revalidation
 
+> **Registro histórico de 2026-09-05 (`beta/packaging`).** Contagens de teste, runtime e
+> "pending packaging findings" descrevem aquela data. Estado atual:
+> [snapshot de consolidação](consolidation/YOMU_CURRENT_PRODUCT_STATE.md),
+> [Testes](TESTING.md) (suíte hermética atual ~6160 passed / 0 failed / 141 skipped) e
+> [Quality Freeze](QUALITY_FREEZE.md#estado-em-2026-10-24). Os caminhos `output/...` e
+> `.cache/...` citados são locais à máquina de verificação e não estão no repositório. **Revisado em:** 2026-10-24 · **Base verificada:** `5f482ce1`
+
 Branch: `beta/packaging`. Start: `292f032514201d0beb7132172c55716ae04a5702`.
 Frozen main/tag commit: `5ebd77e7f0f107f5492902353dddde7ff044d9ce`.
 

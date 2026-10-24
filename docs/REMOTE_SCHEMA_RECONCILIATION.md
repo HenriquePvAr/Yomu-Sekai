@@ -1,5 +1,15 @@
 # Remote schema and migration-history reconciliation
 
+> **Historical snapshot (2026-09-27).** Reviewed 2026-10-24 · Verified base `5f482ce1`.
+> The project audited below (`Tradutor IA Community`) stopped being the active backend at the
+> 2026-09-29 cutover (commit `8b0053fe`; `config/public-runtime.json` now points to the new
+> project, see [SUPABASE_AUTH.md](SUPABASE_AUTH.md)) and is kept only as temporary rollback.
+> Re-checked locally: `supabase/migrations/` still holds 46 active files, the latest being
+> `20260924060000` and `20260926175232`; the ayeT migration is still only under
+> `docs/archive/migrations/`. Whether those two migrations were applied to either remote
+> project was **not** re-verified (no remote access in this review). The statements about
+> remote state below are true only for the date of the snapshot.
+
 Read-only snapshot of Supabase project `mimrsxnhqbqkffsekxuw`
 (`Tradutor IA Community`) reconciled against local migration sources on
 2026-09-27. No remote writes, migration repair, or Edge Function deployment

@@ -1,19 +1,28 @@
 # Fila de worker persistente
 
+> **Base verificada:** `5f482ce1` (branch `main`) · **Revisado em:** 2026-10-24
+
 O pipeline de tradução roda em um **worker independente**, fora do processo da UI.
 Fechar ou reiniciar a UI não interrompe um capítulo em andamento.
 
 ## Processos
 
-- `app_ui.py` — interface e API. Cria/consulta/cancela/retoma jobs. **Não** executa o
-  pipeline.
-- `worker_service.py` — worker independente. Reclama um job por vez (concorrência 1),
-  inicia um runner isolado, mantém heartbeat/lease e recupera jobs abandonados.
-- `job_runner.py` — executa **um** capítulo: escreve manifest inicial, roda o pipeline,
-  emite progresso/checkpoints e encerra com exit code confiável.
+- `app_ui.py` (shim de `yomu.ui.app`, bridge em `yomu/ui/ui_bridge.py`) — interface e API.
+  Cria/consulta/cancela/retoma jobs. **Não** executa o pipeline.
+- `worker_service.py` (shim de `yomu.runtime.worker_service`) — worker independente. Reclama
+  um job por vez (concorrência 1), inicia um runner isolado, mantém heartbeat/lease e recupera
+  jobs abandonados.
+- `yomu/runtime/job_runner.py` — executa **um** capítulo: escreve manifest inicial, roda o
+  pipeline (`run_webtoon.py` como subprocesso), emite progresso/checkpoints e encerra com exit
+  code confiável. Não há shim na raiz: o worker o inicia como `python -u -m
+  yomu.runtime.job_runner` (no executável congelado, `--internal-child job-runner`). Outros tipos
+  de job usam runners próprios: `yomu.community.community_publish_runner`,
+  `yomu.review.workflows.review_rerun_runner` e `yomu.review.workflows.review_reexport_runner`.
 
-Fonte de verdade do estado dos jobs: `.cache/runtime/jobs.sqlite3` (SQLite, WAL).
-Logs por job: `.cache/runtime/logs/<job_id>.log`. Ambos são ignorados pelo Git.
+Fonte de verdade do estado dos jobs: `jobs.sqlite3` (SQLite, WAL) no runtime root
+(`yomu.runtime.runtime_paths.runtime_root()`: padrão `%LOCALAPPDATA%\TradutorIA\runtime\`,
+sobrescrito por `TRADUTOR_RUNTIME_ROOT`). Logs por job: `<runtime_root>/logs/<job_id>.log`.
+Nada disso fica no repositório.
 
 ## Como iniciar
 
@@ -29,7 +38,7 @@ No Windows há também `start_tradutor.bat`. `stop` e `stop-worker` são o mesmo
 
 ## Supervisão do worker
 
-`all` **supervisiona** o worker que ele mesmo iniciou (`worker_supervisor.py`): se aquele
+`all` **supervisiona** o worker que ele mesmo iniciou (`yomu/runtime/worker_supervisor.py`): se aquele
 processo morre inesperadamente, um substituto é criado sob política limitada — backoff de
 `2s`, `5s`, `15s`, no máximo `3` reinícios, e depois o launcher fica `degraded` em vez de
 respawnar indefinidamente. Um worker que fica de pé por `120s` recupera o orçamento de
@@ -48,12 +57,59 @@ está em voo: não há runner, download de capítulo ou OCR. O usuário confirma
 das páginas encontradas e o job então segue para `queued`; também pode ser cancelado.
 
 Depois da confirmação, o fluxo é `queued → claiming → starting → running → finished |
-review_required`, com `cancelling → cancelled`, `running → interrupted → resumable →
-queued` (retomada) e `failed`. Transições inválidas são rejeitadas (fail-closed).
+review_required`, com `cancelling → cancelled`, `interrupted → resumable` e `failed`.
+Transições fora de `ALLOWED_TRANSITIONS` (`yomu/runtime/job_store.py`) são rejeitadas
+(fail-closed).
 
-A taxonomia completa tem 14 estados — os acima mais `staging` (job sendo montado antes de
-entrar na fila) e `source_analysis_ready` (fonte analisada, pendente de política de
-workspace). Tabela e diagrama em
+A taxonomia completa tem **15 estados**: os acima mais `staging` (job sendo montado antes de
+entrar na fila), `source_analysis_ready` (fonte analisada, pendente de política de workspace)
+e `waiting_source_verification` (a fonte pediu verificação humana, por exemplo um challenge do
+Comix; veja [Comix](operations/comix_source_challenge.md)). Diagrama gerado a partir de
+`ALLOWED_TRANSITIONS`:
+
+```mermaid
+stateDiagram-v2
+    [*] --> staging
+    staging --> queued
+    staging --> awaiting_source_review
+    staging --> waiting_source_verification
+    queued --> claiming
+    claiming --> starting
+    claiming --> queued
+    claiming --> awaiting_source_review
+    claiming --> waiting_source_verification
+    claiming --> source_analysis_ready
+    claiming --> interrupted
+    claiming --> cancelling
+    awaiting_source_review --> queued
+    waiting_source_verification --> queued
+    source_analysis_ready --> queued
+    starting --> running
+    starting --> interrupted
+    starting --> cancelling
+    running --> finished
+    running --> review_required
+    running --> interrupted
+    running --> cancelling
+    cancelling --> cancelled
+    cancelling --> interrupted
+    interrupted --> resumable
+    resumable --> queued
+    finished --> [*]
+    review_required --> [*]
+    cancelled --> [*]
+    failed --> [*]
+    note right of failed
+        Também alcançáveis: failed a partir de staging, claiming,
+        starting, running, cancelling, interrupted e dos três estados
+        de fonte; cancelled a partir de staging, queued, interrupted,
+        resumable e dos três estados de fonte.
+    end note
+```
+
+A transição `resumable → queued` existe no store, mas a retomada pela UI cria um **novo**
+attempt (veja [Retomada](#retomada)) em vez de recolocar a linha original na fila. Tabela
+completa em
 [Documentação Técnica §8](technical/DOCUMENTACAO_TECNICA.md#8-máquina-de-estados-do-job).
 
 `review_required` é diferente de `awaiting_source_review`: o primeiro é terminal e só
@@ -137,7 +193,7 @@ de `output/`. Nada é migrado automaticamente.
   **Retomar**; caso contrário (`recoverable=0`) reenviar o capítulo é o caminho prático —
   os artefatos anteriores e o cache são preservados.
 - **Worker duplicado** → o segundo sai limpo; verifique com `status`.
-- **Porta 8080 ocupada** → outra UI já está rodando.
+- **Porta 8080 ocupada** → outra UI já está rodando (ou use `TRADUTOR_UI_PORT`).
 - **Banco bloqueado** → operação concorrente momentânea; o WAL + busy_timeout resolvem;
   não apague o banco.
 - **Processo órfão após crash** → inicie um worker; ele reconcilia e encerra a árvore

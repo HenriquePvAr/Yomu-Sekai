@@ -1,8 +1,11 @@
 # Testes herméticos e smokes manuais
 
-> `tests/test_cleanup_fixed_mask_reconstruction_red.py` é um `KNOWN_INTENTIONAL_RED` documentado.
-> Ele permanece como alarme de qualidade visual e não deve ser interpretado como falha comum
-> da suíte de regressão.
+> **Base verificada:** `5f482ce1` (branch `main`) · **Revisado em:** 2026-10-24
+>
+> `tests/test_cleanup_fixed_mask_reconstruction_red.py` era um `KNOWN_INTENTIONAL_RED`. Desde
+> `5f482ce1` ele passa (2/2) e continua como contrato de reconstrução com máscara fixa; uma
+> falha nele agora é regressão real. No mesmo snapshot, `python -m pytest -q` termina com
+> ~6160 testes aprovados e 0 falhas em cerca de 10 minutos.
 
 ## Padrão: offline
 
@@ -61,8 +64,11 @@ python -m pip install -r requirements/requirements-dev.txt
 python scripts/check_runtime_profile.py
 python -m pytest --collect-only -q
 python -m pytest -q
-node --check static/tradutor_ui.js
+node --check static/tradutor_ui.js   # a CI verifica também os demais scripts de static/ e static/i18n/
+python -m compileall -q yomu test_support
 ```
+
+O `pytest.ini` descobre testes em `tests/` e `experiments/` (`testpaths`).
 
 O `pytest.ini` exclui os marcadores `network` e `manual` por padrão. Os
 marcadores disponíveis são `unit`, `integration`, `network`, `manual` e
@@ -107,7 +113,7 @@ Rodar todas:
 Get-ChildItem tests/test_*.mjs | ForEach-Object { node --experimental-vm-modules $_.FullName }
 ```
 
-> **A flag `--experimental-vm-modules` é obrigatória.** Onze das quatorze suítes montam os
+> **A flag `--experimental-vm-modules` é obrigatória.** Sete das 18 suítes montam os
 > módulos do frontend com `vm.SourceTextModule`, que só existe sob essa flag. Sem ela o Node
 > não falha na importação: cada teste falha individualmente com
 > `vm.SourceTextModule is not a constructor`, o que parece defeito de produto e é apenas erro
@@ -118,7 +124,9 @@ Get-ChildItem tests/test_*.mjs | ForEach-Object { node --experimental-vm-modules
 A versão de Node auditada é a **24**, a mesma da CI.
 
 **A CI não executa as suítes `.mjs`** — ela roda apenas `node --check` de sintaxe sobre os
-arquivos de `static/`. As suítes de frontend são responsabilidade da execução local.
+arquivos de `static/`. As suítes de frontend são responsabilidade da execução local. Fora do
+padrão `test_*.mjs` também existem `tests/wallet_normalization_test.mjs` e
+`tests/integration/control_plane_http_e2e.mjs`; o glob acima não os executa.
 
 ## Serviço Better Auth
 

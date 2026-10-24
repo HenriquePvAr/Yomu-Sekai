@@ -1,5 +1,12 @@
 # Reconciliação do código Edge
 
+> **Registro histórico (2026-09-13).** **Revisado em:** 2026-10-24 · **Base verificada:** `5f482ce1`.
+> O projeto `Tradutor IA Community` citado abaixo deixou de ser o backend ativo no cutover de
+> 2026-09-29 (commit `8b0053fe`, `config/public-runtime.json`); hoje é apenas rollback
+> temporário. Ver [SUPABASE_AUTH.md](SUPABASE_AUTH.md). Os seis entrypoints continuam em
+> `supabase/functions/`; não há verificação, nesta revisão, de que o projeto ativo execute a
+> mesma versão.
+
 Em 2026-09-13, o código local das funções necessárias à primeira closed beta
 foi comparado com o código ativo no projeto Supabase `Tradutor IA Community`.
 Os seis entrypoints abaixo foram incorporados do remoto após revisão:

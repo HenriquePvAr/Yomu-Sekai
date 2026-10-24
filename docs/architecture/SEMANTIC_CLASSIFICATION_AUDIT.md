@@ -1,5 +1,16 @@
 # Semantic region taxonomy & linguistic audit (BLOCO 2)
 
+> **Base verificada:** `5f482ce1` (branch `main`) · **Revisado em:** 2026-10-24
+>
+> Module paths (the bare file names below refer to these): `yomu/review/region_taxonomy.py`,
+> `yomu/translation/linguistic_audit.py`, `yomu/translation/linguistic_triage.py`,
+> `yomu/review/audit_registry.py`, `yomu/review/audit_decisions.py`,
+> `yomu/translation/human_translation_decisions.py`, `yomu/review/preview_gates.py` and
+> `yomu/review/chapter_quality_revision.py` (`revise_page`). Bridge methods live in
+> `yomu/ui/ui_bridge.py`; the `/api/ui/audit/*` routes in `yomu/ui/app.py`. None of these has a
+> root-level shim. The blocks below are a chronological record; later blocks supersede earlier
+> scope notes (for example, BLOCO 4 wires the taxonomy into the live review that BLOCO 2 deferred).
+
 This documents the semantic classification taxonomy and the offline linguistic
 audit. Neither modifies PDFs, final pages, revisions or publications, and neither
 calls a translation provider.
@@ -65,11 +76,18 @@ reason codes, `revision_linked`, `report_only`, cache status, `provider_required
 confidence and `needs_human_review`. Writes JSON + Markdown to a chosen output
 dir; touches nothing else.
 
-Run:
+Run (there is no root `linguistic_audit.py`; the module is executed in place):
 
 ```bash
-.venv/Scripts/python.exe linguistic_audit.py .runtime/linguistic-audit
+python -m yomu.translation.linguistic_audit <job_id> <run_id> [out_dir]
 ```
+
+`out_dir` defaults to `.runtime/linguistic-audit`. Limitation: the CLI resolves the job through
+`resolve_output_dir`, whose default database is the relative path `.cache/runtime/jobs.sqlite3`,
+not the per-user runtime root (`%LOCALAPPDATA%\TradutorIA\runtime\jobs.sqlite3`) that the
+worker uses by default, so it finds a job only when run against a store at that relative path.
+The UI path (`/api/ui/audit/review`) resolves the job through the bridge's own store and is not
+affected.
 
 It is a **derived view**: a region that flips from preserved to translatable is
 flagged `needs_human_review`, not corrected. No translation is applied.

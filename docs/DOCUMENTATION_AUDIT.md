@@ -1,5 +1,13 @@
 # Auditoria de Documentação
 
+> **Registro histórico (2026-08-19, com adendos até 2026-08-26).** Classificações como
+> "Planejados" (§4: updater, licenciamento) e "Atual" descrevem aquela data: desde então o
+> núcleo do updater (`yomu/runtime/update_manifest.py`, `update_transport.py`,
+> `update_installer.py`, `update_bootstrap.py`) e a licença Beta (`yomu/auth/beta_license.py`)
+> existem no código. Estado atual: [snapshot de consolidação](consolidation/YOMU_CURRENT_PRODUCT_STATE.md)
+> e [Documentação Técnica §30](technical/DOCUMENTACAO_TECNICA.md#30-empacotamento-updater-e-prontidão-para-beta).
+> Política vigente: [Política de Documentação](DOCUMENTATION_POLICY.md). **Revisado em:** 2026-10-24 · **Base verificada:** `5f482ce1`
+
 > **Base auditada:** commit `c81c798`, branch `fix/main-e2e-findings`, worktree limpo
 > **Data:** 2026-08-19
 > **Escopo:** auditoria completa da documentação existente + estabelecimento da documentação

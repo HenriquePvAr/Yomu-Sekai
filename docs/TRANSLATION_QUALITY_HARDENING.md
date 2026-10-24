@@ -1,5 +1,11 @@
 # M18.5 — Translation quality hardening
 
+> **Registro histórico de 2026-09-30 (M18.5).** O estado atual dos gates de tradução está em
+> [Qualidade e validação](QUALITY_AND_VALIDATION.md). As salvaguardas listadas continuam no
+> código (`yomu/translation/semantic_fidelity.py`, retry regional em `yomu/ocr/ocr_balloon.py`);
+> o "E2E real de qualidade" citado abaixo segue sem registro para o pipeline atual — ver
+> [Quality Freeze](QUALITY_FREEZE.md#estado-em-2026-10-24). **Revisado em:** 2026-10-24 · **Base verificada:** `5f482ce1`
+
 Status: **PARTIAL_ACCEPTED_LIMITATION**. The offline hardening work is closed
 for progression to M19; this is not a claim of perfect or human-equivalent
 translation. The final real Quality E2E required by the Quality Freeze remains

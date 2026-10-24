@@ -2,6 +2,8 @@
 
 Este guia prepara o ambiente local do Tradutor.IA no cenário atualmente auditado: Windows 64 bits e Python 3.11.
 
+> **Base verificada:** `5f482ce1` (branch `main`) · **Revisado em:** 2026-10-24
+>
 > [Voltar ao README](../README.md) · [Desenvolvimento](DEVELOPMENT.md)
 >
 > Para setup de desenvolvimento, comandos de teste, dependências externas por tipo e riscos
@@ -18,7 +20,7 @@ Este guia prepara o ambiente local do Tradutor.IA no cenário atualmente auditad
 | Node.js | 24 | **Somente desenvolvimento**: suítes de frontend `.mjs` e serviço Better Auth. O pipeline não precisa dele |
 | Memória | 16 GB recomendados | Modelos de OCR e reconstrução podem elevar bastante o uso de RAM e memória virtual |
 | Disco | Espaço para modelos, caches e outputs | Capítulos completos podem gerar muitos arquivos intermediários |
-| Chave do provedor de tradução | `DEEPL_API_KEY` | DeepL é o provedor de tradução padrão. NVIDIA (Riva/Nemotron) só é necessária se você selecionar esses providers |
+| Conta Yomu Sekai | login Supabase + licença Beta | Jobs com tradução passam sempre pelo backend autenticado (`yomu_backend`); a chave DeepL é segredo do servidor, não do cliente |
 
 O suporte end-to-end de Linux e macOS ainda não foi validado. O launcher possui um caminho POSIX para grupos de processos, mas isso não equivale a suporte integral do pipeline nessas plataformas.
 
@@ -65,7 +67,22 @@ Os arquivos têm responsabilidades diferentes:
 - `requirements/requirements-rapidocr.txt`: RapidOCR e ONNX Runtime usados como OCR primário do fluxo Beta
   nos modos `fast` e `quality`;
 - `requirements/requirements-paddle.txt`: PaddleOCR **opcional**, fora da Beta — ver o aviso de OpenCV abaixo;
-- `requirements/requirements-ui.txt`: NiceGUI para a interface local (o pin já vem em `requirements.txt`).
+- `requirements/requirements-ui.txt`: NiceGUI para a interface local (o pin já vem em `requirements.txt`);
+- `requirements/requirements-dev.txt`: pytest e dependências da suíte hermética;
+- `requirements/requirements-optional.txt`: transportes opcionais (importados de forma preguiçosa, desligados por padrão);
+- `requirements/requirements-gemini-vps.txt`: dependências do serviço VPS experimental — fora da Beta; **não** instale no venv do cliente (traz `opencv-python-headless`, que quebra o contrato de OpenCV).
+
+Composição dos perfis (linhas tracejadas: fora do perfil Beta):
+
+```mermaid
+flowchart LR
+    B["requirements/requirements-beta.txt"] --> R["requirements.txt<br/>base: numpy, Pillow, opencv-python, nicegui"]
+    B --> O["requirements/requirements-rapidocr.txt<br/>RapidOCR + onnxruntime"]
+    B --> X["scrapling[fetchers] + psd-tools"]
+    D["requirements/requirements-dev.txt<br/>pytest, fastapi, httpx"] -.-> T["suíte hermética"]
+    B --> C["scripts/check_runtime_profile.py<br/>um único OpenCV, sem Paddle"]
+    P["requirements/requirements-paddle.txt"] -.->|"não instalar no mesmo venv"| C
+```
 
 `scripts/check_runtime_profile.py` é o portão: nenhum arquivo de requisitos consegue proibir
 um pacote, então o script falha quando existe mais de uma distribuição de OpenCV, quando
@@ -103,13 +120,20 @@ recuperação opcional, que é simplesmente pulada quando a biblioteca não est�
 Copy-Item .env.example .env
 ```
 
-Abra `.env` e substitua o placeholder da chave do provedor de tradução padrão:
+Abra `.env` e preencha a configuração pública do Supabase usada pelo login e pelo backend de
+tradução:
 
 ```dotenv
-DEEPL_API_KEY=<sua-chave>
+SUPABASE_URL=<url-do-projeto>
+SUPABASE_PUBLISHABLE_KEY=<chave-publishable>
 ```
 
-`NVIDIA_API_KEY` só é necessária se você selecionar os providers Riva ou Nemotron.
+Todo job com tradução habilitada usa o provider interno `yomu_backend`, que chama o motor
+remoto DeepL no servidor (Edge Function `supabase/functions/translation-execute`). Por isso
+`DEEPL_API_KEY` **não** é necessária no cliente para jobs habilitados — ela é segredo do
+servidor. `NVIDIA_API_KEY` só é lida por caminhos legados/experimentais (por exemplo, o OCR
+NVIDIA opcional); Riva/Nemotron não são providers efetivos de um job habilitado.
+`SUPABASE_SECRET_KEY` nunca pertence ao cliente.
 
 Não versione `.env`, não cole a chave em comandos e não a inclua em relatórios. Os demais defaults são documentados em [Configuração](CONFIGURATION.md).
 
@@ -164,7 +188,7 @@ CHROMEDRIVER_PATH=C:\ferramentas\chromedriver.exe
 Os testes abaixo são locais e não baixam capítulos:
 
 ```powershell
-python -m py_compile run_webtoon.py app_ui.py process_launcher.py
+python -m py_compile run_webtoon.py app_ui.py yomu/runtime/process_launcher.py
 python tests/test_run_webtoon.py
 python tests/test_process_launcher.py
 python tests/test_ocr_quality_regressions.py
@@ -190,9 +214,10 @@ python desktop_app.py
 
 O shell desktop cria a janela nativa e hospeda a UI local em WebView2. Para executar somente o
 servidor de UI durante desenvolvimento, use o procedimento em [Desenvolvimento](DEVELOPMENT.md);
-o endereço loopback não substitui a janela do aplicativo no uso desktop. Configure o provider
-selecionado no ambiente local; `DEEPL_API_KEY` é necessária para DeepL, enquanto
-`NVIDIA_API_KEY` só é necessária se selecionar Riva ou Nemotron.
+o endereço loopback não substitui a janela do aplicativo no uso desktop. Abra sempre **`http://127.0.0.1:8080`**, não `http://localhost:8080`: a origem permitida no projeto Supabase Auth (`SUPABASE_SITE_URL`/`SUPABASE_REDIRECT_URL`) é `127.0.0.1`, e o login pode falhar em outra origem. O servidor da UI não abre navegador nem imprime a URL (`ui.run(show=False)` em `yomu/ui/app.py`); o shell desktop (`python desktop_app.py`) já abre a janela em `http://127.0.0.1:<porta>/`.
+
+ A tradução exige
+login: o backend autenticado executa o DeepL no servidor.
 
 ### Linha de comando
 
@@ -200,19 +225,16 @@ selecionado no ambiente local; `DEEPL_API_KEY` é necessária para DeepL, enquan
 python run_webtoon.py "<URL_DO_CAPITULO>" --mode quality --no-context
 ```
 
-RapidOCR é o engine primário nos dois modos. O modo `fast` mantém os fallbacks pesados
-desativados; o modo `quality` habilita os caminhos de recuperação e validação mais caros,
-incluindo validação de OCR pós-render:
-
-```powershell
-python run_webtoon.py "<URL_DO_CAPITULO>" --mode quality --no-context
-```
+RapidOCR é o engine primário nos dois modos e a validação de OCR pós-render fica ligada
+em ambos. O modo `fast` (somente CLI) mantém os fallbacks pesados desativados; o modo
+`quality` habilita os caminhos de recuperação mais caros. Consulte `python run_webtoon.py --help`
+para as flags reais.
 
 Use somente conteúdo que você tenha autorização para processar. Para uma primeira experiência, acompanhe o consumo de memória e os relatórios de saída.
 
 ## 9. Launcher supervisionado
 
-Para execuções longas iniciadas fora da UI, o repositório inclui `process_launcher.py`. Ele mantém stdout e stderr separados, persiste o exit code e controla a árvore de processos no Windows. Um exemplo completo está em [Arquitetura](ARCHITECTURE.md#launcher-supervisionado).
+Para execuções longas iniciadas fora da UI, o repositório inclui `yomu/runtime/process_launcher.py` (`python -m yomu.runtime.process_launcher --help`). Ele mantém stdout e stderr separados, persiste o exit code e controla a árvore de processos no Windows. Um exemplo completo está em [Arquitetura](ARCHITECTURE.md#launcher-supervisionado).
 
 O launcher PowerShell inline usado em experimentos antigos não faz parte do fluxo documentado e não deve ser usado para capturar o exit code.
 

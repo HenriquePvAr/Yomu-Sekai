@@ -1,5 +1,7 @@
 # Kaggle Qwen fallback lab (experimental)
 
+> **Revisado em:** 2026-10-24 · **Base verificada:** `5f482ce1` · Status: **experimental (DEV/LAB)**; no production caller (`git grep` finds no import outside `experiments/`).
+
 Isolated DEV/LAB benchmark. This package is deliberately not imported by Yomu production code.
 
 The runner selects a non-M20 image, creates a temporary staging directory, creates a **private** Kaggle dataset, pushes a GPU notebook, waits for completion, downloads and validates `result.json`, then deletes the dataset and local staging in a `finally` block. The worker loads `Qwen/Qwen3-VL-8B-Instruct` in FP16 and writes only `result.json`.
@@ -10,9 +12,13 @@ The runner selects a non-M20 image, creates a temporary staging directory, creat
 python experiments/kaggle_qwen_fallback_lab/run.py --image path\to\image.png --prompt "Audit this image" --kaggle-slug your-user/qwen-fallback-lab-<unique>
 ```
 
+Flags verified with `--help`: `--image`, `--prompt`, `--kaggle-slug` (required), `--output`, `--dry-run`, `--keep-staging`. Lab dependency: `experiments/kaggle_qwen_fallback_lab/requirements-lab.txt` (`kaggle==2.2.4`), installed in a separate venv, not in the `requirements/` profiles. Lab tests: `experiments/kaggle_qwen_fallback_lab/test_lab.py`.
+
 Requirements for a real run: Kaggle CLI on PATH, authenticated Kaggle account, GPU notebook quota, and a unique `--kaggle-slug`. The runner refuses an M20 image, non-private datasets, and a slug without an owner. `--dry-run` exercises planning without network access.
 
 ## Actual run (2026-10-01)
+
+> Historical record of one run. The fixture image `source_crop.png` is not in the Git index (only its JSON metadata is); results: `reports/kaggle_qwen_fallback_lab_real_e2e_v1.json`.
 
 The isolated venv uses Python 3.11.9 and `kaggle==2.2.4`. OAuth authentication was completed locally with `kaggle auth login`; no token was copied into this repository. A private upload probe succeeded and was deleted. The real NON-M20 fixture was `test_fixtures/quality_regression_diagnostics/real/sfx_slurp_p006/source_crop.png` (SHA-256 recorded in the report).
 
