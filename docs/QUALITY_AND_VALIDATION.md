@@ -815,7 +815,7 @@ Arquivos legados ausentes, vazios ou inválidos são lidos como código desconhe
   `cv2.__version__` responde **`4.10.0`**. Ou seja, **a baseline congelada foi produzida sobre
   cv2 4.10.0**, não sobre o 5.0.0.93 declarado. A explicação anterior — shadowing entre
   site-packages do usuário e do sistema — estava incorreta. O perfil Beta
-  (`requirements-beta.txt`) remove a aresta e `scripts/check_runtime_profile.py` recusa
+  (`requirements/requirements-beta.txt`) remove a aresta e `scripts/check_runtime_profile.py` recusa
   ambiente ambíguo, mas isso **troca** a versão de `cv2` efetivamente carregada, o que por
   `OPENCV-THRESHOLD-SENSITIVITY-001` acima exige um novo E2E real antes de considerar a
   baseline preservada. Ver

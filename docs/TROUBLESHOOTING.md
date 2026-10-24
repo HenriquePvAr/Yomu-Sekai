@@ -63,8 +63,8 @@ Instale o conjunto correspondente dentro da venv:
 
 ```powershell
 python -m pip install -r requirements.txt
-python -m pip install -r requirements-rapidocr.txt
-python -m pip install -r requirements-ui.txt
+python -m pip install -r requirements/requirements-rapidocr.txt
+python -m pip install -r requirements/requirements-ui.txt
 ```
 
 Não misture o Python global com o da `.venv`. Confira o executável ativo:
@@ -95,12 +95,12 @@ Se o processo encerrar por memória, reduza workers e feche aplicativos de usuá
 O modo `fast` depende do arquivo separado de requisitos:
 
 ```powershell
-python -m pip install -r requirements-rapidocr.txt
+python -m pip install -r requirements/requirements-rapidocr.txt
 python -c "from rapidocr_onnxruntime import RapidOCR; print('RapidOCR: OK')"
 ```
 
 `--mode quality` também usa RapidOCR como primário no fluxo Beta atual. Instale
-`requirements-rapidocr.txt` ou configure explicitamente outro OCR disponível; não conte com
+`requirements/requirements-rapidocr.txt` ou configure explicitamente outro OCR disponível; não conte com
 Paddle como substituto silencioso do OCR primário.
 
 ## Chave NVIDIA ausente ou inválida

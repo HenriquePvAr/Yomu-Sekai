@@ -11,7 +11,7 @@
 #
 # Install into a clean interpreter with user site-packages disabled:
 #   python -m venv .venv-beta
-#   .venv-beta\Scripts\python.exe -s -m pip install -r requirements-beta.txt
+#   .venv-beta\Scripts\python.exe -s -m pip install -r requirements/requirements-beta.txt
 #   .venv-beta\Scripts\python.exe -s scripts/check_runtime_profile.py
 #
 # `check_runtime_profile.py` is the enforcement point: no requirements file can
@@ -19,8 +19,8 @@
 # OpenCV distribution, or any Paddle distribution, is present.
 #
 # Runtime only. The validation environment additionally installs
-# `-r requirements-dev.txt` to run the suite; that is not shipped.
--r requirements.txt
+# `-r requirements/requirements-dev.txt` to run the suite; that is not shipped.
+-r ../requirements.txt
 -r requirements-rapidocr.txt
 # Runtime capabilities explicitly bundled by packaging/tradutor_ia.spec:
 # selected Comix dynamic reader and the current PSD exporter.

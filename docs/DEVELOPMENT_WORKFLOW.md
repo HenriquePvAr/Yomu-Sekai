@@ -1,6 +1,6 @@
 # Fluxo de desenvolvimento
 
-1. Use Python 3.11 e instale as dependências do perfil apropriado (`requirements-beta.txt` e `requirements-dev.txt` para a suíte principal).
+1. Use Python 3.11 e instale as dependências do perfil apropriado (`requirements/requirements-beta.txt` e `requirements/requirements-dev.txt` para a suíte principal).
 2. Mantenha mudanças de produção em runtime e experimentos em `experiments/` ou `research/`.
 3. Execute `python -m pytest --collect-only -q` após alterar discovery, paths ou localização de testes; depois execute `python -m pytest -q`.
 4. Para testes frontend, rode os arquivos em `tests/` com `node --experimental-vm-modules` quando o teste usar `vm.SourceTextModule`.

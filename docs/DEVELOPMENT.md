@@ -50,8 +50,8 @@ py -3.11 -m venv .venv
 python -m pip install --upgrade pip setuptools wheel
 
 # `-s` desabilita o site-packages do usuário, que já mascarou o cv2 carregado.
-python -s -m pip install -r requirements-beta.txt
-python -s -m pip install -r requirements-dev.txt   # somente para rodar os testes
+python -s -m pip install -r requirements/requirements-beta.txt
+python -s -m pip install -r requirements/requirements-dev.txt   # somente para rodar os testes
 
 python -s scripts/check_runtime_profile.py         # prova o perfil antes de confiar nele
 ```
@@ -60,13 +60,13 @@ Os manifests são a fonte de verdade das dependências. Não replique a lista aq
 
 | Manifest | Conteúdo |
 | --- | --- |
-| `requirements-beta.txt` | **perfil de runtime da Beta**; compõe os requisitos base/OCR e declara Scrapling (Comix) + psd-tools, usados pelo spec de packaging |
+| `requirements/requirements-beta.txt` | **perfil de runtime da Beta**; compõe os requisitos base/OCR e declara Scrapling (Comix) + psd-tools, usados pelo spec de packaging |
 | `requirements.txt` | stack principal, incluindo os pins de imagem/CV (`numpy`, `Pillow`, `opencv-python`) e `nicegui`. **Não** contém PaddleOCR |
-| `requirements-rapidocr.txt` | RapidOCR + onnxruntime (engine de OCR primário, obrigatório) |
-| `requirements-paddle.txt` | **opcional, fora da Beta** — PaddleOCR/PaddlePaddle. Instalar isto quebra o contrato de OpenCV (ver abaixo) |
-| `requirements-ui.txt` | pin de NiceGUI espelhado, para as duas listas não divergirem |
-| `requirements-dev.txt` | pytest e o cliente ASGI offline usado pela bateria de segurança |
-| `requirements-optional.txt` | transportes opcionais, importados de forma preguiçosa e desligados por padrão |
+| `requirements/requirements-rapidocr.txt` | RapidOCR + onnxruntime (engine de OCR primário, obrigatório) |
+| `requirements/requirements-paddle.txt` | **opcional, fora da Beta** — PaddleOCR/PaddlePaddle. Instalar isto quebra o contrato de OpenCV (ver abaixo) |
+| `requirements/requirements-ui.txt` | pin de NiceGUI espelhado, para as duas listas não divergirem |
+| `requirements/requirements-dev.txt` | pytest e o cliente ASGI offline usado pela bateria de segurança |
+| `requirements/requirements-optional.txt` | transportes opcionais, importados de forma preguiçosa e desligados por padrão |
 | `apps/auth-service/package.json` | serviço Better Auth (Node/TypeScript) |
 
 Nenhum arquivo de requisitos consegue dizer "este pacote não pode estar instalado". Quem
@@ -181,7 +181,7 @@ npm run build
 ### CI
 
 O workflow `Hermetic Tests` (`.github/workflows/tests.yml`) roda em `windows-latest` com
-Python 3.11 e Node 24, instala `requirements.txt` + `requirements-dev.txt`, confirma que
+Python 3.11 e Node 24, instala `requirements.txt` + `requirements/requirements-dev.txt`, confirma que
 nenhum opt-in de smoke de rede está autorizado, roda `pytest`, `node --check`, o serviço
 Better Auth e `py_compile` dos módulos centrais. **A CI não executa as suítes `.mjs`** —
 elas são responsabilidade local.
@@ -269,7 +269,7 @@ Consequências:
 - "reinstalar `opencv-python` por último" **não** é solução: é uma ordem de instalação frágil,
   não um contrato;
 - a correção arquitetural é remover a aresta, não reordenar a instalação — PaddleOCR sai do
-  perfil de runtime (`requirements-paddle.txt`, opcional) e um preflight de build recusa
+  perfil de runtime (`requirements/requirements-paddle.txt`, opcional) e um preflight de build recusa
   ambiente ambíguo (`scripts/check_runtime_profile.py`).
 
 Registrado como `OPENCV-VARIANT-SHADOWING-001` em [Riscos conhecidos](#riscos-conhecidos).
@@ -307,15 +307,15 @@ empacotamento; remover um pacote muda o ambiente resolvido e invalida a baseline
 
 ### `BETA1_OCR_RUNTIME_CONTRACT`
 
-Perfil de runtime que a Beta 1 empacota. Declarado em `requirements-beta.txt`, imposto por
+Perfil de runtime que a Beta 1 empacota. Declarado em `requirements/requirements-beta.txt`, imposto por
 `scripts/check_runtime_profile.py`.
 
 | Componente | Contrato | Onde |
 | --- | --- | --- |
 | Python | 3.11 | runtime relocável/embutido no pacote; venv apenas em desenvolvimento |
-| OCR primário | **RapidOCR obrigatório** (`rapidocr-onnxruntime` + `onnxruntime`), modelos dentro da wheel | `requirements-rapidocr.txt` |
+| OCR primário | **RapidOCR obrigatório** (`rapidocr-onnxruntime` + `onnxruntime`), modelos dentro da wheel | `requirements/requirements-rapidocr.txt` |
 | OpenCV | **exatamente uma** distribuição: `opencv-python==5.0.0.93` | `requirements.txt` |
-| PaddleOCR / PaddlePaddle / PaddleX | **não empacotados** — capacidade opcional, código preservado | `requirements-paddle.txt` |
+| PaddleOCR / PaddlePaddle / PaddleX | **não empacotados** — capacidade opcional, código preservado | `requirements/requirements-paddle.txt` |
 | `opencv-contrib-python`, `opencv-python-headless` e variantes | **proibidos** — mesmo diretório `cv2/` | recusado pelo preflight |
 | Fallback de navegador (Selenium/Chrome) | separado/opcional; a descoberta HTTP não depende dele | `requirements.txt` + Chrome do sistema |
 
@@ -333,7 +333,7 @@ próprio gate do RapidOCR recusa a página, a falha é fechada e contabilizada
 | Item | Estado histórico |
 | --- | --- |
 | Baseline de empacotamento | **PRONTA** — pipeline congelado, manifests pinados, evidência de E2E registrada |
-| Perfil de runtime Beta | **DEFINIDO E PROVADO EM AMBIENTE LIMPO** — `requirements-beta.txt`, uma única distribuição de OpenCV, `pip check` limpo, preflight verde, E2E real executado (job `902b149e`: 35/35 páginas, PDF válido, zero Paddle carregado) |
+| Perfil de runtime Beta | **DEFINIDO E PROVADO EM AMBIENTE LIMPO** — `requirements/requirements-beta.txt`, uma única distribuição de OpenCV, `pip check` limpo, preflight verde, E2E real executado (job `902b149e`: 35/35 páginas, PDF válido, zero Paddle carregado) |
 | Baseline de qualidade sob o runtime Beta | **NÃO PRESERVADA** — o E2E não reproduziu P28/P31/P32; ver [Quality Freeze](QUALITY_FREEZE.md) |
 | Instalação limpa em Windows | **NÃO PROVADA** — não existe validação em máquina limpa |
 | Instalador para usuário final | **NÃO EXISTE** — não há spec de build nem `Setup.exe` no repositório |
@@ -349,7 +349,7 @@ em Windows limpo, updater e distribuição Beta controlada. Nada disso é implem
 | --- | --- | --- |
 | `OPENCV-THRESHOLD-SENSITIVITY-001` | Limiares literais de pixel calibrados contra o `cv2` congelado; outra versão pode virar a classificação em regiões de fronteira. Trocar versão **ou variante** exige reexecutar o E2E de qualidade, não só a suíte. | **aberto** — detalhe em [Qualidade e validação](QUALITY_AND_VALIDATION.md) |
 | `OPENCV-VARIANT-SHADOWING-001` | `paddleocr` → `paddlex` fixa `opencv-contrib-python==4.10.0.84`, que sobrescreve o mesmo diretório `cv2/` do `opencv-python==5.0.0.93` sem que o pip reporte conflito. A baseline do freeze foi produzida sobre **cv2 4.10.0**, não sobre o pin declarado. | **causa raiz identificada; corrigida no perfil Beta** — o perfil sem Paddle carrega cv2 5.0.0; a troca de versão ainda exige novo E2E por `OPENCV-THRESHOLD-SENSITIVITY-001`. Ver [seção acima](#opencv-contrato-e-inconsistência-conhecida) |
-| `CLEAN-INSTALL-NOT-YET-PROVEN` | Nenhuma instalação limpa em Windows foi validada a partir dos manifests. | **aberto** — o perfil de runtime já instala e roda limpo (`requirements-beta.txt`); falta a máquina limpa |
+| `CLEAN-INSTALL-NOT-YET-PROVEN` | Nenhuma instalação limpa em Windows foi validada a partir dos manifests. | **aberto** — o perfil de runtime já instala e roda limpo (`requirements/requirements-beta.txt`); falta a máquina limpa |
 | `WINDOWS-VENV-LAUNCHER-PID-001` | Em venv de Windows, `Scripts\python.exe` é o *venvlauncher*: ele executa o interpretador base como **processo filho**. `Popen(sys.executable).pid` devolve o PID do stub, enquanto o processo Python real tem outro PID. Isso quebra qualquer contabilidade por PID (lease de worker, supervisão, identidade de runtime na UI). | **ambiente de desenvolvimento apenas** — ver [abaixo](#windows-venv-launcher-e-identidade-de-processo) |
 | Chrome/Selenium × TPM | Em máquinas afetadas por problemas de Microsoft Platform Crypto Provider / TPM, o Chrome pode falhar ao iniciar, inutilizando o fallback de navegador. A descoberta HTTP evita essa dependência para as fontes que a suportam. | **aberto, ambiente de desenvolvimento** — não altere TPM/BIOS/Windows Hello por causa disto |
 | Reconstrução de arte em textura | Regiões texturizadas/open-art podem render sob revisão de fidelidade. | **aberto** |

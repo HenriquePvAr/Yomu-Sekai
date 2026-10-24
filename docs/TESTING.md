@@ -13,10 +13,10 @@ mocks locais para exercitar clientes externos.
 Instale a dependência de desenvolvimento antes de usar pytest:
 
 ```powershell
-python -m pip install -r requirements-dev.txt
+python -m pip install -r requirements/requirements-dev.txt
 ```
 
-A suíte roda sobre o perfil de runtime da Beta (`requirements-beta.txt`): RapidOCR presente,
+A suíte roda sobre o perfil de runtime da Beta (`requirements/requirements-beta.txt`): RapidOCR presente,
 PaddleOCR ausente. Os testes que exercitam o caminho Paddle injetam um módulo falso com
 `patch.dict(sys.modules, ...)` ou fazem patch de `_get_paddle`, então nenhum deles depende da
 biblioteca estar instalada e nenhum passa a pular fora do perfil Beta.
@@ -56,8 +56,8 @@ executa scripts manuais nem usa segredo NVIDIA.
 O equivalente local da CI é:
 
 ```powershell
-python -m pip install -r requirements-beta.txt
-python -m pip install -r requirements-dev.txt
+python -m pip install -r requirements/requirements-beta.txt
+python -m pip install -r requirements/requirements-dev.txt
 python scripts/check_runtime_profile.py
 python -m pytest --collect-only -q
 python -m pytest -q

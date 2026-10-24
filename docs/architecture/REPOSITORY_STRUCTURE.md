@@ -6,6 +6,24 @@ e [ROOT_DEPENDENCY_MAP.md](ROOT_DEPENDENCY_MAP.md). `main` é a linha de integra
 release: antes de iniciar trabalho, confirme a branch e o estado local com Git e consulte o
 Kanban. Não use um checkout antigo nem mova arquivos só para reduzir contagens.
 
+
+## Mapa (2026-10-24)
+
+```mermaid
+flowchart TD
+    R[(raiz)] --> Y[yomu/<br/>pacote do produto]
+    R --> T[tests/ + test_support/ + test_fixtures/]
+    R --> D[docs/<br/>user, technical, architecture, operations]
+    R --> Q[requirements.txt<br/>+ requirements/ perfis]
+    R --> P[packaging/ + deploy/ + apps/ + supabase/]
+    R --> U[ui/ + static/<br/>interface]
+    R --> S[scripts/ + tools/]
+    R --> A[assets/<br/>lexicon, fontes, branding]
+    R --> E[reports/ + research/ + experiments/<br/>evidências e estudos]
+    R --> L[shims na raiz<br/>start_tradutor.py, run_webtoon.py,<br/>run_local_folder.py, desktop_app.py, ...]
+    Y --> Y1[ocr/] & Y2[clean/] & Y3[translation/] & Y4[pipeline/] & Y5[ui/] & Y6[download/] & Y7[export/]
+```
+
 ## Árvore versionada
 
 ```text
@@ -38,7 +56,7 @@ O `.mcp.json` local também permanece fora do Git.
 
 ## Arquivos que permanecem na raiz
 
-Os 31 arquivos rastreados diretamente na raiz têm contratos convencionais, de configuração,
+Os 22 arquivos rastreados diretamente na raiz têm contratos convencionais, de configuração,
 bootstrap, instalação ou compatibilidade. A lista completa, consumidores e riscos está na
 [auditoria](ROOT_STRUCTURE_AUDIT.md). Em particular:
 
@@ -52,13 +70,15 @@ bootstrap, instalação ou compatibilidade. A lista completa, consumidores e ris
 - `conftest.py`, `sitecustomize.py` e `pytest.ini` instalam descoberta, isolamento de runtime e
   guard de rede offline antes de importar testes. Não mova esses hooks sem uma validação
   equivalente de inicialização precoce.
-- Os manifests `requirements*.txt` ficam na raiz porque pip inclui arquivos por caminhos
-  relativos e CI, documentação, Docker/deploy e packaging os consomem diretamente. Os perfis
-  são deliberadamente separados; não os combinar nem atualizar versões nesta organização.
+- `requirements.txt` (conjunto base) fica na raiz, onde ferramentas o procuram por convenção;
+  os perfis (`requirements-beta.txt`, `-dev`, `-rapidocr`, `-ui`, `-optional`, `-paddle`,
+  `-gemini-vps`) ficam em `requirements/` desde 2026-10-24. `requirements/requirements-beta.txt`
+  inclui a base por `-r ../requirements.txt` (pip resolve `-r` relativo ao arquivo). Os perfis
+  continuam separados; não os combinar.
 - `start_tradutor.bat` é o launcher de Windows documentado e encaminha ao shim Python.
-- Os conteúdos de `PRODUCTION_SECRETS_REQUIRED.md` e `SEMANTIC_CLASSIFICATION_AUDIT.md` foram
-  movidos para `docs/operations/` e `docs/architecture/`; stubs compatíveis continuam nos
-  caminhos antigos para não quebrar bookmarks ou consumidores externos não observáveis.
+- Os conteúdos de `PRODUCTION_SECRETS_REQUIRED.md` e `SEMANTIC_CLASSIFICATION_AUDIT.md` vivem em
+  `docs/operations/` e `docs/architecture/`; os ponteiros que ficavam na raiz foram removidos
+  em 2026-10-24 (os links internos já apontavam para os caminhos canônicos).
 
 ## Entry points e contratos
 
@@ -79,10 +99,10 @@ As razões e verificações de identidade de módulo constam na [matriz de depen
 
 - Pytest carrega `pytest.ini`, `conftest.py` e, nos filhos elegíveis, `sitecustomize.py` da raiz.
   Os guards em `test_support/` protegem contra rede real e runtime de usuário.
-- `requirements.txt` é o conjunto base; `requirements-beta.txt` compõe o runtime de Beta;
-  `requirements-dev.txt` é somente validação; OCR/UI e opções ficam em manifests separados;
-  `requirements-paddle.txt` é opcional e não deve ser instalado no mesmo ambiente do contrato
-  OpenCV da Beta; `requirements-gemini-vps.txt` pertence ao worker remoto.
+- `requirements.txt` é o conjunto base; `requirements/requirements-beta.txt` compõe o runtime de Beta;
+  `requirements/requirements-dev.txt` é somente validação; OCR/UI e opções ficam em manifests separados;
+  `requirements/requirements-paddle.txt` é opcional e não deve ser instalado no mesmo ambiente do contrato
+  OpenCV da Beta; `requirements/requirements-gemini-vps.txt` pertence ao worker remoto.
 - O build desktop usa `packaging/tradutor_ia.spec`, que espera `desktop_app.py` na raiz e inclui
   recursos públicos/configuração especificados no spec. Não altere caminhos do spec sem smoke
   frozen offline.

@@ -24,8 +24,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 APP_UI_SOURCE = (ROOT / "yomu/ui/app.py").read_text(encoding="utf-8")
 REQUIREMENTS_TXT = (ROOT / "requirements.txt").read_text(encoding="utf-8")
-REQUIREMENTS_DEV_TXT = (ROOT / "requirements-dev.txt").read_text(encoding="utf-8")
-REQUIREMENTS_BETA_TXT = (ROOT / "requirements-beta.txt").read_text(encoding="utf-8")
+REQUIREMENTS_DEV_TXT = (ROOT / "requirements/requirements-dev.txt").read_text(encoding="utf-8")
+REQUIREMENTS_BETA_TXT = (ROOT / "requirements/requirements-beta.txt").read_text(encoding="utf-8")
 WORKFLOW = (ROOT / ".github" / "workflows" / "tests.yml").read_text(encoding="utf-8")
 
 _PIN_RE = re.compile(r"(?im)^\s*nicegui\s*==\s*([^\s#]+)\s*$")
@@ -59,7 +59,7 @@ class UiRuntimeDependencyTests(unittest.TestCase):
         for dev_pin in dev_pins:
             self.assertEqual(
                 dev_pin, prod_pin,
-                "requirements-dev.txt declares a nicegui version that conflicts with "
+                "requirements/requirements-dev.txt declares a nicegui version that conflicts with "
                 "requirements.txt.",
             )
 
@@ -68,12 +68,12 @@ class UiRuntimeDependencyTests(unittest.TestCase):
         # than restating it. What this guard protects is the chain, not the filename:
         # the nicegui pin must still reach the runner.
         self.assertIn(
-            "pip install -r requirements-beta.txt", WORKFLOW,
+            "pip install -r requirements/requirements-beta.txt", WORKFLOW,
             "Hermetic Tests workflow must install the Beta runtime profile.",
         )
         self.assertIn(
-            "-r requirements.txt", REQUIREMENTS_BETA_TXT,
-            "requirements-beta.txt must include requirements.txt for the nicegui pin "
+            "-r ../requirements.txt", REQUIREMENTS_BETA_TXT,
+            "requirements/requirements-beta.txt must include requirements.txt for the nicegui pin "
             "to reach the CI runner.",
         )
 

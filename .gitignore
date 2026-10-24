@@ -1,7 +1,7 @@
 .env
 .env.local
 .venv/
-# Clean-room environment built from requirements-beta.txt to validate the Beta runtime.
+# Clean-room environment built from requirements/requirements-beta.txt to validate the Beta runtime.
 .venv-beta/
 **pycache**/
 __pycache__/
@@ -103,3 +103,11 @@ test_fixtures/quality_regression_diagnostics/real/**/source_crop.png
 # Required login artwork: force-tracked despite *.png/*.jpg catch-all (clean builds need it)
 !static/assets/auth-background.jpg
 !static/assets/auth-background-hd.png
+
+# Local agent/indexer tooling (machine-specific paths, large indexes).
+.basinfy/
+.agents/
+.codex/
+.mcp.json
+# Security audit material stays private (public repository).
+docs/security-audit/

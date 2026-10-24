@@ -47,25 +47,25 @@ Nos comandos seguintes, substitua `python` por `.\.venv\Scripts\python.exe` e `p
 
 ## 3. Instalar as dependências
 
-`requirements-beta.txt` é o perfil de runtime da Beta. Ele compõe os manifests existentes
+`requirements/requirements-beta.txt` é o perfil de runtime da Beta. Ele compõe os manifests existentes
 e declara também os recursos Comix (Scrapling) e PSD incluídos pelo spec de packaging,
 então instalar por ele é o caminho suportado:
 
 ```powershell
 # -s desabilita o site-packages do usuário, que já mascarou o cv2 carregado.
-python -s -m pip install -r requirements-beta.txt
-python -s -m pip install -r requirements-dev.txt
+python -s -m pip install -r requirements/requirements-beta.txt
+python -s -m pip install -r requirements/requirements-dev.txt
 python -s scripts/check_runtime_profile.py
 ```
 
 Os arquivos têm responsabilidades diferentes:
 
-- `requirements-beta.txt`: perfil de runtime da Beta (`requirements.txt` + `requirements-rapidocr.txt` + Scrapling/PSD usados no pacote);
+- `requirements/requirements-beta.txt`: perfil de runtime da Beta (`requirements.txt` + `requirements/requirements-rapidocr.txt` + Scrapling/PSD usados no pacote);
 - `requirements.txt`: processamento de imagem, Selenium, tradução e monitoramento;
-- `requirements-rapidocr.txt`: RapidOCR e ONNX Runtime usados como OCR primário do fluxo Beta
+- `requirements/requirements-rapidocr.txt`: RapidOCR e ONNX Runtime usados como OCR primário do fluxo Beta
   nos modos `fast` e `quality`;
-- `requirements-paddle.txt`: PaddleOCR **opcional**, fora da Beta — ver o aviso de OpenCV abaixo;
-- `requirements-ui.txt`: NiceGUI para a interface local (o pin já vem em `requirements.txt`).
+- `requirements/requirements-paddle.txt`: PaddleOCR **opcional**, fora da Beta — ver o aviso de OpenCV abaixo;
+- `requirements/requirements-ui.txt`: NiceGUI para a interface local (o pin já vem em `requirements.txt`).
 
 `scripts/check_runtime_profile.py` é o portão: nenhum arquivo de requisitos consegue proibir
 um pacote, então o script falha quando existe mais de uma distribuição de OpenCV, quando
@@ -81,7 +81,7 @@ opencv` mostrar mais de uma linha, desinstale as variantes extras antes de confi
 qualquer resultado de qualidade. Ver `OPENCV-THRESHOLD-SENSITIVITY-001` em
 [Qualidade e validação](QUALITY_AND_VALIDATION.md).
 
-> **Não instale `requirements-paddle.txt` no mesmo ambiente.** `paddleocr` depende de
+> **Não instale `requirements/requirements-paddle.txt` no mesmo ambiente.** `paddleocr` depende de
 > `paddlex`, que fixa `opencv-contrib-python==4.10.0.84`. As duas distribuições instalam o
 > mesmo diretório `cv2/`: pip não reporta conflito, `pip check` fica limpo, e quem escreve por
 > último vence — o `cv2` efetivamente importado vira 4.10.0 sem nenhum aviso. Foi exatamente

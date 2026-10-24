@@ -1,5 +1,12 @@
 # Mapa de dependências da raiz
 
+> **Atualização 2026-10-24:** os ponteiros `PRODUCTION_SECRETS_REQUIRED.md` e
+> `SEMANTIC_CLASSIFICATION_AUDIT.md` foram removidos da raiz (conteúdo canônico em
+> `docs/operations/` e `docs/architecture/`), e os perfis `requirements-*.txt` foram movidos
+> para `requirements/` (a base `requirements.txt` continua na raiz). As tabelas abaixo
+> registram o estado auditado na época; a estrutura vigente está em
+> [REPOSITORY_STRUCTURE.md](REPOSITORY_STRUCTURE.md).
+
 **Escopo:** caminhos diretamente na raiz do checkout `main`, incluindo imports, execução,
 configuração, CI, packaging, testes e links de documentação. A fonte primária de shims é
 `config/repository_root_allowlist.json`; referências foram buscadas no checkout com Basinfy e
@@ -42,13 +49,13 @@ subprocessos, cwd e PyInstaller.
 | `conftest.py` | pytest carrega guard runtime hermético e guard de rede, antes de testes | Pode remover defesa global/inverter ordem de import |
 | `sitecustomize.py` | Python startup em testes/filhos guardados → `test_support` | Pode impedir bloqueio precoce de rede e isolamento de dados |
 | `requirements.txt` | base; incluído por Beta; CI/docs/Docker/deploy | `-r` e comandos existentes usam caminhos raiz |
-| `requirements-beta.txt` | CI, pip profile, runtime checks, packaging preflight | Perfil deliberadamente compõe manifests e é referenciado literalmente |
-| `requirements-dev.txt` | CI e instruções pytest; não empacotado | Nome usado pelos comandos de instalação de dev |
-| `requirements-rapidocr.txt` | Include Beta, CI e docs | Include relativo e perfil do OCR primário |
-| `requirements-ui.txt` | README/docs e verificação do pin NiceGUI | Manter o pin espelhado e verificado |
-| `requirements-optional.txt` | docs e dependências lazy opcionais | Não misturar com o perfil base sem revisar extras |
-| `requirements-paddle.txt` | documentação/ambiente isolado legacy | Conflita com contrato OpenCV; não incluir em Beta |
-| `requirements-gemini-vps.txt` | contrato operacional remoto; literal não encontrado no checkout | Dependência externa não inspecionável; manter path até verificar o deploy consumer |
+| `requirements/requirements-beta.txt` | CI, pip profile, runtime checks, packaging preflight | Perfil deliberadamente compõe manifests e é referenciado literalmente |
+| `requirements/requirements-dev.txt` | CI e instruções pytest; não empacotado | Nome usado pelos comandos de instalação de dev |
+| `requirements/requirements-rapidocr.txt` | Include Beta, CI e docs | Include relativo e perfil do OCR primário |
+| `requirements/requirements-ui.txt` | README/docs e verificação do pin NiceGUI | Manter o pin espelhado e verificado |
+| `requirements/requirements-optional.txt` | docs e dependências lazy opcionais | Não misturar com o perfil base sem revisar extras |
+| `requirements/requirements-paddle.txt` | documentação/ambiente isolado legacy | Conflita com contrato OpenCV; não incluir em Beta |
+| `requirements/requirements-gemini-vps.txt` | contrato operacional remoto; literal não encontrado no checkout | Dependência externa não inspecionável; manter path até verificar o deploy consumer |
 
 ## Configuração, distribuição e documentação
 

@@ -77,7 +77,7 @@ O freeze não é levantado por uma suíte verde. Ele é levantado quando:
 
 | Condição | Estado |
 | --- | --- |
-| 1 — OpenCV único e igual ao declarado | **ATENDIDA no perfil Beta** — `requirements-beta.txt` resolve uma única distribuição (`opencv-python==5.0.0.93`), `pip check` limpo, `scripts/check_runtime_profile.py` verde, `cv2.__version__ == 5.0.0` |
+| 1 — OpenCV único e igual ao declarado | **ATENDIDA no perfil Beta** — `requirements/requirements-beta.txt` resolve uma única distribuição (`opencv-python==5.0.0.93`), `pip check` limpo, `scripts/check_runtime_profile.py` verde, `cv2.__version__ == 5.0.0` |
 | 2 — instalação limpa reproduzível | **PARCIAL** — o perfil instala e roda limpo a partir dos manifests; falta a máquina Windows limpa |
 | 3 — novo E2E real sobre essa instalação | **EXECUTADO — não reproduziu os gates congelados** (ver abaixo) |
 

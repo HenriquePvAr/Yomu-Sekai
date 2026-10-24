@@ -1,5 +1,12 @@
 # Auditoria da estrutura direta da raiz
 
+> **Atualização 2026-10-24:** os ponteiros `PRODUCTION_SECRETS_REQUIRED.md` e
+> `SEMANTIC_CLASSIFICATION_AUDIT.md` foram removidos da raiz (conteúdo canônico em
+> `docs/operations/` e `docs/architecture/`), e os perfis `requirements-*.txt` foram movidos
+> para `requirements/` (a base `requirements.txt` continua na raiz). As tabelas abaixo
+> registram o estado auditado na época; a estrutura vigente está em
+> [REPOSITORY_STRUCTURE.md](REPOSITORY_STRUCTURE.md).
+
 **Snapshot:** 2026-10-16, checkout canônico da `main` consolidada (worktree Windows).
 **Git:** `main` local inicia em `c6bc48d97ba28fba89b027aea0ac5b5b87baedcd`; `origin/main` permanece
 `ec9ca9e4acd0849020eb13a089817c1c11aeab7a`. Havia 31 arquivos e 19 diretórios rastreados
@@ -36,13 +43,13 @@ build e teste, contrato, localização, decisão, justificativa e risco.
 | `down.py` | Shim do downloader histórico | Imports antigos e chamadas CLI | Testes de compatibilidade/download | Módulo histórico reexporta implementação preservando identidade | Raiz | `KEEP_ROOT_COMPATIBILITY`; não substituir por reexport simples nem mover sem prova de callers externos |
 | `main.py` | Shim de GUI legado | CLI/imports históricos | Entrada histórica de aplicativo | `python main.py` / import path | Raiz | `KEEP_ROOT_COMPATIBILITY`; implementador está em `yomu.commands.legacy_gui` |
 | `pytest.ini` | Config de coleta, markers, exclusões e modo offline | Pytest | `python -m pytest`; CI | Descoberto por pytest a partir da raiz | Raiz | `KEEP_ROOT_REQUIRED`; caminho determina coleta e isolamento |
-| `requirements-beta.txt` | Perfil runtime Beta que compõe base/OCR e extras empacotados | Instalação limpa e validação de runtime | CI, docs de instalação, checks de perfil, pip includes relativos | Nome consumido por CI/docs e includes relativos | Raiz | `KEEP_ROOT_REQUIRED`; mover exige reescrever consumidores e validar resolução pip |
-| `requirements-dev.txt` | Dependências de teste, não runtime distribuído | Pytest e testes ASGI | CI e docs de teste/instalação | Nome e caminho diretamente invocados | Raiz | `KEEP_ROOT_REQUIRED`; separado do runtime por contrato |
-| `requirements-gemini-vps.txt` | Dependências do serviço remoto Gemini/VPS | Deploy/worker remoto | Procuras locais não encontraram referência literal no checkout; provável consumo externo precisa de verificação no deploy | Caminho de instalação operacional não pode ser inspecionado integralmente daqui | Raiz | `DEFER_HIGH_RISK`; conservar até confirmar scripts/imagem/host de deploy, não presumir órfão |
-| `requirements-optional.txt` | Dependências opcionais de transporte/PSD | Instalações seletivas e módulos lazy | Docs de desenvolvimento/instalação e guias de runtime | Nome referenciado por documentação | Raiz | `KEEP_ROOT_REQUIRED`; perfil separado por design |
-| `requirements-paddle.txt` | OCR Paddle legacy opcional, isolado por conflito OpenCV | Ambiente de pesquisa/compatibilidade | Docs e validação de perfil | Nome de instalação documentado | Raiz | `KEEP_ROOT_REQUIRED`; risco alto de conflitar distribuição OpenCV se agregado |
-| `requirements-rapidocr.txt` | OCR primário RapidOCR/ONNX | Runtime Beta | CI, runtime profile, instalação, README e testes | Include relativo de requirements-beta e caminho documentado | Raiz | `KEEP_ROOT_REQUIRED`; mover altera cadeia de inclusão e CI |
-| `requirements-ui.txt` | Pin de NiceGUI espelhado | Instalação/UI | README, docs e verificadores de dependência | Nome documentado e pin alinhado ao base | Raiz | `KEEP_ROOT_REQUIRED`; monitorado por testes de conflito de pin |
+| `requirements/requirements-beta.txt` | Perfil runtime Beta que compõe base/OCR e extras empacotados | Instalação limpa e validação de runtime | CI, docs de instalação, checks de perfil, pip includes relativos | Nome consumido por CI/docs e includes relativos | Raiz | `KEEP_ROOT_REQUIRED`; mover exige reescrever consumidores e validar resolução pip |
+| `requirements/requirements-dev.txt` | Dependências de teste, não runtime distribuído | Pytest e testes ASGI | CI e docs de teste/instalação | Nome e caminho diretamente invocados | Raiz | `KEEP_ROOT_REQUIRED`; separado do runtime por contrato |
+| `requirements/requirements-gemini-vps.txt` | Dependências do serviço remoto Gemini/VPS | Deploy/worker remoto | Procuras locais não encontraram referência literal no checkout; provável consumo externo precisa de verificação no deploy | Caminho de instalação operacional não pode ser inspecionado integralmente daqui | Raiz | `DEFER_HIGH_RISK`; conservar até confirmar scripts/imagem/host de deploy, não presumir órfão |
+| `requirements/requirements-optional.txt` | Dependências opcionais de transporte/PSD | Instalações seletivas e módulos lazy | Docs de desenvolvimento/instalação e guias de runtime | Nome referenciado por documentação | Raiz | `KEEP_ROOT_REQUIRED`; perfil separado por design |
+| `requirements/requirements-paddle.txt` | OCR Paddle legacy opcional, isolado por conflito OpenCV | Ambiente de pesquisa/compatibilidade | Docs e validação de perfil | Nome de instalação documentado | Raiz | `KEEP_ROOT_REQUIRED`; risco alto de conflitar distribuição OpenCV se agregado |
+| `requirements/requirements-rapidocr.txt` | OCR primário RapidOCR/ONNX | Runtime Beta | CI, runtime profile, instalação, README e testes | Include relativo de requirements-beta e caminho documentado | Raiz | `KEEP_ROOT_REQUIRED`; mover altera cadeia de inclusão e CI |
+| `requirements/requirements-ui.txt` | Pin de NiceGUI espelhado | Instalação/UI | README, docs e verificadores de dependência | Nome documentado e pin alinhado ao base | Raiz | `KEEP_ROOT_REQUIRED`; monitorado por testes de conflito de pin |
 | `requirements.txt` | Dependências base de produto/imagem/UI | Runtime Python | Beta compõe com `-r`; CI, Docker/deploy, docs e scripts | Manifest padrão de pip e include relativo | Raiz | `KEEP_ROOT_REQUIRED`; movimentação de alto risco e sem benefício funcional |
 | `run_local_folder.py` | Shim de entrada local-folder | Worker, CLI e testes | Comandos persistidos e testes subprocess | Caminho serializado/documentado | Raiz | `KEEP_ROOT_COMPATIBILITY`; mover quebra execução de comandos persistidos |
 | `run_webtoon.py` | Shim de CLI principal | Operador, worker e testes | CLI, subprocessos, CI compileall, docs | `python run_webtoon.py` é API pública de fato | Raiz | `KEEP_ROOT_COMPATIBILITY`; implementador em `yomu.commands.run_webtoon` |
