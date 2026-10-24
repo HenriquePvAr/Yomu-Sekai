@@ -56,7 +56,14 @@ def test_unrenderable_target_still_produces_clean_artifact_without_typography():
         mock.patch.object(
             ob,
             "_uncovered_source_text_evidence",
-            return_value={"measured": True, "source_text_coverage": 0.0},
+            return_value={
+                "measured": True, "source_text_pixels": 100,
+                "source_owned_geometry_coverage": 1.0,
+                "source_text_coverage": 1.0,
+                "largest_uncovered_source_component": 0,
+                "largest_unmasked_source_component": 0,
+                "unmeasured_source_line_ids": [],
+            },
         ),
         mock.patch.object(ob, "_draw_group_translation") as draw,
     ):

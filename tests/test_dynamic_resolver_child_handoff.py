@@ -44,10 +44,12 @@ def test_child_protocol_publishes_atomic_result_hash_and_progress(tmp_path):
 
 
 def test_child_progress_prevents_stall_termination(tmp_path):
-    body = "    for count in range(8):\n        progress('materializing', controls_found=8, materialized_count=count)\n        time.sleep(0.04)\n    return {'ok': True}"
-    outcome, _, status, _, elapsed = _launch(tmp_path, body, stall_timeout=0.15)
+    # Keep the process alive longer than the watchdog while leaving wide margin
+    # for the supervisor's 50 ms polling cadence and loaded CI scheduling.
+    body = "    for count in range(45):\n        progress('materializing', controls_found=45, materialized_count=count)\n        time.sleep(0.04)\n    return {'ok': True}"
+    outcome, _, status, _, elapsed = _launch(tmp_path, body, stall_timeout=1.5)
     assert not outcome["terminated"] and outcome["returncode"] == 0
-    assert elapsed > 0.2
+    assert elapsed > 1.5
     assert json.loads(status.read_text("utf-8"))["state"] == "pass"
 
 

@@ -29,6 +29,9 @@ import numpy as np
 from PIL import Image
 
 from yomu.export.psd_tools_compat import pixel_layer_from_pil
+from yomu.export.editable_psd_writer import EditableTextRegion, _build_tysh
+from psd_tools.constants import Tag
+from psd_tools.psd.tagged_blocks import TaggedBlock
 
 # Any channel delta above this (out of 255) counts as "the translation drew here". Small,
 # to tolerate RLE/anti-alias noise without swallowing faint glyph edges.
@@ -189,8 +192,20 @@ def write_professional_page_psd(
             name = f"Text/Region {layer_number:03d}"
             x, y, _, _ = box
             region_layer = pixel_layer_from_pil(layer_img, psd, name, top=y, left=x)
+            # Keep the bounded raster appearance for memory-safe visual fidelity while
+            # carrying Photoshop's native TypeTool descriptor and editable text payload.
+            type_region = EditableTextRegion(
+                region_id=str(region.get("region_id") or name),
+                semantic_type=str(region.get("region_type") or "text"),
+                text=str(region.get("target") or ""), bbox=box,
+                source_text=str(region.get("source_text") or ""),
+                translation_status="translated",
+            )
+            region_layer._record.tagged_blocks[Tag.TYPE_TOOL_OBJECT_SETTING] = TaggedBlock(
+                key=Tag.TYPE_TOOL_OBJECT_SETTING, data=_build_tysh(type_region))
             region_layer.visible = True
             add(region_layer, name, "translated_region",
+                type="type",
                 region_id=str(region.get("region_id") or ""), page_index=page_index,
                 bbox=list(box), manual=bool(region.get("manual")),
                 region_type=str(region.get("region_type") or ""),
@@ -224,9 +239,9 @@ def write_professional_page_psd(
         "layers": layers_manifest,
         "regions": [_region_metadata(r, page_index) for r in ordered],
         "region_layer_count": layer_number,
-        "editable_text_supported": False,
+        "editable_text_supported": mode == "on",
         "typesetting_mode": mode,
-        "psd_text_mode": "RASTER_PER_REGION",
+        "psd_text_mode": "NATIVE_TYPE_PER_REGION" if mode == "on" else "NONE",
         "translated_preview_included": include_preview,
         "translated_region_layers_included": mode == "on",
         "cleaned_included": True,
@@ -245,7 +260,7 @@ def _save_without_forced_composite(psd, dest_path: Path, merged_bgr: np.ndarray)
 
     This uses psd-tools record internals (``_update_record`` / ``_record.image_data`` /
     ``_updated_layers``), verified against the pinned ``psd-tools==1.10.9`` in
-    requirements-beta.txt. It is guarded: if those attributes are ever absent (a version
+    requirements/requirements-beta.txt. It is guarded: if those attributes are ever absent (a version
     change), it falls back to the library's own ``save`` with no loss of correctness.
     """
     try:
@@ -282,8 +297,10 @@ def _validate_layered_psd(path: Path, width: int, height: int, expected_names: l
     names = [layer.name for layer in reopened]
     if names != expected_names:
         raise ProfessionalPsdError("psd_layer_structure_invalid")
-    if not all(layer.kind == "pixel" for layer in reopened):
-        raise ProfessionalPsdError("psd_non_pixel_layer")
+    for layer in reopened:
+        expected = "type" if layer.name.startswith("Text/Region") else "pixel"
+        if layer.kind != expected:
+            raise ProfessionalPsdError("psd_layer_kind_invalid")
 
 
 def export_professional_psd(
@@ -323,8 +340,9 @@ def export_professional_psd(
             raise ProfessionalPsdError("no_final_pages")
         mode = str(typesetting_mode or "on").casefold()
         (temp / "psd_manifest.json").write_text(
-            json.dumps({"chapter": safe_name, "editable_text_supported": False,
-                        "typesetting_mode": mode, "psd_text_mode": "RASTER_PER_REGION",
+            json.dumps({"chapter": safe_name, "editable_text_supported": mode == "on",
+                        "typesetting_mode": mode,
+                        "psd_text_mode": "NATIVE_TYPE_PER_REGION" if mode == "on" else "NONE",
                         "translated_region_layers_included": mode == "on",
                         "translated_preview_included": mode == "on",
                         "cleaned_included": True, "original_included": True,

@@ -461,6 +461,13 @@ def quality_requires_review(
     )["severity"] == "REVIEW"
 
 
+_SOURCE_RESIDUAL_REASONS = frozenset({
+    "source_language_residual",
+    "physical_source_residual",
+    "translation_source_language_residual",
+})
+
+
 def classify_quality_validation(
     quality_validation: dict[str, Any] | None = None,
     *,
@@ -598,8 +605,13 @@ def classify_quality_validation(
         reviewable.append("legacy_quality_gate_false")
 
     if reviewable:
+        # Source-language text left on the page is a defect in the output, not an
+        # optional polish pass: it is never reported as a success.
+        residual = bool(set(reviewable) & _SOURCE_RESIDUAL_REASONS)
         return {
-            "severity": "REVIEW", "outcome": "success_review_recommended",
+            "severity": "REVIEW",
+            "outcome": "review_required_source_residual" if residual else "success_review_recommended",
+            "review_mandatory": residual,
             "reason_codes": sorted(set(reviewable)),
             "review_required_page_ids": reviewable_ocr_page_ids,
         }

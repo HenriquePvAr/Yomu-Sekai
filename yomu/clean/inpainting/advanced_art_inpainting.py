@@ -268,7 +268,9 @@ def _context_crop(mask: np.ndarray, image_shape) -> tuple[int, int, int, int, in
         raise ValueError("empty_mask")
     x0, y0, x1, y1 = int(xs.min()), int(ys.min()), int(xs.max()) + 1, int(ys.max()) + 1
     span = max(x1 - x0, y1 - y0)
-    margin = max(32, int(span * 0.45))
+    # Capped: past ~256 px of context the result barely changes (mean 0.7-1.2
+    # levels inside large caption masks) while CPU time grows with the crop.
+    margin = min(256, max(32, int(span * 0.45)))
     height, width = image_shape[:2]
     x0 = max(0, x0 - margin)
     y0 = max(0, y0 - margin)

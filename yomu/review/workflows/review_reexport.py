@@ -144,6 +144,13 @@ def validate_review_snapshot(snapshot: dict[str, Any]) -> list[dict[str, Any]]:
     return blockers
 
 
+def _snapshot_review_pending(control: dict[str, Any]) -> bool:
+    return str(control.get("review_status") or "pending").casefold() not in {
+        "approved", "reviewed", "human_translation_approved",
+        "resolved", "edited", "preserved_original",
+    }
+
+
 def _apply_snapshot(page: dict[str, Any], page_index: int, snapshot: dict[str, Any]) -> dict[str, Any]:
     result = copy.deepcopy(page)
     debug = result.setdefault("debug_data", {})
@@ -159,14 +166,20 @@ def _apply_snapshot(page: dict[str, Any], page_index: int, snapshot: dict[str, A
         if not control:
             continue
         present.add(rid)
+        review_pending = _snapshot_review_pending(control)
         item["text"] = control["effective_source_text"]
         item["clean_text"] = control["effective_source_text"]
         item["repaired_text"] = control["effective_source_text"]
         item["translation"] = control["effective_target_text"]
         item["translation_candidate"] = control["effective_target_text"]
         item["translation_valid"] = True
-        item["translation_final_state"] = "translated" if control["effective_target_text"] else ""
-        item["translation_final_reason"] = "review_snapshot"
+        item["translation_final_state"] = (
+            "manual_review" if review_pending else "translated"
+        ) if control["effective_target_text"] else ""
+        if not item.get("translation_final_reason"):
+            item["translation_final_reason"] = (
+                "review_snapshot_pending" if review_pending else "review_snapshot"
+            )
         item["classification"] = control["effective_region_type"]
         item["review_translate_override"] = control["effective_translate_mode"]
         box = control.get("effective_bounding_box")
@@ -178,9 +191,9 @@ def _apply_snapshot(page: dict[str, Any], page_index: int, snapshot: dict[str, A
         if control["effective_translate_mode"] == "translate":
             item["sent_to_translation"] = True
             item["sent_to_nvidia"] = True
-            item["preserved_original"] = False
             item["ignored"] = False
-            item["manual_review_required"] = False
+            if review_pending:
+                item["manual_review_required"] = True
     for rid, control in controls.items():
         if not control.get("is_manual_region") or rid in present:
             continue
@@ -196,11 +209,21 @@ def _apply_snapshot(page: dict[str, Any], page_index: int, snapshot: dict[str, A
                       "bounding_box": [x, y, w, h], "draw_box": [x, y, w, h],
                       "translation_box": [x, y, x + w, y + h], "confidence": 1.0,
                       "translation_valid": True,
-                      "translation_final_state": "translated" if control["effective_target_text"] else "",
+                      "translation_final_state": (
+                          "manual_review" if _snapshot_review_pending(control) else "translated"
+                      ) if control["effective_target_text"] else "",
                       "sent_to_translation": control["effective_translate_mode"] == "translate",
                       "sent_to_nvidia": control["effective_translate_mode"] == "translate",
                       "review_translate_override": control["effective_translate_mode"],
-                      "manual_review_required": False, "preserved_original": False})
+                      "manual_review_required": (
+                          bool(control["effective_target_text"])
+                          and _snapshot_review_pending(control)
+                      ),
+                      "translation_final_reason": (
+                          "review_snapshot_pending"
+                          if _snapshot_review_pending(control) else "review_snapshot"
+                      ) if control["effective_target_text"] else "",
+                      "preserved_original": False})
     return result
 
 

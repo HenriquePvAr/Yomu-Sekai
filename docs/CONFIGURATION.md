@@ -44,7 +44,7 @@ Não versione o `.env` e nunca use uma chave real em exemplos, issues ou logs.
 | `NVIDIA_TRANSLATION_BATCH_SIZE` | `20` | Não | Quantidade máxima de grupos por lote |
 | `NVIDIA_MAX_REQUESTS_PER_MINUTE` | `20` | Não | Limite global aplicado pelo cliente |
 | `TRANSLATION_MODE` | `nvidia` | Não | Provedor: `nvidia`, `google`, `huggingface`, `local` ou `nllb` |
-| `TRANSLATE_SFX` | `False` | Não | Quando falso, preserva grupos classificados como SFX |
+| `TRANSLATE_SFX` | `True` | Não | Traduz SFX (glossário pt-BR de onomatopeias, depois o provider); `False` preserva os grupos classificados como SFX |
 
 NVIDIA é o provedor padrão e o único exposto como fluxo principal pela UI. Os modos Google e NLLB permanecem como compatibilidade; exigem dependências ou modelos próprios e não têm o mesmo contrato de validação end-to-end auditado.
 
@@ -270,7 +270,7 @@ NVIDIA_TRANSLATION_MODEL=nvidia/nemotron-3-super-120b-a12b
 
 OCR_QUALITY_CONTROL=True
 OCR_REGION_SELECTIVE_FALLBACK=True
-TRANSLATE_SFX=False
+TRANSLATE_SFX=True
 
 ENABLE_OCR_CACHE=True
 ENABLE_TRANSLATION_CACHE=True

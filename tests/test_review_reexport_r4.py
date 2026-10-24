@@ -64,7 +64,29 @@ def test_target_bbox_and_type_overrides_reach_render_input():
     assert item["classification"] == "dialogue"
     assert item["bounding_box"] == [10, 20, 30, 40]
     assert item["sent_to_translation"] is True
+    assert item["translation_final_state"] == "manual_review"
+    assert item["manual_review_required"] is True
     assert source_item["translation"] == "OLÁ"
+
+
+def test_pending_snapshot_preserves_existing_manual_review_reason():
+    snap = _snapshot({"page_index": 1, "region_id": "REGION_1", "active": True,
+        "effective_source_text": "I AM HERE", "effective_target_text": "EU ESTOU AQUI",
+        "effective_translate_mode": "translate", "translate_effective": "translate",
+        "effective_region_type": "dialogue", "effective_bounding_box": [10, 20, 30, 40],
+        "review_status": "pending"})
+    page = {"debug_data": {"items": [{
+        "region_id": "REGION_1", "text": "I AM HERE", "translation": "EU ESTOU AQUI",
+        "manual_review_required": True,
+        "translation_final_state": "manual_review",
+        "translation_final_reason": "source_removal_unverified",
+    }]}}
+
+    item = _apply_snapshot(page, 1, snap)["debug_data"]["items"][0]
+
+    assert item["manual_review_required"] is True
+    assert item["translation_final_state"] == "manual_review"
+    assert item["translation_final_reason"] == "source_removal_unverified"
 
 
 def test_manual_region_is_added_and_inactive_region_is_omitted():
@@ -77,6 +99,8 @@ def test_manual_region_is_added_and_inactive_region_is_omitted():
     assert len(result["debug_data"]["items"]) == 1
     assert result["debug_data"]["items"][0]["region_id"] == "manual:abc"
     assert result["debug_data"]["items"][0]["translation"] == "TRÊS DIAS DEPOIS"
+    assert result["debug_data"]["items"][0]["translation_final_state"] == "manual_review"
+    assert result["debug_data"]["items"][0]["manual_review_required"] is True
     inactive = {**active, "active": False}
     assert _apply_snapshot(page, 1, _snapshot(inactive))["debug_data"]["items"] == []
 

@@ -6,6 +6,7 @@ import re
 
 
 class RegionDisposition(StrEnum):
+    PENDING_LOCAL = "PENDING_LOCAL"
     LOCAL_SAFE = "LOCAL_SAFE"
     LOCAL_HARD = "LOCAL_HARD"
     PRESERVE_SFX = "PRESERVE_SFX"
@@ -63,7 +64,7 @@ def serialize_group_disposition(group) -> dict:
         "remote_attempted": bool(getattr(group, "clean_remote_attempted", False)),
         "remote_result": str(getattr(group, "clean_remote_result", "") or ""),
         "review_required": disposition in {
-            RegionDisposition.REVIEW_UNOWNED, RegionDisposition.REVIEW_OCR,
+            RegionDisposition.PENDING_LOCAL, RegionDisposition.REVIEW_UNOWNED, RegionDisposition.REVIEW_OCR,
             RegionDisposition.REVIEW_SEMANTIC, RegionDisposition.REMOTE_REJECTED,
         },
     }

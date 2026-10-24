@@ -37,6 +37,7 @@ datas = [
     (str(ROOT / "ui"), "ui"),
     (str(ROOT / "static"), "static"),
     (str(ROOT / "assets" / "branding"), "assets/branding"),
+    (str(ROOT / "assets" / "lexicon"), "assets/lexicon"),
     (str(ROOT / "config" / "public-runtime.json"), "config"),
     (str(ROOT / "THIRD_PARTY_NOTICES.txt"), "."),
     (str(RAPIDOCR_ROOT / "models"), "rapidocr_onnxruntime/models"),

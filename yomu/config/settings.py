@@ -144,7 +144,9 @@ FAST_OCR_TOTAL_FALLBACK_BUDGET_SECONDS = min(
     3600.0,
     max(0.0, _env_float("FAST_OCR_TOTAL_FALLBACK_BUDGET_SECONDS", 60.0)),
 )
-TRANSLATE_SFX = _env_bool("TRANSLATE_SFX", False)
+# Sound effects are translated (pt-BR onomatopoeia from assets/lexicon/sfx_en_pt.json,
+# the provider for the rest); TRANSLATE_SFX=0 keeps them in the source language.
+TRANSLATE_SFX = _env_bool("TRANSLATE_SFX", True)
 PRIORITIZE_ENCLOSED_TEXT = _env_bool("PRIORITIZE_ENCLOSED_TEXT", True)
 
 
@@ -359,6 +361,15 @@ SMART_PDF_MAX_HEIGHT = max(
 # over speed whenever RapidOCR is selected from the CLI/env.
 OCR_QUALITY_CONTROL = _env_bool("OCR_QUALITY_CONTROL", True)
 OCR_REGION_SELECTIVE_FALLBACK = _env_bool("OCR_REGION_SELECTIVE_FALLBACK", True)
+# After the selective re-OCR, paint every line already read with its surrounding colour
+# and run the detector once more: it finds lines it missed only because of clutter.
+OCR_MASKED_REDISCOVERY = _env_bool("OCR_MASKED_REDISCOVERY", True)
+# A detector line crossed by a balloon border (two balloons side by side read as one
+# row) is split at the border and each side re-read.
+OCR_SPLIT_AT_CROSSING_BORDERS = _env_bool("OCR_SPLIT_AT_CROSSING_BORDERS", True)
+# A glyph the detector clipped at a line's start/end ("I" of "I DO INDEED!") extends the
+# line when it has the line's glyph height and is re-read confidently.
+OCR_EXTEND_CLIPPED_EDGE_GLYPHS = _env_bool("OCR_EXTEND_CLIPPED_EDGE_GLYPHS", True)
 OCR_GROUP_FALLBACK_MAX_GROUPS = max(0, _env_int("OCR_GROUP_FALLBACK_MAX_GROUPS", 8))
 OCR_GROUP_FALLBACK_PADDING = max(8, _env_int("OCR_GROUP_FALLBACK_PADDING", 34))
 OCR_GROUP_MIN_QUALITY_SCORE = _env_float("OCR_GROUP_MIN_QUALITY_SCORE", 0.62)
@@ -402,6 +413,12 @@ MAX_TEXT_OVERFLOW_RATIO = _env_float("MAX_TEXT_OVERFLOW_RATIO", 0.01)
 MAX_EFFECT_OVERFLOW_RATIO = _env_float("MAX_EFFECT_OVERFLOW_RATIO", 0.20)
 AUTO_LINE_WRAP = _env_bool("AUTO_LINE_WRAP", True)
 AUTO_FONT_SHRINK = _env_bool("AUTO_FONT_SHRINK", True)
+# Inside a closed balloon, wrap the translation to the balloon's shape (wide in
+# the middle, narrow at top/bottom) when that lets a larger font fit.
+RENDER_FIT_BALLOON_SHAPE = _env_bool("RENDER_FIT_BALLOON_SHAPE", True)
+# Lean the drawn translation like the source lettering (measured slant) when the
+# chosen font is upright.
+RENDER_MATCH_SOURCE_SLANT = _env_bool("RENDER_MATCH_SOURCE_SLANT", True)
 
 VISUAL_DIFF_VALIDATION = _env_bool("VISUAL_DIFF_VALIDATION", True)
 VISUAL_QA_STRICT = _env_bool("VISUAL_QA_STRICT", True)
@@ -463,6 +480,38 @@ REJECT_DARK_BLOTCH_ON_TEXTURED_ART = _env_bool(
 MAX_FLAT_FILL_RING_SPREAD = _env_float("MAX_FLAT_FILL_RING_SPREAD", 30.0)
 MIN_FLAT_FILL_RING_PIXELS = max(1, _env_int("MIN_FLAT_FILL_RING_PIXELS", 64))
 FLAT_FILL_RING_RADIUS = max(1, _env_int("FLAT_FILL_RING_RADIUS", 12))
+# Spatial gate for constant fills. A ring-median fill is exact only on a proven
+# uniform backdrop; elsewhere it paints letter silhouettes. Enabled: uniform keeps the
+# constant fill, smooth non-uniform uses an accepted harmonic candidate, and anything
+# else stays in review. Set CLEAN_HARMONIC_FILL=0 to restore the previous behaviour.
+CLEAN_HARMONIC_FILL = _env_bool("CLEAN_HARMONIC_FILL", True)
+# Add measured anti-alias/outline fringe (partial-ink pixels connected to the glyph
+# mask) to the cleanup mask instead of leaving it as an outline ghost.
+CLEAN_FRINGE_EVIDENCE = _env_bool("CLEAN_FRINGE_EVIDENCE", True)
+# A straight art line crossing the lettering (building edge, panel border) and seen on
+# both sides of it is redrawn through the cleaned area instead of refusing the region.
+CLEAN_STRUCTURE_CONTINUATION = _env_bool("CLEAN_STRUCTURE_CONTINUATION", True)
+# Letters fused with same-colour art lines form one sparse component; keep the
+# glyph-width strokes inside it instead of dropping the whole word.
+CLEAN_SPLIT_MERGED_GLYPHS = _env_bool("CLEAN_SPLIT_MERGED_GLYPHS", True)
+# On textured backgrounds reconstruct with the verified local LaMa model (the
+# ADVANCED_ART_INPAINT_* asset) instead of Telea, which leaves smooth patches.
+CLEAN_LEARNED_TEXTURE_FILL = _env_bool("CLEAN_LEARNED_TEXTURE_FILL", True)
+# A pixel residual refusal is confirmed by re-reading the cleaned crop with the OCR;
+# it is lifted only when none of the group's source words is legible any more.
+CLEAN_RESIDUAL_OCR_CHECK = _env_bool("CLEAN_RESIDUAL_OCR_CHECK", True)
+# Text inside a light balloon/box: the cleanup mask never leaves the enclosure interior.
+CLEAN_CLIP_TO_ENCLOSURE = _env_bool("CLEAN_CLIP_TO_ENCLOSURE", True)
+# A measured periodic halftone around the lettering routes the region to the learned
+# texture fill even when its tone statistics read as a solid light background.
+CLEAN_SCREENTONE_DETECTION = _env_bool("CLEAN_SCREENTONE_DETECTION", True)
+# Story text refused by every ordinary strategy for an art reason is rebuilt by the
+# learned model (kept only when the source is verifiably gone, always for review)
+# instead of staying in English on the page.
+CLEAN_LEARNED_LAST_RESORT = _env_bool("CLEAN_LEARNED_LAST_RESORT", True)
+# When the learned model is available, build both the classic and the learned
+# reconstruction and keep the one that agrees better with the surrounding art.
+CLEAN_COMPARE_FILLS = _env_bool("CLEAN_COMPARE_FILLS", True)
 REJECT_FLAT_PATCH_ON_TEXTURED_ART = _env_bool(
     "REJECT_FLAT_PATCH_ON_TEXTURED_ART",
     True,

@@ -40,3 +40,6 @@ https://github.com/scikit-image/scikit-image/blob/main/LICENSE.txt
 
 aggdraw 1.4.1 — MIT-style
 https://github.com/euske/aggdraw/blob/master/LICENSE
+
+english-words (dwyl), words_alpha.txt — Unlicense (public domain)
+https://github.com/dwyl/english-words/blob/master/LICENSE.md

@@ -67,7 +67,9 @@ def test_layer_order_count_and_names(tmp_path):
     names = [layer.name for layer in psd]
     assert names == ["Original", "Cleaned", "Text/Region 001", "Text/Region 002",
                      "Text/Region 003", "Translated Preview"]
-    assert all(layer.kind == "pixel" for layer in psd)
+    assert [layer.kind for layer in psd] == ["pixel", "pixel", "type", "type", "type", "pixel"]
+    type_layers = [layer for layer in psd if layer.kind == "type"]
+    assert [layer.text for layer in type_layers] == ["AAA", "BBB", "CCC"]
     assert tuple(psd.size) == (900, 1200)
 
 
@@ -176,11 +178,11 @@ def test_psd_tools_parse(tmp_path):
     assert psd.composite() is not None
 
 
-def test_manifest_declares_raster_text_mode(tmp_path):
+def test_manifest_declares_native_type_layers(tmp_path):
     out, _psd_file, _ = _export(tmp_path)
     manifest = __import__("json").loads((out / "psd_manifest.json").read_text(encoding="utf-8"))
-    assert manifest["editable_text_supported"] is False
-    assert manifest["psd_text_mode"] == "RASTER_PER_REGION"
+    assert manifest["editable_text_supported"] is True
+    assert manifest["psd_text_mode"] == "NATIVE_TYPE_PER_REGION"
     assert manifest["typesetting_mode"] == "on"
 
 

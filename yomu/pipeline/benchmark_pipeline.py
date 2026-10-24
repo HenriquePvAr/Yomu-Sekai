@@ -512,6 +512,7 @@ def _make_clean_certificate(state: dict, job_id: str) -> dict:
     outside_ok = isinstance(outside, int) and not isinstance(outside, bool) and outside == 0
     unresolved = any(
         item["review_required"] or item["disposition"] in {
+            "PENDING_LOCAL",
             "LOCAL_HARD", "REVIEW_UNOWNED", "REVIEW_OCR", "REVIEW_SEMANTIC",
             "REVIEW_REQUIRED", "REMOTE_REJECTED",
         } for item in targets
@@ -676,7 +677,7 @@ def _complete_page_clean(state, cleaned_capture, debug_data, *, job_id: str = ""
     else:
         unresolved = [group for group in state.get("groups", []) if str(
             getattr(group, "clean_disposition", "") or "") in {
-                "LOCAL_HARD", "REVIEW_UNOWNED", "REVIEW_OCR", "REVIEW_SEMANTIC", "REMOTE_REJECTED",
+                "PENDING_LOCAL", "LOCAL_HARD", "REVIEW_UNOWNED", "REVIEW_OCR", "REVIEW_SEMANTIC", "REMOTE_REJECTED",
             }]
         if remote_strategy is None and unresolved:
             for group in unresolved:
@@ -692,7 +693,9 @@ def _complete_page_clean(state, cleaned_capture, debug_data, *, job_id: str = ""
             strategy = {**remote_strategy, "image": remote_strategy.get("image", local_image)}
         else:
             strategy = run_clean_strategy(
-                CleanRequest(original=state["original_bgr"], job_id=job_id, page_id=str(state["index"])),
+                CleanRequest(original=state["original_bgr"],
+                             authorized_mask=cleaned_capture.get("authorized_cleanup_mask"),
+                             job_id=job_id, page_id=str(state["index"])),
                 {"status": LOCAL_SAFE, "image": local_image},
             )
     if state.get("clean_page_review"):
@@ -720,7 +723,7 @@ def _complete_page_clean(state, cleaned_capture, debug_data, *, job_id: str = ""
         strategy.get("status") == "COMPLETED" and clean_persisted and not state.get("clean_page_review")
         and not any(getattr(group, "manual_review_required", False)
                     or str(getattr(group, "clean_disposition", "")) in {
-                        "LOCAL_HARD", "REVIEW_UNOWNED", "REVIEW_OCR", "REVIEW_SEMANTIC", "REMOTE_REJECTED",
+                        "PENDING_LOCAL", "LOCAL_HARD", "REVIEW_UNOWNED", "REVIEW_OCR", "REVIEW_SEMANTIC", "REMOTE_REJECTED",
                     } for group in state.get("groups", []))
     )
     state["clean_result"] = {key: value for key, value in strategy.items()
@@ -737,6 +740,8 @@ def _complete_page_clean(state, cleaned_capture, debug_data, *, job_id: str = ""
         "clean_verified": state["clean_verified"],
         "clean_certificate_schema": state["clean_certificate"]["schema_version"],
         "clean_certificate_status": state["clean_certificate"]["status"],
+        "clean_execution_status": "EXECUTION_COMPLETED" if clean_persisted else "EXECUTION_FAILED",
+        "clean_quality_status": "CLEAN_QUALITY_VERIFIED" if state["clean_verified"] else "REVIEW_REQUIRED",
     })
     _sync_clean_decisions_to_debug_data(debug_data, state.get("groups", []))
     return strategy
@@ -1173,7 +1178,19 @@ def process_post_translation_page(state, *, diagnostic_folder=None, targeted_reg
         layout_retry_attempt = 0
         cleaned_capture: dict = {}
         _want_typeset = _plan_pipeline_flags()["want_typeset"]
+        # The pre-settlement layout preflight already rendered this page; with the
+        # same translations its page and CLEAN capture are the final ones (its time
+        # is counted under the translation stage).
+        preflight = local.pop("_preflight_render", None)
+        reusable = bool(
+            preflight is not None and debug_folder is None and _want_typeset
+            and preflight["signature"] == _translation_render_signature(local["groups"])
+        )
         while True:
+            if reusable:
+                final, debug_data = preflight["result"]
+                cleaned_capture.update(preflight["capture"])
+                break
             final, debug_data = render_analyzed_image(
                 local["original_bgr"], local.get("raw_lines", []), local["candidates"],
                 local["groups"], font_path=config.FONT_PATH, debug_folder=debug_folder,
@@ -3230,14 +3247,27 @@ def run_benchmark(args):
     else:
         if cancel_event.is_set():
             raise PipelineCancelled("user_cancelled")
-        translations = translator.translate_many(
-            [group.text for group in translation_targets],
+        # Sound effects and *action* labels get their pt-BR onomatopoeia from the
+        # glossary. A sound it does not know keeps its source text (an echo, so the
+        # original lettering stays): a provider read "PRESS" as a noun
+        # ("IMPRENSA") and a misread "BOOM" ("hoog") as Dutch ("alto").
+        from yomu.translation.sfx_glossary import translate_sfx
+        local = [(translate_sfx(group.text) or group.text) if group.classification == "sfx" else None
+                 for group in translation_targets]
+        remote_index = [i for i, value in enumerate(local) if value is None]
+        remote = translator.translate_many(
+            [translation_targets[i].text for i in remote_index],
             force=args.force,
-        )
+        ) if remote_index else []
+        translations = list(local)
+        for i, value in zip(remote_index, remote or []):
+            translations[i] = value
+        translator_stats_sfx_glossary = len(translation_targets) - len(remote_index)
     stage_seconds["translation"] = time.perf_counter() - translation_started
     if translator is not None:
         translator_stats = getattr(translator, "stats", {})
     translator_stats["translation_candidates"] = len(translation_targets)
+    translator_stats["sfx_glossary_translations"] = int(locals().get("translator_stats_sfx_glossary", 0))
     translator_stats["translation_results_received"] = len(translations or [])
     translator_stats["translation_results_nonempty"] = sum(
         1 for item in (translations or []) if str(item or "").strip()
@@ -3478,7 +3508,20 @@ def run_benchmark(args):
                 )
             layout_retry_attempt = 0
             cleaned_capture: dict = {}
-            while True:
+            preflight = state.pop("_preflight_render", None)
+            reusable = bool(
+                preflight is not None
+                and page_debug_folder is None
+                and _pipeline_flags["want_typeset"]
+                and preflight["signature"] == _translation_render_signature(state["groups"])
+            )
+            if reusable:
+                # Same translations as the preflight render: its page and CLEAN
+                # capture are the final ones (its time is already counted under
+                # the translation stage, so render timings stay at zero).
+                final, debug_data = preflight["result"]
+                cleaned_capture.update(preflight["capture"])
+            while not reusable:
                 final, debug_data = render_analyzed_image(
                     state["original_bgr"],
                     state.get("raw_lines", []),
@@ -4588,6 +4631,16 @@ def _retry_layout_overflow_translations(
     return retried
 
 
+def _translation_render_signature(groups):
+    """What a page render depends on that translation retries can change."""
+    return tuple(
+        (id(group), str(getattr(group, "translation", "") or ""),
+         str(getattr(group, "translation_candidate", "") or ""),
+         bool(getattr(group, "translation_valid", False)))
+        for group in groups
+    )
+
+
 def _resolve_layout_overflow_before_settlement(
     page_states,
     translator,
@@ -4609,7 +4662,11 @@ def _resolve_layout_overflow_before_settlement(
             continue
         attempts = 0
         while attempts < int(config.TRANSLATION_MAX_RETRIES):
-            render_analyzed_image(
+            # The preflight is a full render; its result is kept so the final
+            # render of an unchanged page does not repeat the whole cleanup.
+            preflight_capture: dict = {}
+            preflight_timings: dict = {}
+            preflight_result = render_analyzed_image(
                 state["original_bgr"],
                 state.get("raw_lines", []),
                 state["candidates"],
@@ -4617,7 +4674,15 @@ def _resolve_layout_overflow_before_settlement(
                 font_path=config.FONT_PATH,
                 page_index=state["index"],
                 image_path=state["image_path"],
+                stage_timings=preflight_timings,
+                capture=preflight_capture,
             )
+            state["_preflight_render"] = {
+                "signature": _translation_render_signature(state["groups"]),
+                "result": preflight_result,
+                "capture": preflight_capture,
+                "timings": preflight_timings,
+            }
             overflow_groups = [
                 group
                 for group in state["groups"]
@@ -5183,7 +5248,7 @@ def _physical_residual_class(item):
     text = _item_source_text(item)
     if region_taxonomy.looks_like_watermark(text) or region_taxonomy.looks_like_url(text):
         return RESIDUAL_PROMO
-    if region_taxonomy.looks_like_credit(text):
+    if region_taxonomy.looks_like_strong_credit(text):
         return RESIDUAL_CREDIT_LOGO
     if _ordinary_story_residual_required(item):
         return RESIDUAL_ORDINARY_STORY

@@ -15,6 +15,9 @@ from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
 import yomu.config.settings as config
 import yomu.clean.inpainting.advanced_art_inpainting as advanced_art_inpainting
+from yomu.clean.ownership.glyph_art_boundary_review import (
+    detect_linear_boundary_conflict,
+)
 import yomu.review.region_taxonomy as region_taxonomy
 import yomu.clean.ownership.font_fidelity as font_fidelity
 import yomu.ocr.ocr_line_provenance as ocr_line_provenance
@@ -126,14 +129,17 @@ REVIEW_REQUIRED_ART_RECONSTRUCTION = "review_required_art_reconstruction"
 # physical residual ledger can tell "the artwork is imperfect" (no English left) from
 # "the English survived the cleanup" (a real residual) without matching strings.
 RESIDUAL_SOURCE_LETTERING_REASONS = frozenset({
+    "source_text_still_legible_after_cleanup",
     "residual_source_text_after_cleanup",
     "residual_source_lettering_after_cleanup",
 })
 ART_RECONSTRUCTION_REVIEW_REASONS = frozenset({
     "flat_reconstruction_patch_on_textured_background",
+    "lettering_contour_ghost",
     "visible_reconstruction_seam_at_mask_boundary",
     "large_white_patch_on_nonwhite_background",
     "dark_blotch_created_on_textured_art",
+    "textured_fill_level_mismatch",
     "broad_mask_rejected_on_nonuniform_background",
     "residual_source_text_after_cleanup",
     "residual_source_lettering_after_cleanup",
@@ -580,6 +586,7 @@ class TextGroup:
     clean_disposition_reason: str = ""
     clean_disposition_confidence: float = 0.0
     clean_local_attempted: bool = False
+    spatial_harmonic_gate_rejected: bool = False
     clean_remote_attempted: bool = False
     clean_remote_result: str = ""
     clean_remote_text_observations: list = field(default_factory=list)
@@ -1840,8 +1847,21 @@ def _echo_is_name_shaped(group):
         return True
     if group_has_name_only_shape(group):
         return True
+    # A sound effect the provider handed back unchanged is a sound it has no
+    # equivalent for: keeping the original lettering is the correct render.
+    if str(getattr(group, "classification", "") or "").lower() == "sfx":
+        return True
     tokens = _source_entity_tokens(getattr(group, "text", "") or "")
-    return _is_nonlexical_vocalization_token(set(tokens))
+    if _is_nonlexical_vocalization_token(set(tokens)):
+        return True
+    # No common English word of 3+ letters ("A-AH...", "RYU KANG-MIN?"): an
+    # interjection or a name, legitimately identical in Portuguese.
+    # Common vocabulary, not the full lexicon (which lists "kang", "min").
+    from yomu.ocr.ocr_engine import COMMON_ENGLISH_WORDS
+    words = re.findall(r"[A-Za-z]+", str(getattr(group, "text", "") or ""))
+    # Short only (<= 3 words): an echoed sentence is a translation that failed.
+    return bool(words) and len(words) <= 3 and not any(
+        len(word) >= 3 and word.lower() in COMMON_ENGLISH_WORDS for word in words)
 
 
 def _translation_echoes_source(group):
@@ -2048,6 +2068,149 @@ def _preserve_unrenderable_translation(group, reason):
     )
 
 
+# Refusals about the *art* (the mask itself was plausible): story text refused for
+# these reasons is rebuilt by the learned model instead of being left in English.
+_LAST_RESORT_ART_REASONS = frozenset({
+    "GLYPH_ART_BOUNDARY_UNCERTAIN",
+    "flat_reconstruction_patch_on_textured_background",
+    "visible_reconstruction_seam_at_mask_boundary",
+    "textured_fill_level_mismatch",
+    "dark_blotch_created_on_textured_art",
+    "large_white_patch_on_nonwhite_background",
+    "local_background_color_mismatch",
+    "spatial_gate_candidate_diagnostic_only",
+    "lettering_contour_ghost",
+})
+
+
+def _last_resort_allowed(group):
+    """Only prose earns the learned last resort; signs, credits and sounds do not.
+
+    The ordinary refusals also protect art lettering that slipped into a story
+    class (a shop sign "ASSISTANCE", a scanlator credit, a "*dong*"). Removing
+    those is worse than leaving them, so the region must read as a sentence.
+    """
+    text = str(getattr(group, "text", "") or "")
+    classification = str(getattr(group, "classification", "") or "").lower()
+    if classification == "sfx":
+        # Sound effects are only replaced when SFX translation is on, and only a
+        # sound with a known rendering (glossary or a real English word).
+        if not config.TRANSLATE_SFX:
+            return False
+        from yomu.translation.sfx_glossary import translate_sfx
+        words = re.findall(r"[A-Za-z]+", text)
+        return bool(words) and (translate_sfx(text) is not None
+                                or all(region_taxonomy.is_english_word(w) for w in words))
+    # "unknown" is the weak label of prose set on art without a balloon ("I WAS
+    # REINCARNATED AS A SWORD."); the story authority below still has to promote it.
+    if classification not in {"speech", "narration", "thought", "unknown"}:
+        return False
+    if region_taxonomy.looks_like_strong_credit(text) or region_taxonomy.looks_like_url(text):
+        return False
+    words = []
+    for token in region_taxonomy._words(text):
+        # OCR glues words ("IFIATLEAST ACCEPTHIS"); read them through the lexicon.
+        words.extend(region_taxonomy.segment_words(token) or [token])
+    real = [w for w in words if region_taxonomy.is_english_word(w)
+            or w.upper() in region_taxonomy._STORY_CLAUSE_MARKERS]
+    sentence = len(real) >= 2 and (
+        re.search(r"[.!?,…]", text) or any(w.upper() in region_taxonomy._STORY_CLAUSE_MARKERS for w in words))
+    return bool(_group_has_story_translation_authority(group) and sentence)
+
+
+def _line_box_mask(group, base_mask):
+    """The group's line boxes, padded for the outline (0.25 line height), plus ``base_mask``."""
+    lines = _cleanup_lines_for_group(group)
+    if not lines or base_mask is None:
+        return None
+    mask = (np.asarray(base_mask) > 0).astype(np.uint8) * 255
+    height, width = mask.shape
+    for line in lines:
+        x, y, w, h = (int(v) for v in line.box)
+        pad = max(3, int(round(0.25 * h)))
+        mask[max(0, y - pad):min(height, y + h + pad), max(0, x - pad):min(width, x + w + pad)] = 255
+    protect = getattr(group, "structure_protect_mask", None)
+    if isinstance(protect, np.ndarray) and protect.shape == mask.shape:
+        mask[protect > 0] = 0
+    return mask
+
+
+def _learned_last_resort_clean(current_bgr, original_bgr, group, cleanup_mask):
+    """Remove refused story text with the learned model rather than leave English.
+
+    Every ordinary strategy refused the region for an art reason. Leaving the
+    source on the page is the worst outcome for a reader, so the verified local
+    model rebuilds the masked art; the result is kept only when the source is
+    verifiably gone (pixel verifier, or the OCR can no longer read any source
+    word). It is marked for art review unless it clears the same reconstruction
+    gates as every other strategy.
+    """
+    attempt = {"strategy": "learned_last_resort", "art_fidelity_uncertain": True}  # until the gates clear it
+    if not (config.CLEAN_LEARNED_LAST_RESORT and config.ADVANCED_ART_INPAINTING):
+        attempt["reason"] = "learned_last_resort_disabled"
+        return {"cleaned": None, "attempt": attempt}
+    cleaned = _learned_inpaint(current_bgr, group, cleanup_mask)
+    if cleaned is None:  # unavailable model keeps the refusal
+        attempt["reason"] = "learned_last_resort_unavailable"
+        attempt["error"] = (getattr(group, "learned_texture_fill", None) or {}).get("reason")
+        return {"cleaned": None, "attempt": attempt}
+    removal = _uncovered_source_text_evidence(original_bgr, cleaned, group, cleanup_mask)
+    attempt["source_text_removal"] = removal
+    status = _source_removal_status(group, removal)
+    legibility = _legible_source_residual(cleaned, group)
+    attempt["residual_ocr_check"] = legibility
+    # Verified by pixels or not, a source word the OCR still reads keeps the refusal.
+    if legibility.get("status") == "legible" or (
+            status != SOURCE_REMOVAL_VERIFIED and legibility.get("status") != "not_legible"):
+        attempt["reason"] = "learned_last_resort_source_still_present"
+        return {"cleaned": None, "attempt": attempt}
+    # The same reconstruction gates every other strategy passes: a result that
+    # clears all of them (no patch, seam, blotch or lettering ghost, texture kept)
+    # is not flagged just for having come from the last resort.
+    gate_metrics = {}
+    failure = _reconstruction_gate_failure(
+        original_bgr, cleaned, group, cleanup_mask, getattr(group, "background_type", None),
+        "learned_last_resort", gate_metrics)
+    attempt["reconstruction_gate_failure"] = failure
+    attempt["art_fidelity_uncertain"] = bool(failure or gate_metrics.get("art_fidelity_uncertain"))
+    attempt["reason"] = ("learned_last_resort_accepted_for_review" if attempt["art_fidelity_uncertain"]
+                         else "learned_last_resort_accepted")
+    attempt["clean_validation_passed"] = True
+    return {"cleaned": cleaned, "attempt": attempt}
+
+
+def _render_on_clean_rescue(before_group, clean_before, clean_after, original_bgr, group, clean_mask, font_path):
+    """Draw the translation where the CLEAN pass removed the source: (page, allowed) or (None, None).
+
+    The cleaned pixels of this group (``clean_after`` differs from
+    ``clean_before`` inside ``clean_mask``) are moved onto the translated page,
+    the translation is drawn, and the result must pass the ordinary visual bounds
+    and leave no legible source word; otherwise the English page is kept.
+    """
+    mask = np.asarray(clean_mask) > 0
+    canvas = before_group.copy()
+    canvas[mask] = clean_after[mask]
+    candidate = str(group.translation_candidate or group.translation or "")
+    previous_translation, previous_valid = group.translation, group.translation_valid
+    group.translation = candidate
+    group.translation_valid = True
+    rendered = _draw_group_translation(canvas, group, font_path, strategy="primary", source_bgr=original_bgr)
+    if group.translation_valid is False:
+        group.translation, group.translation_valid = previous_translation, previous_valid
+        return None, None
+    allowed = _draw_allowed_group_mask(original_bgr.shape, group, cleanup_mask=clean_mask)
+    rendered, summary = _enforce_visual_bounds(before_group, rendered, allowed, group=group,
+                                               mask_metrics={"strategy": "clean_rescue"})
+    legibility = _legible_source_residual(rendered, group)
+    summary["residual_ocr_check"] = legibility
+    group.visual_attempts = list(getattr(group, "visual_attempts", []) or []) + [summary]
+    if not summary.get("visual_validation_passed") or legibility.get("status") == "legible":
+        group.translation, group.translation_valid = previous_translation, previous_valid
+        return None, None
+    group.visual_validation = summary
+    return rendered, allowed
+
+
 def _clean_source_for_clean_artifact(current_bgr, original_bgr, group):
     """Remove owned source glyphs for the CLEAN artifact without drawing a target.
 
@@ -2058,7 +2221,9 @@ def _clean_source_for_clean_artifact(current_bgr, original_bgr, group):
     """
 
     attempts = []
+    last_resort_mask = None
     group.clean_local_attempted = True
+    group.spatial_harmonic_gate_rejected = False
     for strategy in (
         "primary",
         "conservative",
@@ -2074,6 +2239,9 @@ def _clean_source_for_clean_artifact(current_bgr, original_bgr, group):
         )
         metrics = dict(metrics or {})
         attempt = {"strategy": strategy, **metrics}
+        if (last_resort_mask is None and cleanup_mask is not None and np.any(cleanup_mask)
+                and str(metrics.get("reason") or "") in _LAST_RESORT_ART_REASONS):
+            last_resort_mask = cleanup_mask.copy()
         if not metrics.get("mask_valid", False):
             attempts.append(attempt)
             continue
@@ -2091,24 +2259,84 @@ def _clean_source_for_clean_artifact(current_bgr, original_bgr, group):
             cleanup_mask,
         )
         attempt["source_text_removal"] = removal
-        attempt["clean_validation_passed"] = not _source_removal_incomplete(
-            group,
-            removal,
+        attempt["in_mask_residual"] = in_mask_residual_metrics(
+            original_bgr, cleaned, cleanup_mask,
         )
+        source_removal_passed = not _source_removal_incomplete(group, removal)
+        if not source_removal_passed and last_resort_mask is None:
+            # Removal measured incomplete: source left on the page, the case the
+            # learned last resort's line boxes exist for.
+            last_resort_mask = cleanup_mask.copy()
+        attempt["spatial_harmonic_gate_rejected"] = bool(
+            getattr(group, "spatial_harmonic_gate_rejected", False)
+        )
+        attempt["clean_validation_passed"] = bool(
+            source_removal_passed and not attempt["spatial_harmonic_gate_rejected"]
+        )
+        if source_removal_passed and attempt["spatial_harmonic_gate_rejected"]:
+            attempt["reason"] = "spatial_gate_candidate_diagnostic_only"
+        if attempt["clean_validation_passed"]:
+            # The pixel verifier shares the mask's blind spots (red letters on blue
+            # art in grayscale, letters fused with same-colour art): an accepted
+            # result in which the OCR still reads a source word is not clean.
+            legibility = _legible_source_residual(cleaned, group)
+            attempt["acceptance_ocr_check"] = legibility
+            if legibility.get("status") == "legible":
+                attempt["clean_validation_passed"] = False
+                attempt["reason"] = "source_text_still_legible_after_cleanup"
+                if last_resort_mask is None:
+                    last_resort_mask = cleanup_mask.copy()
         attempts.append(attempt)
         if attempt["clean_validation_passed"]:
+            # Text is gone, but a reconstruction markedly smoother than the art
+            # around it must stay visible as a fidelity finding, not read as clean.
+            fidelity_uncertain = bool(attempt.get("art_fidelity_uncertain"))
             group.clean_artifact_validation = {
                 "clean_validation_passed": True,
                 "strategy": strategy,
                 "source_text_removal": removal,
+                "art_fidelity_uncertain": fidelity_uncertain,
                 "attempts": attempts,
             }
             from yomu.clean.disposition import RegionDisposition
             group.clean_disposition = RegionDisposition.LOCAL_SAFE.value
-            group.clean_disposition_reason = "owned_source_text_removed_and_validated"
+            group.clean_disposition_reason = (
+                "owned_source_text_removed_art_fidelity_uncertain" if fidelity_uncertain
+                else "owned_source_text_removed_and_validated")
             group.clean_disposition_confidence = float(getattr(group, "quality_score", 0.0) or 0.0)
             return cleaned, cleanup_mask, strategy, True
 
+    rescued = {"cleaned": None}
+    if last_resort_mask is not None and _last_resort_allowed(group):
+        # The line boxes first - every pixel of the lettering is rebuilt, so letters
+        # fused with same-colour art (white letters touching light streaks or
+        # drips) cannot survive outside an art-respecting mask, and neither
+        # verifier nor OCR reliably sees such remains. The art-respecting mask is
+        # the fallback. Either way the result is marked for art review.
+        for candidate_mask in (_line_box_mask(group, last_resort_mask), last_resort_mask):
+            if candidate_mask is None:
+                continue
+            rescued = _learned_last_resort_clean(current_bgr, original_bgr, group, candidate_mask)
+            rescued["attempt"]["mask_kind"] = "art_respecting" if candidate_mask is last_resort_mask else "line_boxes"
+            attempts.append(rescued["attempt"])
+            if rescued["cleaned"] is not None:
+                last_resort_mask = candidate_mask
+                break
+        if rescued["cleaned"] is not None:
+            uncertain = bool(rescued["attempt"].get("art_fidelity_uncertain", True))
+            group.clean_artifact_validation = {
+                "clean_validation_passed": True,
+                "strategy": "learned_last_resort",
+                "source_text_removal": rescued["attempt"].get("source_text_removal"),
+                "art_fidelity_uncertain": uncertain,
+                "attempts": attempts,
+            }
+            from yomu.clean.disposition import RegionDisposition
+            group.clean_disposition = RegionDisposition.LOCAL_SAFE.value
+            group.clean_disposition_reason = ("owned_source_text_removed_learned_last_resort" if uncertain
+                                              else "owned_source_text_removed_and_validated")
+            group.clean_disposition_confidence = float(getattr(group, "quality_score", 0.0) or 0.0)
+            return rescued["cleaned"], last_resort_mask, "learned_last_resort", True
     group.clean_artifact_validation = {
         "clean_validation_passed": False,
         "reason": "clean_source_removal_unresolved",
@@ -2119,6 +2347,7 @@ def _clean_source_for_clean_artifact(current_bgr, original_bgr, group):
         "flat_reconstruction_patch_on_textured_background",
         "art_fidelity_uncertain",
         "seam_suspected",
+        "textured_fill_level_mismatch",
         "flat_patch_rejected",
         "visible_reconstruction_seam_at_mask_boundary",
     }
@@ -2410,6 +2639,11 @@ def _render_analyzed_image(
     quality_seconds = 0.0
     render_started = time.perf_counter()
 
+    # Every other text on the page bounds where a translation may spread when it
+    # follows its balloon's shape (two texts can share one white region).
+    for group in groups:
+        group.neighbor_text_boxes = [tuple(int(v) for v in other.box) for other in groups
+                                     if other is not group and not getattr(other, "ignored", False)]
     for group in valid_groups:
         # Boundary immediately before inpainting/redraw consume the group: this is
         # the exact text/geometry the renderer sees, not a later reconstruction.
@@ -2434,8 +2668,8 @@ def _render_analyzed_image(
             group.manual_review_required = True
         before_group = final.copy()
         group.visual_attempts = []
-        group.manual_review_required = False
         accepted = False
+        accepted_cleaned_bgr = None
         accepted_cleanup_mask = None
         accepted_strategy = ""
         accepted_allowed_mask = None
@@ -2587,6 +2821,15 @@ def _render_analyzed_image(
                     cleanup_mask,
                 )
                 visual_summary["source_text_removal"] = removal
+                removal_status = _source_removal_status(group, removal)
+                visual_summary["source_removal_status"] = removal_status
+                if removal_status != SOURCE_REMOVAL_VERIFIED:
+                    visual_summary["visual_validation_passed"] = False
+                    visual_summary["reason"] = (
+                        "uncovered_source_text_evidence"
+                        if removal_status == SOURCE_REMOVAL_REJECTED
+                        else "source_removal_unverified"
+                    )
                 if config.POST_RENDER_OCR_VALIDATION:
                     residual_summary = _post_render_source_text_check(
                         rendered,
@@ -2604,9 +2847,6 @@ def _render_analyzed_image(
                             residual_summary.get("reason")
                             or "post_render_ocr_validation_failed"
                         )
-                elif _source_removal_incomplete(group, removal):
-                    visual_summary["visual_validation_passed"] = False
-                    visual_summary["reason"] = "uncovered_source_text_evidence"
             visual_summary["strategy"] = strategy
             group.visual_attempts.append(visual_summary)
             if (
@@ -2642,7 +2882,10 @@ def _render_analyzed_image(
         ):
             inpaint_started = time.perf_counter()
             advanced_attempt = _try_advanced_art_fallback(
-                before_group,
+                # The translated page can contain Portuguese typography from
+                # groups already accepted in this loop.  LaMa reconstructs
+                # CLEAN pixels, so its context must come from that buffer.
+                inpainted,
                 original,
                 group,
                 advanced_fallback_mask,
@@ -2712,9 +2955,15 @@ def _render_analyzed_image(
                         advanced_fallback_mask,
                     )
                     visual_summary["source_text_removal"] = removal
-                    if _source_removal_incomplete(group, removal):
+                    removal_status = _source_removal_status(group, removal)
+                    visual_summary["source_removal_status"] = removal_status
+                    if removal_status != SOURCE_REMOVAL_VERIFIED:
                         visual_summary["visual_validation_passed"] = False
-                        visual_summary["reason"] = "uncovered_source_text_evidence"
+                        visual_summary["reason"] = (
+                            "uncovered_source_text_evidence"
+                            if removal_status == SOURCE_REMOVAL_REJECTED
+                            else "source_removal_unverified"
+                        )
                 visual_summary["strategy"] = "lama_large"
                 group.visual_attempts[-1] = visual_summary
                 if (
@@ -2723,6 +2972,7 @@ def _render_analyzed_image(
                 ):
                     final = rendered
                     accepted = True
+                    accepted_cleaned_bgr = advanced_cleaned
                     accepted_cleanup_mask = advanced_fallback_mask
                     accepted_strategy = "lama_large"
                     accepted_allowed_mask = group_allowed
@@ -2756,6 +3006,48 @@ def _render_analyzed_image(
                 (group.visual_validation or {}).get("source_text_removal", {}),
             )
         )
+        if accepted:
+            from yomu.clean.disposition import RegionDisposition
+            group.clean_local_attempted = True
+            if source_removed and group.art_reconstruction_status == "clean":
+                group.clean_disposition = RegionDisposition.LOCAL_SAFE.value
+                group.clean_disposition_reason = "owned_source_text_removed_and_validated"
+                group.clean_disposition_confidence = float(
+                    getattr(group, "quality_score", 0.0) or 0.0
+                )
+                group.clean_artifact_validation = {
+                    "clean_validation_passed": True,
+                    "strategy": accepted_strategy,
+                    "source_removal_status": SOURCE_REMOVAL_VERIFIED,
+                    "source_text_removal": (group.visual_validation or {}).get(
+                        "source_text_removal", {}
+                    ),
+                    "art_reconstruction_status": group.art_reconstruction_status,
+                }
+            elif _group_has_story_translation_authority(group):
+                group.clean_disposition = RegionDisposition.REVIEW_OCR.value
+                group.clean_disposition_reason = (
+                    "source_removal_unverified" if not source_removed
+                    else group.art_reconstruction_reason or "art_reconstruction_review_required"
+                )
+                group.clean_artifact_validation = {
+                    "clean_validation_passed": False,
+                    "reason": group.clean_disposition_reason,
+                    "source_removal_status": _source_removal_status(
+                        group,
+                        (group.visual_validation or {}).get("source_text_removal", {}),
+                    ),
+                    "art_reconstruction_status": group.art_reconstruction_status,
+                }
+                group.manual_review_required = True
+            else:
+                group.clean_disposition = RegionDisposition.REVIEW_SEMANTIC.value
+                group.clean_disposition_reason = "local_clean_quality_unverified"
+                group.clean_artifact_validation = {
+                    "clean_validation_passed": False,
+                    "reason": group.clean_disposition_reason,
+                }
+                group.manual_review_required = True
         (
             group.render_disposition,
             group.render_disposition_reason,
@@ -2782,17 +3074,59 @@ def _render_analyzed_image(
                 group,
                 accepted_cleanup_mask,
                 strategy=accepted_strategy,
+                accepted_candidate=accepted_cleaned_bgr,
             )
+            if group.spatial_harmonic_gate_rejected:
+                from yomu.clean.disposition import RegionDisposition
+                group.clean_disposition = RegionDisposition.REVIEW_OCR.value
+                group.clean_disposition_reason = "spatial_gate_candidate_diagnostic_only"
+                group.clean_disposition_confidence = 0.0
+                group.clean_artifact_validation = {
+                    "clean_validation_passed": False,
+                    "reason": "spatial_gate_candidate_diagnostic_only",
+                    "spatial_background_class": str(
+                        (group.background_metrics or {}).get(
+                            "local_background_spatial_class", "INSUFFICIENT_EVIDENCE"
+                        )
+                    ),
+                    "accepted_render_strategy": accepted_strategy,
+                    "render_remains_available_for_review": True,
+                }
+                group.render_disposition = RENDER_WITH_REVIEW
+                group.render_disposition_reason = "spatial_gate_candidate_diagnostic_only"
+                group.manual_review_required = True
+                group.translation_quality_impact = "review_required"
         else:
             # A target rejected by typography/semantic/visual gates must not
             # reintroduce the source into the canonical CLEAN artifact.  The
             # translated page deliberately retains its source for review; CLEAN
             # is separately validated as source-free artwork.
+            clean_before = inpainted.copy()
             inpainted, clean_mask, _clean_strategy, clean_ok = (
                 _clean_source_for_clean_artifact(inpainted, original, group)
             )
             if clean_ok and clean_mask is not None:
                 text_mask = cv2.bitwise_or(text_mask, clean_mask)
+            rescued_render, rescued_allowed = None, None
+            if (clean_ok and clean_mask is not None and typeset
+                    and str(group.translation_candidate or group.translation or "").strip()):
+                # The CLEAN pass (learned last resort included) removed the source
+                # where every render strategy was refused: the translation can be
+                # set on that reconstruction, under the same visual bounds, as a
+                # review item - instead of shipping the English page.
+                rescued_render, rescued_allowed = _render_on_clean_rescue(
+                    before_group, clean_before, inpainted, original, group, clean_mask, font_path)
+            if rescued_render is not None:
+                final = rescued_render
+                allowed_mask = cv2.bitwise_or(allowed_mask, rescued_allowed)
+                group.redrawn = True
+                group.manual_review_required = True
+                group.render_disposition = RENDER_WITH_REVIEW
+                group.render_disposition_reason = "rendered_on_learned_clean_rescue"
+                group.translation_quality_impact = "review_required"
+                _set_translation_terminal_state(
+                    group, "manual_review", "rendered_on_learned_clean_rescue", preserved_original=False)
+                continue
             final = before_group
             group.redrawn = False
             group.manual_review_required = True
@@ -2867,6 +3201,7 @@ def _render_analyzed_image(
         # translated glyphs. Consumed by the professional PSD exporter (P1). A copy so a
         # later caller mutating it cannot corrupt the renderer's internal state.
         capture["cleaned_bgr"] = inpainted.copy()
+        capture["authorized_cleanup_mask"] = text_mask.copy()
 
     if debug_folder:
         _write_debug_images(
@@ -2971,13 +3306,31 @@ def _line_ignore_reason(line, image_shape):
         1,
         len(re.sub(r"\s+", "", semantic_span)),
     )
-    if upper not in SHORT_REAL_TEXTS and alpha_ratio < 0.45:
+    if upper not in SHORT_REAL_TEXTS and alpha_ratio < 0.45 and not _holds_real_word(text):
         return "low_alpha_ratio"
 
     if _looks_like_noise(text):
         return "noise_like_text"
 
     return ""
+
+
+def _holds_real_word(text):
+    """A dictionary word of >= 3 letters among digits ("56,984 Won", "Account No. 111-...").
+
+    Mostly-digit lines are dropped as numbers, but in-art UI text (a phone screen,
+    a sign with a price) carries words a reader expects translated.
+    """
+    for token in re.findall(r"[A-Za-z]{3,}", str(text or "")):
+        pieces = region_taxonomy.segment_words(token) or [token]
+        if any(len(piece) >= 3 and region_taxonomy.is_english_word(piece) for piece in pieces):
+            return True
+        # Glued to a short word the segmentation refuses ("AccountNo"): a
+        # dictionary word of >= 4 letters opening or closing the token counts.
+        if any(region_taxonomy.is_english_word(token[:k]) or region_taxonomy.is_english_word(token[-k:])
+               for k in range(len(token), 3, -1)):
+            return True
+    return False
 
 
 def _looks_like_noise(text):
@@ -3663,7 +4016,11 @@ def _classify_groups(groups, image_bgr, page_index=None):
             group.classification = "narration"
         elif balloon_like:
             group.classification = "speech"
-        elif one_short_word and (is_known_sfx or strongly_styled):
+        elif one_short_word and (
+                is_known_sfx
+                # Position near the page edge says nothing about written prose.
+                or (strongly_styled
+                    and not region_taxonomy.weak_label_semantic_promotion_allowed("unknown", group.text))):
             group.classification = "sfx"
         elif diagonal and len(words) <= 3:
             group.classification = "decorative"
@@ -3836,6 +4193,8 @@ def _refine_classification_with_background(group):
         and 5 <= len(compact) <= 12
         and compact not in ORDINARY_DIALOGUE_WORDS
         and compact not in COMMON_ENGLISH_WORDS
+        # Prose with sentence shape is speech, not a sound.
+        and not region_taxonomy.weak_label_semantic_promotion_allowed("unknown", group.text)
         and not bool(getattr(group, "preserve_as_name", False))
         and not bool(getattr(group, "detected_proper_names", []) or [])
         and len(group.lines) == 1
@@ -3995,6 +4354,9 @@ def _refine_classification_with_background(group):
         # exactly like "ACK!". Only the vocabulary separates them, so ordinary
         # dialogue words are held back from this branch entirely.
         and compact not in ORDINARY_DIALOGUE_WORDS
+        # ...and prose outside that list keeps its sentence evidence
+        # (region_taxonomy.weak_label_semantic_promotion_allowed).
+        and not region_taxonomy.weak_label_semantic_promotion_allowed("unknown", group.text)
         and (
             white_ratio < 0.25
             or group.background_type == "speed_lines"
@@ -6899,7 +7261,7 @@ def _recovered_text_is_acceptable(text, confidence):
 _REOCR_ENGINES = ("rapidocr",)
 
 
-def _reocr_engines_for(ocr_lang):
+def _reocr_engines_for(ocr_lang, errors=None):
     """Every recogniser available, so the crop gets a genuine second opinion.
 
     The engine that produced the incomplete reading is the one that failed, and
@@ -6911,19 +7273,67 @@ def _reocr_engines_for(ocr_lang):
     for name in _REOCR_ENGINES:
         try:
             engines.append(OCREngine(ocr_lang, engine=name, fallback_engine=name))
-        except Exception:  # noqa: BLE001 - a missing recogniser is not fatal.
+        except Exception as exc:  # noqa: BLE001 - a missing recogniser is not fatal.
+            # Not fatal, but never silent: the report must say why no re-read ran.
+            if errors is not None:
+                errors.append({"engine": name, "stage": "init",
+                               "exception_type": type(exc).__name__})
             continue
     return engines
 
 
-def _reocr_crop_candidates(engines, crop, page_index=None):
+def _recognize_single_row(engine, crop, page_index=None):
+    """Read a one-row crop with the recogniser alone, skipping text detection.
+
+    The detector is the weak stage on very short rows: "ME!" under "TRIED TO
+    KILL" was never detected (not on the page, not in a padded or upscaled crop),
+    yet the recogniser alone reads it at 0.98. Used only after detection found
+    nothing; the caller's acceptance rule (confidence, real words) still decides.
+    """
+    if getattr(engine, "engine", "") != "rapidocr" or crop is None or not crop.size:
+        return []
+    if crop.shape[1] < 8 or crop.shape[0] < 8 or crop.shape[0] > 3 * crop.shape[1]:
+        return []
+    try:
+        result, _elapsed = engine._get_rapidocr()(crop, use_det=False, use_cls=False, use_rec=True)
+    except Exception:  # noqa: BLE001 - recognition-only is a best-effort extra read
+        return []
+    lines = []
+    for item in result or []:
+        if not item or len(item) < 2:
+            continue
+        text, confidence = str(item[0] or ""), float(item[1] or 0.0)
+        if not text.strip():
+            continue
+        box = (0, 0, int(crop.shape[1]), int(crop.shape[0]))
+        lines.append(OCRLine(text=text, confidence=confidence, polygon=_polygon_from_box(box),
+                             box=box, raw_text=text, engine=engine.engine, page=page_index,
+                             metadata={"recognition_only": True}))
+    return lines[:1]
+
+
+def _reocr_crop_candidates(engines, crop, page_index=None, errors=None):
     """Read a crop with every recogniser; return (engine, text, confidence, lines)."""
     candidates = []
+    # The text detector needs a margin round the glyphs: a tight crop of one short
+    # row ("IT...") reads as "VT." at 0.74, the same row with a replicated border as
+    # "IT.." at 0.96. Boxes are shifted back to crop coordinates.
+    margin = max(8, int(crop.shape[0] // 3)) if crop is not None and crop.size else 0
+    padded = cv2.copyMakeBorder(crop, margin, margin, margin, margin, cv2.BORDER_REPLICATE) if margin else crop
     for engine in engines:
         try:
-            crop_lines = engine.detect_lines(crop, page=page_index)
-        except Exception:  # noqa: BLE001 - never break the page for one crop.
+            crop_lines = engine.detect_lines(padded, page=page_index)
+            for item in crop_lines or []:
+                bx, by, bw, bh = [int(v) for v in item.box]
+                item.box = (max(0, bx - margin), max(0, by - margin), bw, bh)
+                item.polygon = np.asarray(item.polygon) - margin
+        except Exception as exc:  # noqa: BLE001 - never break the page for one crop.
+            if errors is not None:
+                errors.append({"engine": engine.engine, "stage": "detect",
+                               "exception_type": type(exc).__name__})
             continue
+        if not crop_lines:
+            crop_lines = _recognize_single_row(engine, crop, page_index)
         if not crop_lines:
             continue
         text = clean_ocr_text(" ".join(item.text for item in crop_lines))
@@ -6932,7 +7342,410 @@ def _reocr_crop_candidates(engines, crop, page_index=None):
     return candidates
 
 
-def apply_speech_container_reocr(
+_CONTINUATION_ANCHOR_MIN_CONFIDENCE = 0.85
+
+
+def _is_weak_ocr_line(line):
+    """A reading too short or unsure to vouch for the pixels it sits on ("T", 0.67)."""
+    return (float(line.confidence or 0.0) < 0.8
+            or len(re.sub(r"[^A-Za-z0-9]", "", clean_ocr_text(line.text))) < 2)
+
+
+def _stroke_widths(ink):
+    """Per-pixel stroke width estimate: 2x the distance-transform ridge values."""
+    if not np.any(ink):
+        return np.empty(0, dtype=np.float32)
+    distance = cv2.distanceTransform(ink.astype(np.uint8), cv2.DIST_L2, 3)
+    ridge = (distance > 0) & (distance >= cv2.dilate(distance, np.ones((3, 3), np.uint8)))
+    return 2.0 * distance[ridge]
+
+
+def _box_overlap_fraction(box, other):
+    """Share of ``box`` (x, y, w, h) that lies inside ``other``."""
+    x, y, w, h = box
+    ox, oy, ow, oh = other
+    ix = max(0, min(x + w, ox + ow) - max(x, ox))
+    iy = max(0, min(y + h, oy + oh) - max(y, oy))
+    return (ix * iy) / max(1, w * h)
+
+
+def _lettering_continuation_boxes(image_bgr, lines):
+    """Rows directly above/below a confident line that carry the same lettering.
+
+    The full-page detector drops short trailing rows of a speech column ("BE...",
+    "IT...") on dense art. Each confident line proposes the row just above and just
+    below it in its own column. The proposal survives only when no confident line
+    already covers it and it holds ink with the anchor's own signature - same
+    polarity and ink level, glyph-sized height (0.35-1.2 h) and a stroke width
+    within 0.5-1.8x the anchor's. Nothing is accepted here: the crop is re-read and
+    the OCR acceptance rule decides.
+    """
+    if image_bgr is None or image_bgr.size == 0 or not lines:
+        return []
+    gray = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2GRAY)
+    height, width = gray.shape
+    strong = [line for line in lines
+              if not _is_weak_ocr_line(line)
+              and float(line.confidence or 0.0) >= _CONTINUATION_ANCHOR_MIN_CONFIDENCE]
+    boxes = []
+    for anchor in strong:
+        x, y, w, h = [int(v) for v in anchor.box]
+        if w < 4 or h < 6:
+            continue
+        roi = gray[y:y + h, x:x + w].astype(np.float32)
+        median = _line_polarity_level(gray, anchor, float(np.median(roi)))
+        if 118 < median < 138:
+            continue  # mid-tone polarity is not decidable from levels alone
+        contrast = max(8.0, float(np.percentile(roi, 80)) - float(np.percentile(roi, 20)))
+        offset = max(16.0, contrast * 0.28)
+        dark = median >= 138
+        anchor_ink = roi <= median - offset if dark else roi >= median + offset
+        widths = _stroke_widths(anchor_ink)
+        if widths.size < 8:
+            continue
+        stroke = float(np.median(widths))
+        pad = int(round(0.3 * h))
+        for top in (y + h, y - int(round(1.3 * h))):
+            cx1, cx2 = max(0, x - pad), min(width, x + w + pad)
+            cy1, cy2 = max(0, top), min(height, top + int(round(1.3 * h)))
+            if cx2 - cx1 < 4 or cy2 - cy1 < 6:
+                continue
+            area = (cx2 - cx1) * (cy2 - cy1)
+            if any(
+                max(0, min(cx2, int(o.box[0] + o.box[2])) - max(cx1, int(o.box[0])))
+                * max(0, min(cy2, int(o.box[1] + o.box[3])) - max(cy1, int(o.box[1])))
+                > 0.2 * area
+                for o in strong
+            ):
+                continue
+            band = gray[cy1:cy2, cx1:cx2].astype(np.float32)
+            ink = band <= median - offset if dark else band >= median + offset
+            count, labels, stats, _ = cv2.connectedComponentsWithStats(ink.astype(np.uint8), 8)
+            keep = np.zeros(ink.shape, dtype=bool)
+            for label in range(1, count):
+                ch = int(stats[label, cv2.CC_STAT_HEIGHT])
+                if not (0.35 * h <= ch <= 1.2 * h):
+                    continue
+                component = labels == label
+                comp_widths = _stroke_widths(component)
+                if comp_widths.size and 0.5 * stroke <= float(np.median(comp_widths)) <= 1.8 * stroke:
+                    keep |= component
+            if np.count_nonzero(keep) < 0.15 * h * h:
+                continue
+            ys, xs = np.where(keep)
+            bx1 = max(0, cx1 + int(xs.min()) - pad)
+            by1 = max(0, cy1 + int(ys.min()) - pad)
+            bx2 = min(width, cx1 + int(xs.max()) + 1 + pad)
+            by2 = min(height, cy1 + int(ys.max()) + 1 + pad)
+            box = (bx1, by1, bx2 - bx1, by2 - by1)
+            if all(_box_iou(box, other) < 0.5 for other in boxes):
+                boxes.append(box)
+    return boxes
+
+
+def apply_speech_container_reocr(original_bgr, raw_lines, ocr_lang, page_index=None):
+    """Selective re-OCR of under-read lines and gaps, then a masked-page rediscovery."""
+    lines, records = _apply_speech_container_reocr_core(original_bgr, raw_lines, ocr_lang, page_index)
+    if (original_bgr is not None and getattr(original_bgr, "size", 0) and lines
+            and config.OCR_REGION_SELECTIVE_FALLBACK and config.OCR_MASKED_REDISCOVERY):
+        lines, record = _masked_page_rediscovery(original_bgr, lines, ocr_lang, page_index)
+        if record:
+            records.append(record)
+    if (original_bgr is not None and getattr(original_bgr, "size", 0) and lines
+            and config.OCR_REGION_SELECTIVE_FALLBACK and config.OCR_SPLIT_AT_CROSSING_BORDERS):
+        lines, record = _split_lines_at_crossing_borders(original_bgr, lines, ocr_lang, page_index)
+        if record:
+            records.append(record)
+    if (original_bgr is not None and getattr(original_bgr, "size", 0) and lines
+            and config.OCR_REGION_SELECTIVE_FALLBACK and config.OCR_EXTEND_CLIPPED_EDGE_GLYPHS):
+        lines, record = _extend_lines_to_edge_glyphs(original_bgr, lines, ocr_lang, page_index)
+        if record:
+            records.append(record)
+    return lines, records
+
+
+def _extend_lines_to_edge_glyphs(original_bgr, lines, ocr_lang, page_index=None):
+    """Extend a line over a glyph the detector clipped at its start or end.
+
+    A narrow leading glyph ("I" of "I DO INDEED!") fell outside the detected box:
+    it was neither read nor cleaned. An ink component beside the box with the
+    line's glyph height (0.6-1.2 h), overlapping its rows by >= 60 %, within 0.8 h
+    and not part of another line extends the box; the extended box is re-read with
+    the recogniser alone and kept only if confident and the old reading is
+    contained in the new, longer one.
+    """
+    gray = cv2.cvtColor(original_bgr, cv2.COLOR_BGR2GRAY)
+    height, width = gray.shape
+    errors = []
+    engines = None
+    record = {"trigger": "extend_to_edge_glyph", "page": page_index, "accepted": False,
+              "reason": "no_clipped_edge_glyph", "engine_errors": errors}
+    boxes = [tuple(int(v) for v in line.box) for line in lines]
+    result = []
+    for index, line in enumerate(lines):
+        x, y, w, h = boxes[index]
+        reach = int(round(0.8 * h)) + h
+        wx1, wx2 = max(0, x - reach), min(width, x + w + reach)
+        wy1, wy2 = max(0, y - h // 4), min(height, y + h + h // 4)
+        band = gray[wy1:wy2, wx1:wx2]
+        if band.size == 0:
+            result.append(line)
+            continue
+        _t, ink = cv2.threshold(band, 0, 255, cv2.THRESH_BINARY_INV | cv2.THRESH_OTSU)
+        if float(np.median(band)) < 127:
+            ink = cv2.bitwise_not(ink)
+        count, labels, stats, _ = cv2.connectedComponentsWithStats(ink, 8)
+        new_x1, new_x2 = x, x + w
+        for label in range(1, count):
+            cx, cy, cw, ch, _area = [int(v) for v in stats[label]]
+            gx1, gx2 = wx1 + cx, wx1 + cx + cw
+            gy1, gy2 = wy1 + cy, wy1 + cy + ch
+            if not (0.6 * h <= ch <= 1.2 * h):
+                continue
+            overlap = max(0, min(gy2, y + h) - max(gy1, y))
+            if overlap < 0.6 * min(ch, h):
+                continue
+            gap = (x - gx2) if gx2 <= x else (gx1 - (x + w)) if gx1 >= x + w else -1
+            if gap < 0 or gap > 0.8 * h:
+                continue
+            if any(j != index and not (gx2 <= bx or gx1 >= bx + bw or gy2 <= by or gy1 >= by + bh)
+                   for j, (bx, by, bw, bh) in enumerate(boxes)):
+                continue
+            new_x1, new_x2 = min(new_x1, gx1), max(new_x2, gx2)
+        if (new_x1, new_x2) == (x, x + w):
+            result.append(line)
+            continue
+        if engines is None:
+            engines = _reocr_engines_for(ocr_lang, errors)
+        if not engines:
+            result.append(line)
+            continue
+        box = (max(0, new_x1 - 2), y, min(width, new_x2 + 2) - max(0, new_x1 - 2), h)
+        read = _recognize_single_row(engines[0], original_bgr[y:y + h, box[0]:box[0] + box[2]], page_index)
+        old_compact = re.sub(r"[^A-Z0-9]", "", str(line.text).upper())
+        new_text = clean_ocr_text(read[0].text) if read else ""
+        new_compact = re.sub(r"[^A-Z0-9]", "", new_text.upper())
+        if (read and float(read[0].confidence) >= 0.8 and old_compact and old_compact in new_compact
+                and len(new_compact) > len(old_compact)):
+            extended = OCRLine(text=new_text, confidence=float(read[0].confidence),
+                               polygon=_polygon_from_box(box), box=box, raw_text=read[0].text,
+                               engine=line.engine, page=page_index,
+                               metadata={**(line.metadata or {}), "extended_from_line": line.text})
+            result.append(extended)
+            boxes[index] = box
+            record["accepted"] = True
+            record["reason"] = "line_extended_to_clipped_glyph"
+            record.setdefault("extensions", []).append({"from": line.text, "to": new_text})
+        else:
+            result.append(line)
+    return (result if record["accepted"] else lines), record
+
+
+def _border_crossing_columns(gray, box):
+    """x positions where a dark stroke runs through a line from above to below it.
+
+    A balloon border between two balloons set side by side passes through the
+    row the detector read as one line; glyphs never extend both above and below
+    their own line. Ink is the darker Otsu class of a band one line height above
+    and below the box; a component touching both the top and the bottom of the
+    band is a crossing stroke, located by its median x inside the line rows.
+    """
+    x, y, w, h = [int(v) for v in box]
+    height, width = gray.shape
+    y1, y2 = max(0, y - h), min(height, y + 2 * h)
+    x1, x2 = max(0, x), min(width, x + w)
+    band = gray[y1:y2, x1:x2]
+    if band.size == 0 or band.shape[0] < 3 * h - 2 or band.shape[1] < 4:
+        return []
+    _t, ink = cv2.threshold(band, 0, 255, cv2.THRESH_BINARY_INV | cv2.THRESH_OTSU)
+    count, labels, _stats, _ = cv2.connectedComponentsWithStats(ink, 8)
+    top_rows = labels[: max(1, h // 2)]
+    bottom_rows = labels[-max(1, h // 2):]
+    line_rows = labels[y - y1:y - y1 + h]
+    positions = []
+    for label in set(np.unique(top_rows)) & set(np.unique(bottom_rows)) - {0}:
+        cols = np.nonzero(line_rows == label)[1]
+        if cols.size and 0.15 * w <= float(np.median(cols)) <= 0.85 * w:
+            # a crossing stroke is thin within the line rows (not a glyph block)
+            if (cols.max() - cols.min()) <= 0.5 * h:
+                positions.append(int(np.median(cols)) + x1)
+    return sorted(set(positions))
+
+
+def _column_split_positions(gray, line, lines):
+    """Split point of a line that joins two centred text columns.
+
+    Balloon lettering is centred, so the lines of one balloon share a centre. When
+    the detector read across two balloons set side by side, the widest gap between
+    words separates two parts whose centres each match a *different* neighbouring
+    column (other lines within three line heights), while the joined line's own
+    centre matches neither.
+    """
+    x, y, w, h = [int(v) for v in line.box]
+    if w < 3 * h:
+        return []
+    neighbours = [other for other in lines if other is not line
+                  and abs((other.box[1] + other.box[3] / 2) - (y + h / 2)) <= 3 * h
+                  and not (other.box[1] < y + h and other.box[1] + other.box[3] > y)
+                  # a column's own lines are narrower than a line joining two columns
+                  and other.box[2] < 0.8 * w]
+    centres = [other.box[0] + other.box[2] / 2 for other in neighbours]
+    if len(centres) < 2:
+        return []
+    tolerance = max(6.0, 0.35 * h)
+    row = gray[max(0, y):y + h, max(0, x):x + w]
+    if row.size == 0:
+        return []
+    _t, ink = cv2.threshold(row, 0, 255, cv2.THRESH_BINARY_INV | cv2.THRESH_OTSU)
+    filled = (ink > 0).any(axis=0)
+    cols = np.nonzero(filled)[0]
+    if cols.size < 2:
+        return []
+    gaps, col = [], 0
+    while col < filled.size:
+        if filled[col]:
+            col += 1
+            continue
+        begin = col
+        while col < filled.size and not filled[col]:
+            col += 1
+        if cols.min() < begin and col <= cols.max():
+            gaps.append((col - begin, begin, col))
+    for _width, begin, end in sorted(gaps, reverse=True)[:3]:
+        left_c = x + (cols.min() + begin) / 2
+        right_c = x + (end + cols.max()) / 2
+        left_match = [c for c in centres if abs(c - left_c) <= tolerance]
+        right_match = [c for c in centres if abs(c - right_c) <= tolerance]
+        whole = x + (cols.min() + cols.max()) / 2
+        if left_match and right_match and not any(abs(c - whole) <= tolerance for c in centres):
+            return [x + (begin + end) // 2]
+    return []
+
+
+def _split_lines_at_crossing_borders(original_bgr, lines, ocr_lang, page_index=None):
+    """Split detector lines that run across a balloon border into separate lines.
+
+    "YOU'RE STILL" (left balloon) and "LEAVING YOU" (right balloon) came back as
+    one line, so one group spanned two balloons: the cleanup used the wrong
+    balloon as reference and the translation read nonsense. Each side of the
+    crossing stroke is re-read with the recogniser alone; the split is kept only
+    when both sides read confidently, otherwise the line is left as it was.
+    """
+    gray = cv2.cvtColor(original_bgr, cv2.COLOR_BGR2GRAY)
+    errors = []
+    engines = None
+    record = {"trigger": "split_at_crossing_border", "page": page_index, "accepted": False,
+              "reason": "no_line_crosses_a_border", "engine_errors": errors}
+    result = []
+    for line in lines:
+        positions = []
+        if len(str(line.text).split()) >= 2:
+            positions = (_border_crossing_columns(gray, line.box)
+                         or _column_split_positions(gray, line, lines))
+        if not positions:
+            result.append(line)
+            continue
+        if engines is None:
+            engines = _reocr_engines_for(ocr_lang, errors)
+        if not engines:
+            result.append(line)
+            continue
+        x, y, w, h = [int(v) for v in line.box]
+        cuts = [x] + positions + [x + w]
+        parts = []
+        for a, b in zip(cuts[:-1], cuts[1:]):
+            left, right = (a + 3 if a != x else a), (b - 3 if b != x + w else b)
+            if right - left < max(8, h // 2):
+                continue
+            crop = original_bgr[y:y + h, left:right]
+            read = _recognize_single_row(engines[0], crop, page_index)
+            if not read or float(read[0].confidence) < 0.8 or not clean_ocr_text(read[0].text):
+                parts = None
+                break
+            box = (left, y, right - left, h)
+            part = OCRLine(text=clean_ocr_text(read[0].text), confidence=float(read[0].confidence),
+                           polygon=_polygon_from_box(box), box=box, raw_text=read[0].text,
+                           engine=line.engine, page=page_index,
+                           metadata={**(line.metadata or {}), "split_from_line": line.text,
+                                     "ocr_line_id": f"{(line.metadata or {}).get('ocr_line_id', '')}~{len(parts)}"})
+            parts.append(part)
+        if parts and len(parts) >= 2:
+            result.extend(parts)
+            record["accepted"] = True
+            record["reason"] = "line_split_at_crossing_border"
+            record.setdefault("splits", []).append({"from": line.text, "to": [p.text for p in parts]})
+        else:
+            result.append(line)
+    return (result if record["accepted"] else lines), record
+
+
+def _masked_page_rediscovery(original_bgr, lines, ocr_lang, page_index=None):
+    """Lines the detector only finds once the text it already read is out of the way.
+
+    The text detector is context-dependent: a news ticker set between two dense
+    speech columns was never detected on the page, yet read at 0.91 on the
+    cleaned page. Every line already read is painted with the median colour of the
+    band around its box and the detector runs once more on that copy; a new line is
+    kept only when the recovery rule accepts it (confident, real words) and it does
+    not overlap a line already read or a painted box.
+    """
+    started = time.perf_counter()
+    errors = []
+    engines = _reocr_engines_for(ocr_lang, errors)
+    record = {"trigger": "masked_page_rediscovery", "page": page_index, "accepted": False,
+              "reason": "masked_rediscovery_nothing_new", "engine_errors": errors}
+    if not engines:
+        record["reason"] = "selective_reocr_engine_unavailable"
+        return lines, record
+    height, width = original_bgr.shape[:2]
+    painted = original_bgr.copy()
+    covered = np.zeros((height, width), dtype=bool)
+    for line in lines:
+        x, y, w, h = [int(v) for v in line.box]
+        x1, y1, x2, y2 = max(0, x - 2), max(0, y - 2), min(width, x + w + 2), min(height, y + h + 2)
+        if x2 <= x1 or y2 <= y1:
+            continue
+        ry1, ry2 = max(0, y1 - 3), min(height, y2 + 3)
+        rx1, rx2 = max(0, x1 - 3), min(width, x2 + 3)
+        band = np.ones((ry2 - ry1, rx2 - rx1), dtype=bool)
+        band[y1 - ry1:y2 - ry1, x1 - rx1:x2 - rx1] = False  # the band only, not the ink
+        ring = original_bgr[ry1:ry2, rx1:rx2][band]
+        if ring.size:
+            painted[y1:y2, x1:x2] = np.median(ring, axis=0).astype(original_bgr.dtype)
+        covered[y1:y2, x1:x2] = True
+    try:
+        found = engines[0].detect_lines(painted, page=page_index)
+    except Exception as exc:  # noqa: BLE001 - recorded, never fatal
+        errors.append({"engine": engines[0].engine, "stage": "detect", "exception_type": type(exc).__name__})
+        record["reason"] = "selective_reocr_engine_failed"
+        return lines, record
+    new_lines = []
+    for item in found or []:
+        text = clean_ocr_text(item.text)
+        confidence = float(item.confidence or 0.0)
+        box = tuple(int(v) for v in item.box)
+        if not _recovered_text_is_acceptable(text, confidence):
+            continue
+        bx, by, bw, bh = box
+        if np.mean(covered[max(0, by):by + bh, max(0, bx):bx + bw]) > 0.3:
+            continue
+        if any(_box_iou(box, tuple(int(v) for v in known.box)) >= 0.2 for known in lines):
+            continue
+        new_line = OCRLine(text=text, confidence=confidence, polygon=_polygon_from_box(box), box=box,
+                           raw_text=text, engine=f"{engines[0].engine}+reocr", page=page_index,
+                           metadata={"selective_reocr": "masked_page_rediscovery"})
+        mark_ocr_line_recovered(new_line, engines[0].engine, initial_ocr_engine=None)
+        new_lines.append(new_line)
+    if new_lines:
+        lines = list(lines) + new_lines
+        record.update(accepted=True, reason="selective_reocr_recovered_text",
+                      new_lines=[{"text": l.text, "box": list(l.box), "confidence": round(l.confidence, 4)}
+                                 for l in new_lines])
+    record["duration_ms"] = round((time.perf_counter() - started) * 1000, 3)
+    return lines, record
+
+
+def _apply_speech_container_reocr_core(
     original_bgr,
     raw_lines,
     ocr_lang,
@@ -6962,12 +7775,23 @@ def apply_speech_container_reocr(
         return lines, records
 
     underread = [line for line in lines if _line_needs_underread_reocr(line)]
-    gaps = _container_text_gap_boxes(original_bgr, lines)
+    gaps = [(container_id, box, "speech_container_uncovered_text")
+            for container_id, box in _container_text_gap_boxes(original_bgr, lines)]
+    gaps += [(0, box, "lettering_continuation_uncovered_text")
+             for box in _lettering_continuation_boxes(original_bgr, lines)]
     if not underread and not gaps:
         return lines, records
 
-    engines = _reocr_engines_for(ocr_lang)
+    engine_errors = []
+    engines = _reocr_engines_for(ocr_lang, engine_errors)
     if not engines:
+        records.append({
+            "trigger": "selective_reocr",
+            "page": page_index,
+            "accepted": False,
+            "reason": "selective_reocr_engine_unavailable",
+            "engine_errors": engine_errors,
+        })
         return lines, records
     height, width = original_bgr.shape[:2]
 
@@ -6993,13 +7817,14 @@ def apply_speech_container_reocr(
             "previous_confidence": round(float(line.confidence or 0.0), 4),
             "engines_attempted": list(engine_names),
             "candidates": [],
+            "engine_errors": [],
             "accepted": False,
             "reason": "selective_reocr_no_confident_candidate",
         }
         best = None
         if crop.size:
             for engine_name, _, _, crop_lines in _reocr_crop_candidates(
-                engines, crop, page_index
+                engines, crop, page_index, record["engine_errors"]
             ):
                 # The crop holds one line, so read the detection that lands on the
                 # original box. Anything the padding picked up along the way (a
@@ -7049,15 +7874,17 @@ def apply_speech_container_reocr(
             mark_ocr_line_recovered(
                 line, engine_name, initial_ocr_engine=previous_initial_engine
             )
+        if record["engine_errors"] and not record["candidates"] and not record["accepted"]:
+            record["reason"] = "selective_reocr_engine_failed"
         record["duration_ms"] = round((time.perf_counter() - started) * 1000, 3)
         records.append(record)
 
-    for container_id, box in gaps:
+    for container_id, box, trigger in gaps:
         x, y, w, h = box
         crop = original_bgr[y:y + h, x:x + w]
         started = time.perf_counter()
         record = {
-            "trigger": "speech_container_uncovered_text",
+            "trigger": trigger,
             "page": page_index,
             "container_id": int(container_id),
             "box": [int(v) for v in box],
@@ -7065,6 +7892,7 @@ def apply_speech_container_reocr(
             "previous_text": "",
             "engines_attempted": list(engine_names),
             "candidates": [],
+            "engine_errors": [],
             "accepted": False,
             "reason": "selective_reocr_no_confident_candidate",
         }
@@ -7073,38 +7901,65 @@ def apply_speech_container_reocr(
             records.append(record)
             continue
         best = None
-        for engine_name, text, confidence, crop_lines in _reocr_crop_candidates(
-            engines, crop, page_index
-        ):
-            record["candidates"].append(
-                {"engine": engine_name, "text": text, "confidence": round(confidence, 4)}
-            )
-            if not _recovered_text_is_acceptable(text, confidence):
-                continue
-            score = _glyph_count(text) + confidence
-            if best is None or score > best[0]:
-                best = (score, engine_name, crop_lines)
+        crops = [(x, y, crop)]
+        if trigger == "lettering_continuation_uncovered_text":
+            # The detector reads a short row better with its neighbour row in view
+            # ("HEY, YOU!" above "DRIVE THIS": nothing alone, 0.91 with context);
+            # readings landing on known lines are dropped below as rediscoveries.
+            cy1, cy2 = max(0, y - h), min(height, y + 2 * h)
+            crops.append((x, cy1, original_bgr[cy1:cy2, x:x + w]))
+        for crop_x, crop_y, crop_image in crops:
+            for engine_name, text, confidence, crop_lines in _reocr_crop_candidates(
+                engines, crop_image, page_index, record["engine_errors"]
+            ):
+                record["candidates"].append(
+                    {"engine": engine_name, "text": text, "confidence": round(confidence, 4)}
+                )
+                if crop_image is not crop:
+                    # Context crop: only readings mostly inside the proposed row.
+                    crop_lines = [item for item in crop_lines
+                                  if _box_overlap_fraction((crop_x + int(item.box[0]), crop_y + int(item.box[1]),
+                                                            int(item.box[2]), int(item.box[3])), box) >= 0.5]
+                    text = " ".join(clean_ocr_text(item.text) for item in crop_lines)
+                    confidence = min((float(item.confidence or 0.0) for item in crop_lines), default=0.0)
+                if not crop_lines or not _recovered_text_is_acceptable(text, confidence):
+                    continue
+                score = _glyph_count(text) + confidence
+                if best is None or score > best[0]:
+                    best = (score, engine_name, crop_lines, crop_x, crop_y)
+            if best:
+                break
         if best:
-            _, engine_name, crop_lines = best
+            _, engine_name, crop_lines, crop_x, crop_y = best
             for item in crop_lines:
                 text = clean_ocr_text(item.text)
                 confidence = float(item.confidence or 0.0)
                 if not _recovered_text_is_acceptable(text, confidence):
                     continue
                 ix, iy, iw, ih = item.box
-                recovered_box = (int(x + ix), int(y + iy), int(iw), int(ih))
+                recovered_box = (int(crop_x + ix), int(crop_y + iy), int(iw), int(ih))
                 # A crop cut around leftover components can still reach text that
                 # was read perfectly well. A reading that lands on a line we
                 # already have is a rediscovery, not a recovery, and adding it
                 # would duplicate the line.
-                if any(
-                    _box_iou(recovered_box, tuple(int(v) for v in known.box)) >= 0.2
-                    for known in lines
-                ):
+                overlapped = [
+                    known for known in lines
+                    if _box_iou(recovered_box, tuple(int(v) for v in known.box)) >= 0.2
+                ]
+                # A continuation read may replace a weak reading of the same row
+                # ("T" for "IT..."), never a confident one.
+                replaceable = (trigger == "lettering_continuation_uncovered_text"
+                               and overlapped and all(_is_weak_ocr_line(k) for k in overlapped)
+                               and _glyph_count(text) > max(_glyph_count(k.text) for k in overlapped))
+                if overlapped and not replaceable:
                     record.setdefault("skipped", []).append(
                         {"text": text, "reason": "overlaps_existing_line"}
                     )
                     continue
+                for known in overlapped:
+                    lines.remove(known)
+                    record.setdefault("replaced", []).append(
+                        {"text": known.text, "confidence": round(float(known.confidence or 0.0), 4)})
                 new_line = OCRLine(
                     text=text,
                     confidence=confidence,
@@ -7114,7 +7969,7 @@ def apply_speech_container_reocr(
                     engine=f"{engine_name}+reocr",
                     page=page_index,
                     metadata={
-                        "selective_reocr": "speech_container_uncovered_text",
+                        "selective_reocr": trigger,
                     },
                 )
                 # No prior line covered this box -- there is no earlier engine
@@ -7132,6 +7987,8 @@ def apply_speech_container_reocr(
                         "confidence": round(confidence, 4),
                     }
                 )
+        if record["engine_errors"] and not record["candidates"] and not record["accepted"]:
+            record["reason"] = "selective_reocr_engine_failed"
         record["duration_ms"] = round((time.perf_counter() - started) * 1000, 3)
         records.append(record)
 
@@ -7998,6 +8855,9 @@ def validate_translation_text(
         return True, "sfx_preserved"
     if not translated:
         return False, "empty_translation"
+    if classification == "sfx" and translated:
+        # Onomatopoeia is not prose: no lexical overlap or name rules apply.
+        return True, "sfx_translated"
 
     source_infos = _translation_token_infos(source_text)
     translated_infos = _translation_token_infos(translated)
@@ -9661,6 +10521,12 @@ def _advanced_art_reconstruction_metrics(original_bgr, cleaned_bgr, group, clean
         source_evidence,
     )
     metrics.update(lettering_metrics)
+    if metrics.get("residual_source_lettering_detected"):
+        legibility = _legible_source_residual(cleaned_bgr, group)
+        metrics["residual_ocr_check"] = legibility
+        if legibility["status"] == "not_legible":
+            metrics["residual_source_lettering_detected"] = False
+            metrics["residual_overruled_by_ocr"] = True
     if _advanced_tiny_white_highlight_false_positive(metrics):
         metrics["advanced_white_patch_original_rejected"] = True
         metrics["advanced_white_patch_tiny_highlight_reviewed"] = True
@@ -9761,6 +10627,539 @@ def _remove_text_for_groups(img_bgr, groups):
     return result
 
 
+def _group_stroke_band(gray, mask_all, lines, max_width=14):
+    """The lettering's outline stroke, measured and selected like "expand by N px".
+
+    Lettering over art usually carries an outline of the opposite polarity (a
+    white stroke round black letters); left behind, it reads as ghost letters.
+    Going outward from the ink, the fraction of pixels markedly lighter (darker for
+    light ink) than the background beyond the stroke is measured at each distance;
+    while it stays >= 0.5 the stroke continues. The band up to that width (plus the
+    anti-aliased edge) joins the mask. No stroke - nothing at distance 1-2 differs
+    from the background (white balloon) - adds nothing.
+    """
+    empty = np.zeros(mask_all.shape, dtype=bool)
+    if not lines or not np.any(mask_all):
+        return empty, 0
+    height, width = gray.shape
+    line_h = max(int(line.box[3]) for line in lines)
+    gx1 = min(int(line.box[0]) for line in lines)
+    gy1 = min(int(line.box[1]) for line in lines)
+    gx2 = max(int(line.box[0] + line.box[2]) for line in lines)
+    gy2 = max(int(line.box[1] + line.box[3]) for line in lines)
+    reach = max_width + 12
+    wx1, wy1 = max(0, gx1 - reach), max(0, gy1 - reach)
+    wx2, wy2 = min(width, gx2 + reach), min(height, gy2 + reach)
+    roi = gray[wy1:wy2, wx1:wx2].astype(np.float32)
+    glyphs = mask_all[wy1:wy2, wx1:wx2]
+    own = np.zeros(roi.shape, dtype=bool)
+    own[max(0, gy1 - wy1):gy2 - wy1, max(0, gx1 - wx1):gx2 - wx1] = True
+    glyphs = glyphs & cv2.dilate(own.astype(np.uint8), np.ones((5, 5), np.uint8)).astype(bool)
+    if np.count_nonzero(glyphs) < 20:
+        return empty, 0
+    distance = cv2.distanceTransform((~glyphs).astype(np.uint8), cv2.DIST_L2, 3)
+    far = (distance > max_width + 2) & (distance <= max_width + 10)
+    if np.count_nonzero(far) < 50:
+        return empty, 0
+    background = float(np.median(roi[far]))
+    # No polarity guess: the mask also holds fringe and part of the outline, so
+    # neither its extremes (black letters, white outline: p10 6 / p90 254 around
+    # 122) nor its deepest pixels (merged white outline between letters) tell
+    # the ink apart. Both a lighter and a darker stroke are measured; lettering
+    # has one outline, and the side that forms a ring is it.
+    far_values = roi[far]
+
+    glyph_values = roi[glyphs]
+
+    def measure(lighter):
+        room = (255.0 - background) if lighter else background
+        if room < 12.0:
+            return 0, None
+        # An outline is on the opposite side from the ink: a lighter stroke needs
+        # ink clearly darker than the backdrop inside the mask (and vice versa),
+        # else it is only the light letters' own anti-aliased edge.
+        if lighter:
+            opposite_ink = np.mean(glyph_values <= background - max(10.0, 0.5 * background))
+        else:
+            opposite_ink = np.mean(glyph_values >= background + max(10.0, 0.5 * (255.0 - background)))
+        if opposite_ink < 0.15:
+            return 0, None
+        # Half the room left towards the far end of the range (a white stroke on
+        # mid grey art); not scaled by the backdrop's spread, which on textured
+        # art pushed the step past any real stroke (measured regression).
+        step = max(10.0, 0.5 * room)
+        like = (roi >= background + step) if lighter else (roi <= background - step)
+        # Relative to the backdrop's own spread as well: only 10 % of the backdrop
+        # is beyond its 10th/90th percentile, so a ring where half the pixels are
+        # is an outline even when the step is small (black outline on a dark wall).
+        if lighter:
+            like |= roi > float(np.percentile(far_values, 90))
+        else:
+            like |= roi < float(np.percentile(far_values, 10))
+        width = 0
+        for d in range(1, max_width + 1):
+            ring = (distance > d - 1) & (distance <= d)
+            if np.count_nonzero(ring) < 10:
+                break
+            if float(np.mean(like[ring])) >= 0.5:
+                width = d
+            else:
+                break
+        return width, like
+
+    measured = [measure(True), measure(False)]
+    width_px, stroke_like = max(measured, key=lambda item: item[0])
+    if width_px < 1:
+        return empty, 0
+    band = (distance <= width_px + 1) & ~glyphs
+    # The measured width is the outline's typical width; where it is thicker (the
+    # stroke under a line is often wider than at its sides) the stroke pixels that
+    # stay connected to the band are followed out to max_width, otherwise the
+    # thicker part is left behind as a bright line along the mask edge. Stroke-
+    # coloured art beyond max_width (a white area beside the text) is not outline:
+    # what it reaches within max_width steps stays out, the outline further along
+    # the lettering (not reachable that fast) is still followed.
+    stroke_pixels = (stroke_like & ~glyphs).astype(np.uint8)
+    art = (stroke_pixels > 0) & (distance > max_width)
+    kernel = np.ones((3, 3), np.uint8)
+    for _ in range(max_width):
+        grown_art = (cv2.dilate(art.astype(np.uint8), kernel) > 0) & (stroke_pixels > 0)
+        if np.array_equal(grown_art, art):
+            break
+        art = grown_art
+    candidates = (stroke_pixels > 0) & (distance <= max_width) & ~art
+    count, labels = cv2.connectedComponents((candidates | band).astype(np.uint8), connectivity=4)
+    seeds = np.unique(labels[band])
+    band |= candidates & np.isin(labels, seeds[seeds > 0])
+    band &= cv2.dilate(own.astype(np.uint8), np.ones((2 * max_width + 3,) * 2, np.uint8)).astype(bool)
+    out = empty.copy()
+    out[wy1:wy2, wx1:wx2] = band
+    return out, int(width_px)
+
+
+def _fill_enclosed_glyph_holes(cleanup_mask, group):
+    """Close holes the lettering mask fully encloses.
+
+    A hole surrounded on every side by the text mask is part of a glyph: the
+    black core of a letter whose white outline was the part selected ("*ding*"
+    on a dark wall left its cores behind as ghost letters), or a counter (the
+    inside of an "o"). Either way no art from outside the lettering can reach it,
+    so refilling it is safe. Holes larger than a line height squared are not
+    glyph-sized and stay.
+    """
+    mask = (np.asarray(cleanup_mask) > 0).astype(np.uint8)
+    lines = _cleanup_lines_for_group(group)
+    if not np.any(mask) or not lines:
+        return cleanup_mask, 0
+    limit = max(int(line.box[3]) for line in lines) ** 2
+    count, labels, stats, _ = cv2.connectedComponentsWithStats(1 - mask, connectivity=4)
+    edge = np.unique(np.concatenate([labels[0], labels[-1], labels[:, 0], labels[:, -1]]))
+    holes = [label for label in range(1, count)
+             if label not in edge and stats[label, cv2.CC_STAT_AREA] <= limit]
+    if not holes:
+        return cleanup_mask, 0
+    fill = np.isin(labels, holes)
+    filled = np.asarray(cleanup_mask).copy()
+    filled[fill] = 255
+    return filled, int(np.count_nonzero(fill))
+
+
+def _antialias_fringe_mask(original_bgr, cleanup_mask, group):
+    """Partial-ink pixels hugging the glyph mask, measured instead of dilated.
+
+    The anti-alias/outline fringe of lettering lies just outside the OCR polygon; on
+    textured backgrounds the mask may extend only 1 px past it, so the fringe stayed
+    on the page and fed Telea as boundary data, drawing a faint outline ghost. For
+    each line the background is estimated on a band 3-6 px beyond the fringe radius
+    and the ink colour from the masked core; a neighbouring pixel joins only when its
+    ink fraction ``alpha = (bg - I) / (bg - fg)`` is >= 0.12, it is connected to the
+    mask and lies within ``max(2, min(4, 0.08 h))`` px; an outline pixel (offset from
+    the background opposite to the ink by >= max(16, 3 sigma)) joins the same way, but
+    only when such pixels ring at least half of the glyph edge.
+    Candidate runs that continue beyond the radius are art strokes and are dropped.
+    Nothing is added when the background is too textured to separate fringe from art,
+    or when the growth would exceed 0.5x the line mask (1.2x with a validated outline).
+    """
+    empty = np.zeros(np.asarray(cleanup_mask).shape[:2], dtype=np.uint8)
+    metrics = {"antialias_fringe_pixels": 0, "antialias_fringe_lines": 0,
+               "antialias_fringe_skipped_textured_lines": 0}
+    if (not config.CLEAN_FRINGE_EVIDENCE or original_bgr is None or cleanup_mask is None
+            or not np.any(cleanup_mask) or original_bgr.shape[:2] != empty.shape):
+        return empty, metrics
+    gray = cv2.cvtColor(original_bgr, cv2.COLOR_BGR2GRAY).astype(np.float32)
+    mask_all = np.asarray(cleanup_mask) > 0
+    height, width = mask_all.shape
+    fringe = np.zeros(mask_all.shape, dtype=bool)
+    for line in _cleanup_lines_for_group(group):
+        x, y, w, h = [int(value) for value in line.box]
+        radius = max(2, min(4, int(round(max(1, h) * 0.08))))
+        pad = radius + 8
+        x1, y1 = max(0, x - pad), max(0, y - pad)
+        x2, y2 = min(width, x + max(1, w) + pad), min(height, y + max(1, h) + pad)
+        if x2 - x1 < 4 or y2 - y1 < 4:
+            continue
+        roi_mask = mask_all[y1:y2, x1:x2].copy()
+        own = np.zeros_like(roi_mask)
+        own[max(0, y - 2 - y1):min(y2, y + h + 2) - y1, max(0, x - 2 - x1):min(x2, x + w + 2) - x1] = True
+        roi_mask &= own
+        if np.count_nonzero(roi_mask) < 8:
+            continue
+        roi_gray = gray[y1:y2, x1:x2]
+        distance = cv2.distanceTransform((~roi_mask).astype(np.uint8), cv2.DIST_L2, 3)
+        near = (~mask_all[y1:y2, x1:x2]) & (distance <= radius)
+        far = (~mask_all[y1:y2, x1:x2]) & (distance >= radius + 3) & (distance <= radius + 6)
+        if np.count_nonzero(far) < 30:
+            continue
+        background = float(np.median(roi_gray[far]))
+        mad = float(np.median(np.abs(roi_gray[far] - background)))
+        core = roi_gray[roi_mask]
+        low, high = np.percentile(core, [10, 90])
+        dark_text = (background - float(low)) > (float(high) - background)
+        ink = float(low if dark_text else high)
+        contrast = abs(background - ink)
+        if contrast < max(24.0, 6.0 * 1.4826 * mad):
+            metrics["antialias_fringe_skipped_textured_lines"] += 1
+            continue
+        alpha = (background - roi_gray) / (background - ink)
+        # A lettering outline sits on the opposite side of the background from the
+        # ink (white halo round black text); it is part of the lettering too.
+        # Only when it rings most of the glyph edge: a bright art stroke touching
+        # one side of a letter is not an outline.
+        partial = (alpha >= 0.12) & (alpha <= 1.2)
+        # The outline is judged against the background *near each glyph*: a white
+        # halo round letters in a translucent balloon over grey clothing is invisible
+        # against the line-wide median (white) yet stands 40 levels above the
+        # clothing right behind it.
+        span = 4 * radius + 13
+        weight = cv2.blur(far.astype(np.float32), (span, span))
+        local_bg = np.where(weight > 1e-3,
+                            cv2.blur(roi_gray * far, (span, span)) / np.maximum(weight, 1e-3),
+                            background)
+        sign = 1.0 if dark_text else -1.0  # outline sits opposite to the ink
+        outline_step = max(16.0, 3.0 * 1.4826 * mad)
+        bright = (sign * (roi_gray - local_bg)) >= outline_step
+        # Real fringe fades out within the radius; a candidate run that continues
+        # well beyond it is an art stroke touching the glyph, so it is dropped.
+        kernel = np.ones((3, 3), np.uint8)
+        wide = (~mask_all[y1:y2, x1:x2]) & (distance <= radius + 4) & (partial | bright)
+        art = wide & (distance > radius + 2)
+        for _ in range(radius + 4):
+            art |= (cv2.dilate(art.astype(np.uint8), kernel) > 0) & wide
+        # The outline band sits beyond the anti-alias ramp: one extra pixel of reach.
+        outline = (~mask_all[y1:y2, x1:x2]) & (distance <= radius + 1) & bright & ~art
+        perimeter = (~mask_all[y1:y2, x1:x2]) & (distance <= 1.5)
+        # Only where an outline could show: against a local background already at
+        # the outline's own level (white halo on white) there is nothing to remove.
+        if dark_text:
+            perimeter &= local_bg <= 255.0 - outline_step
+        else:
+            perimeter &= local_bg >= outline_step
+        ringed = cv2.dilate(outline.astype(np.uint8), np.ones((2 * radius + 1,) * 2, np.uint8)) > 0
+        if np.count_nonzero(ringed & perimeter) < 0.5 * max(1, np.count_nonzero(perimeter)):
+            outline[:] = False
+        candidate = (near & ~art & partial) | outline
+        grown = roi_mask.copy()
+        for _ in range(radius + 1):
+            grown |= (cv2.dilate(grown.astype(np.uint8), kernel) > 0) & candidate
+        added = grown & ~roi_mask
+        # A validated outline ring (or glow) may be as large as a thin glyph core itself.
+        growth_limit = 1.2 if np.any(outline) else 0.5
+        if np.count_nonzero(added) > growth_limit * np.count_nonzero(roi_mask):
+            metrics["antialias_fringe_skipped_textured_lines"] += 1
+            continue
+        if np.any(added):
+            fringe[y1:y2, x1:x2] |= added
+            metrics["antialias_fringe_lines"] += 1
+    stroke_band, stroke_width = _group_stroke_band(gray, mask_all, _cleanup_lines_for_group(group))
+    metrics["lettering_stroke_width"] = stroke_width
+    metrics["lettering_stroke_pixels"] = int(np.count_nonzero(stroke_band & ~mask_all))
+    fringe |= stroke_band
+    fringe &= ~mask_all
+    metrics["antialias_fringe_pixels"] = int(np.count_nonzero(fringe))
+    return fringe.astype(np.uint8) * 255, metrics
+
+
+def in_mask_residual_metrics(original_bgr, cleaned_bgr, cleanup_mask):
+    """Diagnostic (shadow-mode) measure of lettering that survives *inside* the mask.
+
+    The removal verifier assumes everything under the mask was flattened, so a ghost
+    regenerated by the reconstruction is invisible to it. This reports, without
+    deciding anything: pixels inside the mask still offset from the surrounding
+    background in the lettering's polarity, and how much of the source glyph contour
+    reappears as an edge inside the mask (an outline ghost).
+    """
+    empty = {"status": "not_measured", "decision_impact": "none"}
+    if original_bgr is None or cleaned_bgr is None or cleanup_mask is None:
+        return empty
+    mask = np.asarray(cleanup_mask) > 0
+    if (not np.any(mask) or original_bgr.shape[:2] != mask.shape
+            or cleaned_bgr.shape[:2] != mask.shape):
+        return empty
+    mask_u8 = mask.astype(np.uint8) * 255
+    ring = (cv2.dilate(mask_u8, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (11, 11))) > 0) & ~(
+        cv2.dilate(mask_u8, np.ones((3, 3), np.uint8)) > 0)
+    if np.count_nonzero(ring) < 20:
+        return empty
+    source = cv2.cvtColor(original_bgr, cv2.COLOR_BGR2GRAY).astype(np.float32)
+    cleaned = cv2.cvtColor(cleaned_bgr, cv2.COLOR_BGR2GRAY).astype(np.float32)
+    ring_values = cleaned[ring]
+    ring_median = float(np.median(ring_values))
+    ring_mad = float(np.median(np.abs(ring_values - ring_median)))
+    sign = -1.0 if float(np.median(source[mask])) <= ring_median else 1.0
+    cut = max(12.0, 3.0 * 1.4826 * ring_mad)
+    residual = mask & (sign * (cleaned - ring_median) > cut)
+    count, _labels, stats, _ = cv2.connectedComponentsWithStats(residual.astype(np.uint8), 8)
+    largest = max((int(stats[label, cv2.CC_STAT_AREA]) for label in range(1, count)), default=0)
+    contour = (cv2.Canny(source.astype(np.uint8), 55, 155) > 0) & (
+        cv2.dilate(mask_u8, np.ones((3, 3), np.uint8)) > 0)
+    echo = (cv2.Canny(cleaned.astype(np.uint8), 55, 155) > 0) & (
+        cv2.dilate(contour.astype(np.uint8), np.ones((3, 3), np.uint8)) > 0) & mask
+    contour_pixels = int(np.count_nonzero(contour))
+    # Silhouette: a flat fill leaves a weak but continuous step at the mask edge.
+    # Compare the step across the edge with the natural step one pixel further out.
+    across, natural = [], []
+    for dy, dx in ((0, 1), (1, 0), (0, -1), (-1, 0)):
+        inner = np.roll(mask, (dy, dx), axis=(0, 1))
+        outer = np.roll(mask, (2 * dy, 2 * dx), axis=(0, 1))
+        edge = mask & ~inner & ~outer
+        if not np.any(edge):
+            continue
+        ys, xs = np.nonzero(edge)
+        y1, x1 = ys - dy, xs - dx
+        y2, x2 = ys - 2 * dy, xs - 2 * dx
+        valid = (y2 >= 0) & (x2 >= 0) & (y2 < mask.shape[0]) & (x2 < mask.shape[1])
+        ys, xs, y1, x1, y2, x2 = ys[valid], xs[valid], y1[valid], x1[valid], y2[valid], x2[valid]
+        across.append(np.abs(cleaned[ys, xs] - cleaned[y1, x1]))
+        natural.append(np.abs(cleaned[y1, x1] - cleaned[y2, x2]))
+    step_excess = None
+    if across:
+        step_excess = round(float(np.median(np.concatenate(across)) - np.median(np.concatenate(natural))), 3)
+    return {
+        "status": "measured",
+        "boundary_step_excess": step_excess,
+        "decision_impact": "none",
+        "mask_pixels": int(np.count_nonzero(mask)),
+        "residual_pixels": int(np.count_nonzero(residual)),
+        "residual_fraction": round(float(np.count_nonzero(residual) / np.count_nonzero(mask)), 5),
+        "largest_residual_component": largest,
+        "ring_median": round(ring_median, 3),
+        "residual_cut": round(cut, 3),
+        "source_contour_pixels": contour_pixels,
+        "contour_echo_pixels": int(np.count_nonzero(echo)),
+        "contour_echo_fraction": round(float(np.count_nonzero(echo) / max(1, contour_pixels)), 5),
+    }
+
+
+def _try_harmonic_boundary_fill(original_bgr, cleanup_mask, profile, spatial_class, group):
+    """Return an accepted harmonic candidate for a smooth non-uniform backdrop, else None.
+
+    Only SMOOTH_NONUNIFORM is attempted; uniform backdrops keep the exact constant
+    fill and structured/textured ones stay in review. The solver's own gates decide
+    acceptance; its diagnostic is recorded on the group either way.
+    """
+    if spatial_class != "SMOOTH_NONUNIFORM" or cleanup_mask is None:
+        return None
+    from yomu.clean.inpainting.harmonic_fill import harmonic_boundary_fill
+
+    polarity = str(profile.get("local_background_polarity") or "unknown")
+    try:
+        outcome = harmonic_boundary_fill(
+            original_bgr,
+            (np.asarray(cleanup_mask) > 0).astype(np.uint8) * 255,
+            spatial_class=spatial_class,
+            polarity=polarity if polarity in {
+                "dark_text_on_light_bg", "light_text_on_dark_bg", "mixed_unknown",
+            } else "unknown",
+        )
+    except ValueError as exc:
+        group.background_metrics["harmonic_fill"] = {"status": "error", "error": str(exc)}
+        return None
+    group.background_metrics["harmonic_fill"] = {
+        "status": outcome.get("status"),
+        "accepted": bool(outcome.get("accepted")),
+        "rejection_reasons": list(outcome.get("rejection_reasons") or []),
+        "iterations": int(outcome.get("iterations") or 0),
+        "runtime_ms": round(float(outcome.get("runtime_ms") or 0.0), 3),
+    }
+    if not outcome.get("accepted") or int(outcome.get("changed_pixels_outside_authorized_mask") or 0):
+        return None
+    return outcome["candidate_bgr"]
+
+
+def _component_continues_beyond_line(gray, component, origin, line_limit, median, contrast):
+    """True when a "glyph" is really art of the lettering's colour running through.
+
+    The component is followed on the full page at its own ink level; if >= 30 %
+    of that connected ink lies outside the line's allowed area
+    (polygon plus padding), it is a line of the art (a white "/" next to white
+    lettering), not a letter. Mid-tone polarity is not judged here.
+    """
+    if 118 < median < 138:
+        return False
+    ys, xs = np.nonzero(component)
+    if not ys.size:
+        return False
+    ox, oy = origin
+    height, width = gray.shape
+    reach = max(8, int(component.shape[0]))
+    y1, y2 = max(0, oy + ys.min() - reach), min(height, oy + ys.max() + reach + 1)
+    x1, x2 = max(0, ox + xs.min() - reach), min(width, ox + xs.max() + reach + 1)
+    window = gray[y1:y2, x1:x2]
+    # Followed at the component's own ink level (halfway from the background to
+    # its 10th/90th percentile): grey art lines touching white letters on a dark
+    # panel are not the letters' colour and must not make them "art".
+    values = gray[oy + ys, ox + xs].astype(np.float32)
+    offset = max(16.0, contrast * 0.28)
+    if median >= 138:
+        level = min(median - offset, (median + float(np.percentile(values, 10))) / 2.0)
+        ink = window <= level
+    else:
+        level = max(median + offset, (median + float(np.percentile(values, 90))) / 2.0)
+        ink = window >= level
+    count, labels = cv2.connectedComponents(ink.astype(np.uint8), connectivity=8)
+    seeds = labels[oy + ys - y1, ox + xs - x1]
+    seeds = np.unique(seeds[seeds > 0])
+    if not seeds.size:
+        return False
+    connected = np.isin(labels, seeds)
+    allowed = np.asarray(line_limit)[y1:y2, x1:x2] > 0
+    total = int(np.count_nonzero(connected))
+    return bool(total and np.count_nonzero(connected & ~allowed) >= 0.3 * total)
+
+
+def _glyph_strokes_in_network(network, roi_gray, dark_text, ink_level, background_level,
+                              stroke, line_height):
+    """Glyph strokes inside a component where letters fused with same-colour art.
+
+    The size filter dropped the whole component, letters included, so the word
+    stayed on the page ("WORD" over hatching came out as "ORD"). Inside it the
+    lettering is the part closest to the line's own ink level (within a quarter
+    of the ink-background contrast); hatching and outlines that reach that level
+    are thinner than lettering strokes, so an opening the size of the glyph stroke
+    removes them. Pieces are grown back one pixel for their anti-aliased edges and
+    kept only when glyph-height (0.3-1.3 h) and stroke-shaped (<= 75 % of their
+    bbox, or a narrow vertical stroke): a dark block of background is not a letter.
+    """
+    if stroke < 2.0:
+        return np.zeros(network.shape, dtype=bool)
+    reach = 0.25 * abs(float(background_level) - float(ink_level))
+    near_ink = (roi_gray <= ink_level + reach) if dark_text else (roi_gray >= ink_level - reach)
+    candidate = network & near_ink
+    size = max(2, int(round(0.7 * stroke)))
+    opened = cv2.morphologyEx(
+        candidate.astype(np.uint8), cv2.MORPH_OPEN,
+        cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (size, size)))
+    grown = (cv2.dilate(opened, np.ones((3, 3), np.uint8)) > 0) & network
+    count, labels, stats, _ = cv2.connectedComponentsWithStats(grown.astype(np.uint8), 8)
+    keep = np.zeros(network.shape, dtype=bool)
+    for label in range(1, count):
+        width = int(stats[label, cv2.CC_STAT_WIDTH])
+        height = int(stats[label, cv2.CC_STAT_HEIGHT])
+        area = int(stats[label, cv2.CC_STAT_AREA])
+        if not 0.3 * line_height <= height <= 1.3 * line_height:
+            continue
+        if area > 0.75 * width * height and width > 0.35 * line_height:
+            continue
+        keep |= labels == label
+    return keep
+
+
+def _component_is_background_shaped(component, area, width, height, line_height=None):
+    """Whether a large/box-spanning foreground component is background, not lettering.
+
+    The size filter in ``_component_text_mask`` exists to drop balloon interiors,
+    solid boxes and frames. It used to drop every large component, which removed a
+    bold word whose letters touch and any single-glyph line ("!", "?!"), leaving
+    the source text uncleaned. Background shapes are near-solid (>= 70 % of their
+    bbox), ring-like frames (pixels <= 35 % of the contour-filled area) or sparse
+    strokes spanning the box (< 12 % of their bbox: art lines merged with glyphs).
+    A narrow vertical solid is a glyph stroke (the bar of "!", "I"), not a patch.
+    """
+    bbox = max(1, width * height)
+    vertical_stroke = line_height is not None and width <= 0.35 * line_height <= height
+    if (area >= 0.70 * bbox and not vertical_stroke) or area < 0.12 * bbox:
+        return True
+    contours, _ = cv2.findContours(
+        component.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE,
+    )
+    filled = np.zeros(component.shape, dtype=np.uint8)
+    cv2.drawContours(filled, contours, -1, 1, thickness=-1)
+    return area <= 0.35 * max(1, int(np.count_nonzero(filled)))
+
+
+def _midtone_stroke_kernel(line_height):
+    """Black/top-hat structuring element wide enough for the line's stroke width.
+
+    A morphological hat only responds to features narrower than its kernel. A fixed
+    5x5 kernel caught just the edges of bold lettering on mid-tone backgrounds and
+    left a hollow mask (letter interiors survived the clean). Stroke width scales
+    with line height (~0.15 h for bold comic lettering).
+    """
+    size = max(5, min(31, 2 * int(round(max(1.0, float(line_height)) * 0.15)) + 1))
+    return cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (size, size))
+
+
+def _midtone_hats(roi_u8, line_height, values=None):
+    """Polarity-gated black/top-hat responses for a mid-tone line ROI.
+
+    With a stroke-sized kernel the opposite hat also fires on the background gaps
+    between letters (bright gaps between dark strokes), so only the hat of the
+    lettering's polarity is kept. The lettering side is the luminance extreme farther
+    from the median; comparable extremes (outlined lettering) keep both hats.
+    """
+    kernel = _midtone_stroke_kernel(line_height)
+    blackhat = cv2.morphologyEx(roi_u8, cv2.MORPH_BLACKHAT, kernel)
+    tophat = cv2.morphologyEx(roi_u8, cv2.MORPH_TOPHAT, kernel)
+    sample = np.asarray(roi_u8 if values is None else values, dtype=np.float32).ravel()
+    if sample.size:
+        median = float(np.median(sample))
+        dark_reach = median - float(np.percentile(sample, 5))
+        light_reach = float(np.percentile(sample, 95)) - median
+        if dark_reach > 1.5 * max(light_reach, 1.0):
+            tophat = np.zeros_like(tophat)
+        elif light_reach > 1.5 * max(dark_reach, 1.0):
+            blackhat = np.zeros_like(blackhat)
+    return blackhat, tophat
+
+
+def _outline_polarity_evidence(roi_gray, roi_seed, dark, light, line_height, display_footprint):
+    """Keep opposite-polarity pixels only when they hug the glyph core as an outline.
+
+    The footprint admits both polarities so a white outline around black lettering
+    is erased with it. Bright artwork next to dark lettering (a light column behind a
+    caption) satisfies the same luminance rule; it differs by extending away from the
+    glyph. Opposite-polarity components are kept only when nearly all of their pixels
+    lie within an outline-width ring around the seed.
+    """
+    seed = np.asarray(roi_seed) > 0
+    if not np.any(seed):
+        return dark, light
+    seed_median = float(np.median(roi_gray[seed]))
+    roi_median = float(np.median(roi_gray))
+    text_is_dark = seed_median <= roi_median
+    opposite = light if text_is_dark else dark
+    if not np.any(opposite):
+        return dark, light
+    ring_radius = (
+        max(3, min(24, int(round(max(1, line_height) * 0.25))))
+        if display_footprint
+        else max(2, min(12, int(round(max(1, line_height) * 0.12))))
+    )
+    distance = cv2.distanceTransform((~seed).astype(np.uint8), cv2.DIST_L2, 3)
+    count, labels, stats, _ = cv2.connectedComponentsWithStats(
+        opposite.astype(np.uint8), 8,
+    )
+    kept = np.zeros(opposite.shape, dtype=bool)
+    for label in range(1, count):
+        component = labels == label
+        inside_ring = np.count_nonzero(component & (distance <= ring_radius))
+        if inside_ring >= 0.8 * int(stats[label, cv2.CC_STAT_AREA]):
+            kept |= component
+    if text_is_dark:
+        return dark, kept
+    return kept, light
+
+
 def source_lettering_footprint(
     original_bgr,
     group,
@@ -9835,8 +11234,11 @@ def source_lettering_footprint(
         spread = max(10.0, upper - lower)
         dark = roi_gray <= max(8.0, min(220.0, median - max(14.0, spread * 0.32)))
         light = roi_gray >= min(247.0, max(35.0, median + max(14.0, spread * 0.32)))
-        high_contrast = (dark | light) & roi_limit
         roi_seed = seed[y1:y2, x1:x2]
+        dark, light = _outline_polarity_evidence(
+            roi_gray, roi_seed, dark, light, h, display_footprint,
+        )
+        high_contrast = (dark | light) & roi_limit
         support_radius = (
             max(12, min(70, int(round(max(1, h) * 0.55))))
             if display_footprint
@@ -9873,6 +11275,70 @@ def source_lettering_footprint(
 
     footprint = cv2.bitwise_or(footprint, seed)
     return cv2.bitwise_and(footprint, source_evidence_mask)
+
+
+_RESIDUAL_OCR_ENGINES = []
+
+
+def _legible_source_residual(cleaned_bgr, group):
+    """Whether the source words are still legible on the cleaned pixels.
+
+    The pixel residual checks compare against a "lettering footprint" that, on
+    hatching or halftone, also contains the art next to the glyphs, so they kept
+    refusing reconstructions that had removed every letter. Reading the cleaned
+    crop with the OCR answers the question that matters: is the English still
+    there? ``not_legible`` only when the OCR ran and read none of the group's
+    meaningful source tokens; otherwise the caller keeps its refusal.
+    """
+    if not config.CLEAN_RESIDUAL_OCR_CHECK:
+        return {"status": "disabled"}
+    lines = _cleanup_lines_for_group(group)
+    if cleaned_bgr is None or not lines:
+        return {"status": "unavailable", "reason": "no_lines"}
+    source_tokens = set(source_completeness.meaningful_tokens(getattr(group, "text", "") or ""))
+    if not source_tokens:
+        return {"status": "unavailable", "reason": "no_meaningful_source_tokens"}
+    x1 = min(int(line.box[0]) for line in lines)
+    y1 = min(int(line.box[1]) for line in lines)
+    x2 = max(int(line.box[0] + line.box[2]) for line in lines)
+    y2 = max(int(line.box[1] + line.box[3]) for line in lines)
+    line_height = max(int(line.box[3]) for line in lines)
+    height, width = cleaned_bgr.shape[:2]
+    errors = []
+    if not _RESIDUAL_OCR_ENGINES:
+        _RESIDUAL_OCR_ENGINES.extend(_reocr_engines_for(getattr(group, "ocr_lang", None) or "en", errors))
+    if not _RESIDUAL_OCR_ENGINES:
+        return {"status": "unavailable", "reason": "engine_unavailable", "engine_errors": errors}
+    read_stream = []
+    # The detector's reading depends on the crop (a margin of half a line missed
+    # "RURAL" that a full line of margin read); either crop reading a source word
+    # means it is still there.
+    # Only readings over the group's own lines count: a wider crop can reach a
+    # neighbouring caption with the same words (two "*flicker*" on one page).
+    own_pad = max(2, int(round(0.25 * line_height)))
+    own = (x1 - own_pad, y1 - own_pad, x2 + own_pad, y2 + own_pad)
+    for pad in (max(4, int(round(0.5 * line_height))), max(8, line_height)):
+        cx, cy = max(0, x1 - pad), max(0, y1 - pad)
+        crop = cleaned_bgr[cy:min(height, y2 + pad), cx:min(width, x2 + pad)]
+        if not crop.size:
+            continue
+        for _engine, text, _confidence, crop_lines in _reocr_crop_candidates(
+                _RESIDUAL_OCR_ENGINES, crop, errors=errors):
+            for item in crop_lines:
+                if float(item.confidence or 0.0) < 0.5:
+                    continue
+                bx, by, bw, bh = (int(v) for v in item.box)
+                ix = max(0, min(cx + bx + bw, own[2]) - max(cx + bx, own[0]))
+                iy = max(0, min(cy + by + bh, own[3]) - max(cy + by, own[1]))
+                if ix * iy >= 0.3 * max(1, bw * bh):
+                    read_stream.extend(source_completeness.fold_tokens(item.text))
+    if errors and not read_stream:
+        return {"status": "unavailable", "reason": "engine_failed", "engine_errors": errors}
+    present = source_completeness._represented_token_forms(
+        source_completeness.fold_tokens(getattr(group, "text", "") or ""), [read_stream])
+    legible = sorted(token for token in source_tokens if token in present)
+    return {"status": "legible" if legible else "not_legible",
+            "legible_source_tokens": legible, "read_token_count": len(read_stream)}
 
 
 def residual_source_lettering_metrics(
@@ -9912,10 +11378,22 @@ def residual_source_lettering_metrics(
     original_gray = cv2.cvtColor(original_bgr, cv2.COLOR_BGR2GRAY).astype(np.int16)
     cleaned_gray = cv2.cvtColor(cleaned_bgr, cv2.COLOR_BGR2GRAY).astype(np.int16)
     unchanged = np.abs(original_gray - cleaned_gray) <= config.VISUAL_DIFF_THRESHOLD
+    line_height = max((int(line.box[3]) for line in _cleanup_lines_for_group(group)), default=1)
+    # On textured art the footprint is "everything that differs from the
+    # background" inside the OCR box, hatching included, so all unmasked art used
+    # to count as surviving lettering. This check is about lettering left at the
+    # edge of the cleanup (fringe, outline, glow); a glyph missed entirely is the
+    # removal verifier's job (_uncovered_source_text_evidence).
+    edge_radius = max(3, int(round(0.15 * line_height)))
+    near_cleanup = cv2.dilate(
+        (np.asarray(cleanup_mask) > 0).astype(np.uint8),
+        cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * edge_radius + 1,) * 2),
+    ) > 0
     residual = (
         (footprint > 0)
         & (cleanup_mask == 0)
         & (source_evidence_mask > 0)
+        & near_cleanup
         & unchanged
     ).astype(np.uint8) * 255
     count, _labels, stats, _centroids = cv2.connectedComponentsWithStats(
@@ -9928,7 +11406,6 @@ def residual_source_lettering_metrics(
     )
     residual_pixels = int(np.count_nonzero(residual))
     footprint_pixels = int(np.count_nonzero(footprint))
-    line_height = max((int(line.box[3]) for line in _cleanup_lines_for_group(group)), default=1)
     pixel_limit = max(18, int(round(footprint_pixels * 0.015)))
     component_limit = _glyph_scale_component_area(line_height)
     detected = bool(residual_pixels > pixel_limit or largest >= component_limit)
@@ -10371,6 +11848,10 @@ def _estimate_local_background_profile(img_bgr, group, source_mask, draw_box):
         "local_background_luminance_std": None,
         "local_background_spatial_gradient": None,
         "local_background_polarity": "unknown",
+        "local_background_spatial_class": "INSUFFICIENT_EVIDENCE",
+        "local_background_spatial_tile_count": 0,
+        "local_background_spatial_tile_luma_spread": None,
+        "local_background_spatial_edge_fraction": None,
     }
     if img_bgr is None or source_mask is None or not np.any(source_mask):
         return empty
@@ -10419,6 +11900,55 @@ def _estimate_local_background_profile(img_bgr, group, source_mask, draw_box):
             abs(float(np.median(left)) - float(np.median(right))),
         ))
     robust_std = float(np.mean(std_bgr))
+    # Aggregate standard deviation loses where its variation occurs. Compare
+    # robust luminance/color medians in occupied ring tiles and detect edges in
+    # those same trusted samples. These are diagnostics/gating evidence only;
+    # they do not label hidden pixels or authorize an algorithm by themselves.
+    gray_roi = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
+    tile_luma = []
+    tile_color = []
+    tile_positions = []
+    for row in range(4):
+        ya, yb = row * roi.shape[0] // 4, (row + 1) * roi.shape[0] // 4
+        for col in range(4):
+            xa, xb = col * roi.shape[1] // 4, (col + 1) * roi.shape[1] // 4
+            tile_samples = roi[ya:yb, xa:xb][ring[ya:yb, xa:xb]]
+            if tile_samples.shape[0] < 8:
+                continue
+            tile_luma.append(float(np.median(gray_roi[ya:yb, xa:xb][ring[ya:yb, xa:xb]])))
+            tile_color.append(np.median(tile_samples.astype(np.float32), axis=0))
+            tile_positions.append(((col + 0.5) / 4.0, (row + 0.5) / 4.0))
+    edge_map = cv2.Canny(gray_roi, 55, 155) > 0
+    ring_count = max(1, int(np.count_nonzero(ring)))
+    edge_fraction = float(np.count_nonzero(edge_map & ring) / ring_count)
+    tile_spread = float(np.ptp(tile_luma)) if len(tile_luma) >= 2 else None
+    color_spread = (
+        float(np.max(np.linalg.norm(np.asarray(tile_color) - np.asarray(tile_color).mean(axis=0), axis=1)))
+        if len(tile_color) >= 2 else None
+    )
+    plane_residual = None
+    if len(tile_luma) >= 4:
+        design = np.column_stack((np.asarray(tile_positions), np.ones(len(tile_luma))))
+        fitted = design @ np.linalg.lstsq(design, np.asarray(tile_luma), rcond=None)[0]
+        plane_residual = float(np.median(np.abs(np.asarray(tile_luma) - fitted)))
+    if len(tile_luma) < 4:
+        spatial_class = "INSUFFICIENT_EVIDENCE"
+    elif tile_spread is not None and tile_spread <= 6.0 and color_spread <= 8.0 and edge_fraction <= 0.01:
+        spatial_class = "PROVEN_UNIFORM"
+    elif (
+        tile_spread is not None and tile_spread <= 48.0
+        and plane_residual is not None
+        # Structure means edges. A ring with no Canny edges at all varies only at
+        # low frequency (a translucent box over faint art), whatever the plane fit
+        # says; it is smooth, not textured.
+        and (plane_residual <= 3.0 or edge_fraction <= 0.01)
+        and edge_fraction <= 0.25
+    ):
+        # Low residual edge density is necessary, not sufficient, for a smooth
+        # field. The harmonic solver keeps its independent review gates.
+        spatial_class = "SMOOTH_NONUNIFORM"
+    else:
+        spatial_class = "STRUCTURED_OR_TEXTURED"
     if robust_std <= 11.0 and luminance_std <= 12.0:
         if median_luma >= 190.0:
             background_class = "solid_light"
@@ -10441,6 +11971,11 @@ def _estimate_local_background_profile(img_bgr, group, source_mask, draw_box):
         "local_background_luminance_std": round(luminance_std, 3),
         "local_background_spatial_gradient": round(gradient, 3),
         "local_background_polarity": polarity,
+        "local_background_spatial_class": spatial_class,
+        "local_background_spatial_tile_count": len(tile_luma),
+        "local_background_spatial_tile_luma_spread": round(tile_spread, 3) if tile_spread is not None else None,
+        "local_background_spatial_edge_fraction": round(edge_fraction, 5),
+        "local_background_spatial_plane_residual": round(plane_residual, 3) if plane_residual is not None else None,
     }
 
 
@@ -10569,6 +12104,52 @@ def _build_display_source_evidence_mask(image_shape, group):
     return mask
 
 
+def _light_enclosure_interior(original_bgr, group, background_metrics):
+    """Interior of the light balloon/box holding the group, letters included.
+
+    The OCR box of text set tight in a balloon reaches the balloon border; the
+    mask followed it, the border was taken for crossing art and the region was
+    refused (or the border was erased). The interior is the light connected region
+    that holds the lettering, with its holes (the letters) filled, slightly eroded
+    so the border line stays outside. ``None`` when the light region is not closed
+    within a generous window (open narration on art), so nothing is clipped.
+    """
+    lines = _cleanup_lines_for_group(group)
+    if original_bgr is None or not lines:
+        return None
+    gray = cv2.cvtColor(original_bgr, cv2.COLOR_BGR2GRAY)
+    height, width = gray.shape
+    line_h = max(int(line.box[3]) for line in lines)
+    x1 = min(int(line.box[0]) for line in lines)
+    y1 = min(int(line.box[1]) for line in lines)
+    x2 = max(int(line.box[0] + line.box[2]) for line in lines)
+    y2 = max(int(line.box[1] + line.box[3]) for line in lines)
+    # Balloons are larger than their text; the window grows with the text block.
+    pad = max(3 * line_h, x2 - x1, y2 - y1)
+    wx1, wy1, wx2, wy2 = max(0, x1 - pad), max(0, y1 - pad), min(width, x2 + pad), min(height, y2 + pad)
+    roi = gray[wy1:wy2, wx1:wx2]
+    level = float(np.median(np.asarray(
+        (background_metrics or {}).get("local_background_median_bgr") or [np.percentile(roi, 90)] * 3)))
+    light = (roi >= level - 40).astype(np.uint8)
+    count, labels, stats, _ = cv2.connectedComponentsWithStats(light, 4)
+    box = np.zeros(roi.shape, dtype=bool)
+    box[y1 - wy1:y2 - wy1, x1 - wx1:x2 - wx1] = True
+    inside_box = np.bincount(labels[box], minlength=count)
+    owners = [label for label in range(1, count) if inside_box[label] > 0.05 * np.count_nonzero(box)]
+    if not owners:
+        return None
+    region = np.isin(labels, owners)
+    if region[0, :].any() or region[-1, :].any() or region[:, 0].any() or region[:, -1].any():
+        return None  # not closed inside the window: no enclosure to clip to
+    filled = region.astype(np.uint8) * 255
+    contours, _ = cv2.findContours(filled, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    cv2.drawContours(filled, contours, -1, 255, thickness=-1)
+    filled = cv2.erode(filled, np.ones((3, 3), np.uint8))
+    interior = np.zeros(gray.shape, dtype=bool)
+    interior[wy1:wy2, wx1:wx2] = filled > 0
+    return interior
+
+
 def _remove_text_for_group(
     current_bgr,
     original_bgr,
@@ -10576,6 +12157,9 @@ def _remove_text_for_group(
     strategy="primary",
     forensic_capture=None,
 ):
+    # Attempt-scoped, like texture_synthesized: never carry a previous strategy's lines.
+    group.structure_continuations = []
+    group.structure_protect_mask = None
     background_type, background_metrics = _classify_background_region(
         original_bgr,
         group,
@@ -10588,6 +12172,18 @@ def _remove_text_for_group(
         "sfx_area",
         "unknown",
     }
+    # "unknown" only means no balloon/box was found; "textured_art" can be triggered
+    # by the lettering's own ink in the wider context. When the ring that the cleanup
+    # actually touches is proven uniform and solid, it is not textured art and must not
+    # inherit the textured-background restrictions (they rejected every bold word).
+    local_metrics = background_metrics or {}
+    # Only the ordinary strategies are relaxed; the dedicated textured fallbacks keep
+    # their own scope so they still run when the ordinary ones fail.
+    if (strategy in {"primary", "conservative"}
+            and background_type in {"unknown", "textured_art"}
+            and local_metrics.get("local_background_spatial_class") == "PROVEN_UNIFORM"
+            and str(local_metrics.get("local_background_class") or "").startswith("solid_")):
+        tight_background = False
     if strategy in {"glyph_overlay", "caption_overlay"} and not tight_background:
         return current_bgr.copy(), np.zeros(original_bgr.shape[:2], dtype=np.uint8), {
             "mask_valid": False,
@@ -10828,6 +12424,20 @@ def _remove_text_for_group(
             + detached_metrics["detached_text_pixels"]
         )
     component_metrics.update(detached_metrics)
+    fringe_mask, fringe_metrics = _antialias_fringe_mask(original_bgr, cleanup_mask, group)
+    if np.any(fringe_mask):
+        cleanup_mask = cv2.bitwise_or(cleanup_mask, fringe_mask)
+        # Fringe pixels are glyph pixels (partial ink), so they count as text area.
+        component_metrics["text_component_pixels"] = int(
+            component_metrics.get("text_component_pixels", 0)
+            + fringe_metrics["antialias_fringe_pixels"]
+        )
+    component_metrics.update(fringe_metrics)
+    cleanup_mask, hole_pixels = _fill_enclosed_glyph_holes(cleanup_mask, group)
+    component_metrics["enclosed_glyph_hole_pixels"] = hole_pixels
+    if hole_pixels:
+        component_metrics["text_component_pixels"] = int(
+            component_metrics.get("text_component_pixels", 0) + hole_pixels)
     if strategy == "source_scoped":
         # The owned OCR line polygons expanded by the existing text-scale padding
         # are the only artwork this strategy is ever allowed to touch.
@@ -10841,6 +12451,43 @@ def _remove_text_for_group(
         component_metrics["mask_pixels_outside_source_evidence"] = int(
             np.count_nonzero((cleanup_mask > 0) & (source_evidence_mask == 0))
         )
+    group.light_enclosure_interior = None
+    ring_level = float(np.median(np.asarray(
+        (background_metrics or {}).get("local_background_median_bgr") or [0, 0, 0])))
+    if config.CLEAN_CLIP_TO_ENCLOSURE and (
+            background_type in {"white_balloon", "narration_box"} or ring_level >= 200):
+        enclosure = _light_enclosure_interior(original_bgr, group, background_metrics)
+        group.light_enclosure_interior = enclosure
+        if enclosure is not None:
+            clipped = int(np.count_nonzero((cleanup_mask > 0) & ~enclosure))
+            if clipped:
+                cleanup_mask = cleanup_mask.copy()
+                cleanup_mask[~enclosure] = 0
+            component_metrics["mask_pixels_clipped_to_enclosure"] = clipped
+    detector_view = original_bgr
+    enclosure = getattr(group, "light_enclosure_interior", None)
+    if isinstance(enclosure, np.ndarray) and np.any(enclosure):
+        # Inside a known balloon/box only art *inside* it can cross the lettering;
+        # its frame and the art beyond are painted out so they cannot pose as such.
+        detector_view = original_bgr.copy()
+        detector_view[~enclosure] = np.median(original_bgr[enclosure], axis=0).astype(original_bgr.dtype)
+    boundary_conflict = detect_linear_boundary_conflict(
+        detector_view,
+        cleanup_mask,
+        [tuple(int(value) for value in line.box)
+         for line in _cleanup_lines_for_group(group)],
+    )
+    component_metrics.update({
+        "boundary_candidate_segments": boundary_conflict["candidate_segment_count"],
+        "boundary_candidate_curved_segments": boundary_conflict.get(
+            "candidate_curved_segment_count", 0),
+        "boundary_excluded_glyph_dominated_curves": boundary_conflict.get(
+            "excluded_glyph_dominated_curve_count", 0),
+        "boundary_conflict_pixels": boundary_conflict["conflict_pixel_count"],
+        "boundary_candidate_line_mask_hash": boundary_conflict[
+            "candidate_line_mask_hash"],
+        "boundary_detection_method": boundary_conflict["method"],
+    })
     if not np.any(cleanup_mask):
         return current_bgr.copy(), cleanup_mask, {
             **component_metrics,
@@ -10862,6 +12509,38 @@ def _remove_text_for_group(
         "mask_valid": area_ratio <= config.MAX_MASK_TO_TEXT_AREA_RATIO,
         "strategy": strategy,
     }
+    group.structure_continuations = []
+    if (boundary_conflict["status"] == "review_required"
+            and config.CLEAN_STRUCTURE_CONTINUATION
+            and not boundary_conflict.get("candidate_curved_segment_count")
+            and boundary_conflict.get("candidate_segments")):
+        # Every conflict is a straight line seen on both sides of the lettering:
+        # clean the text and carry the line through instead of refusing the region.
+        continuations = [
+            _straight_structure_continuation(original_bgr, cleanup_mask, segment)
+            for segment in _distinct_segments(boundary_conflict["candidate_segments"])
+        ]
+        if all(continuations):
+            protect = np.zeros(cleanup_mask.shape, dtype=bool)
+            for item in continuations:
+                protect |= item.pop("protect")
+            cleanup_mask = cleanup_mask.copy()
+            cleanup_mask[protect] = 0
+            # The protected line hugs the mask; it is art, not a seam to judge.
+            group.structure_protect_mask = protect
+            group.structure_continuations = continuations
+            metrics["structure_continuation_segments"] = len(continuations)
+            metrics["structure_protected_pixels"] = int(np.count_nonzero(protect))
+            metrics["mask_pixels"] = int(np.count_nonzero(cleanup_mask))
+            boundary_conflict = {**boundary_conflict, "status": "structure_continued"}
+    if boundary_conflict["status"] == "review_required":
+        metrics["mask_valid"] = False
+        metrics["review_required"] = True
+        metrics["reason"] = "GLYPH_ART_BOUNDARY_UNCERTAIN"
+        metrics["reason_codes"] = boundary_conflict["reason_codes"]
+        group.glyph_art_boundary_review_required = True
+        group.glyph_art_boundary_review_reason = "GLYPH_ART_BOUNDARY_UNCERTAIN"
+        return current_bgr.copy(), cleanup_mask, metrics
     if not metrics["mask_valid"]:
         metrics["reason"] = "mask_too_large_for_detected_characters"
         return current_bgr.copy(), cleanup_mask, metrics
@@ -10933,19 +12612,20 @@ def _remove_text_for_group(
         else config.MAX_TEXTURED_MASK_GROUP_RATIO
     )
     textured_component_ratio_limit = config.MAX_TEXTURED_MASK_COMPONENT_RATIO
-    if strategy != "source_scoped" and tight_background and (
-        shape_metrics["mask_to_group_area_ratio"]
-        > textured_group_ratio_limit
-        or shape_metrics["largest_mask_component_to_group_ratio"]
-        > textured_component_ratio_limit
-        or (
-            shape_metrics["broad_rectangular_mask"]
-            and strategy not in {"caption_overlay"}
+    if strategy != "source_scoped" and tight_background:
+        overmask = _textured_overmask_evidence(
+            cleanup_mask, group.box,
+            int(component_metrics.get("text_component_pixels", 0)),
+            legacy_group_ratio_limit=textured_group_ratio_limit,
+            legacy_component_ratio_limit=textured_component_ratio_limit,
         )
-    ):
-        metrics["mask_valid"] = False
-        metrics["reason"] = "broad_mask_rejected_on_nonuniform_background"
-        return current_bgr.copy(), cleanup_mask, metrics
+        metrics.update(overmask)
+        if overmask["textured_overmask_rejected"] and not (
+                overmask["textured_overmask_reason"] == "solid_rectangular_patch"
+                and strategy == "caption_overlay"):
+            metrics["mask_valid"] = False
+            metrics["reason"] = "broad_mask_rejected_on_nonuniform_background"
+            return current_bgr.copy(), cleanup_mask, metrics
 
     cleaned = _apply_cleanup_mask(
         current_bgr,
@@ -10956,78 +12636,29 @@ def _remove_text_for_group(
     )
     if strategy == "caption_overlay":
         metrics["reconstruction_method"] = "glyph_inpaint_telea"
-    white_patch_metrics = _white_patch_artifact_metrics(
-        original_bgr,
-        cleaned,
-        group,
-        cleanup_mask,
-        background_type,
-    )
-    metrics.update(white_patch_metrics)
-    local_background_metrics = _local_background_reconstruction_metrics(
-        original_bgr,
-        cleaned,
-        group,
-        cleanup_mask,
-    )
-    metrics.update(local_background_metrics)
-    if local_background_metrics.get("local_background_color_mismatch"):
+    gate_metrics = {}
+    failure = _reconstruction_gate_failure(
+        original_bgr, cleaned, group, cleanup_mask, background_type, strategy, gate_metrics)
+    alternative = getattr(group, "fill_alternative", None)
+    group.fill_alternative = None
+    if failure and alternative is not None:
+        # The other candidate (classic vs learned) may pass where the chosen one
+        # did not: an editor tries the other tool before giving up on the region.
+        alternative_metrics = {}
+        if _reconstruction_gate_failure(original_bgr, alternative, group, cleanup_mask,
+                                        background_type, strategy, alternative_metrics) is None:
+            metrics["fill_switched_by_gate"] = failure
+            if isinstance(getattr(group, "fill_choice", None), dict):
+                group.fill_choice["chosen"] = "classic" if group.fill_choice.get("chosen") == "learned" else "learned"
+                group.fill_choice["switched_by_gate"] = failure
+                group.spatial_harmonic_gate_rejected = bool(
+                    group.fill_choice["chosen"] == "classic"
+                    and group.fill_choice.get("classic_spatial_gate_rejected"))
+            cleaned, gate_metrics, failure = alternative, alternative_metrics, None
+    metrics.update(gate_metrics)
+    if failure:
         metrics["mask_valid"] = False
-        metrics["reason"] = "local_background_color_mismatch"
-        return current_bgr.copy(), cleanup_mask, metrics
-    if white_patch_metrics.get("white_patch_rejected"):
-        metrics["mask_valid"] = False
-        metrics["reason"] = "large_white_patch_on_nonwhite_background"
-        return current_bgr.copy(), cleanup_mask, metrics
-    flat_patch_metrics = _flat_patch_artifact_metrics(
-        original_bgr,
-        cleaned,
-        group,
-        cleanup_mask,
-    )
-    metrics.update(flat_patch_metrics)
-    if flat_patch_metrics.get("flat_patch_rejected"):
-        metrics["mask_valid"] = False
-        metrics["reason"] = "flat_reconstruction_patch_on_textured_background"
-        return current_bgr.copy(), cleanup_mask, metrics
-    # Fidelity finding, not a safety verdict: the reconstruction is provably not
-    # a synthetic block (the guard above cleared it) but it is markedly smoother
-    # than the artwork around it.  It renders, and it renders as review.
-    fidelity_ratio = flat_patch_metrics.get("flat_patch_texture_ratio")
-    metrics["texture_synthesized"] = bool(getattr(group, "texture_synthesized", False))
-    metrics["art_fidelity_uncertain"] = bool(
-        (
-            fidelity_ratio is not None
-            and fidelity_ratio < config.MIN_ART_FIDELITY_TEXTURE_RATIO
-        )
-        # Synthesised grain fixes the *visible* flat-block defect, but it is a
-        # statistical match, not a recovered original - it must not by itself
-        # promote the reconstruction to "clean" (ART-RECON-001).
-        or metrics["texture_synthesized"]
-    )
-    seam_metrics = _reconstruction_seam_metrics(
-        original_bgr,
-        cleaned,
-        group,
-        cleanup_mask,
-    )
-    metrics.update(seam_metrics)
-    if seam_metrics.get("seam_suspected"):
-        metrics["mask_valid"] = False
-        metrics["reason"] = "visible_reconstruction_seam_at_mask_boundary"
-        return current_bgr.copy(), cleanup_mask, metrics
-    dark_patch_metrics = _dark_blotch_artifact_metrics(
-        original_bgr,
-        cleaned,
-        group,
-        cleanup_mask,
-        background_type,
-        strategy,
-    )
-    metrics.update(dark_patch_metrics)
-    if dark_patch_metrics.get("dark_blotch_rejected"):
-        metrics["mask_valid"] = False
-        metrics["reason"] = "dark_blotch_created_on_textured_art"
+        metrics["reason"] = failure
         return current_bgr.copy(), cleanup_mask, metrics
     if strategy == "source_scoped" and (
         source_scoped_outline_material
@@ -11042,6 +12673,13 @@ def _remove_text_for_group(
         )
         metrics.update(lettering_metrics)
         if lettering_metrics.get("residual_source_lettering_detected"):
+            legibility = _legible_source_residual(cleaned, group)
+            metrics["residual_ocr_check"] = legibility
+            if legibility["status"] == "not_legible":
+                lettering_metrics["residual_source_lettering_detected"] = False
+                metrics["residual_source_lettering_detected"] = False
+                metrics["residual_overruled_by_ocr"] = True
+        if lettering_metrics.get("residual_source_lettering_detected"):
             metrics["mask_valid"] = False
             if metrics.get("source_scoped_mask_to_page_ratio", 1.0) <= 0.05:
                 metrics["reason"] = "residual_source_text_after_cleanup"
@@ -11055,6 +12693,10 @@ def _remove_text_for_group(
         strategy="conservative",
     )
     residual_mask = cv2.bitwise_and(residual_mask, cv2.bitwise_not(cleanup_mask))
+    protected_structure = getattr(group, "structure_protect_mask", None)
+    if isinstance(protected_structure, np.ndarray) and protected_structure.shape == residual_mask.shape:
+        # The protected art line is meant to survive; it is not residual lettering.
+        residual_mask[protected_structure] = 0
     residual_pixels = int(np.count_nonzero(residual_mask))
     residual_limit = max(12, int(text_area * 0.035))
     display_residual_limit = max(120, int(text_area * 0.002))
@@ -11096,6 +12738,8 @@ def _remove_text_for_group(
                     residual_mask,
                     cv2.bitwise_not(cleanup_mask),
                 )
+                if isinstance(protected_structure, np.ndarray) and protected_structure.shape == residual_mask.shape:
+                    residual_mask[protected_structure] = 0
                 residual_pixels = int(np.count_nonzero(residual_mask))
                 metrics["source_scoped_display_residual_cleanup_pass_used"] = True
                 metrics["source_scoped_display_residual_pixel_limit"] = (
@@ -11131,6 +12775,13 @@ def _remove_text_for_group(
     metrics["residual_text_pixels_after_cleanup"] = residual_pixels
     metrics["residual_text_pixel_limit"] = residual_limit
     residual_blocks_render = bool(residual_pixels > residual_limit)
+    if residual_blocks_render and strategy not in {"glyph_overlay", "caption_overlay", "source_scoped"}:
+        # On texture the conservative re-scan finds art as "text"; ask the OCR.
+        legibility = _legible_source_residual(cleaned, group)
+        metrics["residual_ocr_check"] = legibility
+        if legibility["status"] == "not_legible":
+            residual_blocks_render = False
+            metrics["residual_overruled_by_ocr"] = True
     metrics["residual_text_within_noise_budget"] = not residual_blocks_render
     metrics["ordinary_source_residual_pixels_after_cleanup"] = (
         residual_pixels if residual_blocks_render else 0
@@ -11157,6 +12808,53 @@ def _remove_text_for_group(
             metrics=metrics,
         )
     return cleaned, cleanup_mask, metrics
+
+
+def _textured_overmask_evidence(mask, group_box, text_component_pixels, *,
+                                legacy_group_ratio_limit, legacy_component_ratio_limit):
+    """Decide whether a mask on textured art reaches beyond its lettering.
+
+    The former rule compared the mask with the *group box*: bold lettering alone
+    covers 30-50 % of its own tight box, so legitimate masks were rejected and the
+    region ended with no clean at all. Over-masking is now measured against the
+    evidenced glyph pixels (mask may be at most 1.8x them: halo, fringe, padding)
+    and a patch is a near-solid component (>= 75 % of its bbox) covering >= 25 % of
+    the group. Without glyph evidence the legacy box-relative limits still apply.
+    """
+    mask_u8 = (np.asarray(mask) > 0).astype(np.uint8)
+    mask_area = int(np.count_nonzero(mask_u8))
+    gx, gy, gw, gh = (int(v) for v in group_box)
+    group_area = max(1, gw * gh)
+    result = {"textured_overmask_rejected": False, "textured_overmask_reason": None,
+              "mask_to_glyph_evidence_ratio": None}
+    if mask_area == 0:
+        return result
+    count, _labels, stats, _ = cv2.connectedComponentsWithStats(mask_u8, 8)
+    solid_patch = any(
+        int(stats[label, cv2.CC_STAT_AREA]) >= 0.25 * group_area
+        and int(stats[label, cv2.CC_STAT_AREA])
+        >= 0.75 * max(1, int(stats[label, cv2.CC_STAT_WIDTH]) * int(stats[label, cv2.CC_STAT_HEIGHT]))
+        for label in range(1, count)
+    )
+    ratio = mask_area / text_component_pixels if text_component_pixels > 0 else None
+    if ratio is not None:
+        result["mask_to_glyph_evidence_ratio"] = round(float(ratio), 4)
+    # A dense word in a tight OCR box is a near-solid component too; it is only a
+    # patch of artwork when the mask also exceeds what the glyph evidence explains.
+    if solid_patch and (ratio is None or ratio > 1.5):
+        result.update(textured_overmask_rejected=True, textured_overmask_reason="solid_rectangular_patch")
+        return result
+    if ratio is not None:
+        if ratio > 1.8:
+            result.update(textured_overmask_rejected=True,
+                          textured_overmask_reason="mask_exceeds_glyph_evidence")
+        return result
+    largest = max((int(stats[label, cv2.CC_STAT_AREA]) for label in range(1, count)), default=0)
+    if (mask_area / group_area > legacy_group_ratio_limit
+            or largest / group_area > legacy_component_ratio_limit):
+        result.update(textured_overmask_rejected=True,
+                      textured_overmask_reason="no_glyph_evidence_box_ratio")
+    return result
 
 
 def _mask_shape_metrics(mask, group_box):
@@ -11203,6 +12901,133 @@ def _mask_shape_metrics(mask, group_box):
     }
 
 
+def _lettering_contour_ghost_metrics(original_bgr, cleaned_bgr, cleanup_mask, protect_mask=None):
+    """Does the reconstruction redraw the letters' outline (a ghost)?
+
+    The learned fill works on the mask grown by 2 px, so the seam gates, which
+    look at the mask edge, compare model pixels with model pixels. Here the step
+    across the lettering contour itself (2 px inside vs 2 px outside, 9 px local
+    means) is compared with the natural step between two background bands further
+    out in the source: a ghost is a step above that natural level by more than a
+    just-visible 3 grey levels and by more than twice it (measured: ghost 4.7 vs
+    natural 0.8; clean fills on stripes 4.7 vs 5.0). Protected art lines, redrawn
+    across the contour on purpose, are not counted.
+    """
+    mask = (np.asarray(cleanup_mask) > 0).astype(np.uint8)
+    out = {"lettering_contour_ghost": False}
+    if not np.any(mask):
+        return out
+    gray = cv2.cvtColor(cleaned_bgr, cv2.COLOR_BGR2GRAY).astype(np.float32)
+    source = cv2.cvtColor(original_bgr, cv2.COLOR_BGR2GRAY).astype(np.float32)
+
+    def band(inner_size, outer_size):
+        grown = cv2.dilate(mask, np.ones((outer_size, outer_size), np.uint8)) > 0 if outer_size else mask > 0
+        shrunk = cv2.dilate(mask, np.ones((inner_size, inner_size), np.uint8)) > 0 if inner_size else mask > 0
+        return grown & ~shrunk
+
+    def local_step(image, near, far):
+        k = (9, 9)
+        near_f, far_f = near.astype(np.float32), far.astype(np.float32)
+        near_mean = cv2.blur(image * near_f, k) / np.maximum(cv2.blur(near_f, k), 1e-3)
+        far_mean = cv2.blur(image * far_f, k) / np.maximum(cv2.blur(far_f, k), 1e-3)
+        both = near & (cv2.blur(far_f, k) > 0.05)
+        return np.abs(near_mean - far_mean)[both]
+
+    keep = np.ones(mask.shape, dtype=bool)
+    if isinstance(protect_mask, np.ndarray) and protect_mask.shape == mask.shape and np.any(protect_mask):
+        keep = ~(cv2.dilate((protect_mask > 0).astype(np.uint8), np.ones((9, 9), np.uint8)) > 0)
+    inner = (mask > 0) & ~(cv2.erode(mask, np.ones((5, 5), np.uint8)) > 0) & keep
+    step = local_step(gray, inner, band(0, 5) & keep)
+    natural = local_step(source, band(9, 13) & keep, band(17, 21) & keep)
+    if step.size < 30 or natural.size < 30:
+        return out
+    step_level, natural_level = float(np.median(step)), float(np.median(natural))
+    out.update(lettering_contour_step=round(step_level, 2), lettering_contour_natural_step=round(natural_level, 2),
+               lettering_contour_ghost=bool(step_level > natural_level + 3.0 and step_level > 2.0 * natural_level))
+    return out
+
+
+def _reconstruction_gate_failure(original_bgr, cleaned, group, cleanup_mask, background_type,
+                                strategy, metrics):
+    """Run the reconstruction gates on one fill; the first failing reason, or None."""
+    ghost_metrics = _lettering_contour_ghost_metrics(
+        original_bgr, cleaned, cleanup_mask, getattr(group, "structure_protect_mask", None))
+    metrics.update(ghost_metrics)
+    if ghost_metrics.get("lettering_contour_ghost"):
+        return "lettering_contour_ghost"
+    white_patch_metrics = _white_patch_artifact_metrics(
+        original_bgr,
+        cleaned,
+        group,
+        cleanup_mask,
+        background_type,
+    )
+    metrics.update(white_patch_metrics)
+    local_background_metrics = _local_background_reconstruction_metrics(
+        original_bgr,
+        cleaned,
+        group,
+        cleanup_mask,
+    )
+    metrics.update(local_background_metrics)
+    if local_background_metrics.get("local_background_color_mismatch"):
+        return "local_background_color_mismatch"
+    fill_shift_metrics = _textured_fill_shift_metrics(
+        original_bgr, cleaned, group, cleanup_mask)
+    metrics.update(fill_shift_metrics)
+    if fill_shift_metrics["textured_fill_shift_rejected"]:
+        return "textured_fill_level_mismatch"
+    if white_patch_metrics.get("white_patch_rejected"):
+        return "large_white_patch_on_nonwhite_background"
+    flat_patch_metrics = _flat_patch_artifact_metrics(
+        original_bgr,
+        cleaned,
+        group,
+        cleanup_mask,
+    )
+    metrics.update(flat_patch_metrics)
+    if flat_patch_metrics.get("flat_patch_rejected"):
+        return "flat_reconstruction_patch_on_textured_background"
+    # Fidelity finding, not a safety verdict: the reconstruction is provably not
+    # a synthetic block (the guard above cleared it) but it is markedly smoother
+    # than the artwork around it.  It renders, and it renders as review.
+    # Typical-texture ratio: None when the surround is typically flat (a plain
+    # balloon), so a flat fill there is not a fidelity finding.
+    fidelity_ratio = flat_patch_metrics.get("flat_patch_typical_ratio")
+    metrics["texture_synthesized"] = bool(getattr(group, "texture_synthesized", False))
+    metrics["art_fidelity_uncertain"] = bool(
+        (
+            fidelity_ratio is not None
+            and fidelity_ratio < config.MIN_ART_FIDELITY_TEXTURE_RATIO
+        )
+        # Synthesised grain fixes the *visible* flat-block defect, but it is a
+        # statistical match, not a recovered original - it must not by itself
+        # promote the reconstruction to "clean" (ART-RECON-001).
+        or metrics["texture_synthesized"]
+    )
+    seam_metrics = _reconstruction_seam_metrics(
+        original_bgr,
+        cleaned,
+        group,
+        cleanup_mask,
+    )
+    metrics.update(seam_metrics)
+    if seam_metrics.get("seam_suspected"):
+        return "visible_reconstruction_seam_at_mask_boundary"
+    dark_patch_metrics = _dark_blotch_artifact_metrics(
+        original_bgr,
+        cleaned,
+        group,
+        cleanup_mask,
+        background_type,
+        strategy,
+    )
+    metrics.update(dark_patch_metrics)
+    if dark_patch_metrics.get("dark_blotch_rejected"):
+        return "dark_blotch_created_on_textured_art"
+    return None
+
+
 def _white_patch_artifact_metrics(
     original_bgr,
     cleaned_bgr,
@@ -11226,6 +13051,41 @@ def _white_patch_artifact_metrics(
         & (cleaned_gray >= 244)
         & ((cleaned_gray.astype(np.int16) - original_gray.astype(np.int16)) >= 24)
     )
+    # A level the surrounding art itself reaches nearby (light rays on a pale sky)
+    # is the backdrop continuing, not a patch: new white counts only where it is
+    # brighter than the local ring (3-12 px out) mean + 1.5 sigma.
+    mask_u8 = (np.asarray(cleanup_mask) > 0).astype(np.uint8)
+    ring = (cv2.dilate(mask_u8, np.ones((25, 25), np.uint8)) > 0) & ~(cv2.dilate(mask_u8, np.ones((7, 7), np.uint8)) > 0)
+    bright_outside = np.zeros(new_white.shape, dtype=bool)
+    if np.any(ring):
+        ring_f = ring.astype(np.float32)
+        values = original_gray.astype(np.float32)
+        support = np.maximum(cv2.blur(ring_f, (41, 41)), 1e-3)
+        local_mean = cv2.blur(values * ring_f, (41, 41)) / support
+        local_sq = cv2.blur(values * values * ring_f, (41, 41)) / support
+        local_std = np.sqrt(np.maximum(local_sq - local_mean * local_mean, 0.0))
+        reached = cleaned_gray.astype(np.float32) <= local_mean + 1.5 * local_std
+        new_white &= ~((support > 0.02) & reached)
+        bright_outside = values >= np.maximum(236.0, local_mean + local_std) - 12.0
+    # New white joined to bright art just outside the mask (brighter than its
+    # local surround) is a light line carried through the lettering, not a patch.
+    if np.any(new_white):
+        near = ((cv2.dilate(mask_u8, np.ones((7, 7), np.uint8)) > 0) & (mask_u8 == 0)
+                & (bright_outside | (original_gray >= 236)))
+        # Through any light reconstructed pixel (the lettering's own white outline
+        # lies between the ray inside and the ray outside).
+        joined = new_white | near | ((mask_u8 > 0) & (cleaned_gray >= 236))
+        count_j, labels_j = cv2.connectedComponents(joined.astype(np.uint8), connectivity=8)
+        anchored = np.unique(labels_j[near])
+        new_white &= ~np.isin(labels_j, anchored[anchored > 0])
+    enclosure = getattr(group, "light_enclosure_interior", None)
+    if isinstance(enclosure, np.ndarray) and enclosure.shape == new_white.shape:
+        # White inside a closed *white* balloon is that balloon, not a patch. A
+        # translucent balloon over art (grey clothing showing through) is not white,
+        # and a white fill there is exactly the silhouette this gate must catch.
+        visible = original_gray[enclosure & (cleanup_mask == 0)]
+        if visible.size and float(np.median(visible)) >= 240 and float(np.percentile(visible, 10)) >= 225:
+            new_white &= ~enclosure
     new_white_u8 = new_white.astype(np.uint8) * 255
     count, _, stats, _ = cv2.connectedComponentsWithStats(new_white_u8, 8)
     largest = max(
@@ -11279,6 +13139,36 @@ def _local_background_reconstruction_metrics(original_bgr, cleaned_bgr, group, c
     }
 
 
+def _textured_fill_shift_metrics(original_bgr, cleaned_bgr, group, cleanup_mask):
+    """Reject a textured reconstruction whose overall level departs from its ring.
+
+    The profile colour check only knows solids (and lets a gradient drift 30 levels), so a fill pulled
+    lighter by a leftover white outline (or darker by ink) shipped as a visible
+    word-shaped silhouette. The median inside the mask must stay within
+    max(12, sigma/2) of the 2-8 px ring around it; texture may vary, its level may not.
+    """
+    empty = {"textured_fill_shift": None, "textured_fill_shift_limit": None,
+             "textured_fill_shift_rejected": False}
+    profile = str((getattr(group, "background_metrics", {}) or {}).get("local_background_class") or "")
+    # A ring surrounds the mask, so a linear gradient has the same median on both.
+    if profile.startswith("solid_"):
+        return empty
+    if cleanup_mask is None or not np.any(cleanup_mask):
+        return empty
+    mask = (np.asarray(cleanup_mask) > 0).astype(np.uint8)
+    ring = (cv2.dilate(mask, np.ones((9, 9), np.uint8)) > 0) & ~(
+        cv2.dilate(mask, np.ones((3, 3), np.uint8)) > 0)
+    if np.count_nonzero(ring) < 30:
+        return empty
+    cleaned = cv2.cvtColor(np.asarray(cleaned_bgr), cv2.COLOR_BGR2GRAY).astype(np.float32)
+    ring_values = cleaned[ring]
+    ring_median = float(np.median(ring_values))
+    limit = max(12.0, 0.5 * 1.4826 * float(np.median(np.abs(ring_values - ring_median))))
+    shift = float(np.median(cleaned[mask > 0])) - ring_median
+    return {"textured_fill_shift": round(shift, 3), "textured_fill_shift_limit": round(limit, 3),
+            "textured_fill_shift_rejected": bool(abs(shift) > limit)}
+
+
 def _flat_patch_artifact_metrics(original_bgr, cleaned_bgr, group, cleanup_mask):
     """Reject a reconstruction that replaced artwork with a synthetic flat block.
 
@@ -11322,21 +13212,39 @@ def _flat_patch_artifact_metrics(original_bgr, cleaned_bgr, group, cleanup_mask)
         default=0,
     )
     radius = int(config.FLAT_FILL_RING_RADIUS)
+    # The ring starts 3 px out: the band right at the mask still holds the
+    # lettering's outline/glow remains, which read as "texture" around a plain
+    # white balloon (TAP: ring 12.0 vs a clean fill 1.8) - the same reason the
+    # reconstruction side below is measured on the mask's interior.
+    gap = 3
     ring = (
         cv2.dilate(
             mask.astype(np.uint8) * 255,
             cv2.getStructuringElement(
                 cv2.MORPH_ELLIPSE,
-                (radius * 2 + 1, radius * 2 + 1),
+                ((radius + gap) * 2 + 1, (radius + gap) * 2 + 1),
             ),
             iterations=1,
         ) > 0
-    ) & ~mask
+    ) & ~(cv2.dilate(mask.astype(np.uint8), cv2.getStructuringElement(
+        cv2.MORPH_ELLIPSE, (gap * 2 + 1, gap * 2 + 1))) > 0)
     original_gray = cv2.cvtColor(original_bgr, cv2.COLOR_BGR2GRAY)
     cleaned_gray = cv2.cvtColor(cleaned_bgr, cv2.COLOR_BGR2GRAY)
-    source_texture = float(
-        np.abs(cv2.Laplacian(original_gray, cv2.CV_32F))[ring].mean()
-    ) if np.any(ring) else 0.0
+    enclosure = getattr(group, "light_enclosure_interior", None)
+    if isinstance(enclosure, np.ndarray) and enclosure.shape == ring.shape and np.any(ring & enclosure):
+        # Inside a known balloon the reference is the balloon, not the art beyond its border.
+        ring = ring & enclosure
+    ring_laplacian = np.abs(cv2.Laplacian(original_gray, cv2.CV_32F))[ring]
+    source_texture = float(ring_laplacian.mean()) if ring_laplacian.size else 0.0
+    # Typical texture (median) on both sides for the fidelity finding: a few
+    # strong lines in the ring (balloon border, neighbouring art) raised the
+    # mean of a plain white surround and flagged clean balloons for review.
+    source_typical = float(np.median(ring_laplacian)) if ring_laplacian.size else 0.0
+    # A typically flat ring whose mean is raised only by a few line pixels (the
+    # balloon border the ring touches) is not textured art: there is no texture a
+    # flat fill could have failed to rebuild.
+    if ring_laplacian.size and float(np.percentile(ring_laplacian, 75)) < 1.0:
+        source_texture = 0.0
     # Measure the reconstruction's *interior*: the mask boundary always carries a
     # strong Laplacian response, which would hide a perfectly uniform fill.
     interior = cv2.erode(
@@ -11346,9 +13254,9 @@ def _flat_patch_artifact_metrics(original_bgr, cleaned_bgr, group, cleanup_mask)
     ) > 0
     if not np.any(interior):
         interior = mask
-    reconstruction_texture = float(
-        np.abs(cv2.Laplacian(cleaned_gray, cv2.CV_32F))[interior].mean()
-    )
+    interior_laplacian = np.abs(cv2.Laplacian(cleaned_gray, cv2.CV_32F))[interior]
+    reconstruction_texture = float(interior_laplacian.mean())
+    reconstruction_typical = float(np.median(interior_laplacian))
     ratio = (
         reconstruction_texture / source_texture if source_texture > 0.0 else None
     )
@@ -11373,6 +13281,9 @@ def _flat_patch_artifact_metrics(original_bgr, cleaned_bgr, group, cleanup_mask)
         ),
         "flat_patch_largest_component_area": int(largest),
         "flat_patch_rejected": rejected,
+        "flat_patch_typical_ring_texture": round(source_typical, 4),
+        "flat_patch_typical_ratio": (
+            round(reconstruction_typical / source_typical, 4) if source_typical >= 1.0 else None),
     }
 
 
@@ -11453,15 +13364,27 @@ def _reconstruction_seam_metrics(original_bgr, cleaned_bgr, group, cleanup_mask)
         )
 
     core = cv2.erode(mask, _disc(band))
-    if not np.any(core):
-        # Stroke-width masks have no interior to compare against.  Say so rather
-        # than manufacture a verdict from the boundary alone.
-        return {**empty, "seam_reason": "mask_too_thin_for_seam_evidence"}
-    inner = (mask > 0) & (core == 0)
+    # A stroke-width (glyph) mask has no interior: the whole mask is the inner band.
+    # It still gets the step and texture verdicts; only the halo test needs a core.
+    thin_mask = not np.any(core)
+    inner = (mask > 0) if thin_mask else ((mask > 0) & (core == 0))
     near = cv2.dilate(mask, _disc(band))
     wide = cv2.dilate(mask, _disc(band * 2))
     outer = (near > 0) & (mask == 0)
     context = (wide > 0) & (near == 0)
+    enclosure = getattr(group, "light_enclosure_interior", None)
+    if isinstance(enclosure, np.ndarray) and enclosure.shape == mask_full.shape:
+        # Inside a known balloon its border and the art beyond are not the context.
+        inside = enclosure[y0:y1, x0:x1]
+        if np.count_nonzero(outer & inside) >= int(config.MIN_SEAM_BAND_PIXELS):
+            outer &= inside
+            context &= inside
+    protected = getattr(group, "structure_protect_mask", None)
+    if isinstance(protected, np.ndarray) and protected.shape == mask_full.shape:
+        # An art line kept through the lettering sits on the mask edge by design.
+        structure = cv2.dilate(protected[y0:y1, x0:x1].astype(np.uint8), _disc(1)) > 0
+        outer &= ~structure
+        context &= ~structure
     minimum = int(config.MIN_SEAM_BAND_PIXELS)
     if min(inner.sum(), outer.sum(), context.sum()) < minimum:
         return {**empty, "seam_reason": "insufficient_boundary_band_evidence"}
@@ -11503,17 +13426,24 @@ def _reconstruction_seam_metrics(original_bgr, cleaned_bgr, group, cleanup_mask)
     ).astype(np.float32)
     low, high = np.percentile(source_gray[outer], [5.0, 95.0])
     context_spread = float(high - low)
+    # A thin line in the band (a balloon border) widens the 5-95 % spread without the
+    # context being textured; the interquartile spread is not moved by it.
+    q1, q3 = np.percentile(source_gray[outer], [25.0, 75.0])
+    context_spread = min(context_spread, 2.0 * float(q3 - q1))
     flat_context = context_spread <= config.MAX_FLAT_FILL_RING_SPREAD
     texture_ratio = (
         inner_texture / outer_texture if outer_texture > 1e-3 else None
     )
 
-    ring = (near > 0) & (core == 0)
-    ring_mean = float(gray[ring].mean())
-    halo_delta = min(
-        abs(ring_mean - float(gray[core > 0].mean())),
-        abs(ring_mean - float(gray[context].mean())),
-    )
+    if thin_mask:
+        halo_delta = 0.0
+    else:
+        ring = (near > 0) & (core == 0)
+        ring_mean = float(gray[ring].mean())
+        halo_delta = min(
+            abs(ring_mean - float(gray[core > 0].mean())),
+            abs(ring_mean - float(gray[context].mean())),
+        )
 
     step_limit = float(config.MAX_SEAM_LUMINANCE_STEP)
     texture_limit = float(config.MIN_SEAM_TEXTURE_RATIO)
@@ -11557,6 +13487,7 @@ def _reconstruction_seam_metrics(original_bgr, cleaned_bgr, group, cleanup_mask)
             config.DETECT_RECONSTRUCTION_SEAMS and reason and high_confidence
         ),
         "seam_reason": reason or "boundary_consistent_with_source_context",
+        "seam_evidence_mode": "thin_mask" if thin_mask else "interior",
     }
 
 
@@ -11586,7 +13517,24 @@ def _dark_blotch_artifact_metrics(
         & ((original_gray.astype(np.int16) - cleaned_gray.astype(np.int16)) >= 55)
     )
     new_dark_u8 = new_dark.astype(np.uint8) * 255
-    count, _, stats, _ = cv2.connectedComponentsWithStats(new_dark_u8, 8)
+    count, labels, stats, _ = cv2.connectedComponentsWithStats(new_dark_u8, 8)
+    # Dark reconstruction where light *lettering* was, touching dark artwork just
+    # outside the mask, is that artwork continuing under the removed letters. Dark
+    # where light *art* was (a light line the mask swallowed) is still erased art.
+    dark_context = (np.asarray(cleanup_mask) == 0) & (original_gray <= 45)
+    in_mask = original_gray[np.asarray(cleanup_mask) > 0]
+    ink = float(np.percentile(in_mask, 95)) if in_mask.size else 255.0
+    lettering_colored = original_gray >= ink - 0.25 * max(0.0, ink - 45.0)
+    islands = np.zeros(new_dark.shape, dtype=bool)
+    for label in range(1, count):
+        component = labels == label
+        touch = cv2.dilate(component.astype(np.uint8), np.ones((7, 7), np.uint8)) > 0
+        continues_dark_art = (np.any(touch & dark_context)
+                              and np.mean(lettering_colored[component]) >= 0.8)
+        if not continues_dark_art:
+            islands |= component
+    new_dark = islands
+    count, _, stats, _ = cv2.connectedComponentsWithStats(new_dark.astype(np.uint8), 8)
     largest = max(
         (int(stats[label, cv2.CC_STAT_AREA]) for label in range(1, count)),
         default=0,
@@ -11673,11 +13621,41 @@ def _local_line_background_level(gray, line, fallback):
     return float(np.median(values))
 
 
+def _line_polarity_level(gray, line, median):
+    """Box median for the text polarity, unless the band outside the box disagrees.
+
+    Bold lettering in a tight OCR box can own most of the box, and then the box
+    median is the ink: dark text on white read as light text on dark, and the
+    white background became the "source text" the verifier said was left behind.
+    """
+
+    ring = _local_line_background_level(gray, line, median)
+    if (median <= 118 and ring >= 138) or (median >= 138 and ring <= 118):
+        return ring
+    if 118 < ring < 138:
+        # Mid-tone surround: the box median says nothing (white text pulls it up,
+        # so the background between letters was masked). Polarity is the side the
+        # ink departs to; the level returned keeps the threshold on the background.
+        x, y, w, h = [int(v) for v in line.box]
+        roi = np.asarray(gray)[max(0, y):max(0, y) + max(1, h), max(0, x):max(0, x) + max(1, w)]
+        if roi.size:
+            light = float(np.percentile(roi, 95)) - ring
+            dark = ring - float(np.percentile(roi, 5))
+            if light > 1.5 * dark:
+                return min(ring, 118.0)
+            if dark > 1.5 * light:
+                return max(ring, 138.0)
+    return median
+
+
 def _component_text_mask(img_bgr, group, maximum_mask, strategy="primary"):
     gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
     mask = np.zeros(gray.shape, dtype=np.uint8)
     raw_components = np.zeros(gray.shape, dtype=np.uint8)
     accepted_components = 0
+    # Lettering of the same group may touch across lines (outlines merge between
+    # rows); only ink running outside every line of the group is art.
+    group_limit = None
 
     for line in _cleanup_lines_for_group(group):
         polygon_mask = np.zeros(gray.shape, dtype=np.uint8)
@@ -11699,6 +13677,13 @@ def _component_text_mask(img_bgr, group, maximum_mask, strategy="primary"):
                 iterations=1,
             )
         line_limit = cv2.bitwise_and(line_limit, maximum_mask)
+        if group_limit is None:
+            group_limit = np.zeros(gray.shape, dtype=np.uint8)
+            for other in _cleanup_lines_for_group(group):
+                cv2.fillPoly(group_limit, [np.asarray(other.polygon, dtype=np.int32)], 255)
+            if line_limit_padding > 0:
+                group_limit = cv2.dilate(group_limit, np.ones((line_limit_padding * 2 + 1,) * 2, np.uint8))
+            group_limit = cv2.bitwise_and(group_limit, maximum_mask)
         x, y, w, h = line.box
         x1 = max(0, int(x) - line_limit_padding)
         y1 = max(0, int(y) - line_limit_padding)
@@ -11713,6 +13698,7 @@ def _component_text_mask(img_bgr, group, maximum_mask, strategy="primary"):
         if values.size < 8:
             continue
         median = float(np.median(values))
+        median = _line_polarity_level(gray, line, median)
         lower = float(np.percentile(values, 20))
         upper = float(np.percentile(values, 80))
         contrast = max(8.0, upper - lower)
@@ -11723,16 +13709,7 @@ def _component_text_mask(img_bgr, group, maximum_mask, strategy="primary"):
             threshold = min(235.0, max(48.0, median + max(16.0, contrast * 0.28)))
             foreground = roi_gray >= threshold
         else:
-            blackhat = cv2.morphologyEx(
-                roi_gray,
-                cv2.MORPH_BLACKHAT,
-                np.ones((5, 5), np.uint8),
-            )
-            tophat = cv2.morphologyEx(
-                roi_gray,
-                cv2.MORPH_TOPHAT,
-                np.ones((5, 5), np.uint8),
-            )
+            blackhat, tophat = _midtone_hats(roi_gray, h, values)
             foreground = (blackhat >= 12) | (tophat >= 12)
         foreground &= roi_poly
         foreground = cv2.morphologyEx(
@@ -11744,16 +13721,37 @@ def _component_text_mask(img_bgr, group, maximum_mask, strategy="primary"):
         count, labels, stats, _ = cv2.connectedComponentsWithStats(foreground, 8)
         selected = np.zeros_like(foreground)
         line_area = max(1, w * h)
+        merged_networks = []
         for label in range(1, count):
             area = int(stats[label, cv2.CC_STAT_AREA])
             cw = int(stats[label, cv2.CC_STAT_WIDTH])
             ch = int(stats[label, cv2.CC_STAT_HEIGHT])
-            if area < 2 or area > line_area * 0.34:
+            if area < 2:
                 continue
-            if cw > w * 0.82 and ch > h * 0.72:
+            if (area > line_area * 0.34 or (cw > w * 0.82 and ch > h * 0.72)) and \
+                    _component_is_background_shaped(labels == label, area, cw, ch, h):
+                # Background-shaped as a whole, but letters fused with same-colour
+                # art (hatching, a dark area) hide inside it: keep their strokes.
+                merged_networks.append(labels == label)
+                continue
+            if _component_continues_beyond_line(gray, labels == label, (x1, y1), group_limit, median, contrast):
                 continue
             selected[labels == label] = 255
             accepted_components += 1
+        if merged_networks and config.CLEAN_SPLIT_MERGED_GLYPHS and not (118 < median < 138):
+            widths = _stroke_widths(selected > 0)
+            if widths.size < 8:
+                widths = _stroke_widths(np.logical_or.reduce(merged_networks))
+            stroke = float(np.percentile(widths, 75)) if widths.size else 0.0
+            dark_text = median >= 138
+            ink_values = roi_gray[foreground > 0]
+            ink_level = float(np.percentile(ink_values, 5 if dark_text else 95))
+            for network in merged_networks:
+                glyphs = _glyph_strokes_in_network(
+                    network, roi_gray, dark_text, ink_level, median, stroke, h)
+                if np.any(glyphs):
+                    selected[glyphs] = 255
+                    accepted_components += 1
 
         if np.any(selected):
             # The glyph footprint is everything that differs from the *local
@@ -12126,6 +14124,21 @@ def _detached_light_text_components_mask(img_bgr, group, source_mask):
             and 3 <= height <= max(24, int(median_height * 1.35))
         ):
             continue
+        # A bright art line clipped by the box looks like a detached glyph; on the
+        # full page it keeps going (a white "/" beside "*ding*").
+        reach = int(2 * median_height)
+        wy1, wy2 = max(0, y - reach), min(gray.shape[0], y + h + reach)
+        wx1, wx2 = max(0, x - reach), min(gray.shape[1], x + w + reach)
+        wide_count, wide_labels = cv2.connectedComponents((gray[wy1:wy2, wx1:wx2] >= 178).astype(np.uint8), connectivity=8)
+        cys, cxs = np.nonzero(component)
+        seeds = np.unique(wide_labels[cys - wy1, cxs - wx1])
+        seeds = seeds[seeds > 0]
+        if seeds.size:
+            connected = np.isin(wide_labels, seeds)
+            in_box = np.zeros(connected.shape, dtype=bool)
+            in_box[y - wy1:y + h - wy1, x - wx1:x + w - wx1] = True
+            if np.count_nonzero(connected & ~in_box) >= 0.3 * np.count_nonzero(connected):
+                continue
         selected[missing_component] = 255
         components += 1
     if np.any(selected):
@@ -12274,24 +14287,21 @@ def _detached_dark_text_components_mask(img_bgr, group, source_mask):
     ).astype(np.uint8) * 255
     count, labels, stats, _ = cv2.connectedComponentsWithStats(dark, 8)
     selected = np.zeros_like(source_mask)
-    components = 0
     max_area = max(1800, int(group.box[2] * group.box[3] * 0.08))
-    for label in range(1, count):
-        area = int(stats[label, cv2.CC_STAT_AREA])
-        width = int(stats[label, cv2.CC_STAT_WIDTH])
-        height = int(stats[label, cv2.CC_STAT_HEIGHT])
-        component = labels == label
-        missing_component = component & (source_mask == 0)
-        if not np.any(missing_component & (near > 0)):
-            continue
-        if not (
-            2 <= area <= max_area
-            and 1 <= width <= max(24, int(median_height * 1.6))
-            and 3 <= height <= max(28, int(median_height * 1.5))
-        ):
-            continue
-        selected[missing_component] = 255
-        components += 1
+    missing = source_mask == 0
+    # Components with a missing pixel near the source mask, counted in one pass
+    # (a per-label full-page comparison cost seconds on tall pages).
+    touches = np.bincount(labels[missing & (near > 0)], minlength=count) > 0
+    area = stats[:, cv2.CC_STAT_AREA]
+    width = stats[:, cv2.CC_STAT_WIDTH]
+    height = stats[:, cv2.CC_STAT_HEIGHT]
+    keep = (touches & (area >= 2) & (area <= max_area)
+            & (width >= 1) & (width <= max(24, int(median_height * 1.6)))
+            & (height >= 3) & (height <= max(28, int(median_height * 1.5))))
+    keep[0] = False
+    components = int(np.count_nonzero(keep))
+    if components:
+        selected[keep[labels] & missing] = 255
     if np.any(selected):
         selected = cv2.dilate(selected, np.ones((3, 3), np.uint8), iterations=1)
     return selected, {
@@ -12300,7 +14310,515 @@ def _detached_dark_text_components_mask(img_bgr, group, source_mask):
     }
 
 
-def _apply_cleanup_mask(current_bgr, original_bgr, group, cleanup_mask, strategy="primary"):
+def _measure_structure_continuations(original_bgr, group, cleanup_mask):
+    """Straight art lines crossing ``cleanup_mask``: protected and redrawn like the mask builder does."""
+    group.structure_continuations = []
+    group.structure_protect_mask = None
+    if not config.CLEAN_STRUCTURE_CONTINUATION or cleanup_mask is None or not np.any(cleanup_mask):
+        return
+    conflict = detect_linear_boundary_conflict(
+        original_bgr, cleanup_mask,
+        [tuple(int(value) for value in line.box) for line in _cleanup_lines_for_group(group)])
+    if conflict.get("candidate_curved_segment_count") or not conflict.get("candidate_segments"):
+        return
+    continuations = [_straight_structure_continuation(original_bgr, cleanup_mask, segment)
+                     for segment in _distinct_segments(conflict["candidate_segments"])]
+    continuations = [item for item in continuations if item]
+    if not continuations:
+        return
+    protect = np.zeros(np.asarray(cleanup_mask).shape, dtype=bool)
+    for item in continuations:
+        protect |= item.pop("protect")
+    group.structure_protect_mask = protect
+    group.structure_continuations = continuations
+
+
+def _apply_cleanup_mask(current_bgr, original_bgr, group, cleanup_mask, strategy="primary",
+                        accepted_candidate=None):
+    group.fill_alternative = None
+    if (not hasattr(group, "structure_continuations") and strategy != "lama_large"
+            and getattr(group, "lines", None)):
+        # A mask handed in ready-made (not built by _remove_text_for_group) never
+        # had its crossing art lines measured: the compositor still keeps them.
+        _measure_structure_continuations(original_bgr, group, cleanup_mask)
+    protect = getattr(group, "structure_protect_mask", None)
+    if isinstance(protect, np.ndarray) and protect.shape == np.asarray(cleanup_mask).shape and np.any(protect):
+        cleanup_mask = np.asarray(cleanup_mask).copy()
+        cleanup_mask[protect] = 0
+    learned = _learned_texture_fill(current_bgr, group, cleanup_mask, strategy)
+    classic = None
+    if learned is None or (config.CLEAN_COMPARE_FILLS and strategy != "lama_large"):
+        classic = _apply_cleanup_mask_fill(
+            current_bgr, original_bgr, group, cleanup_mask, strategy=strategy,
+            accepted_candidate=accepted_candidate)
+    if learned is None and classic is not None and config.CLEAN_COMPARE_FILLS and strategy != "lama_large" \
+            and not _inside_white_enclosure(current_bgr, group, cleanup_mask):
+        learned = _learned_texture_fill(current_bgr, group, cleanup_mask, strategy, force=True)
+    result = learned if classic is None else classic
+    if learned is not None and classic is not None:
+        # Try both, keep the one the surroundings agree with (what an editor does
+        # when stamp and fill disagree): lower boundary/tone mismatch wins.
+        parts = {name: _fill_consistency_parts(current_bgr, candidate, cleanup_mask)
+                 for name, candidate in (("classic", classic), ("learned", learned))}
+        # The edge step is reported, not scored: the outside band it reads is the
+        # same for both candidates and still holds the lettering's halo, so it
+        # rewarded copying that halo inward (measured on a translucent balloon).
+        # The learned fill is the stronger prior on textured art; the classic one
+        # replaces it only when clearly (>20 %) more consistent with the ring.
+        scores = {name: sum(v for k, v in terms.items() if k != "step") for name, terms in parts.items()}
+        chosen = "classic" if scores["classic"] < 0.8 * scores["learned"] else "learned"
+        result = learned if chosen == "learned" else classic
+        group.fill_alternative = _draw_structure_continuations(
+            classic if chosen == "learned" else learned, group, cleanup_mask)
+        group.fill_choice = {"chosen": chosen, **{k: round(v, 2) for k, v in scores.items()},
+                             "terms": {name: {k: round(v, 2) for k, v in terms.items()} for name, terms in parts.items()}}
+        # The spatial-gate refusal is a verdict on the classic candidate only.
+        group.fill_choice["classic_spatial_gate_rejected"] = bool(
+            getattr(group, "spatial_harmonic_gate_rejected", False))
+        if chosen == "learned":
+            group.spatial_harmonic_gate_rejected = False
+        if isinstance(getattr(group, "background_metrics", None), dict) and chosen == "classic":
+            group.background_metrics["cleanup_fill_source"] = group.background_metrics.get(
+                "cleanup_fill_source_classic", group.background_metrics.get("cleanup_fill_source"))
+    return _draw_structure_continuations(result, group, cleanup_mask)
+
+
+def _fill_consistency_parts(source_bgr, candidate_bgr, cleanup_mask):
+    """How much a reconstruction disagrees with the art around it, per term (lower is better).
+
+    Sum of: the local tone mismatch (each masked pixel against the ring 2-8 px
+    around it averaged at the finest scale reaching it, beyond the ring's own spread
+    about that local average - so a gradient balloon is judged locally, not by one
+    global median); the mean step across the mask edge (inner 3 px vs outer 3 px band,
+    compared locally); the share of masked pixels that are islands darker or
+    lighter than anything common in the ring (5-95 % range widened by 8 levels)
+    and not connected to such pixels just outside the mask;
+    and the fine-detail (|Laplacian|) energy ratio inside vs ring, log-scaled.
+    """
+    mask = (np.asarray(cleanup_mask) > 0).astype(np.uint8)
+    if not np.any(mask):
+        return {}
+    gray = cv2.cvtColor(candidate_bgr, cv2.COLOR_BGR2GRAY).astype(np.float32)
+    source = cv2.cvtColor(source_bgr, cv2.COLOR_BGR2GRAY).astype(np.float32)
+    inside = mask > 0
+    ring = (cv2.dilate(mask, np.ones((17, 17), np.uint8)) > 0) & ~(cv2.dilate(mask, np.ones((5, 5), np.uint8)) > 0)
+    if np.count_nonzero(ring) < 30:
+        return {}
+    ring_values = source[ring]
+    q = np.percentile(ring_values, [5, 25, 50, 75, 95])
+    # Expected tone everywhere in the mask: the ring averaged at the finest scale
+    # that reaches each pixel (31 px, doubling) - a smooth membrane, so a patch
+    # copied from a white region into grey art deep inside a wide mask counts.
+    ring_f = ring.astype(np.float32)
+    expected = np.zeros_like(gray)
+    filled = np.zeros(gray.shape, dtype=bool)
+    spread = None
+    uniform = np.zeros(gray.shape, dtype=bool)
+    for size in (31, 61, 121, 241, 481):
+        support = cv2.blur(ring_f, (size, size))
+        local = cv2.blur(source * ring_f, (size, size)) / np.maximum(support, 1e-3)
+        local_sq = cv2.blur(source * source * ring_f, (size, size)) / np.maximum(support, 1e-3)
+        local_std = np.sqrt(np.maximum(local_sq - local * local, 0.0))
+        if spread is None:
+            spread = float(np.median(np.abs(source[ring] - local[ring])))
+            # Where the ring around a pixel spans an art edge (white sleeve next to
+            # grey coat) its average is no reference: a fill that carries the
+            # edge on would be penalised and one that smears it rewarded.
+            uniform_limit = max(8.0, float(np.median(local_std[ring])))
+        new = inside & ~filled & (support > 0.02)
+        expected[new] = local[new]
+        uniform[new] = local_std[new] <= uniform_limit
+        filled |= new
+        if np.all(filled[inside]):
+            break
+    judged_tone = filled & inside & uniform
+    if np.count_nonzero(judged_tone) >= max(30, 0.1 * np.count_nonzero(inside)):
+        residual = gray[judged_tone] - expected[judged_tone]
+        # Medians: thin art lines carried through are a minority of the pixels
+        # and must not count; a wrong patch or blotch covers most of them.
+        tone = abs(float(np.median(residual))) + max(0.0, float(np.median(np.abs(residual))) - spread)
+    else:
+        tone = abs(float(np.median(gray[inside])) - q[2])
+    inner_band = inside & ~(cv2.erode(mask, np.ones((7, 7), np.uint8)) > 0)
+    outer_band = (cv2.dilate(mask, np.ones((7, 7), np.uint8)) > 0) & ~inside
+    k = (15, 15)
+    inner_mean = cv2.blur(gray * inner_band, k) / np.maximum(cv2.blur(inner_band.astype(np.float32), k), 1e-3)
+    outer_mean = cv2.blur(source * outer_band, k) / np.maximum(cv2.blur(outer_band.astype(np.float32), k), 1e-3)
+    edge = inner_band
+    step = float(np.mean(np.abs(inner_mean[edge] - outer_mean[edge]))) if np.any(edge) else 0.0
+    # Islands: masked pixels darker/lighter than anything common in the ring that
+    # are not connected to the same kind of pixel in the ring. A white speed line
+    # carried through the mask joins its ring part and is continuation, not a blob.
+    near = (cv2.dilate(mask, np.ones((5, 5), np.uint8)) > 0) & ~inside
+    composite = np.where(inside, gray, source)
+    island_pixels = 0
+    for extreme in (composite < q[0] - 8, composite > q[4] + 8):
+        region = extreme & (inside | near)
+        if not np.any(region & inside):
+            continue
+        count, labels = cv2.connectedComponents(region.astype(np.uint8), connectivity=8)
+        anchored = np.unique(labels[region & near])
+        island_pixels += int(np.count_nonzero(region & inside & ~np.isin(labels, anchored[anchored > 0])))
+    islands = 100.0 * float(island_pixels) / max(1, np.count_nonzero(inside))
+    # Texture continuity: fine-detail energy inside vs the ring (a smooth patch in
+    # striped or hatched art is wrong even when its tone matches).
+    hf_in = float(np.mean(np.abs(cv2.Laplacian(gray, cv2.CV_32F))[cv2.erode(mask, np.ones((5, 5), np.uint8)) > 0]))         if np.any(cv2.erode(mask, np.ones((5, 5), np.uint8))) else 0.0
+    hf_ring = float(np.mean(np.abs(cv2.Laplacian(source, cv2.CV_32F))[ring]))
+    texture = 10.0 * abs(float(np.log((hf_in + 1.0) / (hf_ring + 1.0))))
+    return {"tone": float(tone), "step": float(step), "islands": float(islands), "texture": float(texture)}
+
+
+
+def _screentone_lattice(gray, valid, min_period=3, max_period=24):
+    """Lattice vectors of a periodic halftone in ``gray`` (only ``valid`` pixels count).
+
+    Autocorrelation of the high-passed visible pixels, normalised by the
+    autocorrelation of the visibility mask so the hole left by the lettering does
+    not bias it. Returns two non-collinear translation vectors, or ``None`` when
+    no off-centre peak is clearly periodic (normalised < 0.4).
+    """
+    g = gray.astype(np.float32)
+    hp = (g - cv2.GaussianBlur(g, (0, 0), 3.0)) * valid
+    weight = valid.astype(np.float32)
+    if np.count_nonzero(valid) < 400 or float(np.std(hp[valid])) < 4.0:
+        return None
+
+    def autocorr(a):
+        f = np.fft.rfft2(a, s=(2 * a.shape[0], 2 * a.shape[1]))
+        return np.fft.irfft2(f * np.conj(f))[:a.shape[0], :a.shape[1]]
+
+    num, den = autocorr(hp), autocorr(weight)
+    shape = num.shape
+    corr = np.zeros(shape, np.float32)
+    ok = den > 0.3 * den[0, 0]
+    corr[ok] = num[ok] / den[ok]
+    corr /= max(1e-6, float(corr[0, 0]))
+    peaks = []
+    for dy in range(-max_period, max_period + 1):
+        for dx in range(0, max_period + 1):
+            r = (dy * dy + dx * dx) ** 0.5
+            if r < min_period or r > max_period or (dx == 0 and dy <= 0):
+                continue
+            value = corr[dy % shape[0], dx % shape[1]]
+            neighbours = [corr[(dy + a) % shape[0], (dx + b) % shape[1]]
+                          for a in (-1, 0, 1) for b in (-1, 0, 1) if a or b]
+            if value >= 0.25 and value >= max(neighbours):
+                peaks.append((r, -float(value), dy, dx))
+    # The primary screen direction must be clearly periodic (>= 0.4); the second
+    # may be weaker (anisotropic screens) but must still repeat (>= 0.25).
+    if not any(-v >= 0.4 for _r, v, _dy, _dx in peaks):
+        return None
+    peaks.sort(key=lambda p: (p[1] > -0.4, p[0]))
+
+    def refine(dy, dx):
+        # Sub-pixel peak: a rotated screen's lattice step is not a whole pixel.
+        ys, xs, ws = [], [], []
+        for a in (-1, 0, 1):
+            for b in (-1, 0, 1):
+                value = max(0.0, float(corr[(dy + a) % shape[0], (dx + b) % shape[1]]))
+                ys.append(dy + a); xs.append(dx + b); ws.append(value)
+        total = sum(ws) or 1.0
+        return (sum(y * w for y, w in zip(ys, ws)) / total, sum(x * w for x, w in zip(xs, ws)) / total)
+
+    t1 = refine(peaks[0][2], peaks[0][3])
+    for _r, _v, dy, dx in peaks[1:]:
+        cross = peaks[0][2] * dx - peaks[0][3] * dy
+        if abs(cross) >= 0.5 * peaks[0][0] * (dy * dy + dx * dx) ** 0.5:
+            return t1, refine(dy, dx)
+    return None
+
+
+def _screentone_around(current_bgr, cleanup_mask, region=None, boxes=()):
+    """Whether the art around the mask is a periodic halftone screen."""
+    mask = np.asarray(cleanup_mask) > 0
+    if not np.any(mask):
+        return False
+    height, width = mask.shape
+    ys, xs = np.nonzero(mask)
+    pad = 48
+    y1, y2 = max(0, ys.min() - pad), min(height, ys.max() + pad + 1)
+    x1, x2 = max(0, xs.min() - pad), min(width, xs.max() + pad + 1)
+    # Measure the screen outside the whole text block: the gaps between letters hold
+    # anti-alias remnants that would break the periodicity.
+    valid = ~(cv2.dilate(mask[y1:y2, x1:x2].astype(np.uint8), np.ones((15, 15), np.uint8)) > 0)
+    for bx, by, bw, bh in boxes:  # the lettering's own outline/glow is not the screen
+        margin = max(3, int(round(0.3 * bh)))
+        valid[max(0, by - margin - y1):max(0, by + bh + margin - y1),
+              max(0, bx - margin - x1):max(0, bx + bw + margin - x1)] = False
+    if region is not None:
+        valid &= np.asarray(region)[y1:y2, x1:x2]
+    gray = cv2.cvtColor(current_bgr[y1:y2, x1:x2], cv2.COLOR_BGR2GRAY)
+    return _screentone_lattice(gray, valid) is not None
+
+
+
+def _inside_white_enclosure(image_bgr, group, cleanup_mask):
+    """Whether the mask sits in a closed balloon whose visible interior is plain white."""
+    enclosure = getattr(group, "light_enclosure_interior", None)
+    mask = np.asarray(cleanup_mask) > 0
+    if not isinstance(enclosure, np.ndarray) or enclosure.shape != mask.shape:
+        return False
+    if np.count_nonzero(mask & ~enclosure) > 0.05 * max(1, np.count_nonzero(mask)):
+        return False
+    gray = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2GRAY)
+    visible = gray[enclosure & ~(cv2.dilate(mask.astype(np.uint8), np.ones((5, 5), np.uint8)) > 0)]
+    return bool(visible.size and np.median(visible) >= 240 and np.percentile(visible, 10) >= 225)
+
+_LEARNED_FILL_CACHE = {}
+
+
+def _learned_texture_fill(current_bgr, group, cleanup_mask, strategy, force=False):
+    """Local LaMa reconstruction for textured backgrounds, or ``None`` to fall back.
+
+    Telea and the constant/harmonic fills only diffuse the boundary, so on
+    hatching, halftone or photo texture they leave a smooth word-shaped patch
+    (texture ratio ~0.3 of the true background on 269 real-background cases;
+    LaMa ~0.9, lower error in 2 of 3). The same verified local model as the
+    translated-page fallback is used, composited only inside the mask; every
+    existing gate still judges the result. Unavailable/integrity failures fall
+    back to the classic fill and are recorded on the group.
+    """
+    if (not config.CLEAN_LEARNED_TEXTURE_FILL or not config.ADVANCED_ART_INPAINTING
+            or strategy == "lama_large" or cleanup_mask is None or not np.any(cleanup_mask)):
+        return None
+    metrics = getattr(group, "background_metrics", {}) or {}
+    if not force and _inside_white_enclosure(current_bgr, group, cleanup_mask):
+        # A plain white balloon wants plain white; the model invents letter-like
+        # strokes there (it read a dotted border as texture and redrew "I D D").
+        return None
+    spatial = metrics.get("local_background_spatial_class")
+    # The spatial evidence wins over tone statistics: a smooth field (noisy dark
+    # backdrop) is rebuilt by boundary interpolation; the model invented a darker
+    # word-shaped blob there.
+    textured = spatial == "STRUCTURED_OR_TEXTURED" or (
+        metrics.get("local_background_class") == "textured_art"
+        and spatial not in {"SMOOTH_NONUNIFORM", "PROVEN_UNIFORM"})
+    # A light halftone balloon reads as "solid_light" by its tone statistics, and a
+    # flat fill then erases its dots; a measured periodic screen goes to the model.
+    if not textured and config.CLEAN_SCREENTONE_DETECTION:
+        textured = _screentone_around(
+            current_bgr, cleanup_mask, getattr(group, "light_enclosure_interior", None),
+            [tuple(int(v) for v in line.box) for line in _cleanup_lines_for_group(group)])
+        if textured:
+            group.screentone_detected = True
+    if not textured and not force:
+        return None
+    return _learned_inpaint(current_bgr, group, cleanup_mask)
+
+
+def _learned_inpaint(current_bgr, group, cleanup_mask):
+    """The verified local model's reconstruction of ``cleanup_mask``, or ``None``.
+
+    Shared by the texture fill and the last resort so both get the same margin,
+    tone correction and cache; an unavailable model is recorded on the group.
+    """
+    mask_u8 = (np.asarray(cleanup_mask) > 0).astype(np.uint8)
+    # The model is given (and composites) the mask grown by 2 px: a mask that
+    # hugs each letter, with the faint halo just outside, lets it redraw the
+    # letters' shapes as ghosts (measured on 3 cases; 4-6 px added nothing).
+    # Protected structure and the outside of a known balloon are never grown into.
+    grown = cv2.dilate(mask_u8, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5)))
+    protect = getattr(group, "structure_protect_mask", None)
+    if isinstance(protect, np.ndarray) and protect.shape == grown.shape:
+        grown[(protect > 0) & (mask_u8 == 0)] = 0
+    enclosure = getattr(group, "light_enclosure_interior", None)
+    if isinstance(enclosure, np.ndarray) and enclosure.shape == grown.shape:
+        grown[~enclosure.astype(bool) & (mask_u8 == 0)] = 0
+    mask_u8 = grown
+    ys, xs = np.nonzero(mask_u8)
+    pad = 32
+    y1, y2 = max(0, ys.min() - pad), min(mask_u8.shape[0], ys.max() + pad + 1)
+    x1, x2 = max(0, xs.min() - pad), min(mask_u8.shape[1], xs.max() + pad + 1)
+    key = hashlib.sha1(mask_u8.tobytes() + current_bgr[y1:y2, x1:x2].tobytes()).hexdigest()
+    inside = mask_u8 > 0
+    cached = _LEARNED_FILL_CACHE.get(key)
+    if cached is not None:
+        # Only the reconstructed pixels are cached: the rest of the page may have
+        # changed since (other groups cleaned), and must never be rolled back.
+        group.texture_synthesized = False
+        result = current_bgr.copy()
+        result[inside] = cached
+        return result
+    try:
+        inpainter = advanced_art_inpainting.get_default_inpainter()
+        with _LAMA_INFERENCE_LOCK:
+            cleaned, _telemetry = inpainter.reconstruct(current_bgr, mask_u8 * 255)
+    except Exception as exc:  # noqa: BLE001 - unavailable model: classic fill, recorded
+        group.learned_texture_fill = {"status": "unavailable", "reason": type(exc).__name__}
+        return None
+    # The model returns the filled area a few levels off the surroundings (measured
+    # ~3-5 darker on 5 of 6 cases); with the mask edge following the lettering,
+    # that offset alone draws the letters' outline as a ghost on smooth art. One
+    # per-channel offset removes it without touching the reconstructed structure.
+    # It is the median of *local* differences along the mask edge (15 px window,
+    # 3 px just outside vs 3 px just inside): a mask spanning a white shirt and
+    # grey hatching must not be shifted by the difference between the two.
+    outer = (cv2.dilate(mask_u8, np.ones((7, 7), np.uint8)) > 0) & ~inside
+    inner = inside & ~(cv2.erode(mask_u8, np.ones((7, 7), np.uint8)) > 0)
+    tone_offset = [0.0, 0.0, 0.0]
+    outer_f, inner_f = outer.astype(np.float32), inner.astype(np.float32)
+    outer_support = cv2.blur(outer_f, (15, 15))
+    paired = inner & (outer_support > 0.05)
+    if np.count_nonzero(paired) >= 30:
+        inner_support = np.maximum(cv2.blur(inner_f, (15, 15)), 1e-3)
+        differences = []
+        for channel in range(3):
+            outside_mean = cv2.blur(current_bgr[..., channel].astype(np.float32) * outer_f, (15, 15)) / np.maximum(outer_support, 1e-3)
+            inside_mean = cv2.blur(cleaned[..., channel].astype(np.float32) * inner_f, (15, 15)) / inner_support
+            differences.append(float(np.median((outside_mean - inside_mean)[paired])))
+        offset = np.asarray(differences, dtype=np.float32)
+        corrected = cleaned.astype(np.float32)
+        corrected[inside] += offset
+        cleaned = np.clip(np.rint(corrected), 0, 255).astype(np.uint8)
+        tone_offset = [round(float(v), 1) for v in offset]
+    group.learned_texture_fill = {"status": "applied", "tone_offset_bgr": tone_offset}
+    group.texture_synthesized = False
+    if isinstance(getattr(group, "background_metrics", None), dict):
+        group.background_metrics["cleanup_fill_source"] = "learned_texture_fill"
+    if len(_LEARNED_FILL_CACHE) >= 16:
+        _LEARNED_FILL_CACHE.pop(next(iter(_LEARNED_FILL_CACHE)))
+    _LEARNED_FILL_CACHE[key] = cleaned[inside].copy()
+    result = current_bgr.copy()
+    result[inside] = cleaned[inside]
+    return result
+
+
+def _draw_structure_continuations(result_bgr, group, cleanup_mask):
+    """Redraw straight art lines through the cleaned area, inside the mask only."""
+    continuations = getattr(group, "structure_continuations", None) or []
+    if not continuations or cleanup_mask is None or not np.any(cleanup_mask):
+        return result_bgr
+    drawn = result_bgr.copy()
+    for item in continuations:
+        if not item.get("segment"):
+            continue
+        ax, ay, bx, by = item["segment"]
+        cv2.line(drawn, (int(ax), int(ay)), (int(bx), int(by)),
+                 tuple(int(v) for v in item["color_bgr"]),
+                 max(1, int(item["thickness"])), cv2.LINE_AA)
+    inside = np.asarray(cleanup_mask) > 0
+    out = result_bgr.copy()
+    out[inside] = drawn[inside]
+    return out
+
+
+def _distinct_segments(segments, tolerance=3.0):
+    """Drop Hough duplicates: near-parallel segments lying within a few px of a longer one."""
+    kept = []
+    for segment in sorted(segments, key=lambda s: -np.hypot(s[2] - s[0], s[3] - s[1])):
+        ax, ay, bx, by = [float(v) for v in segment]
+        length = max(1.0, float(np.hypot(bx - ax, by - ay)))
+        duplicate = False
+        for other in kept:
+            ox, oy, qx, qy = [float(v) for v in other]
+            olen = max(1.0, float(np.hypot(qx - ox, qy - oy)))
+            cos = abs((bx - ax) * (qx - ox) + (by - ay) * (qy - oy)) / (length * olen)
+            # distance of this segment's midpoint from the other's line
+            mx, my = (ax + bx) / 2, (ay + by) / 2
+            dist = abs((qx - ox) * (oy - my) - (ox - mx) * (qy - oy)) / olen
+            if cos >= 0.995 and dist <= tolerance:
+                duplicate = True
+                break
+        if not duplicate:
+            kept.append(segment)
+    return kept
+
+
+def _straight_structure_continuation(original_bgr, cleanup_mask, segment):
+    """Protect a straight art line inside the mask and say where to redraw it.
+
+    The detector clips segments to its search window, so the segment is extended
+    by half its length each way. The line's colour and thickness are measured
+    outside the dilated mask, on samples that are a line (centre differs from both
+    profile ends by >= 16 and the ends agree - the edge of a dark area is not a line).
+    Inside a band of that thickness, pixels that still have the line's colour are
+    the line itself and are protected (``protect``: removed from the mask); band
+    pixels of another colour are lettering drawn over the line, stay in the mask
+    and get the line redrawn. The redraw runs only between the first and last
+    place the line is actually seen - an interpolation, never an extension past
+    what the page shows. Returns ``None`` when the line is not seen at least
+    four times along the segment, or when there is neither a stretch to bridge
+    nor a line pixel to protect.
+    """
+    ax, ay, bx, by = [float(v) for v in segment]
+    length = float(np.hypot(bx - ax, by - ay))
+    if length < 8:
+        return None
+    ux, uy = (bx - ax) / length, (by - ay) / length
+    extend = 0.5 * length
+    ax, ay, bx, by = ax - ux * extend, ay - uy * extend, bx + ux * extend, by + uy * extend
+    gray = cv2.cvtColor(original_bgr, cv2.COLOR_BGR2GRAY).astype(np.float32)
+    height, width = gray.shape
+    mask = np.asarray(cleanup_mask) > 0
+    near_mask = cv2.dilate(mask.astype(np.uint8), np.ones((5, 5), np.uint8)) > 0
+    t = np.linspace(0.0, 1.0, int(2 * length) + 1)
+    px, py = ax + t * (bx - ax), ay + t * (by - ay)
+    on_page = (px >= 0) & (px <= width - 1) & (py >= 0) & (py <= height - 1)
+    ix = np.clip(np.rint(px).astype(int), 0, width - 1)
+    iy = np.clip(np.rint(py).astype(int), 0, height - 1)
+    offsets = np.arange(-6, 7)
+    thickness, colors, contrasts, shifts = [], [], [], []
+    for index in np.flatnonzero(on_page & ~near_mask[iy, ix]):
+        sx = np.clip(np.rint(px[index] - offsets * uy).astype(int), 0, width - 1)
+        sy = np.clip(np.rint(py[index] + offsets * ux).astype(int), 0, height - 1)
+        profile = gray[sy, sx]
+        side_a, side_b = float(np.median(profile[:3])), float(np.median(profile[-3:]))
+        background = 0.5 * (side_a + side_b)
+        # Hough snaps to wherever the binary evidence is densest (a row of letter
+        # feet beside a border), so the line's real centre is searched +/-3 px.
+        centre = 3 + int(np.argmax(np.abs(profile[3:10] - background)))
+        contrast = abs(float(profile[centre]) - background)
+        # A line has background on both sides; the edge of a dark area does not,
+        # and measuring one would make the protected band swallow the lettering.
+        if contrast < 16 or abs(side_a - side_b) > contrast / 2:
+            continue
+        thickness.append(int(np.count_nonzero(np.abs(profile - background) > contrast / 2)))
+        colors.append(original_bgr[sy[centre], sx[centre]].astype(np.float32))
+        contrasts.append(contrast)
+        shifts.append(centre - 6)
+    if len(colors) < 6:
+        return None
+    shift = float(np.median(shifts))
+    ax, ay, bx, by = ax - shift * uy, ay + shift * ux, bx - shift * uy, by + shift * ux
+    px, py = px - shift * uy, py + shift * ux
+    ix = np.clip(np.rint(px).astype(int), 0, width - 1)
+    iy = np.clip(np.rint(py).astype(int), 0, height - 1)
+    color = np.median(np.asarray(colors), axis=0)
+    line_gray = float(cv2.cvtColor(color.reshape(1, 1, 3).astype(np.uint8), cv2.COLOR_BGR2GRAY)[0, 0])
+    tolerance = 0.5 * float(np.median(contrasts))
+    width_px = int(max(1, min(8, round(float(np.median(thickness))))))
+    band = np.zeros(mask.shape, np.uint8)
+    cv2.line(band, (int(round(ax)), int(round(ay))), (int(round(bx)), int(round(by))),
+             255, width_px, cv2.LINE_8)
+    line_colored = np.abs(gray - line_gray) < tolerance
+    protect = (band > 0) & mask & line_colored
+    seen = on_page & line_colored[iy, ix]
+    if np.count_nonzero(seen) < 4:
+        return None
+    first, last = int(np.argmax(seen)), int(len(seen) - 1 - np.argmax(seen[::-1]))
+    masked = mask[iy, ix] & ~protect[iy, ix]
+    # Something to interpolate over: a masked stretch with the line seen on both sides.
+    inner = masked.copy()
+    inner[:first] = False
+    inner[last + 1:] = False
+    if not np.any(inner) and not np.any(protect):
+        return None
+    return {
+        # No masked stretch to bridge: the line is fully visible, protecting it is
+        # enough (lettering of the same colour touching it stays with the line, and
+        # the residual check judges whether that is acceptable).
+        "segment": None if not np.any(inner) else [
+            int(round(px[first])), int(round(py[first])),
+            int(round(px[last])), int(round(py[last]))],
+        "color_bgr": [int(v) for v in color],
+        "thickness": width_px,
+        "protect": protect,
+        "line_seen_samples": int(np.count_nonzero(seen)),
+    }
+
+
+def _apply_cleanup_mask_fill(current_bgr, original_bgr, group, cleanup_mask, strategy="primary",
+                             accepted_candidate=None):
     # Attempt-scoped: several strategies may run for one group, each calling
     # this function once, so start clean rather than carrying a flag set by an
     # earlier attempt that did not end up shipping.
@@ -12308,15 +14826,53 @@ def _apply_cleanup_mask(current_bgr, original_bgr, group, cleanup_mask, strategy
     result = current_bgr.copy()
     if cleanup_mask is None or not np.any(cleanup_mask):
         return result
+    if strategy == "lama_large":
+        if (isinstance(accepted_candidate, np.ndarray)
+                and accepted_candidate.shape == current_bgr.shape
+                and accepted_candidate.dtype == current_bgr.dtype):
+            # The candidate was produced from page context and can carry pixels
+            # from earlier translated groups.  Only the authorized cleanup
+            # region may cross into CLEAN/PSD; retain the accumulated CLEAN
+            # buffer everywhere else.
+            result[cleanup_mask > 0] = accepted_candidate[cleanup_mask > 0]
+        return result
+    local_profile = getattr(group, "background_metrics", {}) or {}
+    local_background_class = str(
+        local_profile.get("local_background_class") or "unknown"
+    )
+    spatial_class = str(local_profile.get("local_background_spatial_class") or "INSUFFICIENT_EVIDENCE")
+    constant_fill_class = local_background_class in {
+        "solid_light", "solid_dark", "solid_colored", "solid_midtone",
+    }
+    # Deny the constant fill only on positive evidence of non-uniformity. Too few
+    # ring tiles (INSUFFICIENT_EVIDENCE) is not such evidence; the aggregate solid_*
+    # test that selected this branch then stands, as before the spatial gate.
+    spatial_gate_denies_constant = bool(
+        config.CLEAN_HARMONIC_FILL
+        and constant_fill_class
+        and spatial_class in {"SMOOTH_NONUNIFORM", "STRUCTURED_OR_TEXTURED"}
+    )
+    if spatial_gate_denies_constant and strategy != "caption_overlay":
+        harmonic = _try_harmonic_boundary_fill(
+            original_bgr, cleanup_mask, local_profile, spatial_class, group,
+        )
+        if harmonic is not None:
+            # A constant fill would paint letter silhouettes onto a smooth but
+            # non-uniform backdrop; the accepted harmonic candidate is the
+            # boundary-continuous reconstruction for exactly this class.
+            result[cleanup_mask > 0] = harmonic[cleanup_mask > 0]
+            group.background_metrics["cleanup_fill_source"] = "harmonic_boundary_fill"
+            return result
+    if spatial_gate_denies_constant:
+        # Keep downstream fallbacks available for visual diagnosis, but a
+        # removal-only pass cannot certify their output as CLEAN without an
+        # accepted harmonic candidate for this rejected spatial class.
+        group.spatial_harmonic_gate_rejected = True
     if strategy == "caption_overlay":
         return _apply_textured_caption_overlay(
             result, cleanup_mask, original_bgr=original_bgr, group=group,
         )
     draw_box = _safe_draw_box(group.box, original_bgr.shape, group)
-    local_profile = getattr(group, "background_metrics", {}) or {}
-    local_background_class = str(
-        local_profile.get("local_background_class") or "unknown"
-    )
     local_color = local_profile.get("local_background_median_bgr")
     if (
         local_background_class in {
@@ -12328,6 +14884,7 @@ def _apply_cleanup_mask(current_bgr, original_bgr, group, cleanup_mask, strategy
         and isinstance(local_color, (list, tuple))
         and len(local_color) == 3
         and int(local_profile.get("local_background_sample_count") or 0) >= 12
+        and not spatial_gate_denies_constant
     ):
         # The colour is sampled from the immediate, non-glyph ring.  This is
         # the generic path for grey/coloured/neon enclosures; it never uses a
@@ -12379,8 +14936,12 @@ def _apply_cleanup_mask(current_bgr, original_bgr, group, cleanup_mask, strategy
         and _proven_light_cleanup_region(group.background_metrics)
         and (group.background_metrics or {}).get("relaxed_white_context")
     )
+    if spatial_gate_denies_constant:
+        white_region = False
+        dark_region = False
     if (
         (white_region or dark_region)
+        and not spatial_gate_denies_constant
         and not relaxed_source_scoped_light
         and not _local_background_flatness(
             original_bgr,
@@ -12421,7 +14982,9 @@ def _apply_cleanup_mask(current_bgr, original_bgr, group, cleanup_mask, strategy
         )
     else:
         radius = 1 if strategy in {"conservative", "source_scoped"} else 2
-        local = cv2.inpaint(result, cleanup_mask, radius, cv2.INPAINT_TELEA)
+        local = cv2.inpaint(
+            _telea_source_without_fringe(result, cleanup_mask), cleanup_mask,
+            radius, cv2.INPAINT_TELEA)
         result[cleanup_mask > 0] = local[cleanup_mask > 0]
     return result
 
@@ -12463,9 +15026,15 @@ def _restore_lost_local_texture(result_bgr, source_bgr, mask, *, ring_radius=Non
         interior = mask_u8 > 0
     source_gray = cv2.cvtColor(source_bgr, cv2.COLOR_BGR2GRAY)
     result_gray = cv2.cvtColor(result_bgr, cv2.COLOR_BGR2GRAY)
-    source_texture = float(np.abs(cv2.Laplacian(source_gray, cv2.CV_32F))[ring].mean())
+    ring_laplacian = np.abs(cv2.Laplacian(source_gray, cv2.CV_32F))[ring]
+    source_texture = float(ring_laplacian.mean())
     if source_texture <= 1e-3:
         # Surrounding art is itself flat - nothing lost to restore.
+        return result_bgr
+    # Grain is a per-pixel property: most ring pixels carry it. A smooth ring with a
+    # few strong edges has a high mean but a ~0 median, and grain injected there is
+    # invented noise (page 03: ring median |Laplacian| 0, injected result median 3).
+    if float(np.median(ring_laplacian)) <= 1.0:
         return result_bgr
     # A single mask-wide average hides a *localised* flat patch: several OCR
     # lines share one merged mask (P005: three balloon lines over sky/cloud/
@@ -12502,6 +15071,42 @@ def _restore_lost_local_texture(result_bgr, source_bgr, mask, *, ring_radius=Non
     return result
 
 
+def _telea_source_without_fringe(img_bgr, mask):
+    """Telea input whose 2-px boundary ring has leftover lettering neutralised.
+
+    Telea propagates the ring just outside the mask inward, so an outline or
+    anti-alias pixel the mask missed is smeared through the whole word as a light
+    or dark silhouette. Ring pixels that are outliers against the band 3-6 px out
+    (> max(16, 3 sigma)) are replaced by that band's median in a copy used only as
+    the inpainting source, unless they continue into that band (crossing art);
+    pixels outside the mask are never written.
+    """
+    # ponytail: one median per mask; a per-glyph local median if texture varies a lot.
+    selected = (np.asarray(mask) > 0).astype(np.uint8)
+    kernel = np.ones((3, 3), np.uint8)
+    near = (cv2.dilate(selected, kernel, iterations=2) > 0) & (selected == 0)
+    far = (cv2.dilate(selected, kernel, iterations=6) > 0) & ~(
+        cv2.dilate(selected, kernel, iterations=3) > 0)
+    if np.count_nonzero(far) < 30:
+        return img_bgr
+    gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY).astype(np.float32)
+    median = float(np.median(gray[far]))
+    mad = float(np.median(np.abs(gray[far] - median)))
+    reach = (cv2.dilate(selected, kernel, iterations=6) > 0) & (selected == 0)
+    outlier = reach & (np.abs(gray - median) > max(16.0, 3.0 * 1.4826 * mad))
+    # An outlier run that continues into the far band is art crossing the mask
+    # (a line Telea must carry through), not lettering left behind.
+    structure = outlier & far
+    for _ in range(8):
+        structure |= (cv2.dilate(structure.astype(np.uint8), kernel) > 0) & outlier
+    leftovers = near & outlier & ~structure
+    if not np.any(leftovers):
+        return img_bgr
+    source = img_bgr.copy()
+    source[leftovers] = np.median(img_bgr[far], axis=0).astype(img_bgr.dtype)
+    return source
+
+
 def _apply_textured_caption_overlay(img_bgr, mask, *, radius=3, original_bgr=None, group=None):
     """Remove caption glyphs while retaining the local artwork texture.
 
@@ -12510,14 +15115,19 @@ def _apply_textured_caption_overlay(img_bgr, mask, *, radius=3, original_bgr=Non
     from the surrounding illustration.  If the mask is empty the input is
     returned unchanged, allowing the caller to preserve the source safely.
     """
-    if mask is None or not np.any(mask):
+    if (not isinstance(mask, np.ndarray) or mask.ndim != 2
+            or mask.shape != img_bgr.shape[:2] or not np.any(mask)):
         return img_bgr.copy()
-    inpaint_mask = cv2.dilate(mask, np.ones((3, 3), np.uint8), iterations=1)
-    repaired = cv2.inpaint(img_bgr, inpaint_mask, int(radius), cv2.INPAINT_TELEA)
+    effective_mask = mask > 0
+    inpaint_mask = effective_mask.astype(np.uint8) * 255
+    repaired = cv2.inpaint(
+        _telea_source_without_fringe(img_bgr, inpaint_mask), inpaint_mask,
+        int(radius), cv2.INPAINT_TELEA)
     result = img_bgr.copy()
-    result[mask > 0] = repaired[mask > 0]
+    result[effective_mask] = repaired[effective_mask]
     result = _restore_lost_local_texture(
-        result, original_bgr if original_bgr is not None else img_bgr, mask, group=group,
+        result, original_bgr if original_bgr is not None else img_bgr,
+        inpaint_mask, group=group,
     )
     return result
 
@@ -12562,9 +15172,9 @@ def _estimated_white_region_fill_color(img_bgr, mask, box):
         samples = roi[ring]
     if samples.size == 0:
         return np.array([255, 255, 255], dtype=np.uint8)
+    # A dark ring median means the surround is not white; forcing (245,245,245)
+    # here painted a white patch into grey/tinted regions. Use the measured colour.
     color = np.median(samples, axis=0)
-    if float(np.mean(color)) < 150:
-        color = np.array([245, 245, 245], dtype=np.uint8)
     return np.clip(color, 0, 255).astype(np.uint8)
 
 
@@ -12663,6 +15273,121 @@ def _draw_multiline_per_font(draw, origin, lines, plan, *, fill, spacing, stroke
         y += h + spacing
 
 
+def _balloon_text_area(group, image_shape):
+    """Where translated text may sit inside a closed balloon/box, or ``None``.
+
+    The interior measured during cleanup (``light_enclosure_interior``), inset by
+    the letterer's own margin - the closest the source text came to the border -
+    kept between 3 px and 10 % of the balloon's smaller side. ``None`` for open
+    text on art: the rectangle fit is kept there.
+    """
+    interior = getattr(group, "light_enclosure_interior", None)
+    if not isinstance(interior, np.ndarray) or interior.shape != tuple(image_shape[:2]) or not np.any(interior):
+        return None
+    ys, xs = np.nonzero(interior)
+    limit = 0.1 * min(xs.max() - xs.min() + 1, ys.max() - ys.min() + 1)
+    distance = cv2.distanceTransform(interior.astype(np.uint8), cv2.DIST_L2, 3)
+    source = np.zeros(interior.shape, dtype=bool)
+    for line in _cleanup_lines_for_group(group):
+        lx, ly, lw, lh = (int(v) for v in line.box)
+        source[max(0, ly):ly + lh, max(0, lx):lx + lw] = True
+    source &= interior
+    letterer = float(distance[source].min()) if np.any(source) else limit
+    margin = int(round(max(3.0, min(limit, letterer))))
+    area = cv2.erode(interior.astype(np.uint8), np.ones((2 * margin + 1, 2 * margin + 1), np.uint8)) > 0
+    for nx, ny, nw, nh in getattr(group, "neighbor_text_boxes", None) or []:
+        area[max(0, ny - margin):ny + nh + margin, max(0, nx - margin):nx + nw + margin] = False
+    return area if np.any(area) else None
+
+
+def _balloon_shape_layout(draw, text, font, area, center, spacing, stroke_width):
+    """Wrap ``text`` into the balloon's shape: each line as wide as the balloon is there.
+
+    Lines are stacked around ``center`` (the source text's centre); a line's width
+    is the run of ``area`` holding the centre column, narrowed to its tightest row
+    within the line's band - wide in the middle of an oval, narrow at top and
+    bottom, as a letterer sets it. The fewest lines that hold every word win.
+    Returns [(line, x, y)] (draw origin of each line) or ``None``.
+    """
+    words = str(text or "").split()
+    if not words:
+        return None
+    height, width = area.shape
+    cx, cy = (int(round(v)) for v in center)
+    if not (0 <= cx < width and 0 <= cy < height) or not area[cy, cx]:
+        ys, xs = np.nonzero(area)
+        cx, cy = int(np.median(xs)), int(np.median(ys))
+    # Line box from the tallest marks Portuguese uses (accents above capitals,
+    # cedilla and descenders below), so no line pokes out of its band.
+    probe = draw.textbbox((0, 0), "ÉÂÃÇÁGgjpq|", font=font, stroke_width=stroke_width)
+    line_h = probe[3] - probe[1]
+    pitch = line_h + spacing
+    rows = np.flatnonzero(area[:, cx])
+    if not rows.size:
+        return None
+    max_lines = max(1, int((rows.max() - rows.min() + 1 + spacing) // max(1, pitch)))
+
+    def span(row):
+        line = area[row]
+        if not line[cx]:
+            return 0, -1
+        gaps = np.flatnonzero(~line)
+        left = gaps[gaps < cx]
+        right = gaps[gaps > cx]
+        return (int(left[-1]) + 1 if left.size else 0), (int(right[0]) - 1 if right.size else width - 1)
+
+    def measure(words_):
+        return draw.textlength(" ".join(words_), font=font) + 2 * stroke_width
+
+    for count in range(1, max_lines + 1):
+        top = cy - (count * pitch - spacing) / 2.0
+        bands = []
+        for index in range(count):
+            y1 = int(round(top + index * pitch))
+            y2 = y1 + line_h
+            if y1 < 0 or y2 >= height:
+                bands = None
+                break
+            left, right = 0, width - 1
+            for row in range(y1, y2 + 1):
+                a, b = span(row)
+                left, right = max(left, a), min(right, b)
+            if right - left < 4:
+                bands = None
+                break
+            bands.append((y1, left, right))
+        if not bands:
+            continue
+        placed, cursor = [], 0
+        for y1, left, right in bands:
+            line_words = []
+            while cursor < len(words) and measure(line_words + [words[cursor]]) <= right - left + 1:
+                line_words.append(words[cursor])
+                cursor += 1
+            placed.append((line_words, y1, left, right))
+        if cursor < len(words) or any(not item[0] for item in placed):
+            continue
+        layout = []
+        inside = True
+        for line_words, y1, left, right in placed:
+            line = " ".join(line_words)
+            box = draw.textbbox((0, 0), line, font=font, stroke_width=stroke_width)
+            line_w = box[2] - box[0]
+            line_cx = (left + right) / 2.0
+            lx, ly = line_cx - line_w / 2.0 - box[0], y1 - probe[1]
+            # The real ink box of the line must lie inside the area.
+            ink = draw.textbbox((lx, ly), line, font=font, stroke_width=stroke_width)
+            x1, y1i = max(0, int(np.floor(ink[0]))), max(0, int(np.floor(ink[1])))
+            x2, y2i = min(width - 1, int(np.ceil(ink[2]))), min(height - 1, int(np.ceil(ink[3])))
+            if not (area[y1i, x1] and area[y1i, x2] and area[y2i, x1] and area[y2i, x2]):
+                inside = False
+                break
+            layout.append((line, lx, ly))
+        if inside:
+            return layout
+    return None
+
+
 def _draw_group_translation(img_bgr, group, font_path, strategy="primary", source_bgr=None):
     text = group.translation or group.text
     if not text:
@@ -12707,9 +15432,13 @@ def _draw_group_translation(img_bgr, group, font_path, strategy="primary", sourc
     source_height = float(np.median(source_line_heights)) if source_line_heights else h
     size_scale = float(typography_profile.get("font_size_scale") or (
         0.72 if style.name == "decorative_purple" else 0.78))
+    is_sfx = str(getattr(group, "classification", "") or "").lower() == "sfx"
+    # A translated sound effect replaces display lettering: it takes the size of
+    # the drawn sound, not of dialogue.
     display_lettering = bool(
-        typography_profile.get("style_source") == "original_pixels"
-        and typography_profile.get("font_class") in {"condensed_display", "tall_display"}
+        is_sfx or (
+            typography_profile.get("style_source") == "original_pixels"
+            and typography_profile.get("font_class") in {"condensed_display", "tall_display"})
     )
     font_cap = int(config.MAX_FONT_SIZE)
     if display_lettering:
@@ -12721,6 +15450,12 @@ def _draw_group_translation(img_bgr, group, font_path, strategy="primary", sourc
         )
         typography_profile["display_font_cap"] = int(font_cap)
     font_size = min(font_cap, max(config.MIN_FONT_SIZE, int(source_height * size_scale)))
+    # The cleanup measured the source outline's real width (``_group_stroke_band``);
+    # an outline the colour sampler read thinner is drawn at that width, capped at
+    # 15 % of the line height.
+    measured_stroke = int((getattr(group, "mask_metrics", None) or {}).get("lettering_stroke_width") or 0)
+    if measured_stroke > style.stroke_width and typography_profile.get("source_stroke_confident"):
+        style = replace(style, stroke_width=int(min(measured_stroke, max(2, round(0.15 * source_height)))))
     if len(text) > max(1, len(group.text)) * 1.2:
         font_size = max(config.MIN_FONT_SIZE, int(font_size * 0.92))
 
@@ -12743,6 +15478,10 @@ def _draw_group_translation(img_bgr, group, font_path, strategy="primary", sourc
     )
     if preview_font_role:
         font_role = preview_font_role
+    elif is_sfx:
+        # Hand-drawn sound lettering reads as "serif italic" to the glyph classifier;
+        # a sound effect is set in the display (shout) face.
+        font_role = "shout"
     elif glyph_confident:
         # The source glyph SHAPE (serif/italic/display/condensed), detected
         # independently of colour, drives the font when the detector is confident.
@@ -12776,6 +15515,7 @@ def _draw_group_translation(img_bgr, group, font_path, strategy="primary", sourc
     # on font_size, and the wrap below needs it as a target line count so the
     # translated text has an unambiguous line to land each source ratio on.
     line_scales = _source_line_scale_ratios(group)
+    start_font_size = font_size
     while font_size >= config.MIN_FONT_SIZE:
         font = get_font(preview_font_path or font_path, font_size, role=font_role,
                         prefer_role=prefer_preview_role, text=text)
@@ -12858,6 +15598,41 @@ def _draw_group_translation(img_bgr, group, font_path, strategy="primary", sourc
         font_size -= 1
 
     font_size = max(config.MIN_FONT_SIZE, font_size)
+    # Inside a closed balloon the text follows the balloon's shape instead of the
+    # source text's rectangle (the source width made "VENHA NOS / VISITAR / COMO"
+    # columns in a wide balloon), at one uniform size up to the same cap. The area
+    # is kept to the source text's region grown by 25 %, so two touching balloons
+    # (one white region) do not share text.
+    shape_layout = None
+    balloon_area = None
+    if config.RENDER_FIT_BALLOON_SHAPE and config.AUTO_LINE_WRAP:
+        balloon_area = _balloon_text_area(group, img_bgr.shape)
+    if balloon_area is not None:
+        gx, gy, gw, gh = (int(v) for v in group.box)
+        reach_x, reach_y = int(round(0.25 * gw)), int(round(0.25 * gh))
+        own_region = np.zeros(balloon_area.shape, dtype=bool)
+        own_region[max(0, gy - reach_y):gy + gh + reach_y, max(0, gx - reach_x):gx + gw + reach_x] = True
+        balloon_area = balloon_area & own_region
+        if not np.any(balloon_area):
+            balloon_area = None
+    if balloon_area is not None:
+        center = (x + w / 2.0, y + h / 2.0)
+        # Never below the size the rectangle reached (when it fit): the shape is
+        # chosen for its lines, not paid for with smaller text.
+        lowest = font_size if overflow_ratio <= 0.0 else config.MIN_FONT_SIZE
+        for candidate_size in range(start_font_size, lowest - 1, -1):
+            candidate_font = get_font(preview_font_path or font_path, candidate_size, role=font_role,
+                                      prefer_role=prefer_preview_role, text=text)
+            candidate_spacing = max(1, int(candidate_size * 0.1 * float(
+                typography_profile.get("line_height_scale") or 1.0)))
+            layout = _balloon_shape_layout(draw, text, candidate_font, balloon_area, center,
+                                           candidate_spacing, style.stroke_width)
+            if layout:
+                shape_layout = layout
+                font_size, spacing = candidate_size, candidate_spacing
+                lines = [item[0] for item in layout]
+                overflow_ratio = 0.0
+                break
     font = get_font(preview_font_path or font_path, font_size, role=font_role,
                     prefer_role=prefer_preview_role, text=text)
     group.font_runtime_validation = dict(getattr(font, "tradutor_font_runtime", {}) or {})
@@ -12878,8 +15653,27 @@ def _draw_group_translation(img_bgr, group, font_path, strategy="primary", sourc
     # actually shows a real size hierarchy. The uniform block above already
     # proved a same-size render fits the safe area, so this can only ever
     # shrink further from that already-accepted bound, never grow past it.
+    if shape_layout:
+        boxes = [draw.textbbox((lx, ly), line, font=font, stroke_width=style.stroke_width)
+                 for line, lx, ly in shape_layout]
+        text_bbox = (min(b[0] for b in boxes), min(b[1] for b in boxes),
+                     max(b[2] for b in boxes), max(b[3] for b in boxes))
+        draw_x = draw_y = 0.0
+        ys_area, xs_area = np.nonzero(balloon_area)
+        # Plus the stroke pad the overflow gate adds round the ink (the layout
+        # already proved the ink itself lies inside the inset interior).
+        pad = max(style.stroke_width, 1) + 1
+        ax1, ay1 = int(xs_area.min()) - pad, int(ys_area.min()) - pad
+        ax2, ay2 = int(xs_area.max()) + 1 + pad, int(ys_area.max()) + 1 + pad
+        # The balloon interior is the safe area for this text, not the source box.
+        bx1, by1 = min(draw_box[0], ax1), min(draw_box[1], ay1)
+        bx2, by2 = max(draw_box[0] + draw_box[2], ax2), max(draw_box[1] + draw_box[3], ay2)
+        draw_box = (bx1, by1, bx2 - bx1, by2 - by1)
+        group.draw_box = tuple(draw_box)
+        group.safe_area = tuple(draw_box)
+        group.shape_fit = {"lines": len(shape_layout), "font_size": int(font_size)}
     line_plan = None
-    if line_scales and len(lines) == len(group.lines):
+    if line_scales and len(lines) == len(group.lines) and not shape_layout:
         line_plan = _build_per_line_plan(
                 draw, lines, line_scales, font_size,
                 font_role=font_role, font_path=preview_font_path or font_path,
@@ -12955,7 +15749,11 @@ def _draw_group_translation(img_bgr, group, font_path, strategy="primary", sourc
     if style.glow_fill and style.glow_radius > 0:
         glow = Image.new("RGBA", pil_img.size, (0, 0, 0, 0))
         glow_draw = ImageDraw.Draw(glow)
-        if line_plan:
+        if shape_layout:
+            for line, lx, ly in shape_layout:
+                glow_draw.text((lx, ly), line, font=font, fill=style.glow_fill + (190,),
+                               stroke_width=max(style.stroke_width + 1, 2), stroke_fill=style.glow_fill + (210,))
+        elif line_plan:
             _draw_multiline_per_font(
                 glow_draw, (draw_x, draw_y), lines, line_plan,
                 fill=style.glow_fill + (190,), spacing=spacing,
@@ -12979,7 +15777,11 @@ def _draw_group_translation(img_bgr, group, font_path, strategy="primary", sourc
     if style.shadow_fill:
         shadow_x = draw_x + style.shadow_offset[0]
         shadow_y = draw_y + style.shadow_offset[1]
-        if line_plan:
+        if shape_layout:
+            for line, lx, ly in shape_layout:
+                draw.text((lx + style.shadow_offset[0], ly + style.shadow_offset[1]), line,
+                          font=font, fill=style.shadow_fill)
+        elif line_plan:
             _draw_multiline_per_font(
                 draw, (shadow_x, shadow_y), lines, line_plan,
                 fill=style.shadow_fill, spacing=spacing,
@@ -12994,7 +15796,11 @@ def _draw_group_translation(img_bgr, group, font_path, strategy="primary", sourc
                 align="center",
             )
 
-    if line_plan:
+    if shape_layout:
+        for line, lx, ly in shape_layout:
+            draw.text((lx, ly), line, font=font, fill=style.fill,
+                      stroke_width=style.stroke_width, stroke_fill=style.stroke_fill)
+    elif line_plan:
         _draw_multiline_per_font(
             draw, (draw_x, draw_y), lines, line_plan,
             fill=style.fill, spacing=spacing,
@@ -13012,7 +15818,78 @@ def _draw_group_translation(img_bgr, group, font_path, strategy="primary", sourc
             stroke_fill=style.stroke_fill,
         )
 
-    return cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
+    rendered_bgr = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
+    return _match_source_slant(img_bgr, rendered_bgr, group, typography_profile, draw_box)
+
+
+def _match_source_slant(base_bgr, rendered_bgr, group, profile, draw_box):
+    """Lean the drawn translation like the source lettering when the font did not.
+
+    The source slant is measured on the original glyphs (``glyph_style``); the
+    same measure on the drawn text says what the chosen font gave. When they
+    differ by >= 4 degrees the drawn pixels (text, outline, glow - everything
+    that changed) are sheared about their centre to the source slant. Skipped if
+    the sheared text would leave the safe area.
+    """
+    glyph_style = (profile or {}).get("glyph_style") or {}
+    if not config.RENDER_MATCH_SOURCE_SLANT or float(glyph_style.get("confidence") or 0.0) < _GLYPH_RENDER_MIN_CONFIDENCE:
+        return rendered_bgr
+    source_deg = float(glyph_style.get("slant_degrees") or 0.0)
+    # Only a source the glyph classifier calls italic is leaned towards; an
+    # upright source never gets a shear (a 4-degree reading is measurement noise).
+    if str(glyph_style.get("slant") or "normal") != "italic":
+        return rendered_bgr
+    changed = np.any(rendered_bgr != base_bgr, axis=2)
+    if not np.any(changed):
+        return rendered_bgr
+    ys, xs = np.nonzero(changed)
+    x1, y1, x2, y2 = int(xs.min()), int(ys.min()), int(xs.max()) + 1, int(ys.max()) + 1
+    ink = (cv2.cvtColor(rendered_bgr[y1:y2, x1:x2], cv2.COLOR_BGR2GRAY).astype(np.int16)
+           - cv2.cvtColor(base_bgr[y1:y2, x1:x2], cv2.COLOR_BGR2GRAY).astype(np.int16))
+    glyphs = (np.abs(ink) >= 60).astype(np.uint8)
+    # Per line, median: a block of centred lines of different widths fools a
+    # whole-block projection (an upright block read -24 degrees).
+    rows = glyphs.any(axis=1)
+    edges = np.flatnonzero(np.diff(np.concatenate([[0], rows.astype(np.int8), [0]])))
+    readings = [_text_slant_degrees(glyphs[a:b]) for a, b in zip(edges[::2], edges[1::2]) if b - a >= 6]
+    if not readings:
+        return rendered_bgr
+    rendered_deg = float(np.median(readings))
+    if abs(source_deg - rendered_deg) < 4.0:
+        return rendered_bgr
+    shear = float(np.tan(np.deg2rad(rendered_deg)) - np.tan(np.deg2rad(source_deg)))
+    height, width = changed.shape
+    cy = (y1 + y2) / 2.0
+    dx_top, dx_bottom = shear * (y1 - cy), shear * (y2 - cy)
+    nx1, nx2 = x1 + min(dx_top, dx_bottom, 0.0), x2 + max(dx_top, dx_bottom, 0.0)
+    bx, by, bw, bh = draw_box
+    if nx1 < max(0, bx) or nx2 > min(width, bx + bw):
+        group.slant_match = {"applied": False, "reason": "outside_safe_area",
+                             "source_degrees": source_deg, "rendered_degrees": rendered_deg}
+        return rendered_bgr
+    matrix = np.float32([[1, shear, -shear * cy], [0, 1, 0]])
+    warped = cv2.warpAffine(rendered_bgr, matrix, (width, height), flags=cv2.INTER_LINEAR,
+                            borderMode=cv2.BORDER_REPLICATE)
+    alpha = cv2.warpAffine(changed.astype(np.float32), matrix, (width, height), flags=cv2.INTER_LINEAR)
+    out = base_bgr.astype(np.float32) * (1.0 - alpha[..., None]) + warped.astype(np.float32) * alpha[..., None]
+    out = np.clip(np.rint(out), 0, 255).astype(np.uint8)
+    # The validator's allowed area is built from the translation/effect boxes:
+    # they must describe the sheared ink, not the upright one.
+    moved = np.any(out != base_bgr, axis=2)
+    if np.any(moved):
+        mys, mxs = np.nonzero(moved)
+        sheared_box = (int(mxs.min()), int(mys.min()),
+                       int(mxs.max()) - int(mxs.min()) + 1, int(mys.max()) - int(mys.min()) + 1)
+        for attr in ("translation_box", "effect_box"):
+            old_box = getattr(group, attr, None)
+            if old_box:
+                ox, oy, ow, oh = (int(v) for v in old_box)
+                x1u, y1u = min(ox, sheared_box[0]), min(oy, sheared_box[1])
+                x2u = max(ox + ow, sheared_box[0] + sheared_box[2])
+                y2u = max(oy + oh, sheared_box[1] + sheared_box[3])
+                setattr(group, attr, (x1u, y1u, x2u - x1u, y2u - y1u))
+    group.slant_match = {"applied": True, "source_degrees": source_deg, "rendered_degrees": rendered_deg}
+    return out
 
 
 def _draw_rotated_caption_translation(img_bgr, group, font_path, text):
@@ -13319,6 +16196,9 @@ def _uncovered_source_text_evidence(original_bgr, rendered_bgr, group, cleanup_m
         "largest_uncovered_source_component": 0,
         "source_text_coverage": 1.0,
         "uncovered_source_line_ids": [],
+        "unchanged_foreground_inside_cleanup_pixels": 0,
+        "largest_unchanged_foreground_inside_cleanup_component": 0,
+        "inside_mask_similarity_mode": "shadow_only",
         "measured": False,
     }
     if original_bgr is None or cleanup_mask is None:
@@ -13334,23 +16214,28 @@ def _uncovered_source_text_evidence(original_bgr, rendered_bgr, group, cleanup_m
     total = 0
     unmasked_total = 0
     uncovered_total = 0
+    inside_unchanged_total = 0
     largest_unmasked = 0
     largest = 0
+    largest_inside_unchanged = 0
     unmasked_lines = []
     uncovered_lines = []
+    unmeasured_lines = []
     measured = False
     for line in _cleanup_lines_for_group(group):
+        line_id = str((getattr(line, "metadata", None) or {}).get("ocr_line_id") or "")
         x, y, w, h = [int(value) for value in line.box]
         x1 = max(0, x)
         y1 = max(0, y)
         x2 = min(width, x + max(1, w))
         y2 = min(height, y + max(1, h))
         if x2 - x1 < 4 or y2 - y1 < 4:
+            unmeasured_lines.append(line_id)
             continue
         roi = original_gray[y1:y2, x1:x2]
         # Same foreground rule the component mask uses, so "source text" means
         # the same thing to the gate and to the cleanup it is judging.
-        median = float(np.median(roi))
+        median = _line_polarity_level(original_gray, line, float(np.median(roi)))
         contrast = max(
             8.0,
             float(np.percentile(roi, 80)) - float(np.percentile(roi, 20)),
@@ -13360,15 +16245,28 @@ def _uncovered_source_text_evidence(original_bgr, rendered_bgr, group, cleanup_m
         elif median <= 118:
             foreground = roi >= min(235.0, max(48.0, median + max(16.0, contrast * 0.28)))
         else:
-            continue
+            # Mid-tone backgrounds use the same hat rule as _component_text_mask, so
+            # they are measured instead of being forced to review as "unmeasured".
+            roi_u8 = np.clip(roi, 0, 255).astype(np.uint8)
+            blackhat, tophat = _midtone_hats(roi_u8, h)
+            foreground = (blackhat >= 12) | (tophat >= 12)
+        foreground &= ~_box_crossing_foreground(
+            original_gray, (x1, y1, x2, y2), median, contrast)
+        protected = getattr(group, "structure_protect_mask", None)
+        if isinstance(protected, np.ndarray) and protected.shape == original_gray.shape:
+            # Art deliberately kept through the lettering is not leftover source.
+            foreground &= ~protected[y1:y2, x1:x2]
         line_total = int(np.count_nonzero(foreground))
-        if line_total < 24:
+        # Punctuation-sized lines ("!", "...") legitimately own few glyph pixels.
+        if line_total < max(8, min(24, int(round(0.03 * (x2 - x1) * (y2 - y1))))):
+            unmeasured_lines.append(line_id)
             continue
         measured = True
         unchanged = (
             np.abs(roi - rendered_gray[y1:y2, x1:x2]) <= config.VISUAL_DIFF_THRESHOLD
         )
-        unmasked = (foreground & (cleanup_mask[y1:y2, x1:x2] == 0)).astype(np.uint8) * 255
+        line_cleanup_mask = cleanup_mask[y1:y2, x1:x2] > 0
+        unmasked = (foreground & ~line_cleanup_mask).astype(np.uint8) * 255
         unmasked_count, _unmasked_labels, unmasked_stats, _unmasked_centroids = (
             cv2.connectedComponentsWithStats(unmasked, 8)
         )
@@ -13389,12 +16287,26 @@ def _uncovered_source_text_evidence(original_bgr, rendered_bgr, group, cleanup_m
             (int(stats[label, cv2.CC_STAT_AREA]) for label in range(1, count)),
             default=0,
         )
+        inside_unchanged = (
+            foreground & unchanged & line_cleanup_mask
+        ).astype(np.uint8) * 255
+        inside_count, _inside_labels, inside_stats, _inside_centroids = (
+            cv2.connectedComponentsWithStats(inside_unchanged, 8)
+        )
+        line_largest_inside_unchanged = max(
+            (int(inside_stats[label, cv2.CC_STAT_AREA])
+             for label in range(1, inside_count)),
+            default=0,
+        )
         total += line_total
         unmasked_total += int(np.count_nonzero(unmasked))
         uncovered_total += int(np.count_nonzero(surviving))
+        inside_unchanged_total += int(np.count_nonzero(inside_unchanged))
         largest_unmasked = max(largest_unmasked, line_largest_unmasked)
         largest = max(largest, line_largest)
-        line_id = str((getattr(line, "metadata", None) or {}).get("ocr_line_id") or "")
+        largest_inside_unchanged = max(
+            largest_inside_unchanged, line_largest_inside_unchanged
+        )
         if line_largest_unmasked >= _glyph_scale_component_area(h):
             unmasked_lines.append(line_id)
         if line_largest >= _glyph_scale_component_area(h):
@@ -13417,8 +16329,51 @@ def _uncovered_source_text_evidence(original_bgr, rendered_bgr, group, cleanup_m
             float(1.0 - uncovered_total / max(1, total)), 4
         ),
         "uncovered_source_line_ids": uncovered_lines,
-        "measured": True,
+        # This overlap can be retained source, valid line art, or coincident
+        # replacement pixels. Keep it diagnostic until page-level calibration;
+        # it never changes source-removal status by itself.
+        "unchanged_foreground_inside_cleanup_pixels": int(inside_unchanged_total),
+        "largest_unchanged_foreground_inside_cleanup_component": int(
+            largest_inside_unchanged
+        ),
+        "inside_mask_similarity_mode": "shadow_only",
+        "unmeasured_source_line_ids": unmeasured_lines,
+        "measured": not unmeasured_lines,
     }
+
+
+def _box_crossing_foreground(gray, box, median, contrast):
+    """Foreground inside an OCR box that belongs to something extending past it.
+
+    The verifier reads the box, so line art, a panel border or a dark region that
+    runs through it used to count as "source text left behind" and capped coverage
+    below 0.98. A component with >= 30 % of its pixels outside the box is not a
+    glyph the box owns. Only the light/dark rules are judged (mid-tone hats are
+    local by construction).
+    """
+    x1, y1, x2, y2 = box
+    inside_empty = np.zeros((y2 - y1, x2 - x1), dtype=bool)
+    if 118 < median < 138:
+        return inside_empty
+    height, width = gray.shape[:2]
+    pad = max(8, y2 - y1)  # one line height: enough to see art continue
+    px1, py1 = max(0, x1 - pad), max(0, y1 - pad)
+    px2, py2 = min(width, x2 + pad), min(height, y2 + pad)
+    roi = gray[py1:py2, px1:px2]
+    if median >= 138:
+        wide = roi <= max(25.0, min(205.0, median - max(16.0, contrast * 0.28)))
+    else:
+        wide = roi >= min(235.0, max(48.0, median + max(16.0, contrast * 0.28)))
+    count, labels, stats, _ = cv2.connectedComponentsWithStats(wide.astype(np.uint8), 8)
+    if count <= 1:
+        return inside_empty
+    inside = np.zeros(wide.shape, dtype=bool)
+    inside[y1 - py1:y2 - py1, x1 - px1:x2 - px1] = True
+    inside_counts = np.bincount(labels[inside].ravel(), minlength=count)
+    totals = stats[:, cv2.CC_STAT_AREA]
+    crossing = (totals - inside_counts) >= 0.30 * np.maximum(1, totals)
+    crossing[0] = False
+    return crossing[labels][y1 - py1:y2 - py1, x1 - px1:x2 - px1]
 
 
 def _glyph_scale_component_area(line_height):
@@ -13432,27 +16387,59 @@ def _glyph_scale_component_area(line_height):
     return max(24, int(round(max(1.0, float(line_height)) ** 2 * 0.05)))
 
 
+SOURCE_REMOVAL_VERIFIED = "VERIFIED"
+SOURCE_REMOVAL_REJECTED = "REJECTED"
+SOURCE_REMOVAL_NOT_VERIFIED = "NOT_VERIFIED"
+_MIN_SOURCE_REMOVAL_COVERAGE = 0.98
+
+
+def _source_removal_status(group, removal):
+    """Return verified, rejected, or inconclusive physical source-removal evidence."""
+
+    if not isinstance(removal, dict) or removal.get("measured") is not True:
+        return SOURCE_REMOVAL_NOT_VERIFIED
+    source_pixels = removal.get("source_text_pixels")
+    coverage = removal.get("source_owned_geometry_coverage")
+    source_coverage = removal.get("source_text_coverage")
+    largest_uncovered = removal.get("largest_uncovered_source_component")
+    largest_unmasked = removal.get("largest_unmasked_source_component")
+    if (isinstance(source_pixels, bool) or not isinstance(source_pixels, int)
+            or source_pixels < 24 or isinstance(coverage, bool)
+            or not isinstance(coverage, (int, float))
+            or not np.isfinite(coverage) or not 0.0 <= float(coverage) <= 1.0
+            or isinstance(source_coverage, bool)
+            or not isinstance(source_coverage, (int, float))
+            or not np.isfinite(source_coverage)
+            or not 0.0 <= float(source_coverage) <= 1.0
+            or isinstance(largest_uncovered, bool) or not isinstance(largest_uncovered, int)
+            or largest_uncovered < 0 or isinstance(largest_unmasked, bool)
+            or not isinstance(largest_unmasked, int) or largest_unmasked < 0
+            or removal.get("unmeasured_source_line_ids")):
+        return SOURCE_REMOVAL_NOT_VERIFIED
+    if (float(coverage) < _MIN_SOURCE_REMOVAL_COVERAGE
+            or float(source_coverage) < _MIN_SOURCE_REMOVAL_COVERAGE):
+        return SOURCE_REMOVAL_REJECTED
+    if group.translation_final_reason == OCR_UNINTELLIGIBLE_SOURCE_REASON:
+        return SOURCE_REMOVAL_NOT_VERIFIED
+    line_height = max(
+        (line.box[3] for line in _cleanup_lines_for_group(group)),
+        default=0,
+    )
+    threshold = _glyph_scale_component_area(line_height)
+    if largest_uncovered >= threshold or largest_unmasked >= threshold:
+        return SOURCE_REMOVAL_REJECTED
+    return SOURCE_REMOVAL_VERIFIED
+
+
 def _source_removal_incomplete(group, removal):
-    """True when owned source glyphs demonstrably survived the cleanup.
+    """Compatibility boolean: anything short of measured verification is incomplete.
 
     Ordinary source dialogue whose glyphs the cleaning mask never reached is
     still on the page, whatever any OCR pass managed to read back.  Unreadable
     source held for manual review keeps its own taxonomy and is not judged here.
     """
 
-    if not removal.get("measured"):
-        return False
-    if group.translation_final_reason == OCR_UNINTELLIGIBLE_SOURCE_REASON:
-        return False
-    line_height = max(
-        (line.box[3] for line in _cleanup_lines_for_group(group)),
-        default=0,
-    )
-    threshold = _glyph_scale_component_area(line_height)
-    return (
-        removal.get("largest_uncovered_source_component", 0) >= threshold
-        or removal.get("largest_unmasked_source_component", 0) >= threshold
-    )
+    return _source_removal_status(group, removal) != SOURCE_REMOVAL_VERIFIED
 
 
 def _post_render_source_text_check(
@@ -13741,7 +16728,8 @@ def _post_render_source_text_check(
             group,
             cleanup_mask,
         )
-    removal_incomplete = _source_removal_incomplete(group, removal)
+    removal_status = _source_removal_status(group, removal)
+    removal_incomplete = removal_status != SOURCE_REMOVAL_VERIFIED
 
     if (
         (source_language_detected or residual)
@@ -13779,7 +16767,11 @@ def _post_render_source_text_check(
             else "source_tokens_detected_after_render"
         )
     elif removal_incomplete:
-        reason = "uncovered_source_text_evidence"
+        reason = (
+            "uncovered_source_text_evidence"
+            if removal_status == SOURCE_REMOVAL_REJECTED
+            else "source_removal_unverified"
+        )
     elif not observed_joined:
         reason = "translated_text_missing_after_render"
     else:
@@ -13798,6 +16790,7 @@ def _post_render_source_text_check(
         "passed": passed,
         "reason": reason,
         "physical_decision": physical_decision,
+        "source_removal_status": removal_status,
         # Why absence is believed, in the gate's own words: either the cleanup
         # provably covered the owned source text, or it did not and this is not
         # a pass.  ``post_render_ocr_only`` is the historical weak state and is
@@ -13807,7 +16800,7 @@ def _post_render_source_text_check(
             if removal["measured"] and not removal_incomplete
             else "source_text_coverage_incomplete"
             if removal["measured"]
-            else "post_render_ocr_only"
+            else "not_verified"
         ),
         **{key: value for key, value in removal.items() if key != "measured"},
         "validator_reason": language_reason,

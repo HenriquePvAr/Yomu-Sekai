@@ -21,7 +21,19 @@ def _fixture(tmp_path: Path, *, height: int = 180):
     output = tmp_path / "output" / "source"
     output.mkdir(parents=True)
     image_path = output / "page_0001.png"
-    assert cv2.imwrite(str(image_path), np.full((height, 280, 3), 245, dtype=np.uint8))
+    page = np.full((height, 280, 3), 255, dtype=np.uint8)
+    # Keep this persisted OCR/review fixture physically consistent: the source
+    # regions below must exist on the page so fail-closed cleanup evidence is
+    # measured instead of treating an empty white image as verified removal.
+    for text, origin in (
+        ("I AM HERE", (45, 50)),
+        ("I'M HERE", (165, 52)),
+        ("THUMP", (25, 97)),
+        ("THREE DAYS LATER", (33, 143)),
+    ):
+        cv2.putText(page, text, origin, cv2.FONT_HERSHEY_SIMPLEX, 0.32,
+                    (0, 0, 0), 1, cv2.LINE_AA)
+    assert cv2.imwrite(str(image_path), page)
     store = JobStore(db)
     parent_id = "a" * 32
     store.create_job(

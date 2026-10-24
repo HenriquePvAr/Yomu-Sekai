@@ -52,6 +52,7 @@ from yomu.ocr.ocr_balloon import (
     _uniform_container_evidence,
     _uniform_light_line_text_mask,
     _apply_textured_caption_overlay,
+    _apply_cleanup_mask,
     _associate_ignored_cleanup_lines,
     _reclaim_short_lexical_lines,
     _refine_classification_with_background,
@@ -107,6 +108,18 @@ def _line(text, confidence=0.92):
         engine="rapidocr",
         page=1,
     )
+
+
+def _verified_source_removal_fixture():
+    return {
+        "measured": True,
+        "source_text_pixels": 24,
+        "source_owned_geometry_coverage": 1.0,
+        "source_text_coverage": 1.0,
+        "largest_uncovered_source_component": 0,
+        "largest_unmasked_source_component": 0,
+        "unmeasured_source_line_ids": [],
+    }
 
 
 def _boxed_line(text, box, confidence=0.92, *, slant=0):
@@ -3354,6 +3367,8 @@ class OCRQualityRegressionTests(unittest.TestCase):
         self.assertTrue(group.translation_valid, group.translation_validation_reason)
 
         image = np.full((220, 420, 3), 255, dtype=np.uint8)
+        group.lines[0].box = (40, 80, 200, 80)
+        group.lines[0].polygon = np.array([[40, 80], [240, 80], [240, 160], [40, 160]])
         cv_text.putText(image, "GET UP", (50, 140), cv2.FONT_HERSHEY_SIMPLEX, 2,
                         (0, 0, 0), 4)
         original = image.copy()
@@ -3372,6 +3387,8 @@ class OCRQualityRegressionTests(unittest.TestCase):
         self.assertTrue(group.translation_valid, group.translation_validation_reason)
 
         image = np.full((220, 420, 3), 255, dtype=np.uint8)
+        group.lines[0].box = (40, 80, 200, 80)
+        group.lines[0].polygon = np.array([[40, 80], [240, 80], [240, 160], [40, 160]])
         cv_text.putText(image, "No", (50, 140), cv2.FONT_HERSHEY_SIMPLEX, 2,
                         (0, 0, 0), 4)
         render_analyzed_image(image.copy(), [], [], [group])
@@ -4124,6 +4141,90 @@ class OCRQualityRegressionTests(unittest.TestCase):
         # synthetic near-black backing over the glyph region.
         self.assertGreater(float(np.mean(overlaid[mask > 0])), 50.0)
 
+    def test_caption_reconstruction_and_composition_use_the_same_authorized_mask(self):
+        image = np.full((24, 24, 3), 100, dtype=np.uint8)
+        cv2.putText(image, "I", (8, 17), cv2.FONT_HERSHEY_SIMPLEX, 0.6,
+                    (240, 240, 240), 2, cv2.LINE_AA)
+        mask = np.zeros((24, 24), dtype=np.uint8)
+        mask[7:20, 7:14] = 255
+        protected_art = (3, 3)
+        image[protected_art] = (15, 30, 45)
+
+        cleaned = _apply_textured_caption_overlay(image, mask, radius=1)
+        changed = np.any(cleaned != image, axis=2)
+
+        self.assertEqual(np.count_nonzero(changed & (mask == 0)), 0)
+        self.assertTrue(np.array_equal(cleaned[protected_art], image[protected_art]))
+        self.assertTrue(np.array_equal(cleaned[0, 7], image[0, 7]))
+
+    def test_accepted_lama_clean_buffer_is_not_reconstructed_with_telea(self):
+        original = np.full((16, 16, 3), 30, dtype=np.uint8)
+        accepted_lama = np.full_like(original, (210, 20, 180))
+        mask = np.zeros((16, 16), dtype=np.uint8)
+        mask[4:12, 4:12] = 255
+        group = types.SimpleNamespace(texture_synthesized=False)
+
+        clean = _apply_cleanup_mask(
+            original, original, group, mask, strategy="lama_large",
+            accepted_candidate=accepted_lama,
+        )
+
+        self.assertTrue(np.array_equal(clean[mask > 0], accepted_lama[mask > 0]))
+        self.assertTrue(np.array_equal(clean[mask == 0], original[mask == 0]))
+
+    def test_two_group_lama_candidate_cannot_leak_prior_translation_into_clean_or_psd(self):
+        # Group 1 is already translated on the visible page, while its CLEAN
+        # pixels have been preserved independently. Group 2's simulated LaMa
+        # candidate inherits the visible page context, as a whole-page model
+        # candidate may do; only group 2's authorized mask can enter CLEAN.
+        original = np.full((20, 30, 3), 110, dtype=np.uint8)
+        clean_buffer = original.copy()
+        first_mask = np.zeros(original.shape[:2], dtype=np.uint8)
+        first_mask[3:9, 3:12] = 255
+        clean_buffer[first_mask > 0] = (70, 80, 90)
+
+        translated_page = clean_buffer.copy()
+        translated_page[first_mask > 0] = (230, 20, 180)  # Portuguese text marker.
+        second_mask = np.zeros(original.shape[:2], dtype=np.uint8)
+        second_mask[11:17, 17:27] = 255
+        accepted_candidate = translated_page.copy()
+        accepted_candidate[second_mask > 0] = (12, 190, 220)
+
+        clean_after_group_2 = _apply_cleanup_mask(
+            clean_buffer,
+            original,
+            types.SimpleNamespace(texture_synthesized=False),
+            second_mask,
+            strategy="lama_large",
+            accepted_candidate=accepted_candidate,
+        )
+
+        assert np.array_equal(clean_after_group_2[first_mask > 0], clean_buffer[first_mask > 0])
+        assert np.array_equal(clean_after_group_2[second_mask > 0], accepted_candidate[second_mask > 0])
+        assert np.array_equal(clean_after_group_2, clean_buffer * (second_mask == 0)[:, :, None] + accepted_candidate * (second_mask > 0)[:, :, None])
+
+        from psd_tools import PSDImage
+        from yomu.export.professional_psd import write_professional_page_psd
+
+        import tempfile
+        from pathlib import Path
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            psd_path = Path(temp_dir) / "two-group-clean.psd"
+            write_professional_page_psd(
+                psd_path,
+                original_bgr=original,
+                cleaned_bgr=clean_after_group_2,
+                translated_bgr=translated_page,
+                regions=[],
+                page_index=1,
+                typesetting_mode="off",
+            )
+            psd = PSDImage.open(str(psd_path))
+            psd_clean = np.asarray(next(layer for layer in psd if layer.name == "Cleaned").topil().convert("RGB"))[:, :, ::-1]
+            assert np.array_equal(psd_clean[first_mask > 0], clean_buffer[first_mask > 0])
+            assert np.array_equal(psd_clean[second_mask > 0], accepted_candidate[second_mask > 0])
+
     def test_generic_production_credit_is_preserved_as_decorative(self):
         image = np.full((300, 400, 3), 255, dtype=np.uint8)
         group = _scored_group("ARTBY CREATORNAME")
@@ -4598,7 +4699,8 @@ class OCRQualityRegressionTests(unittest.TestCase):
             "yomu.ocr.ocr_balloon.OCREngine._detect_with_rapidocr",
             return_value=[residual_line],
         ):
-            result = _post_render_source_text_check(image, group, page_index=7)
+            result = _post_render_source_text_check(
+                image, group, page_index=7, removal=_verified_source_removal_fixture())
         self.assertFalse(result["passed"])
         self.assertIn("WHAT", result["residual_source_tokens"])
 
@@ -4611,7 +4713,8 @@ class OCRQualityRegressionTests(unittest.TestCase):
             "yomu.ocr.ocr_balloon.OCREngine._detect_with_rapidocr",
             return_value=[_line("BEBIDA NO STARGRAM")],
         ):
-            result = _post_render_source_text_check(image, group, page_index=7)
+            result = _post_render_source_text_check(
+                image, group, page_index=7, removal=_verified_source_removal_fixture())
         self.assertTrue(result["passed"])
         self.assertNotIn("STARGRAM", result.get("residual_source_tokens", []))
 
@@ -4624,7 +4727,8 @@ class OCRQualityRegressionTests(unittest.TestCase):
             "yomu.ocr.ocr_balloon.OCREngine._detect_with_rapidocr",
             return_value=[_line("SORRY FOR HIM")],
         ):
-            result = _post_render_source_text_check(image, group, page_index=8)
+            result = _post_render_source_text_check(
+                image, group, page_index=8, removal=_verified_source_removal_fixture())
         self.assertFalse(result["passed"])
         self.assertEqual(result["reason"], "source_language_detected_after_render")
         self.assertIn("SORRY", result["residual_source_tokens"])
@@ -4638,7 +4742,8 @@ class OCRQualityRegressionTests(unittest.TestCase):
             "yomu.ocr.ocr_balloon.OCREngine._detect_with_rapidocr",
             return_value=[_line("SINTO PENA DELE")],
         ):
-            result = _post_render_source_text_check(image, group, page_index=8)
+            result = _post_render_source_text_check(
+                image, group, page_index=8, removal=_verified_source_removal_fixture())
         self.assertTrue(result["passed"])
 
     def test_post_render_ocr_fails_closed_for_invalid_crop(self):
@@ -4672,7 +4777,8 @@ class OCRQualityRegressionTests(unittest.TestCase):
             "yomu.ocr.ocr_balloon.OCREngine._detect_with_rapidocr",
             return_value=[reordered_read],
         ):
-            result = _post_render_source_text_check(image, group, page_index=53)
+            result = _post_render_source_text_check(
+                image, group, page_index=53, removal=_verified_source_removal_fixture())
         self.assertTrue(result["passed"], result.get("validator_reason"))
         self.assertEqual(result.get("residual_source_tokens"), [])
 
@@ -5141,7 +5247,8 @@ class PostRenderOcrDegradationTests(unittest.TestCase):
             "yomu.ocr.ocr_balloon.OCREngine._detect_with_rapidocr",
             return_value=lines,
         ):
-            return _post_render_source_text_check(image, group, page_index=3)
+            return _post_render_source_text_check(
+                image, group, page_index=3, removal=_verified_source_removal_fixture())
 
     def test_accent_loss_in_reocr_is_not_source_residual(self):
         result = self._check(

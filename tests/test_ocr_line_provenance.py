@@ -446,6 +446,24 @@ class PipelineInstrumentationTest(unittest.TestCase):
             [lid for lid, _ in provenance.ensure_line_ids([line], page=1)],
         )
 
+    def test_manual_review_evidence_survives_a_later_render_attempt(self):
+        import yomu.ocr.ocr_balloon as ocr_balloon
+
+        image = np.full((400, 800, 3), 255, dtype=np.uint8)
+        line = make_line("EVERY TIME I GO", (181, 154, 287, 33), page=1)
+        group = ocr_balloon.TextGroup(group_id="BALAO_REVIEW", lines=[line])
+        group.text = line.text
+        group.translation = "TODA VEZ QUE EU VOU"
+        group.translation_valid = True
+        group.sent_to_translation = True
+        group.classification = "speech"
+        group.manual_review_required = True
+
+        ocr_balloon.render_analyzed_image(image, [line], [], [group], page_index=1)
+
+        self.assertTrue(group.manual_review_required)
+        self.assertFalse((group.visual_validation or {}).get("clean_validation_passed", False))
+
 
 if __name__ == "__main__":
     unittest.main()

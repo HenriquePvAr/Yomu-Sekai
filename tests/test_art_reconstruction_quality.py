@@ -18,6 +18,7 @@ install_offline_network_guard()
 
 import os
 import unittest
+from unittest.mock import patch
 
 import cv2
 import numpy as np
@@ -305,6 +306,179 @@ class OvermaskProtection(unittest.TestCase):
             np.array_equal(cleaned[330:350, :], image[330:350, :]),
             "protected line art was destroyed by the cleanup",
         )
+
+
+class MaskGeometryDiagnostics(unittest.TestCase):
+    """Pin current short-glyph handling and measure line-art overlap for Sprint 2."""
+
+    def test_short_real_glyphs_survive_component_filtering(self):
+        for text in ("I", "NO", "AH", "!?"):
+            with self.subTest(text=text):
+                image = _flat_canvas(shape=(100, 240))
+                cv2.putText(image, text, (60, 68), cv2.FONT_HERSHEY_SIMPLEX,
+                            1.4, (10, 10, 10), 3, cv2.LINE_AA)
+                line = _line(text, (45, 25, 150, 55))
+                group = _group([line])
+                maximum = ob._build_text_mask(image.shape, [group])
+
+                mask, metrics = ob._component_text_mask(image, group, maximum)
+
+                self.assertGreater(metrics["accepted_text_components"], 0)
+                self.assertGreater(int(np.count_nonzero(mask)), 0)
+
+    def test_crossing_line_art_overlap_is_measured_for_follow_up(self):
+        image = np.full((120, 260, 3), 220, dtype=np.uint8)
+        cv2.putText(image, "TEXT", (55, 70), cv2.FONT_HERSHEY_SIMPLEX,
+                    1.5, (5, 5, 5), 3, cv2.LINE_AA)
+        cv2.line(image, (35, 58), (225, 58), (5, 5, 5), 2)
+        group = _group([_line("TEXT", (45, 20, 170, 68))])
+        maximum = ob._build_text_mask(image.shape, [group])
+        mask, _metrics = ob._component_text_mask(image, group, maximum)
+        protected_art = np.zeros(image.shape[:2], dtype=np.uint8)
+        cv2.line(protected_art, (35, 58), (225, 58), 255, 2)
+
+        self.assertGreater(int(np.count_nonzero((mask > 0) & (protected_art > 0))), 0)
+        cleaned, proposed, metrics = ob._remove_text_for_group(
+            image, image, group, strategy="primary")
+        # A straight line seen on both sides of the lettering is protected and
+        # carried through (CLEAN_STRUCTURE_CONTINUATION). Black lettering crossed by
+        # a black line cannot be separated, so the downstream gates still fail it
+        # closed and the page is left untouched.
+        self.assertFalse(metrics["mask_valid"])
+        self.assertGreaterEqual(metrics["structure_continuation_segments"], 1)
+        self.assertGreater(metrics["structure_protected_pixels"], 0)
+        self.assertIn(metrics["reason"], ob.ART_RECONSTRUCTION_REVIEW_REASONS)
+        self.assertGreater(metrics["boundary_conflict_pixels"], 0)
+        self.assertGreater(int(np.count_nonzero(proposed)), 0)
+        self.assertTrue(np.array_equal(cleaned, image))
+
+        contained = _flat_canvas(shape=(120, 260), level=220)
+        cv2.putText(contained, "TEXT", (55, 70), cv2.FONT_HERSHEY_SIMPLEX,
+                    1.5, (5, 5, 5), 3, cv2.LINE_AA)
+        cv2.line(contained, (45, 58), (215, 58), (5, 5, 5), 2)
+        contained_group = _group([_line("TEXT", (45, 20, 170, 68))])
+        contained_clean, _contained_mask, contained_metrics = ob._remove_text_for_group(
+            contained, contained, contained_group, strategy="primary")
+        self.assertFalse(contained_metrics["mask_valid"])
+        self.assertEqual(contained_metrics["reason"], "GLYPH_ART_BOUNDARY_UNCERTAIN")
+        self.assertTrue(np.array_equal(contained_clean, contained))
+
+    def test_plain_text_does_not_trigger_linear_art_conflict(self):
+        image = _flat_canvas(shape=(120, 260), level=220)
+        cv2.putText(image, "TEXT", (55, 70), cv2.FONT_HERSHEY_SIMPLEX,
+                    1.5, (5, 5, 5), 3, cv2.LINE_AA)
+        group = _group([_line("TEXT", (45, 20, 170, 68))])
+        cleaned, _mask, metrics = ob._remove_text_for_group(
+            image, image, group, strategy="primary")
+        self.assertNotEqual(metrics.get("reason"), "GLYPH_ART_BOUNDARY_UNCERTAIN")
+        self.assertFalse(metrics.get("review_required", False))
+
+    def test_diagonal_art_crossing_text_is_reviewed_in_both_directions(self):
+        for start, end in (((20, 25), (250, 105)), ((20, 105), (250, 25))):
+            with self.subTest(start=start, end=end):
+                image = _flat_canvas(shape=(140, 280), level=220)
+                _draw_text(image, "TEXT", (78, 82), scale=1.3, thickness=2)
+                cv2.line(image, start, end, (5, 5, 5), 2, cv2.LINE_AA)
+                authorized = np.zeros(image.shape[:2], np.uint8)
+                authorized[40:100, 65:210] = 255
+                result = ob.detect_linear_boundary_conflict(
+                    image, authorized, [(65, 40, 145, 60)])
+                self.assertEqual(result["status"], "review_required")
+                self.assertGreater(result["conflict_pixel_count"], 0)
+
+    def test_horizontal_and_vertical_art_crossings_are_reviewed(self):
+        for start, end in (((20, 65), (255, 65)), ((135, 15), (135, 130))):
+            with self.subTest(start=start, end=end):
+                image = _flat_canvas(shape=(150, 280), level=220)
+                _draw_text(image, "TEXT", (70, 83), scale=1.3, thickness=2)
+                cv2.line(image, start, end, (5, 5, 5), 2, cv2.LINE_AA)
+                authorized = np.zeros(image.shape[:2], np.uint8)
+                authorized[40:95, 65:205] = 255
+                result = ob.detect_linear_boundary_conflict(
+                    image, authorized, [(65, 40, 140, 55)])
+                self.assertEqual(result["status"], "review_required")
+                self.assertGreater(result["conflict_pixel_count"], 0)
+
+    def test_curved_art_and_fine_hair_crossings_are_reviewed(self):
+        traces = {
+            "curve": (2, [[20, 82], [65, 42], [120, 93], [180, 40], [260, 82]]),
+            "fine_hair": (1, [[20, 81], [65, 62], [120, 90], [180, 61], [260, 81]]),
+        }
+        for name, (thickness, points) in traces.items():
+            with self.subTest(trace=name):
+                image = _flat_canvas(shape=(150, 280), level=220)
+                _draw_text(image, "TEXT", (70, 83), scale=1.3, thickness=2)
+                glyph_gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+                _threshold, authorized = cv2.threshold(
+                    glyph_gray, 127, 255, cv2.THRESH_BINARY_INV)
+                authorized = cv2.dilate(
+                    authorized, np.ones((3, 3), np.uint8), iterations=1)
+                cv2.polylines(
+                    image, [np.asarray(points, np.int32)], False,
+                    (5, 5, 5), thickness, cv2.LINE_AA)
+                result = ob.detect_linear_boundary_conflict(
+                    image, authorized, [(65, 40, 140, 55)])
+                self.assertEqual(result["status"], "review_required")
+                self.assertGreater(result["candidate_curved_segment_count"], 0)
+                self.assertGreater(result["conflict_pixel_count"], 0)
+
+    def test_long_glyph_strokes_antialias_and_opposite_polarity_are_not_art_conflicts(self):
+        cases = (
+            ("I", 255, (5, 5, 5)),
+            ("NO", 5, (250, 250, 250)),
+        )
+        for text, background, foreground in cases:
+            with self.subTest(text=text, background=background):
+                image = _flat_canvas(shape=(120, 260), level=background)
+                cv2.putText(
+                    image, text, (65, 82), cv2.FONT_HERSHEY_SIMPLEX,
+                    1.4, foreground, 2, cv2.LINE_AA)
+                authorized = np.zeros(image.shape[:2], np.uint8)
+                authorized[35:95, 55:205] = 255
+                result = ob.detect_linear_boundary_conflict(
+                    image, authorized, [(55, 35, 150, 60)])
+                self.assertNotEqual(result["status"], "review_required")
+                self.assertEqual(result["status"], "no_conflict_detected")
+                self.assertIn("not_general_art_safety", result["scope"])
+                self.assertEqual(result["conflict_pixel_count"], 0)
+
+    def test_halftone_crossing_is_not_declared_safe(self):
+        image = _flat_canvas(shape=(150, 280), level=220)
+        _draw_text(image, "TEXT", (70, 83), scale=1.3, thickness=2)
+        glyph_gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        _threshold, authorized = cv2.threshold(
+            glyph_gray, 127, 255, cv2.THRESH_BINARY_INV)
+        authorized = cv2.dilate(
+            authorized, np.ones((3, 3), np.uint8), iterations=1)
+        x = np.arange(15, 266)
+        points = np.column_stack((x, 70 + np.rint(10 * np.sin(x / 18.0)))).astype(np.int32)
+        cv2.polylines(image, [points], False, (40, 40, 40), 1, cv2.LINE_AA)
+        result = ob.detect_linear_boundary_conflict(
+            image, authorized, [(65, 40, 140, 55)])
+        self.assertEqual(result["status"], "review_required")
+
+    def test_sfx_outside_text_ownership_remains_pixel_identical(self):
+        image = _flat_canvas(shape=(160, 320))
+        _draw_text(image, "TEXT", (45, 70), scale=1.1, thickness=2)
+        _draw_text(image, "PEW!", (225, 140), scale=1.1, thickness=2)
+        group = _group([_line("TEXT", (35, 30, 145, 50))])
+        group.background_type = "white_balloon"
+        group.inside_balloon_like_region = True
+        cleaned, _mask, metrics = ob._remove_text_for_group(
+            image, image, group, strategy="primary")
+        self.assertTrue(metrics["mask_valid"], metrics.get("reason"))
+        self.assertTrue(np.array_equal(cleaned[95:, 210:], image[95:, 210:]))
+
+    def test_boundary_conflict_does_not_escalate_to_advanced_inpainting(self):
+        group = _group([_line("TEXT", (45, 20, 170, 68))])
+        with patch.object(ob.config, "ADVANCED_ART_INPAINTING", True), \
+             patch.object(
+                 ob.config, "ADVANCED_ART_INPAINT_MAX_ATTEMPTS_PER_REGION", 1):
+            eligible = ob._advanced_art_fallback_eligible(group, {
+                "reason": "GLYPH_ART_BOUNDARY_UNCERTAIN",
+                "background_type": "textured_art",
+            })
+        self.assertFalse(eligible)
 
 
 class ReconstructionAccounting(unittest.TestCase):
@@ -609,14 +783,19 @@ class ReconstructionSeamDetector(unittest.TestCase):
         self.assertTrue(metrics["seam_suspected"])
 
     # --- contract ----------------------------------------------------------
-    def test_thin_glyph_mask_reports_no_boundary_evidence(self):
-        """A stroke-width mask has no interior; say so instead of guessing."""
+    def test_thin_glyph_mask_gets_a_verdict(self):
+        """A stroke-width mask has no interior, but is still judged (step/texture)."""
         image = _texture_canvas()
         mask = np.zeros(image.shape[:2], np.uint8)
         mask[200:203, 60:600] = 255
         metrics = self._seam(image, image.copy(), mask)
         self.assertFalse(metrics["seam_suspected"])
-        self.assertEqual(metrics["seam_reason"], "mask_too_thin_for_seam_evidence")
+        self.assertEqual(metrics["seam_evidence_mode"], "thin_mask")
+        self.assertEqual(metrics["seam_reason"], "boundary_consistent_with_source_context")
+        flat = image.copy()
+        flat[mask > 0] = (200, 200, 200)
+        flat_metrics = self._seam(image, flat, mask)
+        self.assertTrue(flat_metrics["seam_suspected"], flat_metrics)
 
     def test_structured_result_carries_its_evidence(self):
         image = _texture_canvas()

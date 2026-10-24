@@ -69,3 +69,14 @@ def test_systemic_layout_error_is_not_converted_to_regional_fallback():
     with mock.patch.object(bp, "render_analyzed_image", return_value=(state["original_bgr"], {})):
         with pytest.raises(SystemicTranslationFailure, match="reservation_already_settled"):
             bp._resolve_layout_overflow_before_settlement([state], Translator(), [])
+
+
+def test_render_signature_changes_only_with_the_translation_state():
+    from types import SimpleNamespace
+    from yomu.pipeline.benchmark_pipeline import _translation_render_signature
+
+    group = SimpleNamespace(translation="OI", translation_candidate="OI", translation_valid=True)
+    before = _translation_render_signature([group])
+    assert _translation_render_signature([group]) == before   # unchanged: preflight render reusable
+    group.translation = "OLÁ"                                  # a layout retry changed it
+    assert _translation_render_signature([group]) != before

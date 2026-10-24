@@ -1,4 +1,5 @@
 import importlib.util
+import functools
 import re
 import threading
 import unicodedata
@@ -236,9 +237,20 @@ class OCREngine:
             start += step
 
         merged, duplicates = _deduplicate_tiled_ocr_lines(all_lines)
+        engine_unavailable = any(
+            bool(record["metadata"].get("engine_unavailable")) for record in tile_records
+        )
+        # Consumers read these at the top level, as for an untiled page; the page is
+        # only as sufficient as its worst tile.
+        severity = {OCR_SUFFICIENT: 0, OCR_REVIEW: 1, OCR_INSUFFICIENT: 2}
+        tile_sufficiency = [
+            record["metadata"].get("ocr_sufficiency") for record in tile_records
+            if record["metadata"].get("ocr_sufficiency") in severity
+        ]
         self.last_run_metadata = {
             "original_engine": self.engine,
             "final_engine": self.engine,
+            "engine_unavailable": engine_unavailable,
             "tall_image_tiling": {
                 "logical_page_count": 1,
                 "tile_count": len(tile_records),
@@ -247,12 +259,11 @@ class OCREngine:
                 "tiles": tile_records,
                 "duplicate_lines_removed": duplicates,
                 "global_coordinates": True,
-                "engine_unavailable": any(
-                    bool(record["metadata"].get("engine_unavailable"))
-                    for record in tile_records
-                ),
+                "engine_unavailable": engine_unavailable,
             },
         }
+        if tile_sufficiency:
+            self.last_run_metadata["ocr_sufficiency"] = max(tile_sufficiency, key=severity.get)
         return sorted(merged, key=lambda line: (line.box[1], line.box[0]))
 
     def _detect_lines_single(self, img_bgr, upscale=True, page=None, rapidocr_upscale=False):
@@ -1266,6 +1277,16 @@ def _low_vowel_signal(token):
 
 
 def _word_candidates(piece, allow_fuzzy=True):
+    # The same words recur on every page; the vocabulary is fixed per process.
+    return list(_cached_word_candidates(str(piece or ""), bool(allow_fuzzy)))
+
+
+@functools.lru_cache(maxsize=20000)
+def _cached_word_candidates(piece, allow_fuzzy):
+    return tuple(_word_candidates_uncached(piece, allow_fuzzy))
+
+
+def _word_candidates_uncached(piece, allow_fuzzy=True):
     piece_lower = re.sub(r"[^a-z]", "", str(piece or "").lower())
     if not piece_lower:
         return []
@@ -1292,7 +1313,7 @@ def _word_candidates(piece, allow_fuzzy=True):
         for word in _WORDS_BY_LENGTH.get(length, []):
             if word == piece_lower:
                 continue
-            distance = _edit_distance(piece_lower, word)
+            distance = _bounded_edit_distance(piece_lower, word, max_distance)
             if distance > max_distance:
                 continue
             similarity = 1.0 - distance / max(len(piece_lower), len(word))
@@ -1511,6 +1532,27 @@ def _edit_distance(left, right):
                     previous[right_index - 1] + (left_char != right_char),
                 )
             )
+        previous = current
+    return previous[-1]
+
+
+def _bounded_edit_distance(left, right, limit):
+    """Edit distance, or ``limit + 1`` as soon as it must exceed ``limit``."""
+    if abs(len(left) - len(right)) > limit:
+        return limit + 1
+    previous = list(range(len(right) + 1))
+    for left_index, left_char in enumerate(left, start=1):
+        current = [left_index]
+        for right_index, right_char in enumerate(right, start=1):
+            current.append(
+                min(
+                    current[-1] + 1,
+                    previous[right_index] + 1,
+                    previous[right_index - 1] + (left_char != right_char),
+                )
+            )
+        if min(current) > limit:
+            return limit + 1
         previous = current
     return previous[-1]
 

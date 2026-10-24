@@ -8,7 +8,7 @@ import yomu.runtime.artifact_contract as artifact_contract
 from yomu.pipeline import benchmark_pipeline as pipeline
 
 
-def _page(tmp_path, page_id):
+def _page(tmp_path, page_id, disposition="LOCAL_SAFE"):
     source = np.full((20, 20, 3), 120, dtype=np.uint8)
     source[1:4, 1:4] = (10, 30, 50)
     source_path = tmp_path / f"source-{page_id}.png"
@@ -20,7 +20,7 @@ def _page(tmp_path, page_id):
         canonical_source_text="owned story text", text="owned story text",
         quality_score=0.99, ocr_provenance_engines=("rapidocr",), source_engine="rapidocr",
         sent_to_translation=False, text_overflow_ratio=0.0,
-        clean_disposition="LOCAL_SAFE", clean_disposition_reason="owned_text_removed_and_validated",
+        clean_disposition=disposition, clean_disposition_reason="owned_text_removed_and_validated",
         clean_local_attempted=True,
         clean_artifact_validation={"clean_validation_passed": True},
         clean_remote_candidate=False, clean_remote_eligible=False,
@@ -55,6 +55,8 @@ def test_serial_and_parallel_workers_complete_clean_and_bind_canonical_file(
 
     def render(source, _lines, _candidates, _groups, *, capture, page_index, **_kwargs):
         capture["cleaned_bgr"] = clean[int(page_index) - 1]
+        capture["authorized_cleanup_mask"] = np.zeros(source.shape[:2], dtype=np.uint8)
+        capture["authorized_cleanup_mask"][8:13, 8:13] = 255
         return source.copy(), {"items": [{
             "id": f"group-{page_index}", "region_id": f"region-{page_index}",
             "classification": "dialogue", "clean_text": "owned story text",
@@ -113,3 +115,34 @@ def test_serial_and_parallel_workers_complete_clean_and_bind_canonical_file(
     modified_provenance = modified_report["provenance"][2]
     assert modified_provenance["clean_verified"] is False
     assert "REVIEW_CERTIFICATE:clean_certificate_clean_hash_mismatch" in modified_provenance["review_reasons"]
+
+
+def test_pending_local_can_complete_execution_without_clean_quality_certificate(
+    tmp_path, monkeypatch,
+):
+    state = _page(tmp_path, 1, disposition="PENDING_LOCAL")
+    cleaned = state["original_bgr"].copy()
+    cleaned[8:13, 8:13] = (200, 190, 180)
+    monkeypatch.setenv("PIPELINE_PAGE_WORKERS", "1")
+    monkeypatch.setenv("YOMU_ENABLE_GEMINI_SAFE_FALLBACK", "0")
+    monkeypatch.setattr(pipeline, "_plan_pipeline_flags", lambda: {
+        "want_clean": True, "want_typeset": False,
+    })
+    monkeypatch.setattr(pipeline, "_save_page_processed_cache", lambda _state: None)
+
+    def render(source, _lines, _candidates, _groups, *, capture, **_kwargs):
+        capture["cleaned_bgr"] = cleaned
+        capture["authorized_cleanup_mask"] = np.zeros(source.shape[:2], dtype=np.uint8)
+        capture["authorized_cleanup_mask"][8:13, 8:13] = 255
+        return source.copy(), {"items": [{
+            "id": "group-1", "region_id": "region-1", "classification": "dialogue",
+        }]}
+
+    monkeypatch.setattr(pipeline, "render_analyzed_image", render)
+    results = pipeline.process_post_translation_pages([state], job_id="job-pending-clean")
+    completed = results[0].page_state
+
+    assert results[0].error is None
+    assert completed["clean_result"]["clean_execution_status"] == "EXECUTION_COMPLETED"
+    assert completed["clean_result"]["clean_quality_status"] == "REVIEW_REQUIRED"
+    assert completed["clean_certificate"]["status"] == "REVIEW_REQUIRED"

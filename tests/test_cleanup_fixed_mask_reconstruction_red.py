@@ -1,4 +1,4 @@
-"""Permanent RED for the frozen fixed-mask reconstruction contract."""
+"""Frozen fixed-mask reconstruction contract."""
 from __future__ import annotations
 
 import test_support._test_bootstrap as _test_bootstrap  # noqa: F401
@@ -101,20 +101,11 @@ def test_fixed_mask_shade_positive_control_is_on_correct_side():
     )
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "MASK_PRODUCT_BUG: known-limitation. Fixed-mask reconstruction still erases "
-        "known line structure (margin<0). Accepted as a known defect for the beta.16 "
-        "gate; xfail is strict so this flips to a failure the moment a reconstruction "
-        "fix makes it pass. See docs technical debt §29."
-    ),
-)
 def test_fixed_mask_structured_reconstruction_must_not_erase_known_structure():
     margin, d_correct, d_erased, signal, mask = _pair("line")
     assert mask.size == 260 * 360
-    # Frozen R2 contract: clear negative margin is structural erasure.  This is
-    # intentionally RED until a future reconstruction fix preserves the line.
+    # Frozen R2 contract: clear negative margin is structural erasure. The
+    # authorized-mask compositor must leave protected line structure intact.
     assert margin >= 0.0, (
         f"fixed-mask structural erasure: margin={margin:.6f}, "
         f"d_correct={d_correct:.6f}, d_erased={d_erased:.6f}, signal={signal:.6f}"

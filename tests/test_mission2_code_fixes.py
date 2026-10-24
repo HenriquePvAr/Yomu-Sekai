@@ -38,9 +38,12 @@ class Mission2ValidationFixTests(unittest.TestCase):
         group = self._group()
         removal = {
             "measured": True,
+            "source_text_pixels": 24,
+            "source_owned_geometry_coverage": 1.0,
             "source_text_coverage": 1.0,
             "largest_uncovered_source_component": 0,
             "largest_unmasked_source_component": 0,
+            "unmeasured_source_line_ids": [],
         }
         with patch.object(ocr_balloon.OCREngine, "_detect_with_rapidocr", return_value=[]), \
              patch.object(ocr_balloon.source_completeness, "expected_physical_tokens", return_value=(
@@ -59,9 +62,12 @@ class Mission2ValidationFixTests(unittest.TestCase):
         group = self._group()
         removal = {
             "measured": True,
+            "source_text_pixels": 24,
+            "source_owned_geometry_coverage": 1.0,
             "source_text_coverage": 1.0,
             "largest_uncovered_source_component": 0,
             "largest_unmasked_source_component": 0,
+            "unmeasured_source_line_ids": [],
         }
         with patch.object(ocr_balloon.OCREngine, "_detect_with_rapidocr", return_value=[]), \
              patch.object(ocr_balloon.source_completeness, "expected_physical_tokens", return_value=(

@@ -88,6 +88,15 @@ _CREDIT_RE = re.compile(
     r"typeset(ter|ting)?|redraw(er)?|clean(er|ing)?|proofread(er)?|raw\s?provider|uploader|"
     r"produced|producer|"
     r"team|subs?|staff|credits?|thanks?|producers?|assistants?|original\s+story|web\s?comic)\b", re.I)
+# Terms that only a credit/production line uses. Weak terms (thanks, team, staff,
+# edit, clean, sub) are ordinary dialogue words and need ``by``/``:`` to count.
+_STRONG_CREDIT_RE = re.compile(
+    r"\b(scan(lation|s)?|translat(ed|or|ion|ions)|traduz(ido|ao|ção)|"
+    r"typeset(ter|ting)?|redraw(er)?|clean(er|ing)|proofread(er)?|raw\s?provider|uploader|"
+    r"produced|producers?|credits?|original\s+story|web\s?comic)\b", re.I)
+_CREDIT_ATTRIBUTION_RE = re.compile(
+    r"\b(edit(ed|or|ing)?|clean(er|ing)?|team|subs?|staff|thanks?|assistants?)\s*(by\b|:)", re.I)
+_DIALOGUE_LABELS = frozenset({"speech", "dialogue", "thought", "narration"})
 _WATERMARK_HINT_RE = re.compile(r"\b(read|scans?|toon|manga|manhwa|webtoon|comic|\.(com|net))\b", re.I)
 _PROMO_COMPACT_HINTS = (
     "readthisseriesfirstat",
@@ -148,6 +157,22 @@ def looks_like_credit(text: str) -> bool:
     return bool(_CREDIT_RE.search(body)) or any(
         hint in compact for hint in _PROMO_COMPACT_HINTS
     ) or comma_credit_roll
+
+
+def looks_like_strong_credit(text: str) -> bool:
+    """Credit evidence that ordinary dialogue cannot produce by itself."""
+    body = str(text or "")
+    compact = _compact_alnum(body)
+    words = _words(body)
+    comma_credit_roll = (
+        body.count(",") >= 4
+        and len(words) >= 8
+        and not re.search(r"[!?]", body)
+    )
+    return bool(
+        _STRONG_CREDIT_RE.search(body) or _CREDIT_ATTRIBUTION_RE.search(body)
+        or any(hint in compact for hint in _PROMO_COMPACT_HINTS) or comma_credit_roll
+    )
 
 
 def looks_like_watermark(text: str) -> bool:
@@ -224,7 +249,10 @@ def normalize(legacy_label: str, *, text: str = "", preserve_as_name: bool = Fal
     # Text-shape evidence wins over a coarse visual label for the preserve cases.
     if looks_like_url(body):
         return URL_PRESERVE, "url_detected"
-    if looks_like_credit(body):
+    # A balloon/narration line saying "THANK YOU" or "OUR TEAM" is dialogue, not a
+    # credit; those labels need credit evidence that dialogue cannot produce.
+    if looks_like_credit(body) and (
+            label not in _DIALOGUE_LABELS or looks_like_strong_credit(body)):
         return CREDIT_PRESERVE, "credit_terms_detected"
     if looks_like_watermark(body):
         return WATERMARK_PRESERVE, "watermark_signature_detected"
@@ -265,6 +293,62 @@ def suggested_action(category: str) -> str:
     return "human_review"
 
 
+_LEXICON: frozenset[str] | None = None
+
+
+def _lexicon() -> frozenset[str]:
+    """English words (assets/lexicon, public domain); empty if the asset is missing."""
+    global _LEXICON
+    if _LEXICON is None:
+        import gzip
+        from yomu.runtime.paths import REPO_ROOT
+        path = REPO_ROOT / "assets" / "lexicon" / "english_words.txt.gz"
+        try:
+            with gzip.open(path, "rt", encoding="ascii") as handle:
+                _LEXICON = frozenset(line.strip() for line in handle if line.strip())
+        except OSError:
+            _LEXICON = frozenset()
+    return _LEXICON
+
+
+def is_english_word(token: str) -> bool:
+    """Dictionary membership, not shape: "INCREDIBLE" yes, "PAEHYEOK"/"FWASHAA" no."""
+    return re.sub(r"[^A-Z]", "", str(token or "").upper()) in _lexicon()
+
+
+def segment_words(token: str) -> list[str] | None:
+    """Split letters the OCR glued together into dictionary words, or ``None``.
+
+    "IFIATLEAST" -> IF I AT LEAST. Dynamic programming over the lexicon plus the
+    short function words; the split with the fewest words wins (it prefers real
+    words over letter runs). ``None`` when the letters cannot be covered.
+    """
+    letters = re.sub(r"[^A-Z]", "", str(token or "").upper())
+    if not letters or len(letters) > 40:
+        return None
+    vocabulary = _lexicon()
+    best: list[list[str] | None] = [None] * (len(letters) + 1)
+    best[0] = []
+    for end in range(1, len(letters) + 1):
+        for start in range(max(0, end - 20), end):
+            prefix = best[start]
+            piece = letters[start:end]
+            if prefix is None:
+                continue
+            if piece in vocabulary or piece in _STORY_CLAUSE_MARKERS:
+                candidate = prefix + [piece]
+                if best[end] is None or len(candidate) < len(best[end]):
+                    best[end] = candidate
+    split = best[-1]
+    # A plausible split, not a run of dictionary scraps ("ICHIGONYANYAN" ->
+    # I CHI GON YAN YAN): pieces average >= 3 letters, at most one single letter.
+    if split is None or (len(split) > 1 and (
+            sum(len(w) for w in split) / len(split) < 3.0
+            or sum(len(w) == 1 for w in split) > 1)):
+        return None
+    return split
+
+
 def weak_label_semantic_promotion_allowed(legacy_label: str, text: str) -> bool:
     """Whether an uncertain/decorative legacy label has enough story evidence.
 
@@ -286,7 +370,19 @@ def weak_label_semantic_promotion_allowed(legacy_label: str, text: str) -> bool:
     folded = [re.sub(r"[^A-Z']", "", word.upper()) for word in words]
     has_clause_marker = any(word in _STORY_CLAUSE_MARKERS for word in folded)
     has_sentence_punctuation = bool(re.search(r"[.!?…]", body))
-    return bool(len(real_words) >= 2 and has_clause_marker and has_sentence_punctuation)
+    if len(real_words) >= 2 and has_clause_marker and has_sentence_punctuation:
+        return True
+    # Prose without punctuation ("BY THE NIGHTMARE SPELL"): a function word *inside*
+    # the phrase joins content words; a leading article alone ("THE TOWER") does not.
+    if len(real_words) >= 3 and any(word in _STORY_CLAUSE_MARKERS for word in folded[1:]):
+        return True
+    # A single dictionary word trailing off ("INCREDIBLE...", "HOPELESS,") is speech.
+    # Many sounds are dictionary words too ("SCREECH", "CRASH!"), so the trailing-off
+    # punctuation is required; a romanised sound ("PAEHYEOK...") is not in the lexicon.
+    return bool(
+        len(words) == 1 and len(folded[0]) >= 4 and is_english_word(folded[0])
+        and re.search(r"(\.\.|…|,)\s*$", body.strip())
+    )
 
 
 # --- canonical policy -------------------------------------------------------

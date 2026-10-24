@@ -132,7 +132,17 @@ class PostRenderResidualEnglishTests(unittest.TestCase):
             "yomu.ocr.ocr_balloon.OCREngine._detect_with_rapidocr",
             return_value=[_line(observed)],
         ):
-            return _post_render_source_text_check(image, group, page_index=page_index)
+            return _post_render_source_text_check(
+                image, group, page_index=page_index,
+                removal={
+                    "measured": True, "source_text_pixels": 24,
+                    "source_owned_geometry_coverage": 1.0,
+                    "source_text_coverage": 1.0,
+                    "largest_uncovered_source_component": 0,
+                    "largest_unmasked_source_component": 0,
+                    "unmeasured_source_line_ids": [],
+                },
+            )
 
     def test_b1_token_the_translation_itself_spells_is_forgiven(self):
         # "FOR" is the future subjunctive of *ser* in the rendered Portuguese and

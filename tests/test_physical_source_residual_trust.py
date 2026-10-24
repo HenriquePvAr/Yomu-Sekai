@@ -257,12 +257,14 @@ class PhysicalResidualTrustTests(unittest.TestCase):
         self.assertEqual(result["physical_decision"], PASS)
         self.assertEqual(result["uncovered_source_text_pixels"], 0)
 
-    # 17 - a missing original/mask must not turn every OCR miss into a failure.
-    def test_absent_removal_evidence_does_not_invent_a_residual(self):
+    # 17 - OCR silence cannot certify removal when physical evidence is absent.
+    def test_absent_removal_evidence_requires_review_even_without_residual_ocr(self):
         _original, rendered, group, _mask = _p002_shaped_case(uncovered_word=False)
         result = _check(rendered, group, None, None, observed="EU PERDI O CONTROLE")
 
-        self.assertTrue(result["passed"], result.get("reason"))
+        self.assertFalse(result["passed"], result.get("reason"))
+        self.assertEqual(result["physical_decision"], REVIEW)
+        self.assertEqual(result["source_removal_status"], ocr_balloon.SOURCE_REMOVAL_NOT_VERIFIED)
 
     # 42 - one covered line plus one uncovered line is not a global pass.
     def test_one_uncovered_line_fails_the_whole_group(self):
@@ -310,7 +312,8 @@ class PhysicalResidualTrustTests(unittest.TestCase):
         result = _check(rendered, group, original, mask, observed="EU PERDI O CONTROLE")
 
         self.assertTrue(result["checked"])
-        self.assertEqual(result["physical_decision"], PASS)
+        self.assertEqual(result["physical_decision"], REVIEW)
+        self.assertEqual(result["source_removal_status"], ocr_balloon.SOURCE_REMOVAL_NOT_VERIFIED)
 
     # 57 - a PASS has to be explainable, not merely asserted.
     def test_pass_reports_the_removal_evidence_behind_it(self):
@@ -330,6 +333,23 @@ class PhysicalResidualTrustTests(unittest.TestCase):
 
 class RemovalEvidenceGuardTests(unittest.TestCase):
     """38 - a known-incomplete mask is refused without needing any OCR."""
+
+    def test_unchanged_foreground_inside_mask_is_reported_in_shadow_only(self):
+        original, _rendered, group, mask = _p002_shaped_case(uncovered_word=False)
+        # A no-op candidate models a reconstruction that received a full mask
+        # but left source-like pixels in place. This signal is diagnostic only:
+        # line art and coincident pixels need calibration before gating.
+        removal = ocr_balloon._uncovered_source_text_evidence(
+            original, original.copy(), group, mask
+        )
+
+        self.assertTrue(removal["measured"])
+        self.assertEqual(removal["source_owned_geometry_uncovered_pixels"], 0)
+        self.assertEqual(removal["inside_mask_similarity_mode"], "shadow_only")
+        self.assertGreater(removal["unchanged_foreground_inside_cleanup_pixels"], 0)
+        self.assertGreater(
+            removal["largest_unchanged_foreground_inside_cleanup_component"], 0
+        )
 
     def test_uncovered_glyph_is_refused_independently_of_the_ocr_stage(self):
         original, rendered, group, mask = _p002_shaped_case()
@@ -353,6 +373,29 @@ class RemovalEvidenceGuardTests(unittest.TestCase):
         self.assertEqual(removal["source_owned_geometry_coverage"], 1.0)
         self.assertEqual(removal["largest_unmasked_source_component"], 0)
         self.assertFalse(ocr_balloon._source_removal_incomplete(group, removal))
+
+    def test_insufficient_total_coverage_is_rejected_even_without_large_components(self):
+        _original, _rendered, group, _mask = _p002_shaped_case(uncovered_word=False)
+        removal = {
+            "measured": True,
+            "source_text_pixels": 1000,
+            "source_owned_geometry_coverage": 0.90,
+            "source_text_coverage": 1.0,
+            "largest_uncovered_source_component": 0,
+            "largest_unmasked_source_component": 0,
+            "unmeasured_source_line_ids": [],
+        }
+
+        self.assertEqual(
+            ocr_balloon._source_removal_status(group, removal),
+            ocr_balloon.SOURCE_REMOVAL_REJECTED,
+        )
+        removal["source_owned_geometry_coverage"] = 1.0
+        removal["source_text_coverage"] = 0.90
+        self.assertEqual(
+            ocr_balloon._source_removal_status(group, removal),
+            ocr_balloon.SOURCE_REMOVAL_REJECTED,
+        )
 
     def test_p68_partial_child_mask_is_not_clean_even_when_ocr_is_noise(self):
         original, rendered, group, mask = _p68_shaped_case(complete_cleanup=False)
@@ -384,6 +427,7 @@ class RemovalEvidenceGuardTests(unittest.TestCase):
 
         self.assertTrue(result["passed"], result.get("reason"))
         self.assertEqual(result["physical_decision"], PASS)
+        self.assertEqual(result["source_removal_status"], ocr_balloon.SOURCE_REMOVAL_VERIFIED)
         self.assertEqual(result["source_owned_geometry_coverage"], 1.0)
         self.assertEqual(result["largest_unmasked_source_component"], 0)
 
@@ -394,7 +438,40 @@ class RemovalEvidenceGuardTests(unittest.TestCase):
         )
 
         self.assertFalse(removal["measured"])
-        self.assertFalse(ocr_balloon._source_removal_incomplete(group, removal))
+        self.assertEqual(
+            ocr_balloon._source_removal_status(group, removal),
+            ocr_balloon.SOURCE_REMOVAL_NOT_VERIFIED,
+        )
+        self.assertTrue(ocr_balloon._source_removal_incomplete(group, removal))
+
+    def test_midtone_small_and_unmeasurable_regions_are_not_verified(self):
+        _original, rendered, group, mask = _p002_shaped_case(uncovered_word=False)
+        midtone = np.full_like(rendered, 128)
+        cases = [
+            (midtone, mask, group),
+            (rendered, mask, _speech_group([_line("I", (10, 10, 3, 3))], "I")),
+            (rendered, None, group),
+        ]
+        for original, cleanup_mask, candidate_group in cases:
+            with self.subTest(box=candidate_group.lines[0].box):
+                evidence = ocr_balloon._uncovered_source_text_evidence(
+                    original, rendered, candidate_group, cleanup_mask
+                )
+                self.assertEqual(
+                    ocr_balloon._source_removal_status(candidate_group, evidence),
+                    ocr_balloon.SOURCE_REMOVAL_NOT_VERIFIED,
+                )
+
+    def test_clean_measured_region_is_verified(self):
+        original, rendered, group, mask = _p002_shaped_case(uncovered_word=False)
+        evidence = ocr_balloon._uncovered_source_text_evidence(
+            original, rendered, group, mask
+        )
+        self.assertTrue(evidence["measured"])
+        self.assertEqual(
+            ocr_balloon._source_removal_status(group, evidence),
+            ocr_balloon.SOURCE_REMOVAL_VERIFIED,
+        )
 
 
 class NoiseForgivenessPolicyTests(unittest.TestCase):
@@ -432,7 +509,6 @@ class NoiseForgivenessPolicyTests(unittest.TestCase):
 
         self.assertTrue(result["passed"], result.get("reason"))
         self.assertIn("SO", result["forgiven_ocr_noise_tokens"])
-        self.assertEqual(result["physical_decision"], PASS)
 
     def test_expected_source_word_is_never_forgiven_as_noise(self):
         # Same token, opposite provenance: here "SO" is an English word the

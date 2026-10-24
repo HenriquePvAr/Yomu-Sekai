@@ -54,16 +54,51 @@ def _masked_composite(original: np.ndarray, generated: np.ndarray, mask: np.ndar
     changed = int(np.count_nonzero(np.any(output[outside] != original[outside], axis=1))) if np.any(outside) else 0
     return output, changed
 
+def _outside_mask_changed_pixels(original: Any, generated: Any, mask: Any) -> int | None:
+    """Measure actual output changes outside a complete page-coordinate mask."""
+    if not isinstance(original, np.ndarray) or not isinstance(generated, np.ndarray):
+        return None
+    if (original.shape != generated.shape or original.ndim != 3
+            or original.shape[2] not in (3, 4)
+            or original.dtype != np.uint8 or generated.dtype != np.uint8):
+        return None
+    if not isinstance(mask, np.ndarray) or mask.ndim != 2 or mask.shape != original.shape[:2]:
+        return None
+    if (not (np.issubdtype(mask.dtype, np.number) or mask.dtype == np.bool_)
+            or not np.isfinite(mask).all()):
+        return None
+    authorized = mask > 0
+    outside = ~authorized
+    if not np.any(outside):
+        return 0
+    return int(np.count_nonzero(np.any(generated[outside] != original[outside], axis=1)))
+
 def run_clean_strategy(request: CleanRequest, local_result: dict[str, Any], *,
                        fallback: Callable[[CleanRequest], dict[str, Any]] | None = None) -> dict[str, Any]:
     """Try local clean first; invoke fallback only for eligible content difficulty."""
     local = local_result if isinstance(local_result, dict) else {}
     local_status = str(local.get("status") or "").upper()
     if local_status == LOCAL_SAFE:
+        local_image = local.get("image")
+        outside_metric = _outside_mask_changed_pixels(
+            request.original, local_image, request.authorized_mask,
+        )
+        if outside_metric is None:
+            return _review(
+                request, reason="outside_mask_metric_unavailable", local_status=local_status,
+                image=local_image, outside_mask_changed_pixels=None,
+                fallback_status="VALIDATION_EVIDENCE_MISSING",
+            )
+        if outside_metric != 0:
+            return _review(
+                request, reason="outside_mask_violation", local_status=local_status,
+                image=local_image, outside_mask_changed_pixels=outside_metric,
+                fallback_status="SAFETY_FAIL",
+            )
         return {"status": "COMPLETED", "strategy_requested": "clean", "strategy_used": "local",
                 "local_status": local_status, "fallback_invoked": False, "fallback_reason": "local_safe",
                 "fallback_status": "NOT_RUN", "safety_status": "PASS", "review_required": False,
-                "image": local.get("image"), "outside_mask_changed_pixels": 0,
+                "image": local_image, "outside_mask_changed_pixels": outside_metric,
                 "job_id": request.job_id, "page_id": request.page_id}
     if local_status == SFX:
         return _review(request, reason="sfx_firewall", local_status=local_status,

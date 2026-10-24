@@ -87,7 +87,9 @@ class HybridCancellationTests(unittest.TestCase):
         cancel = threading.Event()
         started = threading.Event()
         release = threading.Event()
+        rapid_release = threading.Event()
         calls = []
+        rapid_calls = []
 
         class Provider:
             def is_configured(self):
@@ -102,8 +104,27 @@ class HybridCancellationTests(unittest.TestCase):
         jobs = [{"index": i, "image_path": f"p{i}.png"} for i in range(4)]
         holder = {}
 
+        def fake_rapidocr_page(_engine, job):
+            rapid_calls.append(job["index"])
+            rapid_release.wait(2)
+            return OCRPageResult(
+                page_id=job["index"], engine="rapidocr", width=8, height=8,
+            )
+
         def run():
-            with mock.patch("cv2.imread", side_effect=_image):
+            class FastRapidOCREngine:
+                def __init__(self, *_args, **_kwargs):
+                    pass
+
+                def detect_lines(self, *_args, **_kwargs):
+                    return []
+
+            # This test exercises hybrid cancellation, not RapidOCR model
+            # startup. Keep the competing worker hermetic so cold model load
+            # cannot outlive the cancellation join under suite load.
+            with mock.patch("cv2.imread", side_effect=_image), \
+                 mock.patch.object(sched, "OCREngine", FastRapidOCREngine), \
+                 mock.patch.object(sched, "_rapidocr_page", side_effect=fake_rapidocr_page):
                 holder["value"] = sched.run_hybrid(
                     jobs, "en", Provider(), rapidocr_workers=1, nvidia_workers=1,
                     cancel_event=cancel,
@@ -114,9 +135,11 @@ class HybridCancellationTests(unittest.TestCase):
         self.assertTrue(started.wait(1))
         cancel.set()
         release.set()
+        rapid_release.set()
         thread.join(2)
         self.assertFalse(thread.is_alive())
         self.assertEqual(len(calls), 1)
+        self.assertLessEqual(len(rapid_calls), 1)
         self.assertEqual(holder["value"][0], {})
 
 

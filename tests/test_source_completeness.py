@@ -699,7 +699,15 @@ class PhysicalSourceTruthTest(unittest.TestCase):
             group.text = group_text
             provenance.record_group(group)
             return self.ocr_balloon._post_render_source_text_check(
-                self.rendered, group, 2
+                self.rendered, group, 2,
+                removal={
+                    "measured": True, "source_text_pixels": 24,
+                    "source_owned_geometry_coverage": 1.0,
+                    "source_text_coverage": 1.0,
+                    "largest_uncovered_source_component": 0,
+                    "largest_unmasked_source_component": 0,
+                    "unmeasured_source_line_ids": [],
+                },
             )
 
     def test_token_only_provenance_remembers_is_detected_after_render(self):

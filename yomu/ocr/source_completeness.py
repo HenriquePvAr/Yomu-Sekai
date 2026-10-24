@@ -107,6 +107,32 @@ def meaningful_tokens(text):
     return list(seen)
 
 
+def _represented_token_forms(source_stream, downstream_streams, max_run=4):
+    """Source tokens the downstream text carries, matched per token, not per substring.
+
+    A substring test over the compacted text counted ``THE`` as present inside
+    ``OTHER``. Spacing repair still compares equal: a source token matches a whole
+    downstream token, a run of downstream tokens it was split into (``LOST CON TROL``),
+    or a downstream token that is a run of source tokens merged (``LOSTCONTROL``).
+    """
+    present = set()
+    downstream_tokens = set()
+    for stream in downstream_streams:
+        downstream_tokens.update(stream)
+        for start in range(len(stream)):
+            for size in range(1, max_run + 1):
+                if start + size > len(stream):
+                    break
+                present.add("".join(stream[start:start + size]))
+    for start in range(len(source_stream)):
+        for size in range(2, max_run + 1):
+            if start + size > len(source_stream):
+                break
+            if "".join(source_stream[start:start + size]) in downstream_tokens:
+                present.update(source_stream[start:start + size])
+    return present
+
+
 def discard_is_explained(reason):
     return str(reason or "") in KNOWN_DISCARD_REASONS
 
@@ -265,20 +291,24 @@ def check(
         str(line.get("line_id") or "") for line in downstream_lines
     ]
 
-    downstream_compact = compact(downstream_text) + "|" + compact(
-        " ".join(_downstream_text(line) for line in downstream_lines)
-    )
+    downstream_streams = [
+        fold_tokens(downstream_text),
+        fold_tokens(" ".join(_downstream_text(line) for line in downstream_lines)),
+    ]
 
     expected = {}
+    source_stream = []
     for line in source_lines:
         line_id = str(line.get("line_id") or "")
+        source_stream.extend(fold_tokens(_snapshot_text(line)))
         for token in meaningful_tokens(_snapshot_text(line)):
             expected.setdefault(token, []).append(line_id)
 
+    present = _represented_token_forms(source_stream, downstream_streams)
     represented = []
     missing = []
     for token in expected:
-        if token in downstream_compact:
+        if token in present:
             represented.append(token)
         else:
             missing.append(token)

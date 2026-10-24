@@ -178,7 +178,14 @@ class PhysicalFailClosedTests(unittest.TestCase):
             mock.patch.object(
                 ob,
                 "_uncovered_source_text_evidence",
-                return_value={"measured": True, "source_text_coverage": 1.0},
+                return_value={
+                    "measured": True, "source_text_pixels": 100,
+                    "source_owned_geometry_coverage": 1.0,
+                    "source_text_coverage": 1.0,
+                    "largest_uncovered_source_component": 0,
+                    "largest_unmasked_source_component": 0,
+                    "unmeasured_source_line_ids": [],
+                },
             ),
         ):
             ob.render_analyzed_image(

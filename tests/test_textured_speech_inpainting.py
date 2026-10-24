@@ -233,9 +233,26 @@ class TexturedSpeechMaskAcceptance(unittest.TestCase):
         box = (40, 200, 720, 300)
         _write_light_text(image, "HUGE", (60, 420), scale=9.0)
         group = _speech_group([_line("HUGE TEXT REGION", box)], "HUGE TEXT REGION")
-        _cleaned, _mask, metrics = _remove_text_for_group(
-            image, image, group, strategy=FALLBACK
-        )
+        # This contract isolates the oversized-mask/residual-source verdict;
+        # boundary conflict behavior has dedicated crossing-art regressions.
+        detector_clear = {
+            "status": "no_conflict_detected",
+            "candidate_segment_count": 0,
+            "candidate_curved_segment_count": 0,
+            "excluded_glyph_dominated_curve_count": 0,
+            "conflict_pixel_count": 0,
+            "candidate_line_mask_hash": "0" * 64,
+            "method": "test_isolated",
+            "reason_codes": [],
+        }
+        with patch.object(
+            ocr_balloon,
+            "detect_linear_boundary_conflict",
+            return_value=detector_clear,
+        ):
+            _cleaned, _mask, metrics = _remove_text_for_group(
+                image, image, group, strategy=FALLBACK
+            )
         self.assertFalse(metrics.get("mask_valid"))
         # The rejection is no longer about the *region* being oversized: since
         # TDD #81 this fallback builds a glyph-scoped mask, so it now covers
@@ -291,6 +308,13 @@ class TexturedSpeechMaskAcceptance(unittest.TestCase):
             ocr_balloon,
             "_detached_light_text_components_mask",
             return_value=(empty_mask, {"detached_text_components": 0, "detached_text_pixels": 0}),
+        ), patch.object(
+            ocr_balloon,
+            "detect_linear_boundary_conflict",
+            return_value={"status": "clear", "candidate_segment_count": 0,
+                          "conflict_pixel_count": 0,
+                          "candidate_line_mask_hash": "test-clear",
+                          "method": "test-isolated-risk-metrics"},
         ):
             _cleaned, _mask, metrics = _remove_text_for_group(
                 image,

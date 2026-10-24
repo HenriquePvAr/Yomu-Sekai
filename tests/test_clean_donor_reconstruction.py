@@ -167,6 +167,44 @@ class VerifiedDonorPoolTests(unittest.TestCase):
         self.assertEqual(
             result["sampling_manifest"]["target_pixels_used_as_donors"], 0)
 
+    def test_telea_reuses_contaminated_strokes_but_sanitized_context_does_not(self):
+        image = np.zeros((60, 80, 3), np.uint8)
+        for x in range(image.shape[1]):
+            image[:, x] = [100 + x, 120 + x // 2, 150]
+        glyph = np.zeros(image.shape[:2], np.uint8)
+        cv2.line(glyph, (10, 30), (70, 30), 255, 3, cv2.LINE_AA)
+        image[glyph > 0] = (5, 5, 5)
+        target = np.zeros_like(glyph)
+        target[24:37, 34:47] = 255
+        zero = np.zeros_like(glyph)
+        contract = ati.build_contamination_contract(
+            text_fill_mask=glyph, outline_mask=zero,
+            antialias_mask=zero, shadow_mask=zero, residual_mask=zero,
+        )
+        pool = ati.build_verified_donor_pool(
+            contamination_contract=contract, target_mask=target)
+
+        telea = cv2.inpaint(image, target, 3, cv2.INPAINT_TELEA)
+        sanitized = ati.reconstruct_with_sanitized_context(
+            image, target_mask=target, contamination_contract=contract,
+            donor_pool=pool, method=cv2.INPAINT_TELEA, radius=3,
+        )
+        self.assertEqual(pool["status"], "valid")
+        self.assertEqual(pool["contamination_overlap"], 0)
+        self.assertEqual(sanitized["status"], "valid")
+        self.assertEqual(
+            sanitized["sampling_manifest"]["target_pixels_used_as_donors"], 0)
+
+        telea_gray = cv2.cvtColor(telea, cv2.COLOR_BGR2GRAY)
+        sanitized_gray = cv2.cvtColor(sanitized["image"], cv2.COLOR_BGR2GRAY)
+        self.assertGreater(int((telea_gray[target > 0] < 50).sum()), 0)
+        self.assertEqual(int((sanitized_gray[target > 0] < 50).sum()), 0)
+
+        ring = cv2.dilate(target, np.ones((7, 7), np.uint8)) & ~target
+        self.assertGreater(int(np.count_nonzero((ring > 0) & (glyph > 0))), 0)
+        outside = target == 0
+        self.assertTrue(np.array_equal(sanitized["image"][outside], image[outside]))
+
     def test_selection_prefers_zero_residual_over_higher_scoring_candidate(self):
         common = {
             "edge_continuity_score": 1.0,

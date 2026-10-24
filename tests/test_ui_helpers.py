@@ -337,7 +337,14 @@ class UIHelpersTests(unittest.TestCase):
             with self.subTest(quality=quality):
                 classification = classify_quality_validation(quality)
                 self.assertEqual(classification["severity"], "REVIEW")
-                self.assertEqual(classification["outcome"], "success_review_recommended")
+                residual = any(
+                    code in {"source_language_residual", "physical_source_residual",
+                             "translation_source_language_residual"}
+                    for code in classification["reason_codes"])
+                self.assertEqual(
+                    classification["outcome"],
+                    "review_required_source_residual" if residual else "success_review_recommended")
+                self.assertIs(classification["review_mandatory"], residual)
                 self.assertEqual(
                     derive_final_run_status(technical_success=True, quality_validation=quality),
                     "review_required",

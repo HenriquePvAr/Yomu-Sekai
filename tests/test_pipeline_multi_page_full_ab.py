@@ -81,8 +81,11 @@ class MultiPageFullAB(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             root=Path(td); runs=[self._run(root/label,w) for label,w in (("serial",1),("parallel1",2),("parallel2",2))]
             for report,tr in runs:
-                self.assertEqual(report.get("status"),"finished")
+                # The fixture OCR supplies regions without source pixels. The
+                # job still produces its PDF, while Clean correctly stays in review.
+                self.assertEqual(report.get("status"),"review_required")
                 self.assertEqual(report.get("quality_validation",{}).get("expected_pdf_pages"),3)
+                self.assertFalse(report.get("quality_validation",{}).get("clean_quality",{}).get("passed"))
                 self.assertTrue(Path(report["pdf_path"]).is_file())
                 self.assertGreaterEqual(len(tr.retry_calls),1)
             self.assertEqual(

@@ -33,6 +33,49 @@ def test_local_safe_never_calls_gemini():
     assert result["strategy_used"] == "local"
     assert result["fallback_invoked"] is False
     assert calls == []
+    assert result["outside_mask_changed_pixels"] == 0
+
+
+def test_local_safe_counts_changes_outside_all_authorized_regions():
+    request = _request()
+    mask = np.zeros((4, 4), dtype=np.uint8)
+    mask[0, 0] = 255
+    mask[3, 3] = 255
+    request = CleanRequest(original=request.original, authorized_mask=mask, mask_confidence=0.95)
+    image = request.original.copy()
+    image[0, 0] = 10
+    image[3, 3] = 20
+    result = run_clean_strategy(request, {"status": LOCAL_SAFE, "image": image})
+    assert result["status"] == "COMPLETED"
+    assert result["outside_mask_changed_pixels"] == 0
+
+    image[2, 2] = 30
+    result = run_clean_strategy(request, {"status": LOCAL_SAFE, "image": image})
+    assert result["status"] == "REVIEW_REQUIRED"
+    assert result["fallback_status"] == "SAFETY_FAIL"
+    assert result["outside_mask_changed_pixels"] == 1
+
+
+def test_local_safe_marks_missing_or_incompatible_metric_unavailable():
+    request = _request()
+    missing = CleanRequest(original=request.original)
+    result = run_clean_strategy(missing, {"status": LOCAL_SAFE, "image": request.original.copy()})
+    assert result["status"] == "REVIEW_REQUIRED"
+    assert result["outside_mask_changed_pixels"] is None
+
+    bad_shape = np.zeros((3, 4, 3), dtype=np.uint8)
+    result = run_clean_strategy(request, {"status": LOCAL_SAFE, "image": bad_shape})
+    assert result["status"] == "REVIEW_REQUIRED"
+    assert result["outside_mask_changed_pixels"] is None
+
+    bad_mask = CleanRequest(
+        original=request.original, authorized_mask=np.zeros((3, 4), dtype=np.uint8),
+        mask_confidence=0.95,
+    )
+    result = run_clean_strategy(
+        bad_mask, {"status": LOCAL_SAFE, "image": request.original.copy()})
+    assert result["status"] == "REVIEW_REQUIRED"
+    assert result["outside_mask_changed_pixels"] is None
 
 
 def test_hard_local_invokes_gemini_and_composites_only_inside_mask():

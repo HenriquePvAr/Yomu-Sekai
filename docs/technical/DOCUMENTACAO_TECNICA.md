@@ -1,7 +1,10 @@
 # Tradutor IA — Documentação Técnica
 
-> **Base verificada:** `0ae4bac` (branch `main`)
-> **Última revisão:** 2026-09-28
+> **Base verificada:** `0ae4bac` (branch `main`); §16 (gate espacial / correções de Clean) e
+> o parágrafo de créditos da §17 verificados sobre `c994426f` + working tree em 2026-10-23;
+> §16 (sexta a oitava passadas, diagramação, SFX) e §25 verificados sobre `c994426f` + working
+> tree em 2026-10-24
+> **Última revisão:** 2026-10-24
 > **Público:** desenvolvedores, mantenedores, suporte técnico e agentes automatizados.
 
 Documentos irmãos: [Guia do Usuário](../user/GUIA_DO_USUARIO.md) ·
@@ -773,8 +776,8 @@ concorrência a partir de memória e CPU observadas (opt-in por `.env`).
 
 `ocr_balloon.py` agrupa linhas visualmente relacionadas e classifica o grupo com evidências
 textuais e de container. Classes: `speech`, `narration`, `sfx`, `decorative` e `unknown`
-(evidência insuficiente para decisão segura). SFX são preservados por padrão
-(`TRANSLATE_SFX=False`). A classificação também informa a estratégia de máscara e redraw.
+(evidência insuficiente para decisão segura). SFX são traduzidos por padrão
+desde 2026-10-24 (`TRANSLATE_SFX=True`; `False` preserva). A classificação também informa a estratégia de máscara e redraw.
 
 ### Proveniência e recuperação de OCR
 
@@ -852,6 +855,61 @@ executou. Os rótulos genéricos de estágio e timing **não nomeiam mais NVIDIA
 efetivo é registrado, não presumido.
 
 ## 16. Limpeza, inpainting e renderização
+
+
+Fluxo da limpeza (estado em 2026-10-24; detalhes nas passadas abaixo e em [`clean_strategy.md`](../architecture/clean_strategy.md)):
+
+```mermaid
+flowchart TD
+    A[Página original] --> B[OCR RapidOCR<br/>detect_lines]
+    B --> C[Re-OCR seletivo<br/>linhas fracas, continuações,<br/>redescoberta mascarada,<br/>divisão em bordas, glifo cortado]
+    C --> D[Agrupamento e classificação<br/>fala / narração / SFX / crédito]
+    D -->|SFX com TRANSLATE_SFX=0,<br/>crédito, nome| P[Preservado]
+    D --> E[Máscara do grupo<br/>componentes + franja antialias<br/>+ contorno medido nas 2 polaridades<br/>+ buracos fechados]
+    E --> F{Interior de balão?}
+    F -->|sim| G[Recorte ao interior<br/>light_enclosure_interior]
+    F -->|não| H[Detector de fronteira arte/letra]
+    G --> H
+    H -->|linhas retas| I[Proteção + continuação de estrutura]
+    H -->|curvas| R[Estratégia recusada]
+    I --> J[Preenchimento]
+    H -->|sem conflito| J
+    J --> K[Clássico: constante / harmônico / Telea]
+    J --> L[LaMa local<br/>máscara +2 px, ajuste de tom local]
+    K --> M{Comparação com o anel<br/>tom local, ilhas, textura}
+    L --> M
+    M --> N[Portões de reconstrução<br/>white patch, flat patch, costura,<br/>mancha, fantasma no contorno]
+    N -->|reprovado| N2[Tenta o outro candidato]
+    N2 -->|reprovado| R
+    N -->|aprovado| O[Verificador de remoção<br/>+ releitura por OCR]
+    N2 -->|aprovado| O
+    O -->|texto legível| R
+    O -->|removido| S[LOCAL_SAFE]
+    R --> T{Prosa com autoridade<br/>de história?}
+    T -->|sim| U[Último recurso LaMa<br/>caixas das linhas, depois máscara]
+    T -->|não| V[Revisão manual]
+    U --> W{Remoção verificada<br/>e OCR ilegível?}
+    W -->|sim| X[Aceito; revisão só se<br/>algum portão disparar]
+    W -->|não| V
+```
+
+Diagramação da tradução:
+
+```mermaid
+flowchart LR
+    A[Tradução validada] --> B[Perfil tipográfico<br/>cor, contorno, brilho,<br/>família, inclinação]
+    B --> C[Encaixe retangular<br/>reduz fonte até caber]
+    C --> D{Balão fechado?}
+    D -->|não| G[Desenho]
+    D -->|sim| E[Forma do balão<br/>linhas largas no meio,<br/>margem do letrista,<br/>sem invadir textos vizinhos]
+    E -->|fonte >= retângulo| G
+    E -->|não cabe| G
+    G --> H{Inclinação da fonte<br/>difere do original >= 4°?}
+    H -->|sim| I[Cisalhamento dos pixels<br/>desenhados]
+    H -->|não| J[Página traduzida]
+    I --> J
+```
+
 
 Antes do redraw, o texto traduzido passa por validação lexical e multilíngue (resíduo em
 inglês/espanhol, fragmento parcialmente traduzido, mistura de idiomas). Candidatos
@@ -982,6 +1040,206 @@ reason específico quando ele pertence a `ART_RECONSTRUCTION_REVIEW_REASONS` e c
 `TextGroup.art_reconstruction_status` / `.art_reconstruction_reason` e é contabilizado
 separadamente no relatório de qualidade.
 
+### Gate espacial do preenchimento constante e correções de 2026-10-23
+
+Estado: **IMPLEMENTADO** (working tree sobre `c994426f`, OpenCV 5.0.0). Detalhes e números
+em [`clean_strategy.md`](../architecture/clean_strategy.md#current-behaviour-2026-10-23-supersedes-the-sprint-03c03d-notes-below).
+
+- `CLEAN_HARMONIC_FILL` passou a ser `True` por padrão (`CLEAN_HARMONIC_FILL=0` restaura o
+  comportamento anterior). Em região `solid_*`, o preenchimento pela mediana do anel só é
+  usado com classe espacial `PROVEN_UNIFORM` ou `INSUFFICIENT_EVIDENCE`; em
+  `SMOOTH_NONUNIFORM`, `_apply_cleanup_mask` usa o candidato de `harmonic_boundary_fill`
+  quando o solver o aceita; nos demais casos a região fica em revisão
+  (`spatial_gate_candidate_diagnostic_only`). Motivo: preenchimento constante sobre fundo
+  não uniforme desenha a silhueta das letras.
+- `HoughLinesP` no OpenCV 5 retorna `(N, 4)`; o detector de fronteira e o solver harmônico
+  indexavam `(N, 1, 4)` e lançavam `IndexError`, derrubando a página. Corrigido com
+  `glyph_art_boundary_review.hough_segments`.
+- `source_lettering_footprint` só aceita pixels de polaridade oposta (contorno branco em
+  texto escuro e vice-versa) quando o componente abraça o núcleo do glifo; arte clara ao
+  lado do texto não entra mais na máscara.
+- Máscara e verificador de remoção em fundo de tom médio usam kernel de hat proporcional à
+  altura da linha e só o hat da polaridade do letreiro; linhas de tom médio passam a ser
+  medidas em vez de `NOT_VERIFIED`.
+- `_estimated_white_region_fill_color` não força mais (245,245,245) em entorno não branco;
+  `_restore_lost_local_texture` só injeta grão quando a mediana do |Laplaciano| do anel
+  passa de 1,0.
+- Cada tentativa CLEAN registra `in_mask_residual` (modo sombra, `decision_impact: none`).
+
+Segunda passada (mesma data, **IMPLEMENTADO**; detalhes e números em `clean_strategy.md`,
+seção "Mask, boundary and validation fixes"):
+
+- `CLEAN_FRINGE_EVIDENCE` (padrão `True`, lido em `yomu/config/settings.py`; como as demais
+  flags de ajuste do Clean, não está no `.env.example`): `_antialias_fringe_mask` acrescenta à
+  máscara a franja antialiasada e o contorno de polaridade oposta medidos por alfa, sem
+  dilatação global; `_telea_source_without_fringe` impede o Telea de espalhar sobras do anel.
+- Polaridade do texto vem da faixa fora da caixa quando a caixa é dominada pela tinta
+  (`_line_polarity_level`); o filtro de componentes não descarta mais "!", "?!" nem palavras
+  com letras unidas (`_component_is_background_shaped`); a regra de máscara em fundo
+  texturizado compara com a evidência de glifo (`_textured_overmask_evidence`).
+- Detector de fronteira (`glyph_art_boundary_review.py`): teste de traço fino fora da máscara,
+  segmento contido só conta com ≥ 1,5× a altura da linha, diagonais de canto/pontas
+  consideradas, contorno do próprio glifo e rede de retícula excluídos.
+- Validação: o verificador ignora componentes que saem ≥ 30 % da caixa; o detector de costura
+  dá veredito em máscara fina (`seam_evidence_mode`); novo portão
+  `textured_fill_level_mismatch` (`_textured_fill_shift_metrics`).
+- `ui_helpers.classify_quality_validation`: inglês residual (`source_language_residual`,
+  `physical_source_residual`, `translation_source_language_residual`) gera
+  `outcome = "review_required_source_residual"` com `review_mandatory: true` em vez de
+  `success_review_recommended`. O status do job continua `review_required` (nenhum estado
+  novo em `job_store.py`, nenhum rótulo de UI alterado).
+- Falhas silenciosas: o tiling de páginas altas (`OCREngine.detect_lines`) publica no topo
+  dos metadados `ocr_sufficiency` (pior tile) e `engine_unavailable`;
+  `source_completeness.check` compara por token (inteiro, partido em vários ou fundido),
+  não por substring; o re-OCR seletivo grava `engine_errors` e os motivos
+  `selective_reocr_engine_unavailable` / `selective_reocr_engine_failed` em vez de
+  `except: continue` silencioso.
+- Limite conhecido: em hachura/retícula densa o Telea ainda gera mancha lisa no formato da
+  palavra; esses casos saem com `art_fidelity_uncertain` (revisão), não como limpos.
+
+Terceira passada (páginas de fronteira, mesma data, **IMPLEMENTADO**; detalhes em
+`clean_strategy.md`, seção "Boundary-candidate pages"):
+
+- Classe espacial: anel sem nenhuma borda Canny é `SMOOTH_NONUNIFORM` (preenchimento
+  harmônico), não `STRUCTURED_OR_TEXTURED` — caixas de narração translúcidas.
+- Taxonomia: prosa sem pontuação com conectivo interno ("BY THE NIGHTMARE SPELL") deixa de
+  ser `weak_unknown_text` sobre arte texturizada; as regras de SFX de palavra única respeitam
+  essa evidência. Palavra única ("INCREDIBLE...") continua SFX: sem dicionário não se distingue
+  de onomatopeia romanizada ("PAEHYEOK...").
+- `apply_speech_container_reocr` ganha o gatilho `lettering_continuation_uncovered_text`
+  (`_lettering_continuation_boxes`): linhas curtas não lidas abaixo/acima de uma linha confiante,
+  com a mesma assinatura de letreiro, são relidas; o recorte de re-OCR recebe margem replicada.
+- `CLEAN_STRUCTURE_CONTINUATION` (padrão `True`, `yomu/config/settings.py`, fora do
+  `.env.example` como as demais flags de ajuste do Clean): conflito de fronteira formado só por
+  segmentos retos protege a linha e a redesenha entre os pontos onde ela é vista, em vez de
+  recusar a região; curvas continuam em revisão.
+
+Reconstrução com textura (item 5, **IMPLEMENTADO**):
+
+- `CLEAN_LEARNED_TEXTURE_FILL` (padrão `True`): em fundo `textured_art` /
+  `STRUCTURED_OR_TEXTURED`, `_apply_cleanup_mask` usa o modelo LaMa local já existente
+  (`yomu/clean/inpainting/advanced_art_inpainting.py`, arquivo externo verificado por SHA-256
+  em `ADVANCED_ART_INPAINT_MODEL_PATH`) em vez do Telea; sem o modelo, cai no preenchimento
+  clássico e registra `group.learned_texture_fill`. Os portões existentes continuam valendo.
+  Custo ~1 s por região texturizada em CPU. O cache guarda só os pixels reconstruídos dentro
+  da máscara. A suíte roda com `CLEAN_LEARNED_TEXTURE_FILL=0` (definido no `conftest.py` da raiz)
+  e nunca carrega o modelo real; os testes dessa função usam um inpainter falso.
+- `CLEAN_SPLIT_MERGED_GLYPHS` (padrão `True`): letras fundidas com arte da mesma cor deixam
+  de ser descartadas junto com a arte; `_glyph_strokes_in_network` separa os traços de letra.
+- `residual_source_lettering_metrics` mede só a borda da limpeza (`max(3, 0.15h)` px).
+
+Quarta passada (evidência em vez de limiar, **IMPLEMENTADO**):
+
+- `CLEAN_RESIDUAL_OCR_CHECK` (padrão `True`; `0` no `conftest.py` da raiz): recusa por resíduo
+  de pixel é confirmada relendo o recorte limpo com o RapidOCR; só é retirada se nenhuma
+  palavra do texto original for legível. Sem motor de OCR, a recusa vale (falha fechada).
+- Dicionário inglês em `assets/lexicon/english_words.txt.gz` (dwyl/english-words, Unlicense),
+  incluído no spec do PyInstaller e no `THIRD_PARTY_NOTICES.txt`;
+  `region_taxonomy.is_english_word`. Palavra única do dicionário com reticências/vírgula passa
+  a ser fala; onomatopeia romanizada continua SFX.
+- Polaridade em fundo de tom médio decidida pelo lado para onde a tinta se afasta do fundo.
+- Portão de mancha escura conta só ilhas (não o fundo escuro voltando sob letra clara).
+- `CLEAN_CLIP_TO_ENCLOSURE` (padrão `True`): texto dentro de balão/caixa clara tem a máscara
+  recortada ao interior fechado do balão (`_light_enclosure_interior`); a borda não é mais
+  apagada nem tratada como arte, e branco dentro do balão não conta como "white patch".
+- O portão de "mancha lisa" considera liso o anel cujo p75 do |Laplaciano| é < 1 (a borda do
+  balão não é textura).
+- Com o interior do balão conhecido, os portões de mancha lisa e de costura e o detector de
+  conflito com arte comparam só com o interior (borda e arte de fora não contam).
+- `CLEAN_SCREENTONE_DETECTION` (padrão `True`): retícula periódica medida em volta do texto
+  (`_screentone_lattice`) manda a região para o preenchimento aprendido mesmo quando o fundo é
+  classificado como "sólido claro".
+- `OCR_MASKED_REDISCOVERY` (padrão `True`; `0` no `conftest.py`): ao fim de
+  `apply_speech_container_reocr`, as linhas já lidas são pintadas com a cor do entorno e o
+  detector roda de novo na página; linhas novas aceitas pela regra de recuperação entram na
+  análise (achado real: faixa de notícia nunca detectada na página original). Custo: uma detecção
+  extra de página inteira (~1–3 s).
+
+Quinta passada (escolha da reconstrução e fantasmas, **IMPLEMENTADO**; detalhes em
+`clean_strategy.md`, seção "Choosing the reconstruction and closing the ghosts"):
+
+- `CLEAN_COMPARE_FILLS` (padrão `True`; sem efeito na suíte porque o preenchimento aprendido
+  está desligado no `conftest.py`): fora de balão branco de verdade, o preenchimento clássico e
+  o LaMa são construídos e comparados com o anel intacto em volta da máscara
+  (`_fill_consistency_parts`: tom local multiescala por mediana, ilhas desconectadas do anel,
+  energia de textura). O LaMa só é trocado pelo clássico quando este pontua < 0,8× o aprendido.
+  Os termos ficam em `group.fill_choice`.
+- Os portões de reconstrução foram extraídos para `_reconstruction_gate_failure`; quando o
+  candidato escolhido é recusado, o alternativo é testado antes de recusar a estratégia
+  (`fill_switched_by_gate`). A recusa do portão espacial do preenchimento harmônico
+  (`spatial_harmonic_gate_rejected`) vale só para o candidato clássico.
+- O LaMa recebe a máscara dilatada em 2 px (elipse 5×5), sem invadir estrutura protegida nem
+  sair do interior do balão: a máscara colada às letras fazia o modelo redesenhar a forma das
+  letras como fantasma. O resultado do LaMa recebe ainda um deslocamento de tom por canal
+  (mediana logo fora da máscara menos mediana logo dentro; o modelo devolve a área ~3–5 níveis
+  mais escura), registrado em `learned_texture_fill.tone_offset_bgr`.
+- `_fill_enclosed_glyph_holes`: buraco totalmente cercado pela máscara do texto (≤ altura da
+  linha²) entra na máscara — miolo preto de letra com contorno branco ou contraforma.
+- `_group_stroke_band` mede o contorno pelo espaço até o extremo da faixa de tons (não mais
+  pelo espalhamento do fundo) e segue os pixels de contorno conectados até a largura máxima
+  (contorno mais grosso embaixo da linha), sem entrar em área de arte da mesma cor.
+- `_component_continues_beyond_line` segue o componente no nível da própria tinta: linha de
+  arte cinza encostando em letra branca não transforma a letra em arte.
+- `OCR_SPLIT_AT_CROSSING_BORDERS` e `OCR_EXTEND_CLIPPED_EDGE_GLYPHS` (padrão `True`,
+  `yomu/config/settings.py`): linha que atravessa borda de painel/balão é dividida e relida;
+  glifo cortado na ponta da linha estende a caixa quando a releitura confirma.
+- `CLEAN_LEARNED_LAST_RESORT` (padrão `True`; `0` no `conftest.py`): depois de todas as
+  estratégias recusarem, prosa de fala/narração/pensamento é reconstruída pelo LaMa e aceita só
+  com remoção verificada ou texto ilegível ao OCR; sai sempre com `art_fidelity_uncertain`
+  (revisão), nunca como limpa.
+- Rodada nos cinco capítulos reais inteiros (546 páginas): a releitura por OCR virou portão de
+  aceitação (`source_text_still_legible_after_cleanup`), com dois recortes e só leituras sobre as
+  linhas do grupo; linhas do mesmo grupo que se tocam não são mais "arte"; novo portão
+  `lettering_contour_ghost` (degrau na borda das letras contra o degrau natural do fundo); o
+  deslocamento de tom do LaMa usa diferenças locais na borda; o último recurso compartilha
+  `_learned_inpaint`, vale para prosa `unknown` com autoridade de história, é acionado também por
+  remoção incompleta e tenta primeiro as caixas das linhas. A releitura de linha de continuação
+  que não lê nada sozinha tenta de novo com a linha vizinha no recorte (detector depende de
+  contexto).
+- Nenhum estado de job, rota HTTP, rótulo de UI ou variável do `.env.example` mudou.
+
+Sexta passada (**IMPLEMENTADO**; detalhes em `clean_strategy.md`, "Five follow-ups"):
+
+- Máscara pronta entregue a `_apply_cleanup_mask` tem as linhas retas de arte medidas e
+  preservadas (`_measure_structure_continuations`); o teste de contrato que falhava passa.
+- Velocidade: solver harmônico com `filter2D` em float32; contagens por `bincount`; distância
+  de edição limitada com cache no reparo de palavras do OCR; margem de contexto do LaMa até 256 px.
+- O último recurso passa pelos mesmos portões de reconstrução e só é marcado para revisão quando
+  algum dispara; o contorno do letreiro é medido nas duas polaridades.
+- Linha de OCR majoritariamente numérica com palavra do dicionário ("56,984 Won") não é descartada.
+- `RENDER_FIT_BALLOON_SHAPE` (padrão `True`, `yomu/config/settings.py`): dentro de balão fechado a
+  tradução é quebrada na forma do balão (linhas mais largas no meio), nunca com fonte menor que a do
+  encaixe retangular, respeitando a margem do letrista e os outros textos da página.
+
+Sétima passada (2026-10-24, **IMPLEMENTADO**):
+
+- Marcação `art_fidelity_uncertain` pela textura típica (mediana) do entorno, com o anel começando
+  3 px fora da máscara (`flat_patch_typical_ratio`); o portão de rejeição continua pela média.
+- Termo de tom da escolha de preenchimento julgado só onde o entorno é uniforme.
+- `TRANSLATE_SFX` passa a `True` por padrão (`yomu/config/settings.py`, `.env.example`; `0` no
+  `conftest.py`). `yomu/translation/sfx_glossary.py` + `assets/lexicon/sfx_en_pt.json` dão a
+  onomatopeia pt-BR; SFX fora do glossário mantém o texto original e não é enviado ao provider (`sfx_glossary_translations`).
+- `RENDER_MATCH_SOURCE_SLANT` (padrão `True`): `_match_source_slant` inclina a tradução desenhada
+  como o letreiro original quando a fonte escolhida é reta (diferença ≥ 4°), dentro da área segura.
+
+Oitava passada (capítulos reais com DeepL, 2026-10-24, **IMPLEMENTADO**):
+
+- Inclinação só para original itálico, medida por linha; caixas de tradução atualizadas após o
+  cisalhamento.
+- Eco do provider aceito para SFX e para texto curto sem palavra comum (interjeição, nome).
+- Portão de mancha branca ignora luz da arte continuada através do letreiro.
+- SFX conhecidos recebem o último recurso e são desenhados como letreiro de destaque.
+- `_render_on_clean_rescue`: quando todas as estratégias de renderização recusam mas a limpeza
+  removeu o texto, a tradução é desenhada sobre essa limpeza com os mesmos limites visuais e sai
+  como `render_with_review` (`rendered_on_learned_clean_rescue`).
+
+- Performance: o pré-voo de layout antes da liquidação (`_resolve_layout_overflow_before_settlement`)
+  é uma renderização completa de cada página; o resultado (página, captura CLEAN e assinatura das
+  traduções, `_translation_render_signature`) fica no estado da página e a renderização final
+  (`process_post_translation_page` e o laço sequencial) o reaproveita quando as traduções não
+  mudaram depois do pré-voo. Medido no cap. 58 (118 páginas): a limpeza deixa de rodar duas vezes
+  (~400 s por capítulo a menos). O tempo do pré-voo continua contado na etapa de tradução.
+
 ## 17. Qualidade, validação física e proveniência
 
 O sistema separa **sucesso técnico** de **aprovação de qualidade**. Um PDF pode existir e a
@@ -1045,6 +1303,14 @@ fala, narração ou texto de sistema da história; scan credits, promos, URLs, l
 continuam excluídos por política explícita. Assim, uma frase story em fonte estilizada não
 escapa por ter sido classificada como decorativa, e uma página de crédito/promo não passa a
 ser traduzida só por conter inglês.
+
+Em regiões rotuladas `speech`, `dialogue`, `thought` ou `narration`, palavras comuns de
+diálogo (`thanks`, `team`, `staff`, `edit`, `clean`, `sub`) não bastam para classificar como
+crédito: é preciso termo exclusivo de produção (scan, translat*, typeset, redraw, cleaner,
+proofread, uploader, producer, credits), atribuição (`<termo> by` / `<termo>:`) ou os sinais
+de promo/lista já existentes (`region_taxonomy.looks_like_strong_credit`). A mesma regra
+decide se um resíduo físico é `RESIDUAL_CREDIT_LOGO`; um "THANK YOU" esquecido na página
+conta como resíduo de história.
 
 Nomes próprios declarados pela própria fala — por exemplo padrões equivalentes a “people
 call me …” ou “that’s a strange name” — viram autoridade de preservação de entidade. O
@@ -2304,7 +2570,7 @@ terminação forçada parecem para o banco.
 ### CI (`.github/workflows/tests.yml`)
 
 `windows-latest`, Python 3.11 + Node 24. Etapas: instalar `requirements.txt` +
-`requirements-dev.txt`, **confirmar que os opt-ins de smoke de rede estão desligados**
+`requirements/requirements-dev.txt`, **confirmar que os opt-ins de smoke de rede estão desligados**
 (`ALLOW_NETWORK_TESTS`, `ALLOW_WEBTOON_SMOKE`, `ALLOW_NVIDIA_SMOKE`), coletar e rodar
 pytest, `node --check` em cada JS, typecheck/test/build do serviço Better Auth, e
 `py_compile` dos módulos centrais.
@@ -2601,8 +2867,8 @@ py -3.11 -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install --upgrade pip
 pip install -r requirements.txt
-pip install -r requirements-rapidocr.txt
-pip install -r requirements-ui.txt
+pip install -r requirements/requirements-rapidocr.txt
+pip install -r requirements/requirements-ui.txt
 
 Copy-Item .env.example .env
 ```
@@ -2614,10 +2880,10 @@ Arquivos de dependências:
 | Arquivo | Conteúdo |
 | --- | --- |
 | `requirements.txt` | Núcleo: numpy, Pillow, opencv-python, selenium, paddleocr/paddlepaddle, torch/transformers, psutil, nicegui, psycopg, PyJWT, google-auth |
-| `requirements-rapidocr.txt` | `rapidocr-onnxruntime==1.4.4`, `onnxruntime==1.27.0` |
-| `requirements-ui.txt` | `nicegui` |
-| `requirements-dev.txt` | `pytest>=9,<10`, `fastapi`, `httpx` |
-| `requirements-optional.txt` | `cloudscraper` (transporte opcional, desligado por padrão) |
+| `requirements/requirements-rapidocr.txt` | `rapidocr-onnxruntime==1.4.4`, `onnxruntime==1.27.0` |
+| `requirements/requirements-ui.txt` | `nicegui` |
+| `requirements/requirements-dev.txt` | `pytest>=9,<10`, `fastapi`, `httpx` |
+| `requirements/requirements-optional.txt` | `cloudscraper` (transporte opcional, desligado por padrão) |
 
 ### Executar a aplicação
 
@@ -2800,7 +3066,7 @@ documentação de produto, mas não executou auditoria de release nem nova regre
 | `ADS-INVENTORY-BLOCKER` | Alta (bloqueia monetização por anúncios) | Pesquisa concluída: nenhum provider entrega anúncio passivo verificável neste runtime (Win32 + WebView local, sem domínio). AdSense/Ad Manager proíbem desktop apps por política; Microsoft e AdDuplex estão mortos; Pubfinity/PubMatic são UWP; AdsJumbo é .NET sem rewarded nem SSV. Único viável: offerwall web com postback HMAC — produto diferente de "assistir anúncio". | `docs/technical/ADS_PROVIDER_RESEARCH.md`, §31 | Decisão comercial do owner: offerwall, beta sem anúncios passivos, ou monetização fora do escopo da beta |
 | `CI-JS-SUITES-NOT-RUN` | Média | A CI roda apenas `node --check` sobre `static/*.js`; as 14 suítes `.mjs` (que exigem `--experimental-vm-modules`) não são executadas em nenhum job. Regressão de frontend só é detectada localmente. | `.github/workflows/tests.yml`, `docs/DEVELOPMENT.md#ci` | Adicionar um step que itere `test_*.mjs` com a flag; barato e sem impacto no comportamento de produção |
 | `YK-POSTGRES-RUNTIME-VALIDATION` | Alta (bloqueia deploy YK) | O comportamento local de YK (reserva/settlement/recovery) passa em 70/70 unit/mock e a auditoria estática é forte (transação, advisory lock, row locks, estado terminal, idempotency key parcial única, chave de settlement determinística), mas **não houve prova em PostgreSQL real** (Docker indisponível). Sem validação de concorrência/atomicidade no runtime Postgres. | `yk_reservation.py`, `yomu_backend_provider.py`, `supabase/functions/wallet-settle-job/`, migration `20260926175232` | Validar em Postgres quando Docker estiver disponível; **não** deployar migration/functions remotas antes disso e sem autorização explícita |
-| `COMIX-DYNAMIC-DEP-PROVISIONING` | Média | A descoberta dinâmica do Comix exige `scrapling[fetchers]==0.4.15` (declarado em `requirements-beta.txt` e empacotado pelo spec). Um venv/ambiente que **não** instale as requirements-beta faz o Comix falhar fechado com `capability_unavailable` (fail-closed correto, sem output falso). | `scrapling_reader_resolver.py`, `requirements-beta.txt`, `packaging/tradutor_ia.spec` | Garantir que qualquer ambiente/venv de execução instale `requirements-beta.txt`; coberto por `tests/test_beta_packaging_requirements.py` |
+| `COMIX-DYNAMIC-DEP-PROVISIONING` | Média | A descoberta dinâmica do Comix exige `scrapling[fetchers]==0.4.15` (declarado em `requirements/requirements-beta.txt` e empacotado pelo spec). Um venv/ambiente que **não** instale as requirements-beta faz o Comix falhar fechado com `capability_unavailable` (fail-closed correto, sem output falso). | `scrapling_reader_resolver.py`, `requirements/requirements-beta.txt`, `packaging/tradutor_ia.spec` | Garantir que qualquer ambiente/venv de execução instale `requirements/requirements-beta.txt`; coberto por `tests/test_beta_packaging_requirements.py` |
 
 ### Limitações conhecidas do produto
 
