@@ -3496,6 +3496,20 @@ def _line_belongs_to_group(line, group):
         )
     ):
         return False
+    # The same veto the other way round: lines arrive top to bottom, so a sound
+    # effect drawn above a balloon becomes the group first, and its height would
+    # otherwise stretch the allowed gap enough to swallow the dialogue below it.
+    # One word is enough ("RUSTLE", "SPARKLE"); a single line three times the
+    # height of the text below it never shares a balloon with that text.
+    if (
+        len(group.lines) == 1
+        and len(re.sub(r"[^A-Za-z]", "", group.lines[0].text or "")) <= 12
+        and (
+            base_height > lh * 3.0
+            or base_area > lw * lh * 6.0
+        )
+    ):
+        return False
     avg_height = max(base_height, gh / max(1, len(group.lines)))
 
     # Same reading row: a fragment sitting beside the group's text on the same

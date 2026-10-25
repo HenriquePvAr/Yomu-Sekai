@@ -3261,6 +3261,11 @@ def run_benchmark(args):
         ) if remote_index else []
         translations = list(local)
         for i, value in zip(remote_index, remote or []):
+            source = translation_targets[i].text
+            # A bare action label lettered outside a balloon ("NOD", "GRIN") is
+            # classified as speech, and the provider hands it back untouched.
+            if config.TRANSLATE_SFX and str(value or "").strip().upper() == str(source or "").strip().upper():
+                value = translate_sfx(source) or value
             translations[i] = value
         translator_stats_sfx_glossary = len(translation_targets) - len(remote_index)
     stage_seconds["translation"] = time.perf_counter() - translation_started

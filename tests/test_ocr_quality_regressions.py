@@ -2497,21 +2497,35 @@ class OCRQualityRegressionTests(unittest.TestCase):
             self._region_line("OVERWHELMED.", (288, 1530, 369, 40), 0, False),
         ]
 
-        grouped = _group_lines(lines)
-        self.assertEqual(len(grouped), 1, [group.text for group in grouped])
+        # The sound effect arrives first (it sits above the block) and must not
+        # become the seed the story lines below are grouped into.
+        grouped = _split_detached_story_outlier_lines(_group_lines(lines))
 
-        split = _split_detached_story_outlier_lines(grouped)
-
-        self.assertEqual(len(split), 2, [group.text for group in split])
         self.assertEqual(
-            split[0].text,
-            "NATIONALMILITARIES WEREQLICKLY OVERWHELMED.",
+            [group.text for group in grouped],
+            ["ATa", "NATIONALMILITARIES WEREQLICKLY OVERWHELMED."],
         )
-        self.assertFalse(split[0].ignored)
-        self.assertEqual(split[0].group_id, "BALAO_1")
-        self.assertEqual(split[1].text, "ATa")
-        self.assertTrue(split[1].ignored)
-        self.assertEqual(split[1].ignore_reason, "detached_story_outlier_line")
+        self.assertFalse(grouped[1].ignored)
+
+    def test_large_sound_effect_above_balloon_does_not_absorb_dialogue(self):
+        # A WIMP'S TOWER STRATEGY GUIDE ep. 33: "RUSTLE" (263 px tall) drawn above a
+        # balloon whose lines are ~33 px. Its height stretched the allowed vertical
+        # gap enough to swallow the dialogue 235 px below it.
+        lines = [
+            self._region_line("RUSTILE", (410, 1255, 325, 263), 0, False),
+            self._region_line("I BROUGHT", (359, 1753, 215, 32), 0, False),
+            self._region_line("SOMETHINGWITH", (308, 1796, 320, 31), 0, False),
+            self._region_line("ME.HOPEFULLY,IT'LL", (277, 1838, 380, 31), 0, False),
+            self._region_line("HELPMECATCH", (322, 1879, 295, 32), 0, False),
+            self._region_line("THAT LUCK.", (360, 1919, 215, 35), 0, False),
+        ]
+
+        grouped = _group_lines(lines)
+
+        self.assertEqual(
+            [group.text for group in grouped],
+            ["RUSTILE", "I BROUGHT SOMETHINGWITH ME.HOPEFULLY,IT'LL HELPMECATCH THAT LUCK."],
+        )
 
     def test_story_opening_line_is_not_split_as_detached_outlier(self):
         lines = [

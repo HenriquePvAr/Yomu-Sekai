@@ -229,7 +229,46 @@ def numeric_values(text):
 
 
 def _quantity_mismatches(source, candidate):
-    """Compare numeric and written quantities by value across both languages."""
+    """Compare numeric and written quantities by value across both languages.
+
+    The source is OCR. When it disagrees with the candidate, the reading with the
+    recogniser's usual confusions undone is tried too; it can only release a
+    candidate whose quantities it matches exactly, never block one.
+    """
+    missing = _quantity_mismatches_as_read(source, candidate)
+    if missing:
+        reread = _ocr_quantity_reading(source)
+        if reread != source and not _quantity_mismatches_as_read(reread, candidate):
+            return []
+    return missing
+
+
+_ORDINAL_SUFFIX = r"(?:ST|ND|RD|TH|S)\b"
+
+
+def _ocr_quantity_reading(text):
+    """``text`` with the OCR confusions that fake or hide a quantity undone.
+
+    "5O" -> "50" (letter O for zero), "1CANFEEL" -> " CANFEEL" (a 1 glued to a
+    word is a capital I), "STOREDTHIRTY-SIX" / "SIXIN" -> a spelled number split
+    off the word it was glued to.
+    """
+    text = re.sub(r"(?<=\d)[Oo]+(?![A-Za-z])", lambda m: "0" * len(m.group(0)), str(text or ""))
+    text = re.sub(rf"(?<!\d)(?<!\d[.,])[10](?![\d.,])(?=[A-Za-z]{{2}})(?!{_ORDINAL_SUFFIX})", " ", text, flags=re.I)
+    text = re.sub(r"(?<=[A-Za-z]{2})[10](?![\dA-Za-z])", " ", text)
+    numbers = sorted((word for word in _SOURCE_CARDINALS if len(word) >= 3), key=len, reverse=True)
+    glued = re.compile(r"^(%s)(?=[a-z]{2})|(?<=[a-z]{2})(%s)$" % ("|".join(numbers), "|".join(numbers)), re.I)
+
+    def split(match):
+        word = match.group(0)
+        if word.lower() in _SOURCE_CARDINALS:
+            return word
+        return glued.sub(lambda m: f" {m.group(0)} ", word).strip()
+
+    return re.sub(r"[A-Za-z]+", split, text)
+
+
+def _quantity_mismatches_as_read(source, candidate):
     def signatures(text, cardinal_words, magnitudes, approximators):
         values = [("exact", value) for value in numeric_values(text)]
         values.extend(_written_quantity_signatures(

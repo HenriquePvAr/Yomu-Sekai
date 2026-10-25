@@ -217,6 +217,34 @@ class LocalInvariantTests(unittest.TestCase):
         )
         self.assertTrue(finding.faithful)
 
+    def test_ocr_confusions_do_not_fake_a_quantity_change(self):
+        # A WIMP'S TOWER STRATEGY GUIDE ep. 33: the provider read the glued OCR
+        # correctly and the gate rejected four faithful balloons.
+        for source, candidate in (
+            ("WE HAVE SECURED AND STOREDTHIRTY-SIX BASILISKHIDESIN TOTAL.",
+             "ARMAZENAMOS TRINTA E SEIS PELES DE BASILISCO NO TOTAL."),
+            ("YOL MENTIONED THIRTY-SIXIN TOTAL.WHERE ARETHEOTHER TWO...?",
+             "VOCÊ MENCIONOU TRINTA E SEIS NO TOTAL. ONDE ESTÃO OS OUTROS DOIS...?"),
+            ("FOR THE LEVEL 5O SPECIAL BONuS, LET'S HOLD A RITUAL FIRST.",
+             "PARA O BÔNUS ESPECIAL DO NÍVEL 50, VAMOS FAZER UM RITUAL PRIMEIRO."),
+            ("WATCHING THEM,1CANFEEL USSTARTINGTO CLICK.",
+             "VENDO-OS, SINTO QUE ESTAMOS COMEÇANDO A NOS ENTENDER."),
+        ):
+            with self.subTest(source=source):
+                self.assertTrue(
+                    semantic_fidelity.evaluate_local_fidelity(source, candidate).faithful
+                )
+
+    def test_ocr_reading_never_releases_a_real_quantity_change(self):
+        for source, candidate in (
+            ("I HAVE 36 HIDES.", "TENHO 35 PELES."),
+            ("STOREDTHIRTY-SIX HIDES.", "TRINTA E CINCO PELES."),
+            ("LEVEL 5O.", "NÍVEL 60."),
+        ):
+            with self.subTest(source=source):
+                finding = semantic_fidelity.evaluate_local_fidelity(source, candidate)
+                self.assertEqual(finding.primary_reason, semantic_fidelity.QUANTITY_CHANGED)
+
     def test_locale_number_formatting_is_not_a_quantity_change(self):
         # 1,000 -> 1.000 and 3.5 -> 3,5 are the same values, written for a
         # different locale. Rejecting them would be rejecting correct output.
