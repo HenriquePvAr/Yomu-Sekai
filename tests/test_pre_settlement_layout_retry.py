@@ -80,3 +80,37 @@ def test_render_signature_changes_only_with_the_translation_state():
     assert _translation_render_signature([group]) == before   # unchanged: preflight render reusable
     group.translation = "OLÁ"                                  # a layout retry changed it
     assert _translation_render_signature([group]) != before
+
+
+def _residual_group():
+    group = TextGroup(group_id="residual", lines=[], text="I'LL BE SPEAKING WITH MS. GO ALONE TODAY.")
+    group.classification = "narration"
+    group.sent_to_translation = True
+    group.translation = "HOJE VOU CONVERSAR COM A SRA. GO ALONE."
+    group.translation_valid = True
+    group.visual_attempts = [{"reason": "source_tokens_detected_after_render",
+                              "post_render_ocr": {"residual_source_tokens": ["GOALONE"]}}]
+    return group
+
+
+@pytest.mark.parametrize("answer, accepted", [
+    ("HOJE VOU CONVERSAR A SÓS COM A SRA. GO.", True),
+    ("HOJE CONVERSO COM A SRA. GO ALONE.", False),
+])
+def test_render_residual_english_is_retranslated_once(answer, accepted):
+    group = _residual_group()
+    calls = []
+
+    class Translator:
+        def translate_strict(self, source, **kwargs):
+            calls.append(kwargs["validation_reason"])
+            return answer
+
+    records = []
+    retried = bp._retry_residual_source_translations([group], Translator(), records)
+    assert "GOALONE" in calls[0]
+    assert retried == (1 if accepted else 0)
+    assert (group.translation == answer) is accepted
+    # One request per region, however many preflight passes follow.
+    assert bp._retry_residual_source_translations([group], Translator(), records) == 0
+    assert len(calls) == 1

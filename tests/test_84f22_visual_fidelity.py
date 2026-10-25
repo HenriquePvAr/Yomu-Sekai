@@ -99,7 +99,9 @@ class TypographyProfileContracts(unittest.TestCase):
         self.assertEqual(profile["case_style"], "uppercase")
         self.assertGreaterEqual(profile["stroke_width"], 2)
         self.assertGreater(profile["glow_strength"], 0)
-        self.assertEqual(profile["fill_color"], (226, 245, 255))
+        # The fill follows the source ink (drawn BGR (255, 245, 225)), not the preset.
+        for got, want in zip(profile["fill_color"], (225, 245, 255)):
+            self.assertLessEqual(abs(got - want), 12)
         self.assertEqual(profile["style_source"], "original_pixels")
 
     def test_light_open_emphasis_gets_dramatic_red_display_profile(self):

@@ -1426,6 +1426,50 @@ Oitava passada (capítulos reais com DeepL, 2026-10-24, **IMPLEMENTADO**):
   mudaram depois do pré-voo. Medido no cap. 58 (118 páginas): a limpeza deixa de rodar duas vezes
   (~400 s por capítulo a menos). O tempo do pré-voo continua contado na etapa de tradução.
 
+Nona passada (cap. 33 de *A Wimp's Tower Strategy Guide* com DeepL, 2026-10-24, **IMPLEMENTADO**):
+
+- Agrupamento: o veto de tamanho vale nos dois sentidos — um SFX alto desenhado acima do balão
+  não vira semente do grupo e não engole a fala abaixo (`_line_belongs_to_group`).
+- Quantidades: `semantic_fidelity._quantity_mismatches` tenta também a leitura com as confusões
+  do OCR desfeitas (`5O`→`50`, `1` colado em palavra, numeral grudado); só libera, nunca bloqueia.
+- Glossário de SFX como reserva quando o provider devolve intacta uma palavra de ação (NOD, GRIN).
+- `_render_on_clean_rescue` não se aplica a SFX: o letreiro original fica.
+- Leituras divergentes (`material_variant_disagreement`): o voto por variantes
+  (`recover_source_with_rapidocr_variants`) roda antes de mandar a região para revisão; empate
+  entre leituras com ≥ 2 votos é decidido pela que tem estritamente menos não-palavras
+  (`_lexical_variant_winner`, reason `lexical_variant_agreement`). Leitura confiável substitui
+  `group.text`/`canonical_source_text`.
+- Reenvio por inglês residual: no pré-voo, um grupo cujo render ainda mostra tokens do original
+  (`post_render_ocr.residual_source_tokens`) é reenviado uma vez ao provider nomeando os tokens
+  (`_retry_residual_source_translations`, `retry_type=residual_source`); o candidato só é aceito
+  se os tokens sumirem.
+
+Fidelidade tipográfica (mesma data, **IMPLEMENTADO**):
+
+```mermaid
+flowchart LR
+    L[Linhas OCR do grupo] --> M[Medidas por linha<br/>inclinação, contraste de traço, peso]
+    M --> F{Contraste ≤ 0,8?}
+    F -->|sim| S[Família serifada]
+    F -->|não| C[Sem serifa / quadrinho]
+    M --> P{Peso negrito?}
+    P -->|sim| B[bold_dialogue<br/>Comic Relief Bold]
+    O[Pixels do letreiro] --> K[Cor de preenchimento e contorno medidas]
+    K --> R[Render com a cor do original]
+```
+
+- `extract_glyph_style_profile` mede inclinação (`_consensus_slant`), contraste de traço
+  (`SERIF_STROKE_CONTRAST_MAX = 0.8`) e peso **por linha** (`_per_line_glyph_measures`); antes o
+  bloco inteiro era medido e texto reto saía itálico/serifado.
+- Cor: a cor medida do original vence a paleta das classes estilizadas quando confiável e
+  coerente com a família de cor; o contorno medido só acompanha um preenchimento aceito. Um
+  "contorno" exige preenchimento com espessura interna (franja antialias não é fill).
+- Hierarquia de tamanho entre linhas usa a altura da tinta (`_line_ink_height`), não a caixa OCR,
+  com limiar 1,25.
+- Fontes empacotadas em `assets/fonts/` (`font_fidelity.BUNDLED_FONTS_DIR`, incluídas na spec do
+  PyInstaller): Comic Relief Regular/Bold (fala) e Bangers (grito/SFX), SIL OFL 1.1; têm
+  prioridade sobre a fonte do Windows de mesmo papel.
+
 ## 17. Qualidade, validação física e proveniência
 
 O sistema separa **sucesso técnico** de **aprovação de qualidade**. Um PDF pode existir e a

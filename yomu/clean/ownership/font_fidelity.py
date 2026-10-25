@@ -16,12 +16,13 @@ import cv2
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
-FONT_FIDELITY_VERSION = "1.1"
+FONT_FIDELITY_VERSION = "1.2"
+BUNDLED_FONTS_DIR = Path(__file__).resolve().parents[3] / "assets" / "fonts"
 
 ROLE_FONT_FILES = {
     "bold": ("arialbd.ttf", "calibrib.ttf", "seguisb.ttf", "trebucbd.ttf"),
     "decorative": ("georgia.ttf", "georgiab.ttf", "calibril.ttf"),
-    "shout": ("impact.ttf", "bahnschrift.ttf", "arialbd.ttf", "arialbi.ttf", "segoeuii.ttf"),
+    "shout": ("bangers-regular.ttf", "impact.ttf", "bahnschrift.ttf", "arialbd.ttf", "arialbi.ttf", "segoeuii.ttf"),
     "regular": ("segoeui.ttf", "calibri.ttf", "arial.ttf"),
     # Role-aware, source-derived typography (TDD #84F32). Each semantic text
     # role gets its own local-font candidate chain instead of collapsing onto
@@ -30,7 +31,11 @@ ROLE_FONT_FILES = {
     # rather than a heavy geometric block; display-class roles keep the
     # existing bold/condensed/impact-style candidates. These are local Windows
     # system fonts used only to prove the architecture - see FUTURE PACKAGING.
-    "balloon_dialogue": ("comic.ttf", "segoepr.ttf", "comici.ttf", "calibri.ttf"),
+    # Bundled comic-lettering faces (assets/fonts) come first; the Windows fonts
+    # stay as the fallback of each chain.
+    "balloon_dialogue": ("comicrelief-regular.ttf", "comic.ttf", "segoepr.ttf", "comici.ttf", "calibri.ttf"),
+    # Heavy monoline lettering, the webtoon norm, measured from the source strokes.
+    "bold_dialogue": ("comicrelief-bold.ttf", "comicbd.ttf", "trebucbd.ttf", "arialbd.ttf"),
     "thought_dialogue": ("comici.ttf", "segoepr.ttf", "comic.ttf", "calibrii.ttf"),
     "narration_box": ("trebucbd.ttf", "comicbd.ttf", "segoeprb.ttf", "calibrib.ttf"),
     "story_caption": ("trebuc.ttf", "corbel.ttf", "calibri.ttf", "segoepr.ttf"),
@@ -78,6 +83,9 @@ FONT_METADATA = {
     "comic.ttf":      {"family": "comic", "weight": "regular", "italic": False, "width_ratio": 0.55},
     "comici.ttf":     {"family": "comic", "weight": "regular", "italic": True, "width_ratio": 0.55},
     "comicbd.ttf":    {"family": "comic", "weight": "bold", "italic": False, "width_ratio": 0.57},
+    "comicrelief-regular.ttf": {"family": "comic", "weight": "regular", "italic": False, "width_ratio": 0.56},
+    "comicrelief-bold.ttf":    {"family": "comic", "weight": "bold", "italic": False, "width_ratio": 0.57},
+    "bangers-regular.ttf":   {"family": "display", "weight": "bold", "italic": False, "width_ratio": 0.42},
     "segoepr.ttf":    {"family": "handwritten", "weight": "regular", "italic": False, "width_ratio": 0.50},
     "segoeprb.ttf":   {"family": "handwritten", "weight": "bold", "italic": False, "width_ratio": 0.52},
     "impact.ttf":     {"family": "display", "weight": "bold", "italic": False, "width_ratio": 0.40},
@@ -151,9 +159,10 @@ def rank_fonts_by_glyph_style(glyph_style: dict, *, role: str = "", top_n: int =
 AUTHORIZED_FONT_FILES = {
     "regular": ("segoeui.ttf", "calibri.ttf", "arial.ttf", "trebuc.ttf"),
     "bold": ("arialbd.ttf", "calibrib.ttf", "seguisb.ttf", "trebucbd.ttf"),
-    "shout": ("arialbi.ttf", "ariali.ttf", "impact.ttf", "bahnschrift.ttf"),
+    "shout": ("bangers-regular.ttf", "arialbi.ttf", "ariali.ttf", "impact.ttf", "bahnschrift.ttf"),
     "decorative": ("georgia.ttf", "georgiab.ttf", "georgiai.ttf", "calibril.ttf"),
-    "balloon_dialogue": ("comic.ttf", "segoepr.ttf", "comici.ttf"),
+    "balloon_dialogue": ("comicrelief-regular.ttf", "comic.ttf", "segoepr.ttf", "comici.ttf"),
+    "bold_dialogue": ("comicrelief-bold.ttf", "comicbd.ttf"),
     "thought_dialogue": ("comici.ttf", "segoepr.ttf"),
     "narration_box": ("trebucbd.ttf", "comicbd.ttf", "segoeprb.ttf"),
     "story_caption": ("trebuc.ttf", "corbel.ttf"),
@@ -172,13 +181,18 @@ def _fonts_dir() -> Path | None:
     return candidate if candidate.is_dir() else None
 
 
+def _font_file(name: str, fonts_dir: Path | None) -> Path:
+    """A bundled face (assets/fonts) first, else the Windows font of that name."""
+    bundled = BUNDLED_FONTS_DIR / name
+    if bundled.is_file():
+        return bundled
+    return fonts_dir / name if fonts_dir else Path(name)
+
+
 def role_font_paths(role: str) -> list[str]:
     fonts_dir = _fonts_dir()
     names = ROLE_FONT_FILES.get(str(role or "").lower(), ROLE_FONT_FILES["regular"])
-    paths: list[str] = []
-    for name in names:
-        paths.append(str(fonts_dir / name) if fonts_dir else name)
-    return paths
+    return [str(_font_file(name, fonts_dir)) for name in names]
 
 
 def authorized_font_inventory(*, text: str = "") -> list[dict[str, Any]]:
@@ -192,7 +206,7 @@ def authorized_font_inventory(*, text: str = "") -> list[dict[str, Any]]:
     seen_paths: set[str] = set()
     for role, names in AUTHORIZED_FONT_FILES.items():
         for name in names:
-            path = Path(fonts_dir / name) if fonts_dir else Path(name)
+            path = _font_file(name, fonts_dir)
             resolved = str(path.resolve()) if path.is_file() else str(path)
             if resolved in seen_paths:
                 continue
@@ -204,7 +218,8 @@ def authorized_font_inventory(*, text: str = "") -> list[dict[str, Any]]:
                 "configured": bool(path.is_file()),
                 "resolved_font_path": resolved if path.is_file() else "",
                 "font_file_hash": file_sha256(path) if path.is_file() else "",
-                "license_metadata": "local_system_font_allowlist",
+                "license_metadata": ("bundled_ofl_1.1" if path.parent == BUNDLED_FONTS_DIR
+                                     else "local_system_font_allowlist"),
                 "fallback_possible": False,
                 "font_load_success": False,
                 "font_load_error": "",

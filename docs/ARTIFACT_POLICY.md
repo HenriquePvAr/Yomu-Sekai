@@ -7,7 +7,7 @@
 - Código, testes, configuração sanitizada e documentação necessária para reproduzir o software.
 - Relatórios pequenos, canônicos, sem dados pessoais ou segredos e importantes para a rastreabilidade.
 - Fixtures sintéticas mínimas e manifests com hashes, propósito e proveniência.
-- Dados pequenos de runtime que o produto carrega, como `assets/lexicon/` (léxico inglês e glossário de SFX, com licença registrada em `assets/lexicon/LICENSE-english-words.md`).
+- Dados pequenos de runtime que o produto carrega, como `assets/lexicon/` (léxico inglês e glossário de SFX, com licença registrada em `assets/lexicon/LICENSE-english-words.md`). Também `assets/fonts/` (fontes de letreiro OFL, licenças em `assets/fonts/OFL-*.txt`).
 
 ## Manter fora do Git
 

@@ -266,7 +266,7 @@ class SyntheticFixtureRedGreenTests(unittest.TestCase):
 
         self.assertEqual(profile["font_role"], "balloon_dialogue")
         _, runtime = font_fidelity.resolve_font(profile["font_role"], 28)
-        self.assertIn(runtime["actual_font_identity"], {"comic", "comici", "segoepr"})
+        self.assertIn(runtime["actual_font_identity"], {"comic", "comici", "segoepr", "comicrelief-regular", "comicrelief-bold"})
         self.assertNotIn(runtime["actual_font_identity"], {"arial", "calibri", "segoeui"})
 
     def test_narration_box_selects_appropriate_role_not_heavy_display(self):

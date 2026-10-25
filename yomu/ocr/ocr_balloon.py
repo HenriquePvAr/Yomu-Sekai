@@ -2441,6 +2441,15 @@ def _finalize_translation_failure(
     rejected_candidate=None,
     validator_reason="",
 ):
+    if reason == "translation_not_rendered_after_validation" and group.classification == "sfx":
+        # A sound effect whose translation could not be drawn safely keeps its
+        # own lettering - part of the art, nothing a reader loses - instead of
+        # becoming a review item.
+        group.manual_review_required = False
+        _set_translation_terminal_state(
+            group, "preserved_original", "sfx_original_lettering_kept", preserved_original=True,
+        )
+        return
     candidate = clean_ocr_text(candidate)
     rejected_candidate = clean_ocr_text(
         candidate if rejected_candidate is None else rejected_candidate
@@ -3108,7 +3117,12 @@ def _render_analyzed_image(
             if clean_ok and clean_mask is not None:
                 text_mask = cv2.bitwise_or(text_mask, clean_mask)
             rescued_render, rescued_allowed = None, None
+            # Not for a sound effect: it is part of the art, and when every regular
+            # strategy refused it the rescue paints a flat patch over that art and
+            # block letters over the lettering ("STEP" -> "PASSO"). The original
+            # sound costs the reader nothing.
             if (clean_ok and clean_mask is not None and typeset
+                    and group.classification != "sfx"
                     and str(group.translation_candidate or group.translation or "").strip()):
                 # The CLEAN pass (learned last resort included) removed the source
                 # where every render strategy was refused: the translation can be
@@ -5573,6 +5587,42 @@ def _reorder_tolerant_agreement(by_text, min_confidence):
     }
 
 
+def _unknown_source_words(word_signature):
+    """Tokens of a read that are neither dictionary words nor short function words."""
+    unknown = 0
+    for token in str(word_signature or "").split("|"):
+        letters = re.sub(r"[^A-Z]", "", token.upper())
+        if not letters:
+            continue
+        if letters in region_taxonomy._STORY_CLAUSE_MARKERS or region_taxonomy.is_english_word(letters):
+            continue
+        unknown += 1
+    return unknown
+
+
+def _lexical_variant_winner(by_text, min_confidence):
+    """Break a tie between reads that several variants each agree on.
+
+    Two clusters with two or more votes each ("FANYWAY" vs "ANYWAY", "ITSALREADY"
+    vs "IT'S ALREADY") are the same pixels read with and without a lost boundary
+    or a stray stroke. The one with strictly fewer non-words wins; names are
+    unknown in every cluster alike, so they never decide it. ``None`` when no
+    cluster is strictly cleaner.
+    """
+    voted = [
+        (_unknown_source_words(key[1]), key, items)
+        for key, items in by_text.items()
+        if len(items) >= 2
+        and sum(float(v.get("confidence") or 0.0) for v in items) / len(items) >= min_confidence
+    ]
+    if len(voted) < 2:
+        return None
+    voted.sort(key=lambda item: item[0])
+    if voted[0][0] >= voted[1][0]:
+        return None
+    return voted[0][1], voted[0][2]
+
+
 def _source_recovery_agreement(attempts, *, min_confidence=0.55):
     by_text = {}
     for attempt in attempts or []:
@@ -5603,6 +5653,11 @@ def _source_recovery_agreement(attempts, *, min_confidence=0.55):
         reason = "low_variant_confidence"
     elif materially_disagreeing:
         reason = "material_variant_disagreement"
+        lexical = _lexical_variant_winner(by_text, min_confidence)
+        if lexical is not None:
+            (normalized, word_signature), winners = lexical
+            avg_conf = sum(float(item.get("confidence") or 0.0) for item in winners) / len(winners)
+            reason = "lexical_variant_agreement"
     else:
         reason = "variant_agreement"
     # Order alone should never be why a correct read is left unusable: it is
@@ -5613,7 +5668,7 @@ def _source_recovery_agreement(attempts, *, min_confidence=0.55):
         if reordered is not None:
             return reordered
     return {
-        "trusted": reason == "variant_agreement",
+        "trusted": reason in ("variant_agreement", "lexical_variant_agreement"),
         "reason": reason,
         "canonical_source": str(winners[0].get("text") or ""),
         "normalized_source": normalized,
@@ -6111,6 +6166,28 @@ def apply_rapidocr_region_recovery(
                 "reason": "material_variant_disagreement",
                 "rejected_recovery": record["rejected_recovery_observation"],
             }
+            # Two reads disagree: let the bounded variant vote decide instead of
+            # sending the region to review. Only an agreement of independent
+            # reads (or a strictly cleaner one, see _lexical_variant_winner) is
+            # adopted; anything else stays untrusted exactly as before.
+            vote = recover_source_with_rapidocr_variants(
+                original_bgr, group, ocr_lang, page_index=page_index, engine=engine
+            )
+            record["variant_vote"] = {
+                "trusted": bool(vote.get("trusted")),
+                "reason": str(vote.get("reason") or ""),
+                "canonical_source": str(vote.get("canonical_source") or ""),
+                "agreement_count": int(vote.get("agreement_count") or 0),
+            }
+            if vote.get("trusted") and str(vote.get("canonical_source") or "").strip():
+                vote["rejected_recovery"] = record["rejected_recovery_observation"]
+                group.source_recovery = dict(vote)
+                group.canonical_source_text = clean_ocr_text(vote["canonical_source"])
+                group.text = group.canonical_source_text
+                group.quality_score, group.quality_reasons = score_group_ocr_quality(group)
+                record["reason"] = "variant_vote_resolved_disagreement"
+                record_count("rapidocr_recovery.variant_vote_resolved", page_index=page_index)
+                continue
         # Attempt 1 already failed the policy, so there is no "both acceptable"
         # tie to break: attempt 2 wins only by clearing the same bar attempt 1
         # could not. Nothing is preferred merely for being newer.
@@ -6213,6 +6290,14 @@ def enforce_rapidocr_quality_gate(groups, page_index=None):
                 "source_recovery_reason": str(recovery.get("reason") or ""),
             }
             blocked.append(group)
+            continue
+        if (
+            recovery.get("trusted")
+            and str(recovery.get("canonical_source") or "").strip()
+            and not group.ocr_quality_blocked
+        ):
+            # Independent variant reads agreed on this source: that agreement is
+            # the evidence the score below was standing in for.
             continue
         decision = rapidocr_region_decision(group)
         if group.ocr_quality_blocked or decision == "accept":
@@ -15201,15 +15286,34 @@ def _estimated_white_region_fill_color(img_bgr, mask, box):
 # font size. The source OCR line boxes already carry per-line height, which is
 # a generic, source-derived hierarchy signal with no text/page/region literal
 # involved.
-def _source_line_scale_ratios(group):
+def _line_ink_height(source_bgr, box):
+    """Height of the ink rows inside an OCR line box, or ``None``."""
+    mask, _gray = _glyph_ink_mask(source_bgr, box)
+    if mask is None:
+        return None
+    rows = np.where(mask.sum(axis=1) >= max(2, mask.shape[1] * 0.02))[0]
+    return float(rows.max() - rows.min() + 1) if rows.size else None
+
+
+def _source_line_scale_ratios(group, source_bgr=None):
     """Relative per-line size ratios derived only from source line heights.
 
     Returns ``None`` when there is no real hierarchy signal to preserve: fewer
     than two source lines, or a height spread too small to be a deliberate
     hierarchy rather than normal OCR box jitter. The same font role/family is
     still used for every line - only the size differs.
+
+    With the source pixels the height is the line's ink, not its OCR box: box
+    heights of one uniform serif narration ran 29-37 px (punctuation, a bold
+    word) while its ink was 27-28 px on every line, and the jitter was drawn as
+    a size hierarchy.
     """
-    heights = [float(line.box[3]) for line in getattr(group, "lines", []) or [] if line.box[3] > 0]
+    lines = [line for line in getattr(group, "lines", []) or [] if line.box[3] > 0]
+    heights = [float(line.box[3]) for line in lines]
+    if source_bgr is not None and lines:
+        inked = [_line_ink_height(source_bgr, line.box) for line in lines]
+        if all(inked):
+            heights = inked
     if len(heights) < 2:
         return None
     median = float(np.median(heights))
@@ -15217,7 +15321,7 @@ def _source_line_scale_ratios(group):
         return None
     ratios = [h / median for h in heights]
     spread = max(ratios) / max(1e-6, min(ratios))
-    if spread < 1.2:
+    if spread < 1.25:
         return None
     return [max(0.62, min(1.35, r)) for r in ratios]
 
@@ -15528,7 +15632,7 @@ def _draw_group_translation(img_bgr, group, font_path, strategy="primary", sourc
     # Computed once, up front: a real per-line hierarchy signal doesn't depend
     # on font_size, and the wrap below needs it as a target line count so the
     # translated text has an unambiguous line to land each source ratio on.
-    line_scales = _source_line_scale_ratios(group)
+    line_scales = _source_line_scale_ratios(group, typography_source)
     start_font_size = font_size
     while font_size >= config.MIN_FONT_SIZE:
         font = get_font(preview_font_path or font_path, font_size, role=font_role,
@@ -17164,10 +17268,14 @@ def extract_original_lettering_profile(img_bgr, group, box):
                 std_outline = float(np.mean(np.std(glyph_px[labels == outline_k], axis=0)))
                 outline_band = (full == outline_k).astype(np.uint8)
                 band_depth = float(cv2.distanceTransform(outline_band, cv2.DIST_L2, 5).max())
+                fill_band = (full == fill_k).astype(np.uint8)
+                fill_depth = float(cv2.distanceTransform(fill_band, cv2.DIST_L2, 5).max())
                 # A solid outline has measurable interior thickness. The
                 # antialiased fringe around plain text is only a one-pixel
-                # boundary cluster even when its colour is uniform.
-                if std_outline <= 55 and band_depth >= 2.0:
+                # boundary cluster even when its colour is uniform. The fill
+                # needs the same: black ink with a grey antialiased fringe is not
+                # grey text outlined in black.
+                if std_outline <= 55 and band_depth >= 2.0 and fill_depth >= 2.0:
                     stroke_present = True
                     stroke_color = tuple(int(v) for v in centers[outline_k].tolist())
                     dominant_bgr = centers[fill_k]
@@ -17341,6 +17449,60 @@ def _text_slant_degrees(mask):
     return float(best_deg)
 
 
+def _ink_run_lengths(mask, axis):
+    """Lengths of the ink runs along rows (axis=1) or columns (axis=0)."""
+    lanes = mask if axis == 1 else mask.T
+    padded = np.pad(lanes.astype(np.int8), ((0, 0), (1, 1)))
+    edges = np.diff(padded, axis=1)
+    starts = np.where(edges == 1)
+    ends = np.where(edges == -1)
+    return ends[1] - starts[1]
+
+
+# Serif type has thick stems and thin bars; comic lettering is monoline. Measured
+# on A Wimp's Tower Strategy Guide ep. 33: serif narration 0.58-0.67, comic
+# lettering 1.0-1.5.
+SERIF_STROKE_CONTRAST_MAX = 0.8
+
+
+def _per_line_glyph_measures(img_bgr, group):
+    """``(slants, stroke contrasts, stroke weights)``, one per OCR line of ``group``.
+
+    Both are line properties. Measured over a whole balloon, centred lines of
+    different lengths shift apart under the shear and fake a slant (upright text
+    read as -28 degrees), and the block height swamps every stroke ratio.
+    """
+    slants, contrasts, weights = [], [], []
+    for line in getattr(group, "lines", None) or []:
+        mask, _gray = _glyph_ink_mask(img_bgr, line.box)
+        if mask is None or int(mask.sum()) < 30:
+            continue
+        rows = np.where(mask.any(axis=1))[0]
+        cols = np.where(mask.any(axis=0))[0]
+        mask = mask[rows.min() : rows.max() + 1, cols.min() : cols.max() + 1]
+        height = mask.shape[0]
+        slants.append(_text_slant_degrees(mask))
+        dist = cv2.distanceTransform(mask, cv2.DIST_L2, 3)
+        weights.append(float(np.median(dist[mask > 0])) * 2.0 / max(1.0, float(height)))
+        stems = _ink_run_lengths(mask, 1)
+        bars = _ink_run_lengths(mask, 0)
+        stems = stems[(stems >= 2) & (stems <= height * 0.4)]
+        bars = bars[(bars >= 2) & (bars <= height * 0.4)]
+        if len(stems) >= 10 and len(bars) >= 10:
+            contrasts.append(float(np.percentile(bars, 30)) / max(1e-6, float(np.percentile(stems, 30))))
+    return slants, contrasts, weights
+
+
+def _consensus_slant(slants):
+    """The lines' common slant, or 0 when they do not agree on one."""
+    italic = [value for value in slants if abs(value) >= 8]
+    if not slants or len(italic) * 3 < len(slants) * 2:
+        return 0.0
+    if len({value > 0 for value in italic}) > 1:
+        return 0.0
+    return float(np.median(italic))
+
+
 def extract_glyph_style_profile(img_bgr, group, box):
     """Classify the *shape* of the source lettering, independent of its colour.
 
@@ -17379,7 +17541,11 @@ def extract_glyph_style_profile(img_bgr, group, box):
     _, _, stats, _ = cv2.connectedComponentsWithStats(mask, 8)
     comps = [s for s in stats[1:] if s[4] >= height * height * 0.01 and s[3] >= height * 0.25]
     aspect = float(np.median([s[2] / max(1, s[3]) for s in comps])) if comps else 0.0
-    slant = _text_slant_degrees(mask)
+    line_slants, line_contrasts, line_weights = _per_line_glyph_measures(img_bgr, group)
+    if line_weights:
+        weight_ratio = float(np.median(line_weights))
+    slant = _consensus_slant(line_slants) if line_slants else _text_slant_degrees(mask)
+    stroke_contrast = float(np.median(line_contrasts)) if line_contrasts else None
     grad_x = cv2.Sobel(gray.astype(np.float32), cv2.CV_32F, 1, 0, ksize=3)
     grad_y = cv2.Sobel(gray.astype(np.float32), cv2.CV_32F, 0, 1, ksize=3)
     serif_ratio = float(np.sum(np.abs(grad_y)) / (np.sum(np.abs(grad_x)) + 1e-6))
@@ -17426,6 +17592,8 @@ def extract_glyph_style_profile(img_bgr, group, box):
     # --- family: display and serif are the confidently separable shapes ----------
     if fill_ratio >= 0.42 and weight_ratio >= 0.090:
         family = "display"
+    elif stroke_contrast is not None:
+        family = "serif" if stroke_contrast <= SERIF_STROKE_CONTRAST_MAX else "sans"
     elif serif_ratio >= 0.79 and fill_ratio < 0.42:
         family = "serif"
     else:
@@ -17433,7 +17601,9 @@ def extract_glyph_style_profile(img_bgr, group, box):
 
     # Confidence: enough ink, and the family signal clear of its threshold.
     ink_conf = min(1.0, ink_count / 900.0)
-    if family == "serif":
+    if family != "display" and stroke_contrast is not None:
+        margin = min(1.0, abs(stroke_contrast - SERIF_STROKE_CONTRAST_MAX) / 0.2)
+    elif family == "serif":
         margin = min(1.0, max(0.0, (serif_ratio - 0.79) / 0.10))
     elif family == "display":
         margin = min(1.0, max(0.0, (fill_ratio - 0.42) / 0.15))
@@ -17446,6 +17616,8 @@ def extract_glyph_style_profile(img_bgr, group, box):
         "character": character, "character_confidence": character_confidence,
         "slant_degrees": round(slant, 1), "weight_ratio": round(weight_ratio, 4),
         "aspect": round(aspect, 3), "serif_ratio": round(serif_ratio, 4),
+        "stroke_contrast": None if stroke_contrast is None else round(stroke_contrast, 3),
+        "line_slants": [round(float(value), 1) for value in line_slants],
         "fill_ratio": round(fill_ratio, 4), "stroke_cv": round(stroke_cv, 4),
         "baseline_std": round(baseline_std, 4),
         "confidence": confidence, "source": "original_glyph_pixels",
@@ -17564,6 +17736,16 @@ def select_font_role_with_glyph_style(base_role, text_role, glyph_style):
         return (role if role in {"display", "dramatic_display"} else "display"), "glyph_style_display"
     if slant == "italic" and role not in {"thought_dialogue", "system_text"}:
         return "italic_dialogue", "glyph_style_italic"
+    if (
+        family == "sans"
+        and str(style.get("weight") or "") in {"bold", "extra_bold"}
+        and role == "balloon_dialogue"
+    ):
+        return "bold_dialogue", "glyph_style_bold"
+    if slant == "normal" and role == "system_text":
+        # The system chain is all italic faces; upright source lettering keeps
+        # the system colours but takes the upright caption faces.
+        return "story_caption", "glyph_style_upright_system"
     if width == "condensed" and family != "serif":
         return "condensed", "glyph_style_condensed"
     return base_role, "semantic_role_kept"
@@ -17618,14 +17800,24 @@ def typography_profile_for_region(img_bgr, group, box, *, style=None):
     _stylized = str(profile.get("visual_class") or "") in {
         "dramatic_red_display", "mystic_blue_system", "ink_display",
     }
-    if source_bgr and source_conf >= _SOURCE_COLOR_MIN_CONFIDENCE and not _stylized:
+    # Fidelity wins over the preset fill: a purple caption classified as the blue
+    # "system" family was drawn light blue. The preset keeps its glow/outline.
+    if source_bgr and source_conf >= _SOURCE_COLOR_MIN_CONFIDENCE:
         source_rgb = (int(source_bgr[2]), int(source_bgr[1]), int(source_bgr[0]))
         bg_brightness = float(lettering.get("background_brightness") or 255.0)
         luminance = 0.299 * source_rgb[0] + 0.587 * source_rgb[1] + 0.114 * source_rgb[2]
         # Legible either by luminance contrast (neutral ink) or by chroma (a
         # saturated colour reads against the balloon even at similar brightness).
         chromatic = (max(source_rgb) - min(source_rgb)) >= 45
-        if chromatic or abs(luminance - bg_brightness) >= 45.0:
+        # The measured fill must agree with the measured colour family: white ink
+        # outlined in black on busy art can median to the outline's dark grey.
+        family = str(lettering.get("color_family") or "")
+        # A saturated fill is its own evidence (pink ink, white outline).
+        consistent = chromatic or not (
+            (family == "white" and luminance < 150)
+            or (family == "black" and luminance > 105)
+        )
+        if consistent and (chromatic or abs(luminance - bg_brightness) >= 45.0):
             profile["fill_color"] = source_rgb
             profile["source_text_color_confident"] = True
             # Apply the measured outline without ever weakening an intentional
@@ -17637,15 +17829,20 @@ def typography_profile_for_region(img_bgr, group, box, *, style=None):
     # --- STROKE_STYLE: measured outline colour, independent of fill/role ----------
     profile["source_stroke_confident"] = False
     stroke_bgr = lettering.get("stroke_color")
+    # Only as a pair with the measured fill: when the fill was refused the
+    # fill/outline split itself is suspect (it can come out inverted).
     if (
         lettering.get("stroke_present")
         and stroke_bgr
         and float(lettering.get("stroke_confidence") or 0.0) >= 0.55
-        and not _stylized
+        and (profile["source_text_color_confident"] or not _stylized)
     ):
         profile["stroke_color"] = (int(stroke_bgr[2]), int(stroke_bgr[1]), int(stroke_bgr[0]))
         profile["stroke_width"] = max(2, int(profile.get("stroke_width") or 1))
         profile["source_stroke_confident"] = True
+        if _stylized and profile.get("glow_color") is not None:
+            # The preset glow belongs to the preset palette; follow the outline.
+            profile["glow_color"] = profile["stroke_color"]
 
     # --- MIXED_STYLE: divergent per-line source styles (detection + telemetry) -----
     # Only real, already-segmented OCR lines are used - never invented word spans.

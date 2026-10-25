@@ -43,3 +43,9 @@ https://github.com/euske/aggdraw/blob/master/LICENSE
 
 english-words (dwyl), words_alpha.txt — Unlicense (public domain)
 https://github.com/dwyl/english-words/blob/master/LICENSE.md
+
+Comic Relief (Copyright 2013 The Comic Relief Project Authors) — SIL Open Font License 1.1
+https://github.com/loudifier/Comic-Relief — full text: assets/fonts/OFL-ComicRelief.txt
+
+Bangers (Copyright 2010 The Bangers Project Authors) — SIL Open Font License 1.1
+https://github.com/googlefonts/bangers — full text: assets/fonts/OFL-Bangers.txt

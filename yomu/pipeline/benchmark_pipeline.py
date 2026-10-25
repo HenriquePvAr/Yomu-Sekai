@@ -4636,6 +4636,85 @@ def _retry_layout_overflow_translations(
     return retried
 
 
+_RESIDUAL_RENDER_REASONS = frozenset({
+    "source_tokens_detected_after_render",
+    "source_language_detected_after_render",
+})
+
+
+def _render_residual_source_tokens(group):
+    """English tokens the post-render OCR still read on this group's render."""
+    tokens = []
+    for attempt in getattr(group, "visual_attempts", None) or []:
+        if attempt.get("reason") not in _RESIDUAL_RENDER_REASONS:
+            continue
+        check = attempt.get("post_render_ocr") or {}
+        tokens.extend(str(token) for token in check.get("residual_source_tokens") or [])
+    return list(dict.fromkeys(token for token in tokens if token))
+
+
+def _letters(text):
+    return re.sub(r"[^A-Z]", "", str(text or "").upper())
+
+
+def _retry_residual_source_translations(groups, translator, retry_records, force=False, attempt=1):
+    """Re-ask once for a translation whose render still shows English words.
+
+    The post-render OCR read words of the source in the drawn translation
+    ("SRA. GO ALONE" for "with Ms. Go alone"); the region was then kept in
+    English. The provider is told which words survived, and the new candidate
+    is kept only if they are gone from it.
+    """
+    retried = 0
+    for group in groups:
+        residual = _render_residual_source_tokens(group)
+        if not residual or getattr(group, "_residual_source_retry_done", False):
+            continue
+        group._residual_source_retry_done = True
+        previous = str(getattr(group, "translation", "") or getattr(group, "translation_candidate", "") or "").strip()
+        source = str(getattr(group, "canonical_source_text", "") or group.text)
+        try:
+            candidate = translator.translate_strict(
+                source,
+                previous_translation=previous,
+                validation_reason=(
+                    "residual_source_language: a traducao manteve palavras em ingles "
+                    f"({', '.join(residual)}); traduza-as para portugues do Brasil, "
+                    "mantendo apenas nomes proprios como estao"
+                ),
+                force=force,
+            )
+        except Exception as exc:
+            if isinstance(exc, SystemicTranslationFailure):
+                raise
+            retry_records.append({
+                "group_id": group.group_id, "source": source, "previous_translation": previous,
+                "candidate_translation": "", "attempt": attempt, "valid": False,
+                "reason": f"residual_retry_error:{type(exc).__name__}", "retry_type": "residual_source",
+            })
+            continue
+        candidate = str(candidate or "").strip()
+        if not candidate:
+            continue
+        apply_group_translations([group], [candidate])
+        survived = [token for token in residual if _letters(token) and _letters(token) in _letters(group.translation)]
+        accepted = bool(group.translation_valid and not survived)
+        retry_records.append({
+            "group_id": group.group_id, "source": source, "previous_translation": previous,
+            "candidate_translation": group.translation, "attempt": attempt, "valid": accepted,
+            "reason": "residual_retry_ok" if accepted else "residual_retry_still_english",
+            "retry_type": "residual_source",
+        })
+        if accepted:
+            group.translation_retry_count += 1
+            group.translation_validation_reason = "residual_retry_ok"
+            retried += 1
+        else:
+            group.translation = previous
+            group.translation_valid = True
+    return retried
+
+
 def _translation_render_signature(groups):
     """What a page render depends on that translation retries can change."""
     return tuple(
@@ -4695,7 +4774,14 @@ def _resolve_layout_overflow_before_settlement(
                 and float(group.text_overflow_ratio or 0.0)
                 > config.MAX_TEXT_OVERFLOW_RATIO
             ]
-            if not overflow_groups:
+            residual_groups = [
+                group
+                for group in state["groups"]
+                if group.sent_to_translation
+                and not getattr(group, "redrawn", False)
+                and _render_residual_source_tokens(group)
+            ]
+            if not overflow_groups and not residual_groups:
                 break
             retried = _retry_layout_overflow_translations(
                 overflow_groups,
@@ -4703,6 +4789,9 @@ def _resolve_layout_overflow_before_settlement(
                 retry_records,
                 force=force,
                 attempt=attempts + 1,
+            ) if overflow_groups else 0
+            retried += _retry_residual_source_translations(
+                residual_groups, translator, retry_records, force=force, attempt=attempts + 1,
             )
             if not retried:
                 break
