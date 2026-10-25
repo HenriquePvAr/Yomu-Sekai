@@ -131,14 +131,69 @@ def _emit_pipeline_event(event_name, **fields):
     _PIPELINE_TELEMETRY.emit(str(event_name), **fields)
 
 
-def _pipeline_page_workers():
-    raw = os.environ.get("PIPELINE_PAGE_WORKERS", str(getattr(config, "PIPELINE_PAGE_WORKERS", 1)))
+MAX_PIPELINE_PAGE_WORKERS = 4
+
+
+def _auto_page_workers():
+    """Pages rendered at once on this machine: a third of the logical cores and
+    one page per ~3 GB of free memory (LaMa + page buffers), at most 4."""
+    cores = os.cpu_count() or 2
     try:
-        value = int(str(raw).strip())
+        import psutil
+
+        free_gb = psutil.virtual_memory().available / 2**30
+    except Exception:  # noqa: BLE001 - no psutil: assume a modest machine
+        free_gb = 6.0
+    return max(1, min(MAX_PIPELINE_PAGE_WORKERS, cores // 3, int(free_gb // 3)))
+
+
+_DELIBERATE_PRESERVE_REASONS = frozenset({
+    "source_echo_preserved_original", "sfx_original_lettering_kept", "proper_name_only",
+    "credit", "sound_effect", "sfx_preserved",
+})
+
+
+def _deliberately_preserved(group):
+    """Kept in English by decision (a sound, a name, a credit), not by failure."""
+    return (
+        str(getattr(group, "translation_final_state", "") or "") == "preserved_original"
+        and str(getattr(group, "translation_final_reason", "") or "") in _DELIBERATE_PRESERVE_REASONS
+    )
+
+
+def _share_native_threads(workers):
+    """Give each page worker its slice of the cores in the native libraries.
+
+    OpenCV and the LaMa model (PyTorch) each spread one call over every core by
+    default; with several pages in flight they fight over the same cores and
+    the summed per-page time doubled (measured: 4 workers, 33 pages).
+    """
+    if workers <= 1:
+        return
+    share = max(1, (os.cpu_count() or 2) // workers)
+    try:
+        cv2.setNumThreads(share)
+    except Exception:  # noqa: BLE001 - a tuning knob, never a failure
+        pass
+    try:
+        import torch
+
+        torch.set_num_threads(share)
+    except Exception:  # noqa: BLE001 - torch absent or already configured
+        pass
+
+
+def _pipeline_page_workers():
+    raw = os.environ.get("PIPELINE_PAGE_WORKERS", str(getattr(config, "PIPELINE_PAGE_WORKERS", "auto")))
+    text = str(raw).strip().lower()
+    if text in {"", "auto"}:
+        return _auto_page_workers()
+    try:
+        value = int(text)
     except (TypeError, ValueError) as exc:
-        raise ValueError("PIPELINE_PAGE_WORKERS must be 1 or 2") from exc
-    if value not in (1, 2):
-        raise ValueError("PIPELINE_PAGE_WORKERS must be 1 or 2")
+        raise ValueError("PIPELINE_PAGE_WORKERS must be auto or 1-4") from exc
+    if not 1 <= value <= MAX_PIPELINE_PAGE_WORKERS:
+        raise ValueError("PIPELINE_PAGE_WORKERS must be auto or 1-4")
     return value
 
 
@@ -677,10 +732,12 @@ def _complete_page_clean(state, cleaned_capture, debug_data, *, job_id: str = ""
             local_image = remote_image
         strategy = remote_strategy
     else:
+        # A sound, name or credit kept on purpose keeps its lettering in the
+        # CLEAN layer too: that is the decision, not an unresolved clean.
         unresolved = [group for group in state.get("groups", []) if str(
             getattr(group, "clean_disposition", "") or "") in {
                 "PENDING_LOCAL", "LOCAL_HARD", "REVIEW_UNOWNED", "REVIEW_OCR", "REVIEW_SEMANTIC", "REMOTE_REJECTED",
-            }]
+            } and not _deliberately_preserved(group)]
         if remote_strategy is None and unresolved:
             for group in unresolved:
                 if group.clean_disposition == "LOCAL_HARD":
@@ -3126,6 +3183,7 @@ def run_benchmark(args):
     }
     pre_translation_wall_started = time.perf_counter()
     configured_page_workers = _pipeline_page_workers()
+    _share_native_threads(configured_page_workers)
     classification_progress = {"current": 0}
 
     def _emit_classification_progress(_result):
@@ -3491,7 +3549,7 @@ def run_benchmark(args):
         stage_current=len(rendered_page_ids), stage_total=len(image_paths),
     )
     post_parallel_results = None
-    if _pipeline_page_workers() == 2:
+    if _pipeline_page_workers() > 1:
         overflow_retry_lock = threading.Lock()
         post_parallel_results = process_post_translation_pages(
             analyzable_states,
@@ -4752,10 +4810,10 @@ def _resolve_layout_overflow_before_settlement(
     new provider request.
     """
 
-    total_retried = 0
-    for state in page_states:
-        if state.get("status") == "completed":
-            continue
+    lock = threading.Lock()
+
+    def preflight(state):
+        retried_total = 0
         attempts = 0
         while attempts < int(config.TRANSLATION_MAX_RETRIES):
             # The preflight is a full render; its result is kept so the final
@@ -4795,20 +4853,48 @@ def _resolve_layout_overflow_before_settlement(
             ]
             if not overflow_groups and not residual_groups:
                 break
-            retried = _retry_layout_overflow_translations(
-                overflow_groups,
-                translator,
-                retry_records,
-                force=force,
-                attempt=attempts + 1,
-            ) if overflow_groups else 0
-            retried += _retry_residual_source_translations(
-                residual_groups, translator, retry_records, force=force, attempt=attempts + 1,
-            )
+            # Provider calls stay one at a time; only the page renders overlap.
+            with lock:
+                retried = _retry_layout_overflow_translations(
+                    overflow_groups,
+                    translator,
+                    retry_records,
+                    force=force,
+                    attempt=attempts + 1,
+                ) if overflow_groups else 0
+                retried += _retry_residual_source_translations(
+                    residual_groups, translator, retry_records, force=force, attempt=attempts + 1,
+                )
             if not retried:
                 break
-            total_retried += retried
+            retried_total += retried
             attempts += 1
+        return retried_total
+
+    pending = [state for state in page_states if state.get("status") != "completed"]
+    workers = min(_pipeline_page_workers(), max(1, len(pending)))
+    if workers == 1:
+        return sum(preflight(state) for state in pending)
+
+    run_recorder = ocr_line_provenance.active()
+
+    def preflight_in_thread(state):
+        # Provenance is thread-local: each page records into its own recorder,
+        # merged in page order below, as the post-translation pages do.
+        recorder = ocr_line_provenance.ProvenanceRecorder()
+        ocr_line_provenance.activate(recorder)
+        try:
+            return preflight(state), recorder
+        finally:
+            ocr_line_provenance.deactivate()
+
+    with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="preflight-page") as executor:
+        results = list(executor.map(preflight_in_thread, pending))
+    total_retried = 0
+    for retried, recorder in results:
+        total_retried += retried
+        if run_recorder is not None:
+            run_recorder.merge_from(recorder)
     return total_retried
 
 

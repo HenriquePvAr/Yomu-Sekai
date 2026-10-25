@@ -28,8 +28,11 @@ class PipelinePageWorkersTests(unittest.TestCase):
 
     def test_default_and_invalid_worker_values(self):
         os.environ.pop("PIPELINE_PAGE_WORKERS", None)
-        self.assertEqual(bp._pipeline_page_workers(), 2)
-        for value in ("0", "-1", "3", "nope"):
+        self.assertEqual(bp._pipeline_page_workers(), bp._auto_page_workers())
+        self.assertTrue(1 <= bp._auto_page_workers() <= bp.MAX_PIPELINE_PAGE_WORKERS)
+        os.environ["PIPELINE_PAGE_WORKERS"] = "4"
+        self.assertEqual(bp._pipeline_page_workers(), 4)
+        for value in ("0", "-1", "5", "nope"):
             os.environ["PIPELINE_PAGE_WORKERS"] = value
             with self.assertRaises(ValueError):
                 bp._pipeline_page_workers()

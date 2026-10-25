@@ -298,7 +298,8 @@ OCR_ALLOW_HEAVY_PARALLELISM = _env_bool("OCR_ALLOW_HEAVY_PARALLELISM", False)
 # Page-level pre/post parallelism defaults to two after controlled A/B runs
 # showed semantic/provenance/quality equivalence. RapidOCR and LaMa remain
 # independently capped at one; the runtime helper validates overrides again.
-PIPELINE_PAGE_WORKERS = _env_int("PIPELINE_PAGE_WORKERS", 2)
+# "auto" (default): pages rendered at once from cores and free memory, 1-4.
+PIPELINE_PAGE_WORKERS = _env_str("PIPELINE_PAGE_WORKERS", "auto")
 ADAPTIVE_PARALLELISM = _env_bool("ADAPTIVE_PARALLELISM", True)
 RESOURCE_MONITORING = _env_bool("RESOURCE_MONITORING", False)
 RESOURCE_MONITOR_INTERVAL_SECONDS = max(

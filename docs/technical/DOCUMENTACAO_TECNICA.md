@@ -1519,6 +1519,16 @@ Décima primeira passada (reconstrução e regiões restantes, 2026-10-25, **IMP
   dicionário na fonte da nova tentativa.
 - Medido nas 33 páginas com DeepL (antes destas duas últimas mudanças): traduzidos 102 → 104,
   não selecionados 1 → 0, revisão 10 → 6.
+- Desempenho: o pré-voo de layout (`_resolve_layout_overflow_before_settlement`) roda as
+  páginas em paralelo (`preflight-page`, um `ProvenanceRecorder` por página mesclado em ordem;
+  chamadas ao provider serializadas por uma trava). `PIPELINE_PAGE_WORKERS` passou a `auto`
+  (1–4 por núcleos e memória livre) e `_share_native_threads` divide os fios do OpenCV e do
+  PyTorch (LaMa) entre os workers. 33 páginas com DeepL: 1237 s → 900 s com 4 workers, mesma
+  qualidade.
+- Limpeza: máscara larga sobre arte não é vetada quando o preenchimento escolhido foi o
+  aprendido ou o de superfície e passou nos portões de reconstrução (`_broad_mask_reconstructed`)
+  — o LaMa refaz batentes e molduras que o carimbo quebrava. Altura de linha para hierarquia
+  medida pela faixa densa de tinta (`_line_ink_height`).
 - Modos verificados com DeepL em 4 páginas: Tradução pronta (PDF), Apenas Clean
   (`images/clean/NNN.png`), Apenas tradução (`translation/translation.json`), Tradução + Clean,
   Completo (PDF + PSD).

@@ -140,6 +140,10 @@ seguindo o formato do balão fechado quando isso permite uma fonte maior, e
 é reta. Também só no código: `CLEAN_SURFACE_FILL` (default `True`) acrescenta o preenchimento
 de degradê suave como candidato da limpeza (ver Documentação Técnica §16).
 
+`PIPELINE_PAGE_WORKERS` (só no código, default `auto`): quantas páginas são analisadas,
+pré-renderizadas e renderizadas ao mesmo tempo. `auto` usa um terço dos núcleos lógicos e uma
+página por ~3 GB de memória livre, no máximo 4; valores explícitos de `1` a `4` são aceitos.
+
 `FONT_PATH` também é suportada fora do template. Quando vazia, o código usa a resolução de fonte existente; quando definida, deve apontar para um arquivo local válido.
 
 ## Validação visual

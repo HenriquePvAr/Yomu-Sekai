@@ -6,7 +6,7 @@
 ![Plataforma auditada: Windows](https://img.shields.io/badge/plataforma%20auditada-Windows-0078D4?logo=windows11&logoColor=white)
 ![Status: beta técnica](https://img.shields.io/badge/status-beta%20t%C3%A9cnica-D97706)
 
-> **Base verificada:** `5f482ce1` (branch `main`) · **Revisado em:** 2026-10-24
+> **Base verificada:** `ee846921` (branch `main`) · **Revisado em:** 2026-10-25
 
 Yomu Sekai organiza em um único fluxo a coleta de páginas, o reconhecimento de texto, a classificação semântica, a tradução, a reconstrução visual e a geração do PDF. O projeto preserva evidências de cada etapa e encaminha resultados duvidosos para revisão, em vez de tratá-los silenciosamente como corretos.
 
@@ -14,7 +14,21 @@ O fluxo principal atual é voltado a capítulos web com texto-fonte em inglês e
 
 ## Demonstração visual
 
-> Uma demonstração pública ainda não está versionada no repositório. Isso evita publicar páginas de terceiros ou artefatos de usuários. Uma futura demonstração deverá usar somente material próprio ou autorizado.
+Capturas da interface local (`http://127.0.0.1:8080`), versão 0.9.1-beta.18. Os anúncios foram
+ocultados e as prévias das fontes, desfocadas: o repositório não publica páginas nem capas de
+terceiros.
+
+![Tela de entrada](docs/assets/screenshots/login.png)
+
+| Início | Nova tradução |
+| --- | --- |
+| ![Início](docs/assets/screenshots/inicio.png) | ![Nova tradução](docs/assets/screenshots/nova_traducao.png) |
+| **Fontes** | **Fila** |
+| ![Fontes](docs/assets/screenshots/fontes.png) | ![Fila](docs/assets/screenshots/fila.png) |
+| **Capítulos traduzidos** | **Atualizações** |
+| ![Capítulos traduzidos](docs/assets/screenshots/capitulos.png) | ![Atualizações](docs/assets/screenshots/atualizacoes.png) |
+
+![Configurações](docs/assets/screenshots/configuracoes.png)
 
 ## Principais recursos
 

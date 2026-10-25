@@ -36,3 +36,6 @@ Ver [Política de Documentação §6](../../DOCUMENTATION_POLICY.md#6-quando-as-
 | `resultado-pdf.png` | Capítulo concluído com PDF disponível |
 | `capitulo-interrompido.png` | Painel "Processamento interrompido" com o botão Retomar |
 | `atualizacoes.png` | Aba Atualizações (Verificar atualizações) |
+
+As capturas da interface usadas no README do projeto ficam em `docs/assets/screenshots/`
+(2026-10-25, versão 0.9.1-beta.18; anúncios ocultos e prévias de fontes desfocadas).

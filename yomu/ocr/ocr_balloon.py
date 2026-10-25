@@ -15631,8 +15631,18 @@ def _line_ink_height(source_bgr, box):
     mask, _gray = _glyph_ink_mask(source_bgr, box)
     if mask is None:
         return None
-    rows = np.where(mask.sum(axis=1) >= max(2, mask.shape[1] * 0.02))[0]
-    return float(rows.max() - rows.min() + 1) if rows.size else None
+    # The letters' band: the longest run of rows holding at least a quarter of
+    # the densest row. A box also clips a neighbouring line's descenders and a
+    # balloon's spikes, which a plain "any ink" row count includes.
+    profile = mask.sum(axis=1).astype(np.float32)
+    if not profile.size or profile.max() <= 0:
+        return None
+    dense = profile >= 0.25 * profile.max()
+    best = run = 0
+    for flag in dense:
+        run = run + 1 if flag else 0
+        best = max(best, run)
+    return float(best) if best else None
 
 
 def _source_line_scale_ratios(group, source_bgr=None):
@@ -17291,6 +17301,19 @@ def _post_render_source_text_check(
     }
 
 
+def _broad_mask_reconstructed(group, metrics):
+    """A broad mask is only a problem for a fill that cannot rebuild what it covers.
+
+    The veto exists because a stamp/flat fill over a broad mask on textured art
+    leaves a block. A learned or fitted fill that already passed every
+    reconstruction gate on that mask (blotch, seam, flat patch, ghost) rebuilt
+    the art - door frames included - and the narrow fallback would only trade it
+    for the stamp.
+    """
+    chosen = str(((getattr(group, "fill_choice", None) or {}) if group is not None else {}).get("chosen") or "")
+    return chosen in {"learned", "surface"} and metrics.get("mask_valid") is True
+
+
 def _enforce_visual_bounds(
     original_bgr,
     final_bgr,
@@ -17413,6 +17436,7 @@ def _enforce_visual_bounds(
         and metrics.get("strategy") != "source_scoped"
         and metrics.get("background_type")
         not in {"white_balloon", "dark_balloon", "narration_box"}
+        and not _broad_mask_reconstructed(group, metrics)
     ):
         reasons.append("broad_rectangular_or_polygonal_mask")
     if metrics.get("white_patch_rejected"):
