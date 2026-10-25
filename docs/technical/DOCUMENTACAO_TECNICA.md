@@ -1579,6 +1579,13 @@ Décima primeira passada (reconstrução e regiões restantes, 2026-10-25, **IMP
   (1–4 por núcleos e memória livre) e `_share_native_threads` divide os fios do OpenCV e do
   PyTorch (LaMa) entre os workers. 33 páginas com DeepL: 1237 s → 900 s com 4 workers, mesma
   qualidade.
+- Desempenho (passo 2): os portões de reconstrução (`_lettering_contour_ghost_metrics`,
+  `_white_patch_artifact_metrics`), a pontuação `_fill_consistency_parts` e o ajuste de tom do
+  LaMa rodam num recorte em volta da máscara (`_mask_roi`, margem maior que o alcance de cada
+  filtro), com resultado idêntico ao da página inteira (5–10× mais rápidos). O LaMa deixou de
+  ser serializado: `_LAMA_INFERENCE_LOCK` admite uma inferência por worker (4), e o cache de
+  preenchimentos aprendidos passou de 16 para 64 entradas, com trava. 33 páginas com DeepL:
+  730 s → 629 s, mesmos contadores de qualidade (107 traduzidos).
 - Limpeza: máscara larga sobre arte não é vetada quando o preenchimento escolhido foi o
   aprendido ou o de superfície e passou nos portões de reconstrução (`_broad_mask_reconstructed`)
   — o LaMa refaz batentes e molduras que o carimbo quebrava. Altura de linha para hierarquia

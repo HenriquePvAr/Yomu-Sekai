@@ -25,7 +25,10 @@ import yomu.ocr.source_completeness as source_completeness
 import yomu.translation.semantic_fidelity as semantic_fidelity
 from yomu.translation.providers.yomu_backend_provider import SystemicTranslationFailure
 
-_LAMA_INFERENCE_LOCK = threading.BoundedSemaphore(1)
+# One LaMa call per page worker (MAX_PIPELINE_PAGE_WORKERS): the TorchScript
+# forward is re-entrant, and 4 concurrent calls on 3 threads each finish in 0.56x
+# the time of the same 4 calls queued (measured, 12 logical cores).
+_LAMA_INFERENCE_LOCK = threading.BoundedSemaphore(4)
 from tools.research.cleanup_forensic_capture import CleanupForensicCapture
 from yomu.ocr.classification_profiler import profile_step, record_count, record_group
 from yomu.core.json_utils import dump_json
@@ -13186,8 +13189,12 @@ def _lettering_contour_ghost_metrics(original_bgr, cleaned_bgr, cleanup_mask, pr
     """
     mask = (np.asarray(cleanup_mask) > 0).astype(np.uint8)
     out = {"lettering_contour_ghost": False}
-    if not np.any(mask):
+    roi = _mask_roi(mask, 48)  # widest reach: 21 px band + 9 px means
+    if roi is None:
         return out
+    mask, original_bgr, cleaned_bgr = mask[roi], original_bgr[roi], cleaned_bgr[roi]
+    if isinstance(protect_mask, np.ndarray) and protect_mask.shape[:2] == np.asarray(cleanup_mask).shape[:2]:
+        protect_mask = protect_mask[roi]
     gray = cv2.cvtColor(cleaned_bgr, cv2.COLOR_BGR2GRAY).astype(np.float32)
     source = cv2.cvtColor(original_bgr, cv2.COLOR_BGR2GRAY).astype(np.float32)
 
@@ -13318,6 +13325,21 @@ def _white_patch_artifact_metrics(
             "largest_new_white_component_area": 0,
             "white_patch_rejected": False,
         }
+    cleanup_mask = np.asarray(cleanup_mask)
+    # White inside a closed *white* balloon is that balloon, not a patch. A
+    # translucent balloon over art (grey clothing showing through) is not white,
+    # and a white fill there is exactly the silhouette this gate must catch.
+    enclosure = getattr(group, "light_enclosure_interior", None)
+    if isinstance(enclosure, np.ndarray) and enclosure.shape == cleanup_mask.shape:
+        visible = cv2.cvtColor(original_bgr, cv2.COLOR_BGR2GRAY)[enclosure & (cleanup_mask == 0)]
+        if not (visible.size and float(np.median(visible)) >= 240 and float(np.percentile(visible, 10)) >= 225):
+            enclosure = None
+    else:
+        enclosure = None
+    roi = _mask_roi(cleanup_mask, 64)  # widest reach: 12 px ring + 41 px means
+    if roi is not None:
+        enclosure = enclosure[roi] if enclosure is not None else None
+        original_bgr, cleaned_bgr, cleanup_mask = original_bgr[roi], cleaned_bgr[roi], cleanup_mask[roi]
     original_gray = cv2.cvtColor(original_bgr, cv2.COLOR_BGR2GRAY)
     cleaned_gray = cv2.cvtColor(cleaned_bgr, cv2.COLOR_BGR2GRAY)
     new_white = (
@@ -13353,14 +13375,8 @@ def _white_patch_artifact_metrics(
         count_j, labels_j = cv2.connectedComponents(joined.astype(np.uint8), connectivity=8)
         anchored = np.unique(labels_j[near])
         new_white &= ~np.isin(labels_j, anchored[anchored > 0])
-    enclosure = getattr(group, "light_enclosure_interior", None)
-    if isinstance(enclosure, np.ndarray) and enclosure.shape == new_white.shape:
-        # White inside a closed *white* balloon is that balloon, not a patch. A
-        # translucent balloon over art (grey clothing showing through) is not white,
-        # and a white fill there is exactly the silhouette this gate must catch.
-        visible = original_gray[enclosure & (cleanup_mask == 0)]
-        if visible.size and float(np.median(visible)) >= 240 and float(np.percentile(visible, 10)) >= 225:
-            new_white &= ~enclosure
+    if enclosure is not None:
+        new_white &= ~enclosure
     new_white_u8 = new_white.astype(np.uint8) * 255
     count, _, stats, _ = cv2.connectedComponentsWithStats(new_white_u8, 8)
     largest = max(
@@ -14778,7 +14794,36 @@ def _surface_fill(current_bgr, cleanup_mask, group=None):
     return filled, {**metrics, "surface_fill_reason": "fitted"}
 
 
+# Widest window the score reads around the mask: the 481 px membrane blur over a
+# ring that ends 8 px out. Inside a crop this far from the mask every value is
+# what the full page gives (the ring is zero beyond it, so border handling of the
+# crop never reaches it); on tall webtoon pages it is the difference between
+# blurring 800x7500 and 800x600 pixels, five scales per candidate.
+_FILL_SCORE_MARGIN = 260
+
+
+def _mask_roi(mask, margin):
+    """Slices of the mask's bounding box grown by ``margin`` (None for an empty mask).
+
+    The gates only look a bounded distance past the mask, so running them on this
+    crop gives the same numbers as the full page at a fraction of the cost.
+    """
+    ys, xs = np.nonzero(mask)
+    if not ys.size:
+        return None
+    return (slice(max(0, ys.min() - margin), min(mask.shape[0], ys.max() + margin + 1)),
+            slice(max(0, xs.min() - margin), min(mask.shape[1], xs.max() + margin + 1)))
+
+
 def _fill_consistency_parts(source_bgr, candidate_bgr, cleanup_mask):
+    mask = np.asarray(cleanup_mask)
+    roi = _mask_roi(mask, _FILL_SCORE_MARGIN)
+    if roi is None:
+        return {}
+    return _fill_consistency_parts_full(source_bgr[roi], candidate_bgr[roi], mask[roi])
+
+
+def _fill_consistency_parts_full(source_bgr, candidate_bgr, cleanup_mask):
     """How much a reconstruction disagrees with the art around it, per term (lower is better).
 
     Sum of: the local tone mismatch (each masked pixel against the ring 2-8 px
@@ -14960,6 +15005,7 @@ def _inside_white_enclosure(image_bgr, group, cleanup_mask):
     return bool(visible.size and np.median(visible) >= 240 and np.percentile(visible, 10) >= 225)
 
 _LEARNED_FILL_CACHE = {}
+_LEARNED_FILL_CACHE_LOCK = threading.Lock()
 
 
 def _learned_texture_fill(current_bgr, group, cleanup_mask, strategy, force=False):
@@ -15092,8 +15138,10 @@ def _learned_inpaint(current_bgr, group, cleanup_mask):
     # It is the median of *local* differences along the mask edge (15 px window,
     # 3 px just outside vs 3 px just inside): a mask spanning a white shirt and
     # grey hatching must not be shifted by the difference between the two.
-    outer = (cv2.dilate(mask_u8, np.ones((7, 7), np.uint8)) > 0) & ~inside
-    inner = inside & ~(cv2.erode(mask_u8, np.ones((7, 7), np.uint8)) > 0)
+    roi = _mask_roi(mask_u8, 24)  # widest reach: 3 px band + 15 px means
+    roi_mask, roi_inside = mask_u8[roi], inside[roi]
+    outer = (cv2.dilate(roi_mask, np.ones((7, 7), np.uint8)) > 0) & ~roi_inside
+    inner = roi_inside & ~(cv2.erode(roi_mask, np.ones((7, 7), np.uint8)) > 0)
     tone_offset = [0.0, 0.0, 0.0]
     outer_f, inner_f = outer.astype(np.float32), inner.astype(np.float32)
     outer_support = cv2.blur(outer_f, (15, 15))
@@ -15102,21 +15150,23 @@ def _learned_inpaint(current_bgr, group, cleanup_mask):
         inner_support = np.maximum(cv2.blur(inner_f, (15, 15)), 1e-3)
         differences = []
         for channel in range(3):
-            outside_mean = cv2.blur(current_bgr[..., channel].astype(np.float32) * outer_f, (15, 15)) / np.maximum(outer_support, 1e-3)
-            inside_mean = cv2.blur(cleaned[..., channel].astype(np.float32) * inner_f, (15, 15)) / inner_support
+            outside_mean = cv2.blur(current_bgr[roi][..., channel].astype(np.float32) * outer_f, (15, 15)) / np.maximum(outer_support, 1e-3)
+            inside_mean = cv2.blur(cleaned[roi][..., channel].astype(np.float32) * inner_f, (15, 15)) / inner_support
             differences.append(float(np.median((outside_mean - inside_mean)[paired])))
         offset = np.asarray(differences, dtype=np.float32)
-        corrected = cleaned.astype(np.float32)
-        corrected[inside] += offset
-        cleaned = np.clip(np.rint(corrected), 0, 255).astype(np.uint8)
+        cleaned = cleaned.copy()
+        cleaned[inside] = np.clip(np.rint(cleaned[inside].astype(np.float32) + offset), 0, 255).astype(np.uint8)
         tone_offset = [round(float(v), 1) for v in offset]
     group.learned_texture_fill = {"status": "applied", "tone_offset_bgr": tone_offset}
     group.texture_synthesized = False
     if isinstance(getattr(group, "background_metrics", None), dict):
         group.background_metrics["cleanup_fill_source"] = "learned_texture_fill"
-    if len(_LEARNED_FILL_CACHE) >= 16:
-        _LEARNED_FILL_CACHE.pop(next(iter(_LEARNED_FILL_CACHE)))
-    _LEARNED_FILL_CACHE[key] = cleaned[inside].copy()
+    # Sized for 4 page workers each re-filling a group across strategies and the
+    # CLEAN-artifact pass; the lock keeps the eviction safe between them.
+    with _LEARNED_FILL_CACHE_LOCK:
+        while len(_LEARNED_FILL_CACHE) >= 64:
+            _LEARNED_FILL_CACHE.pop(next(iter(_LEARNED_FILL_CACHE)))
+        _LEARNED_FILL_CACHE[key] = cleaned[inside].copy()
     result = current_bgr.copy()
     result[inside] = cleaned[inside]
     return result
