@@ -21,6 +21,8 @@ os.environ.setdefault("CLEAN_LEARNED_LAST_RESORT", "0")
 # The suite was written against the former default (sound effects preserved);
 # the translated-SFX path has its own tests.
 os.environ.setdefault("TRANSLATE_SFX", "0")
+# Results must not depend on the machine's GPU; DirectML has its own tests.
+os.environ.setdefault("GPU_INFERENCE", "off")
 install_offline_network_guard()
 install_runtime_isolation_guard()
 

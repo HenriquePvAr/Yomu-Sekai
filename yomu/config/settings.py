@@ -612,6 +612,10 @@ ADVANCED_ART_INPAINT_MODEL_SHA256 = _env_str(
     "ADVANCED_ART_INPAINT_MODEL_SHA256",
     "479d3afdcb7ed2fd944ed4ebcc39ca45b33491f0f2e43eb1000bd623cfb41823",
 ).lower()
+# GPU through DirectML (any DX12 card on Windows: AMD, Intel, NVIDIA) for RapidOCR
+# and LaMa. "auto" uses it when onnxruntime-directml exposes DmlExecutionProvider,
+# "off" keeps everything on the CPU. Same results within float rounding.
+GPU_INFERENCE = _env_str("GPU_INFERENCE", "auto").strip().lower()
 ADVANCED_ART_INPAINT_MAX_ATTEMPTS_PER_REGION = max(
     0,
     _env_int("ADVANCED_ART_INPAINT_MAX_ATTEMPTS_PER_REGION", 1),

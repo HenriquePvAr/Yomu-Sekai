@@ -1586,6 +1586,16 @@ Décima primeira passada (reconstrução e regiões restantes, 2026-10-25, **IMP
   ser serializado: `_LAMA_INFERENCE_LOCK` admite uma inferência por worker (4), e o cache de
   preenchimentos aprendidos passou de 16 para 64 entradas, com trava. 33 páginas com DeepL:
   730 s → 629 s, mesmos contadores de qualidade (107 traduzidos).
+- Desempenho (passo 3, GPU): com `GPU_INFERENCE=auto` e `onnxruntime-directml`, o RapidOCR roda
+  com `det/cls/rec_use_dml` e o LaMa por uma sessão ONNX DirectML (`yomu/clean/inpainting/lama_onnx.py`).
+  O exportador não tem forma ONNX das FFTs reais 2-D das Fourier units, então `rfftn`/`irfftn`
+  viram produtos por matrizes de DFT montadas no grafo para o tamanho real (mesma conta;
+  diferença máxima de 0,002/255 contra o TorchScript). A exportação é derivada do `.pt`
+  verificado e cacheada com sidecar de SHA-256; falha de exportação ou de sessão volta ao
+  PyTorch na CPU. Todas as sessões DirectML rodam sob uma trava única (`yomu.core.gpu.DIRECTML_LOCK`):
+  RapidOCR e LaMa ao mesmo tempo derrubam o processo com access violation. Medido (RX 6600):
+  OCR 3,5× e LaMa ~19× por inferência; 33 páginas com DeepL 629 s → 223 s, mesmos contadores e
+  as 33 páginas limpas idênticas às da CPU.
 - Limpeza: máscara larga sobre arte não é vetada quando o preenchimento escolhido foi o
   aprendido ou o de superfície e passou nos portões de reconstrução (`_broad_mask_reconstructed`)
   — o LaMa refaz batentes e molduras que o carimbo quebrava. Altura de linha para hierarquia

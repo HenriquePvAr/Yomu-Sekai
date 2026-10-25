@@ -21,6 +21,7 @@ import cv2
 import numpy as np
 
 import yomu.config.settings as config
+from yomu.core.gpu import directml_enabled
 
 
 @dataclass(frozen=True)
@@ -73,6 +74,8 @@ class AdvancedArtInpainter:
         self.model_path = Path(model_path or config.ADVANCED_ART_INPAINT_MODEL_PATH)
         self.device = device
         self._model = None
+        self._gpu_session = None
+        self.gpu_unavailable_reason: str | None = None
         self._lock = threading.Lock()
         self.last_load_seconds: float | None = None
         self._verified_file_key: tuple[int, int] | None = None
@@ -126,6 +129,20 @@ class AdvancedArtInpainter:
                 return self._model
             digest = self.verify_integrity()
             started = time.perf_counter()
+            if self.device == "cpu" and directml_enabled():
+                # Exported from the verified .pt; any failure keeps the CPU model.
+                try:
+                    from yomu.clean.inpainting import lama_onnx
+
+                    self._gpu_session = lama_onnx.DirectMLSession(
+                        lama_onnx.ensure_onnx(self.model_path, digest))
+                    self._model = self._gpu_session
+                    self.last_load_seconds = time.perf_counter() - started
+                    self.metrics["load_count"] += 1
+                    return self._model
+                except Exception as exc:  # noqa: BLE001 - GPU is an accelerator, never a requirement
+                    self._gpu_session = None
+                    self.gpu_unavailable_reason = type(exc).__name__
             try:
                 import torch
 
@@ -143,6 +160,7 @@ class AdvancedArtInpainter:
     def unload(self):
         with self._lock:
             self._model = None
+            self._gpu_session = None
 
     def reconstruct(
         self,
@@ -166,7 +184,6 @@ class AdvancedArtInpainter:
         if image_bgr is None or mask is None or not np.any(mask > 0):
             raise ValueError("invalid_image_or_mask")
         model = self.load()
-        import torch
 
         mask_u8 = (mask > 0).astype(np.uint8) * 255
         x, y, w, h, margin = _context_crop(mask_u8, image_bgr.shape)
@@ -175,16 +192,20 @@ class AdvancedArtInpainter:
         rgb = cv2.cvtColor(crop_bgr, cv2.COLOR_BGR2RGB)
         padded_rgb, original_h, original_w = _pad_to_modulo(rgb, 8)
         padded_mask, _, _ = _pad_to_modulo(crop_mask, 8)
-        img_t = torch.from_numpy(_norm_img(padded_rgb)).unsqueeze(0).to(self.device)
-        mask_t = torch.from_numpy(_norm_img(padded_mask)).unsqueeze(0).to(self.device)
-        mask_t = (mask_t > 0).float()
+        image_np = _norm_img(padded_rgb)[None]
+        mask_np = (_norm_img(padded_mask)[None] > 0).astype(np.float32)
         started = time.perf_counter()
-        with torch.no_grad():
-            pred = model(img_t, mask_t)
+        if model is self._gpu_session:
+            pred_rgb = model(image_np, mask_np)[0].transpose(1, 2, 0)
+        else:
+            import torch
+
+            with torch.no_grad():
+                pred = model(torch.from_numpy(image_np).to(self.device), torch.from_numpy(mask_np).to(self.device))
+            pred_rgb = pred[0].permute(1, 2, 0).detach().cpu().numpy()
         inference_seconds = time.perf_counter() - started
         self.metrics["inference_count"] += 1
         self.metrics["inference_seconds"] += inference_seconds
-        pred_rgb = pred[0].permute(1, 2, 0).detach().cpu().numpy()
         pred_rgb = np.clip(pred_rgb * 255, 0, 255).astype(np.uint8)
         pred_rgb = pred_rgb[:original_h, :original_w]
         pred_bgr = cv2.cvtColor(pred_rgb, cv2.COLOR_RGB2BGR)
@@ -204,8 +225,8 @@ class AdvancedArtInpainter:
             "model_version": self.descriptor.model_version,
             "model_sha256": self.verify_integrity(),
             "model_hash_verified": True,
-            "device": self.device,
-            "backend": self.descriptor.backend,
+            "device": "directml" if model is self._gpu_session else self.device,
+            "backend": "onnx_directml" if model is self._gpu_session else self.descriptor.backend,
             "inference_ms": int(round(inference_seconds * 1000)),
             "hash_count": int(self.metrics["hash_count"]),
             "hash_lookup_count": int(self.metrics["hash_lookup_count"]),

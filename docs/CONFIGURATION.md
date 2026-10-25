@@ -2,7 +2,7 @@
 
 Esta referência descreve as opções reais do `.env.example` e as poucas variáveis adicionais consumidas diretamente pelo código atual.
 
-> **Base verificada:** `fb8875e` (branch `main`) · **Revisado em:** 2026-10-25
+> **Base verificada:** `1af9385` (branch `main`) · **Revisado em:** 2026-10-25
 >
 > [Voltar ao README](../README.md)
 
@@ -250,6 +250,13 @@ O diretório padrão é `%LOCALAPPDATA%\TradutorIA\cache` (`yomu/runtime/runtime
 | `OCR_QUEUE_MULTIPLIER` | `10` | Multiplicador do limite da fila |
 | `TRANSLATION_PARALLEL` | `True` | Permite lotes de tradução concorrentes |
 | `TRANSLATION_WORKERS` | `2` | Quantidade máxima de workers de tradução |
+
+`GPU_INFERENCE` (só no código, default `auto`): roda o RapidOCR e o LaMa na GPU via DirectML
+(qualquer placa DirectX 12 no Windows: AMD, Intel ou NVIDIA) quando o `onnxruntime-directml`
+expõe `DmlExecutionProvider`. `off` mantém tudo na CPU. O LaMa é exportado uma vez do `.pt`
+verificado para `anime_manga_lama_large.dml.onnx`, ao lado dele, com um `.json` que registra o
+SHA-256 da origem e o da exportação; qualquer falha volta ao PyTorch na CPU. Os testes forçam
+`off`.
 
 Em máquinas com pouca memória, reduza primeiro `OCR_WORKERS` e `TRANSLATION_WORKERS`. Não diminua reservas do sistema apenas para forçar uma execução.
 

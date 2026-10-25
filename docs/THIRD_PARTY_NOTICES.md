@@ -9,7 +9,7 @@ english-words, entre outros). A tabela abaixo lista o que ainda depende de revis
 
 | Componente | Uso | Situação |
 |---|---|---|
-| RapidOCR / ONNX Runtime | OCR local | `LICENSE_REVIEW_REQUIRED` |
+| RapidOCR / ONNX Runtime (DirectML no Windows: `onnxruntime-directml`, MIT; `DirectML.dll` sob a licença da Microsoft que acompanha o pacote) | OCR local e LaMa na GPU | `LICENSE_REVIEW_REQUIRED` |
 | OpenCV / Pillow | imagem e reconstrução | `LICENSE_REVIEW_REQUIRED` (Pillow listado em `THIRD_PARTY_NOTICES.txt`) |
 | PyInstaller | empacotamento | `LICENSE_REVIEW_REQUIRED` |
 | NiceGUI / WebView2 | UI | `LICENSE_REVIEW_REQUIRED` |

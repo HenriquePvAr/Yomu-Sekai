@@ -1,2 +1,5 @@
 rapidocr-onnxruntime==1.4.4
-onnxruntime==1.27.0
+# Windows: the DirectML build (CPU provider included) runs RapidOCR and LaMa on any
+# DirectX 12 GPU; GPU_INFERENCE=off keeps the CPU. Elsewhere the CPU build.
+onnxruntime-directml==1.24.4; sys_platform == "win32"
+onnxruntime==1.27.0; sys_platform != "win32"
