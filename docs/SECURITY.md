@@ -1,11 +1,44 @@
 # Segurança e limites de confiança
 
-> **Revisado em:** 2026-10-24 · **Base verificada:** `5f482ce1`.
+> **Revisado em:** 2026-10-25 · **Base verificada:** `fb8875e`.
 
 Este documento descreve as fronteiras implementadas no Tradutor.IA e, igualmente importante,
 o que elas **não** garantem. O projeto lida com URLs, páginas renderizadas, imagens e pastas
 locais; nenhuma dessas entradas deve ser considerada confiável só porque veio de uma UI local ou
 de um host público.
+
+## Mapa das fronteiras
+
+```mermaid
+flowchart LR
+    subgraph Local[Máquina do usuário]
+        UI[UI local]
+        W[Worker<br/>argumentos em lista, sem shell]
+        DB[(Job store SQLite<br/>metadados e IDs opacos)]
+        LF[Pasta local<br/>política de caminhos + snapshot]
+        ENV[.env / .env.local<br/>nunca versionados]
+    end
+    subgraph Externo[Rede não confiável]
+        SRC[Leitores de capítulo<br/>Webtoons, Comix, VortexScans, universal]
+        IMG[Hosts de imagem]
+    end
+    subgraph Backend[Backend autenticado]
+        EF[Supabase Edge Functions<br/>JWT do usuário]
+        DL[DeepL<br/>chave só no servidor]
+    end
+    UI -->|cria job| DB
+    DB --> W
+    UI -->|somente cliente loopback| LF
+    LF -->|fingerprint e referência opaca| W
+    W -->|HTTP/S validado, sem IP privado,<br/>redirect revalidado a cada hop| SRC
+    W -->|orçamento de bytes, tipo e decodificação| IMG
+    W -->|token em envelope DPAPI por job| EF
+    EF --> DL
+    ENV -.->|configuração| W
+```
+
+Cada seta que sai da máquina passa por uma das validações descritas abaixo; nenhuma delas é um
+sandbox de egress completo (ver [Limite importante](#limite-importante)).
 
 ## Princípios operacionais
 
@@ -94,7 +127,7 @@ existir).
 
 A política recusa caminhos relativos, traversal, UNC/dispositivos, `file:`, symlinks e junctions.
 Ela inspeciona somente arquivos diretos, valida bytes de imagem e limita tamanho/quantidade. Um
-snapshot de nomes gerados é criado em `local_sources/` da raiz de runtime (`%LOCALAPPDATA%\TradutorIAuntime` por padrão), fora da pasta de instalação; jobs, manifests de saída e
+snapshot de nomes gerados é criado em `local_sources/` da raiz de runtime (`%LOCALAPPDATA%\TradutorIA\runtime` por padrão), fora da pasta de instalação; jobs, manifests de saída e
 a UI recebem fingerprint, contagens e referência opaca, não o caminho original. A materialização
 posterior revalida o snapshot e não limpa uma saída não marcada como pertencente ao pipeline.
 

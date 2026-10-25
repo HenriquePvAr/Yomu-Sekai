@@ -1,6 +1,6 @@
 # Testes herméticos e smokes manuais
 
-> **Base verificada:** `5f482ce1` (branch `main`) · **Revisado em:** 2026-10-24
+> **Base verificada:** `fb8875e` (branch `main`) · **Revisado em:** 2026-10-25
 >
 > `tests/test_cleanup_fixed_mask_reconstruction_red.py` era um `KNOWN_INTENTIONAL_RED`. Desde
 > `5f482ce1` ele passa (2/2) e continua como contrato de reconstrução com máscara fixa; uma
@@ -28,6 +28,29 @@ O comando padrão garantido para a suíte hermética é:
 
 ```powershell
 python -m pytest
+```
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant PY as pytest
+    participant CF as conftest.py
+    participant OG as offline_test_guard
+    participant HR as hermetic_runtime
+    participant T as Teste
+    participant CH as Processo-filho Python
+    PY->>CF: carrega antes dos módulos de teste
+    CF->>CF: TRADUTOR_IA_HERMETIC_TEST_ENV=1<br/>desliga LaMa, re-OCR e TRANSLATE_SFX
+    CF->>OG: install_offline_network_guard
+    OG->>OG: socket.connect e getaddrinfo<br/>só aceitam loopback
+    OG->>OG: marca o ambiente e põe o repo no PYTHONPATH
+    CF->>HR: install_runtime_isolation_guard
+    HR->>HR: raiz de runtime temporária por processo
+    HR->>HR: sqlite3.connect, open, mkdir, rename<br/>e Popen recusam a raiz real
+    PY->>T: executa com snapshot de os.environ
+    T->>CH: subprocess Python
+    CH->>CH: sitecustomize.py reinstala o guard<br/>antes de importar o pipeline
+    T-->>PY: os.environ restaurado ao fim do teste
 ```
 
 Cada módulo descoberto por `unittest` importa o bootstrap offline como primeiro passo de

@@ -1,6 +1,6 @@
 # Publicação explícita de PDFs sociais + leitor autenticado
 
-> **Revisado em:** 2026-10-24 · **Base verificada:** `5f482ce1`.
+> **Revisado em:** 2026-10-25 · **Base verificada:** `fb8875e` (diagrama de fluxo convertido para Mermaid; demais seções sobre `5f482ce1`).
 > **Estado:** backend IMPLEMENTADO (`yomu/community/social_pdf_http.py`,
 > `social_pdf_publishing.py`, `chapter_asset_repository.py`, `social_content.py`), coberto por
 > testes offline. A UI social que expõe esses controles está **desligada** no cliente
@@ -14,16 +14,18 @@ comunidade".
 
 ## Fluxo
 
-```
-PDF local (resultado de um job de tradução)
-  → permanece só no computador
-
-Ação explícita "Publicar" (owner autenticado)
-  → backend valida o job (opaco), o manifest e o PDF (magic %PDF, in-root, tamanho, checksum)
-  → upload privado ao Google Drive (fluxo de comunidade existente, token do backend)
-  → publicação privada registrada server-side (SQLite)
-  → SOMENTE após o upload verificado: vínculo chapter → publicação
-  → SOMENTE no final: status do chapter = private | community
+```mermaid
+flowchart TD
+    A[PDF local<br/>resultado de um job de tradução] --> B{Ação explícita Publicar<br/>pelo owner autenticado?}
+    B -->|não| L[Permanece só no computador]
+    B -->|sim| C[Backend valida job opaco, manifest e PDF<br/>magic %PDF, in-root, tamanho, checksum]
+    C -->|falha| X[Arquivo continua local<br/>chapter invisível, sem vínculo parcial]
+    C --> D[Upload privado ao Google Drive<br/>fluxo de comunidade, token do backend]
+    D --> E[Publicação privada registrada<br/>server-side em SQLite]
+    E --> F{Upload verificado?<br/>publish-status = verified}
+    F -->|não| X
+    F -->|sim| G[Vínculo chapter para publicação<br/>ChapterAssetRepository]
+    G --> H[Por último: status do chapter<br/>private ou community]
 ```
 
 Se o usuário cancelar ou qualquer etapa falhar: o arquivo continua local, o chapter

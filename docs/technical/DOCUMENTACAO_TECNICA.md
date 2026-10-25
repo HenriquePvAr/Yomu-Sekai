@@ -1,10 +1,12 @@
 # Tradutor IA — Documentação Técnica
 
-> **Base verificada:** `5f482ce1` (branch `main`) em 2026-10-24 — caminhos de módulo, estados
-> de job, schema, comandos (`--help`), variáveis de ambiente, rotas e status reconferidos contra
-> o código. §16 e §25 foram verificados antes sobre `c994426f` + working tree (2026-10-23/24).
+> **Base verificada:** `fb8875e` (branch `main`) em 2026-10-25 — diagramas Mermaid de §15
+> (validação/retries/liquidação), §16 (três candidatos de preenchimento, escolha e portões,
+> tipografia) e §25 (paralelismo por página) conferidos contra `yomu/ocr/ocr_balloon.py`,
+> `yomu/pipeline/benchmark_pipeline.py` e `yomu/clean/ownership/font_fidelity.py`. O restante do
+> documento foi verificado sobre `5f482ce1` (2026-10-24); §16 e §25 antes sobre `c994426f`.
 > Seções marcadas como *snapshot histórico* (§28.1, §29, parte da §30) não foram revalidadas.
-> **Última revisão:** 2026-10-24
+> **Última revisão:** 2026-10-25
 > **Público:** desenvolvedores, mantenedores, suporte técnico e agentes automatizados.
 
 Documentos irmãos: [Guia do Usuário](../user/GUIA_DO_USUARIO.md) ·
@@ -1040,6 +1042,47 @@ PDF.
 executou. Os rótulos genéricos de estágio e timing **não nomeiam mais NVIDIA** — o provider
 efetivo é registrado, não presumido.
 
+### Validação, retries e liquidação (fluxo atual)
+
+Ordem real em `yomu/pipeline/benchmark_pipeline.py` (função principal do pipeline) e
+`yomu/ocr/ocr_balloon.py`. As chamadas ao provider só acontecem **antes** da liquidação; a
+renderização final recebe `translator=None`.
+
+```mermaid
+flowchart TD
+    A[Grupos da página<br/>process_pre_translation_page] --> V{Leituras divergentes<br/>na recuperação RapidOCR?}
+    V -->|sim| VV[recover_source_with_rapidocr_variants<br/>voto por variantes]
+    VV --> VW{Empate com 2+ votos?}
+    VW -->|sim| VL[_lexical_variant_winner<br/>menos não-palavras vence]
+    VW -->|não| VT{Voto confiável?}
+    VL --> VT
+    VT -->|sim| VA[_adopt_variant_vote<br/>group.text e linhas<br/>apply_variant_votes no reagrupamento]
+    VT -->|não| VR[material_variant_disagreement<br/>fonte não confiável, revisão]
+    V -->|não| SW
+    VA --> SW[resolve_split_word_ambiguity<br/>VISIT OR e afins]
+    VR --> SW
+    SW --> T[translate_many no provider<br/>SFX conhecido pelo glossário local]
+    T --> AP[apply_group_translations<br/>session_context.record_translations]
+    AP --> VAL[validate_and_retry_translations<br/>validação lexical, multilíngue e semântica]
+    VAL -->|inválido| RT[translate_strict<br/>até TRANSLATION_MAX_RETRIES, padrão 2]
+    RT --> VAL
+    VAL -->|persistiu inválido| PR[Fonte preservada ou<br/>candidato sob revisão]
+    VAL -->|válido| GF[Fallback de tradução Gemini<br/>só com adaptador injetado]
+    PR --> GF
+    GF --> PF[_resolve_layout_overflow_before_settlement<br/>render em memória por página, em paralelo]
+    PF --> OV{Overflow de layout<br/>ou inglês residual no render?}
+    OV -->|overflow| LO[_retry_layout_overflow_translations]
+    OV -->|residual| RS[_retry_residual_source_translations<br/>até 2 por grupo, RESIDUAL_SOURCE_MAX_RETRIES]
+    LO --> PF
+    RS --> PF
+    OV -->|nada ou sem progresso| ST[commit_translation<br/>liquidação do YK]
+    ST --> RN[Render final<br/>reaproveita o pré-voo se<br/>_translation_render_signature não mudou]
+```
+
+As chamadas ao provider dentro do pré-voo são serializadas por uma trava; só as renderizações
+das páginas se sobrepõem. O laço do pré-voo para quando nenhum grupo foi reenviado com sucesso
+ou depois de `TRANSLATION_MAX_RETRIES` rodadas.
+
 ## 16. Limpeza, inpainting e renderização
 
 
@@ -1058,15 +1101,17 @@ flowchart TD
     G --> H
     H -->|linhas retas| I[Proteção + continuação de estrutura]
     H -->|curvas| R[Estratégia recusada]
-    I --> J[Preenchimento]
+    I --> J[Preenchimento sobre a máscara crescida<br/>_grown_fill_mask: +2 px e<br/>resíduo de contorno _outline_residue_mask]
     H -->|sem conflito| J
-    J --> K[Clássico: constante / harmônico / Telea]
-    J --> L[LaMa local<br/>máscara +2 px, ajuste de tom local]
-    K --> M{Comparação com o anel<br/>tom local, ilhas, textura}
+    J --> K[classic<br/>constante / harmônico / Telea]
+    J --> L[learned<br/>LaMa local, ajuste de tom local]
+    J --> L2[surface<br/>ajuste quadrático do anel<br/>+ difusão cv2.INPAINT_NS]
+    K --> M{Ranking por _fill_consistency_parts<br/>tom local, ilhas, textura}
     L --> M
+    L2 --> M
     M --> N[Portões de reconstrução<br/>white patch, flat patch, costura,<br/>mancha, fantasma no contorno]
-    N -->|reprovado| N2[Tenta o outro candidato]
-    N2 -->|reprovado| R
+    N -->|reprovado| N2[Tenta o próximo de<br/>group.fill_alternatives]
+    N2 -->|todos reprovados| R
     N -->|aprovado| O[Verificador de remoção<br/>+ releitura por OCR]
     N2 -->|aprovado| O
     O -->|texto legível| R
@@ -1448,14 +1493,23 @@ Fidelidade tipográfica (mesma data, **IMPLEMENTADO**):
 
 ```mermaid
 flowchart LR
-    L[Linhas OCR do grupo] --> M[Medidas por linha<br/>inclinação, contraste de traço, peso]
-    M --> F{Contraste ≤ 0,8?}
+    L[Linhas OCR do grupo] --> M[Medidas por linha<br/>_per_line_glyph_measures<br/>inclinação, contraste de traço, peso]
+    M --> SL[Inclinação de consenso<br/>_consensus_slant]
+    M --> F{Contraste menor ou igual a 0,8?<br/>SERIF_STROKE_CONTRAST_MAX}
     F -->|sim| S[Família serifada]
     F -->|não| C[Sem serifa / quadrinho]
     M --> P{Peso negrito?}
-    P -->|sim| B[bold_dialogue<br/>Comic Relief Bold]
-    O[Pixels do letreiro] --> K[Cor de preenchimento e contorno medidas]
-    K --> R[Render com a cor do original]
+    P -->|sim| B[Papel bold_dialogue]
+    P -->|não| D[Papel pela classe da região<br/>balloon_dialogue, shout, ...]
+    B --> FR[role_font_paths<br/>assets/fonts primeiro<br/>depois fonte do Windows]
+    D --> FR
+    FR --> FT[Comic Relief Regular/Bold<br/>Bangers - SIL OFL 1.1]
+    O[Pixels do letreiro] --> K{Cor medida confiável<br/>e da mesma família de cor?}
+    K -->|sim| R[Render com a cor do original<br/>contorno só se o fill foi aceito]
+    K -->|não| PA[Paleta da classe estilizada]
+    FT --> R
+    PA --> R
+    SL --> R
 ```
 
 - `extract_glyph_style_profile` mede inclinação (`_consensus_slant`), contraste de traço
@@ -1532,6 +1586,42 @@ Décima primeira passada (reconstrução e regiões restantes, 2026-10-25, **IMP
 - Modos verificados com DeepL em 4 páginas: Tradução pronta (PDF), Apenas Clean
   (`images/clean/NNN.png`), Apenas tradução (`translation/translation.json`), Tradução + Clean,
   Completo (PDF + PSD).
+
+Escolha entre os três candidatos de preenchimento (`_apply_cleanup_mask`, `_remove_text_for_group`
+e `_enforce_visual_bounds` em `yomu/ocr/ocr_balloon.py`). O `learned` só existe com
+`CLEAN_LEARNED_TEXTURE_FILL` e modelo local disponível; o `surface` só com `CLEAN_SURFACE_FILL`
+(padrão `True`), fora da estratégia `lama_large`, e quando o anel prova um fundo suave. A pontuação
+soma os termos de `_fill_consistency_parts` exceto o degrau de borda (`step`), que só é reportado.
+
+```mermaid
+flowchart TD
+    A[Candidatos não nulos<br/>classic, learned, surface] --> B{Há mais de um?}
+    B -->|não| Z[Usa o único candidato]
+    B -->|sim| C[Pontua cada um<br/>_fill_consistency_parts sem step]
+    C --> D{learned e classic<br/>presentes?}
+    D -->|sim| E{classic menor que<br/>0,8 x learned?}
+    E -->|sim| F[classic]
+    E -->|não| G[learned]
+    D -->|não| H[o que existir]
+    F --> I{surface menor ou igual a<br/>0,9 x melhor dos outros?}
+    G --> I
+    H --> I
+    I -->|sim| J[surface]
+    I -->|não| K[mantém a escolha]
+    J --> L[Restantes em group.fill_alternatives<br/>ordenados por pontuação<br/>registro em group.fill_choice]
+    K --> L
+    Z --> M
+    L --> M[_reconstruction_gate_failure]
+    M -->|reprovado e há alternativa| N[Próxima alternativa<br/>fill_switched_by_gate]
+    N --> M
+    M -->|reprovado sem alternativa| O[mask_valid = False<br/>região fica para revisão]
+    M -->|aprovado| P[_enforce_visual_bounds]
+    P --> Q{broad_rectangular_mask<br/>fora de balão liso<br/>e fora de source_scoped?}
+    Q -->|não| S[Aceito]
+    Q -->|sim| T{_broad_mask_reconstructed<br/>escolhido learned ou surface<br/>e mask_valid?}
+    T -->|sim| S
+    T -->|não| U[broad_rectangular_or_polygonal_mask]
+```
 
 ## 17. Qualidade, validação física e proveniência
 
@@ -2989,6 +3079,29 @@ commit: **~405,82s (~6min46s)** contra a classe histórica de **~489,73s** — m
 
 Achado dominante restante: a inferência nativa do OCR domina o tempo. Ganhos futuros
 relevantes tendem a vir daí, não da orquestração Python.
+
+### Paralelismo por página (estado atual)
+
+`PIPELINE_PAGE_WORKERS` (`yomu/config/settings.py`, padrão `auto`) decide quantas páginas rodam
+ao mesmo tempo. `auto` usa `_auto_page_workers`: um terço dos núcleos lógicos e uma página por
+~3 GB de memória livre, entre 1 e 4 (`MAX_PIPELINE_PAGE_WORKERS`); valor explícito fora de 1–4
+falha com `ValueError`.
+
+```mermaid
+flowchart TD
+    W[_pipeline_page_workers<br/>auto ou 1-4] --> SN[_share_native_threads<br/>cv2 e torch com núcleos / workers]
+    SN --> PRE[process_pre_translation_pages<br/>pool pre-page]
+    PRE --> OCR[OCR, recuperação e voto por variantes<br/>RapidOCR serializado por<br/>_RAPIDOCR_INFERENCE_LOCK]
+    OCR --> ORD1[Resultados ordenados por página<br/>mescla na thread principal]
+    ORD1 --> TR[Tradução e retries<br/>thread principal]
+    TR --> PF[Pré-voo de layout<br/>pool preflight-page<br/>um ProvenanceRecorder por página]
+    PF --> LK[Chamadas ao provider<br/>uma por vez, threading.Lock]
+    LK --> SET[Liquidação]
+    SET --> POST[process_post_translation_pages<br/>pool post-page, translator=None]
+    POST --> ORD2[Páginas ordenadas por índice<br/>PDF e artefatos]
+```
+
+Com `workers == 1` os três estágios usam o caminho sequencial direto (sem pool).
 
 ## 26. Logs, saúde e diagnóstico
 

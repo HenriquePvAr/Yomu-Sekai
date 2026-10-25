@@ -1,6 +1,6 @@
 # Fronteira de autenticação e autorização da comunidade
 
-> **Revisado em:** 2026-10-24 · **Base verificada:** `5f482ce1`.
+> **Revisado em:** 2026-10-25 · **Base verificada:** `fb8875e`.
 > **Estado:** fronteira de autorização IMPLEMENTADA no backend (`yomu/community/`). A UI da
 > Comunidade está desligada no cliente (`COMMUNITY_ENABLED = false` em
 > `static/social_community.js`); as rotas `/api/community/*` continuam montadas.
@@ -36,6 +36,25 @@ implementação por `AUTH_PROVIDER` ou `COMMUNITY_AUTH_PROVIDER`; sem valor, o p
 - `local_test` — apenas testes.
 
 Configuração incompleta falha fechada, sem queda silenciosa para o provider local.
+
+```mermaid
+flowchart TD
+    A[get_auth_provider<br/>uma vez por processo] --> B[build_auth_provider]
+    B --> C{AUTH_PROVIDER ou<br/>COMMUNITY_AUTH_PROVIDER}
+    C -->|vazio ou supabase| S[SupabaseAuthProvider<br/>SupabaseAuthConfig.from_env]
+    C -->|local| L[LocalSessionAuthProvider<br/>só loopback]
+    C -->|better_auth| BA[BetterAuthProvider<br/>não ativado]
+    C -->|local_test| T[LocalTestAuthProvider<br/>só testes]
+    C -->|outro valor| E[AuthConfigurationError]
+    S -->|configuração incompleta| E
+    S --> R[Rota recebe RequestPrincipal]
+    L --> R
+    BA --> R
+    T --> R
+    R --> D{authenticated?}
+    D -->|não| AN[Principal anônimo explícito<br/>rotas protegidas negam]
+    D -->|sim| RL[require_role / require_csrf<br/>decidem a mutação]
+```
 
 ## Sessão local temporária
 

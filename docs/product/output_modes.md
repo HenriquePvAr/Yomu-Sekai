@@ -3,7 +3,7 @@
 > Estado: **IMPLEMENTADO** — os presets executam de verdade e têm **interface**:
 > `Tradução pronta`, `Apenas Clean`, `Completo` (preset `profissional`), `Apenas tradução`,
 > `Tradução + Clean` e `Personalizado`; `Apenas download` é escolhido em "Modo de processamento".
-> **Base verificada:** `5f482ce1` · **Revisado em:** 2026-10-24.
+> **Base verificada:** `fb8875e` · **Revisado em:** 2026-10-25.
 
 ## Interface — "O que você quer gerar?" (divulgação progressiva)
 
@@ -75,6 +75,58 @@ como um job **concluído e útil**, não como falha por ausência de PDF/PNG.
 - **YK:** permanece ligado a *provider success + tradução válida persistida*, **nunca** a um
   artefato visual. Falha antes do provedor → 0 YK. Provedor falhou → 0 YK. Retry/re-export
   com alvo persistido → 0 provedor, 0 YK adicional.
+
+## Do preset aos artefatos
+
+Mapa verificado em `yomu/runtime/output_plan.py` (`PRESETS`, `_REQUIRES`, `_close_dependencies`,
+`plan_artifact_types`, `output_format`) e na escrita de `translation/translation.json` em
+`yomu/pipeline/benchmark_pipeline.py`.
+
+```mermaid
+flowchart LR
+    subgraph Presets
+        TP[Tradução pronta<br/>traducao_pronta]
+        AC[Apenas Clean<br/>apenas_clean]
+        AT[Apenas tradução<br/>apenas_traducao]
+        TC[Tradução + Clean<br/>traducao_clean]
+        CO[Completo<br/>profissional]
+        DL[Apenas download<br/>download]
+    end
+    subgraph Operações
+        T[translate]
+        C[clean]
+        Y[typeset]
+        P[pdf]
+        S[psd]
+        Q[qc]
+    end
+    TP --> T & C & Y & P
+    AC --> C
+    AT --> T
+    TC --> T & C
+    CO --> T & C & Y & P & S & Q
+    DL --> N[nenhuma<br/>download_only]
+    subgraph Artefatos
+        PDF[PDF final<br/>final_pdf]
+        TI[images/translated/NNN.png<br/>translated_image]
+        CI[images/clean/NNN.png<br/>clean_image]
+        TJ[translation/translation.json<br/>translation_manifest]
+        PSD[psd/NNN.psd<br/>ORIGINAL, CLEAN, TEXT]
+        QC[quality_report e<br/>qc/review_manifest.json]
+    end
+    Y --> TI
+    P --> PDF
+    C --> CI
+    S --> PSD
+    Q --> QC
+    T -.->|sem clean, typeset, pdf, psd| TJ
+    T -.->|com clean e sem typeset| TJ
+```
+
+Regras de fechamento: `typeset` puxa `translate`; `psd` puxa `translate` + `typeset`; `qc` puxa
+`translate` + `clean` + `typeset`; `pdf` sem `clean` nem `typeset` é descartado. `psd`/`qc` mudam
+o perfil para `professional_qc`. O formato é `psd` se houver PSD, senão `pdf`, senão
+`translation` (só tradução), senão `png`.
 
 ## Regras de dependência (aplicadas por `normalize_output_plan`)
 

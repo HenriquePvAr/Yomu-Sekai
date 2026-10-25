@@ -1,6 +1,6 @@
 # Saídas e artefatos
 
-> **Base verificada:** `5f482ce1` · **Revisado em:** 2026-10-24
+> **Base verificada:** `fb8875e` · **Revisado em:** 2026-10-25
 
 Este documento descreve o que os perfis atuais solicitam e como identificar os arquivos de uma
 execução. Na interface atual o usuário não escolhe o perfil diretamente: ele escolhe um cartão em
@@ -21,6 +21,26 @@ originais, sem OCR, tradução/provider ou YK, e força o perfil Automático sem
 artefatos de tradução.
 
 ## Artefatos e caminhos
+
+```mermaid
+flowchart TD
+    O[Raiz do output do run] --> F[final/ ou raiz<br/>PDF traduzido]
+    O --> IT[images/translated/NNN.png]
+    O --> IC[images/clean/NNN.png]
+    O --> PS[psd/NNN.psd]
+    PS --> G1[grupo ORIGINAL]
+    PS --> G2[grupo CLEAN]
+    PS --> G3[grupo TEXT<br/>Type Layers nativas]
+    O --> QR[quality_report.json/.html<br/>e qc/ no resolver V2]
+    O --> RM[qc/review_manifest.json]
+    O --> TJ[translation/translation.json]
+    O --> AM[artifact_manifest.json<br/>estado por artefato:<br/>requested, produced, skipped,<br/>unavailable, failed]
+    AM -.->|registra| F & IT & IC & PS & QR & RM & TJ
+```
+
+Quais desses arquivos um run deve produzir depende do plano de saída (ver o diagrama em
+[modos de saída](product/output_modes.md#do-preset-aos-artefatos)); o `artifact_manifest.json`
+é a autoridade sobre o que de fato foi produzido.
 
 O Artifact Contract V2 (`yomu/runtime/artifact_contract.py`) define os caminhos canônicos relativos à raiz do
 output:

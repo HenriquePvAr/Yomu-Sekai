@@ -1,6 +1,6 @@
 # Autenticação Supabase (community)
 
-> **Estado:** IMPLEMENTADO (provedor padrão). **Revisado em:** 2026-10-24 · **Base verificada:** `5f482ce1`.
+> **Estado:** IMPLEMENTADO (provedor padrão). **Revisado em:** 2026-10-25 · **Base verificada:** `fb8875e`.
 
 ## Backend ativo após o cutover local (2026-09-29)
 
@@ -81,6 +81,29 @@ Implementação: `yomu/auth/supabase_auth.py` (`SupabaseAuthConfig`, `SupabaseAu
    exige `sub`;
 5. só então cria `RequestPrincipal(authenticated=True, auth_source="supabase")` com
    `user_id = sub` e **role comum** (nunca admin/moderator vindos de metadata editável).
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant B as Browser (SDK supabase-js)
+    participant API as Backend local
+    participant P as SupabaseAuthProvider
+    participant J as JWKS do projeto
+    B->>API: GET /api/community/auth/config
+    API-->>B: URL + publishable key
+    B->>B: login pelo SDK, sessão guardada e renovada
+    B->>API: chamada com Authorization Bearer
+    API->>P: verificar token
+    P->>P: header estrito, alg ES256 ou RS256, kid obrigatório
+    P->>J: chave por kid (cache 300 s, 1 refresh por kid novo)
+    J-->>P: chave pública
+    P->>P: assinatura, iss, aud, exp, nbf, sub
+    alt token válido
+        P-->>API: RequestPrincipal autenticado, role comum
+    else qualquer falha, inclusive JWKS
+        P-->>API: não autenticado (falha fechada)
+    end
+```
 
 O JWKS é buscado sob demanda (nunca no import), com timeout, cache com TTL (300 s), limite de
 tamanho e no máximo um refresh por rotação de `kid` (sem loop de refresh). Qualquer falha

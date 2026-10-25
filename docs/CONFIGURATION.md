@@ -2,7 +2,7 @@
 
 Esta referência descreve as opções reais do `.env.example` e as poucas variáveis adicionais consumidas diretamente pelo código atual.
 
-> **Base verificada:** `5f482ce1` (branch `main`) · **Revisado em:** 2026-10-24
+> **Base verificada:** `fb8875e` (branch `main`) · **Revisado em:** 2026-10-25
 >
 > [Voltar ao README](../README.md)
 
@@ -14,6 +14,25 @@ não versionado), que pode sobrescrever valores do `.env`. Variáveis já presen
 do processo antes do carregamento sempre têm precedência; valores ausentes ou vazios usam o
 default do código (`yomu/config/settings.py`, que chama esse helper ao ser importado). Em
 testes herméticos (`TRADUTOR_IA_HERMETIC_TEST_ENV=1`) nenhum arquivo é carregado.
+
+```mermaid
+flowchart TD
+    A[import de yomu/config/settings.py] --> B[load_local_environment<br/>yomu/runtime/local_environment.py]
+    B --> H{TRADUTOR_IA_HERMETIC_TEST_ENV = 1?}
+    H -->|sim| N[Nenhum arquivo carregado]
+    H -->|não| P[Snapshot das variáveis<br/>já presentes no processo]
+    P --> E{.env na raiz do projeto?}
+    E -->|sim| V1[Valida sintaxe<br/>erro sem valor nem caminho]
+    V1 --> L1[Carrega .env<br/>sem sobrescrever o processo]
+    E -->|não| L2
+    L1 --> L2{.env.local existe?}
+    L2 -->|sim| V2[Valida sintaxe]
+    V2 --> L3[Carrega .env.local<br/>sobrescreve valores do .env]
+    L3 --> R[Restaura as variáveis<br/>do snapshot do processo]
+    L2 -->|não| D
+    R --> D[settings.py lê cada variável<br/>ausente ou vazia usa o default do código]
+    N --> D
+```
 
 Valores booleanos verdadeiros aceitos: `1`, `true`, `yes` e `on`, sem distinção de caixa. Qualquer outro valor não vazio é interpretado como falso.
 

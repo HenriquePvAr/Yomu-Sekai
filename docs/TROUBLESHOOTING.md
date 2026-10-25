@@ -2,12 +2,13 @@
 
 Este guia reúne problemas comprovados e caminhos de diagnóstico não destrutivos. Preserve os relatórios antes de alterar configuração ou repetir uma execução.
 
-> **Base verificada:** `5f482ce1` (branch `main`) · **Revisado em:** 2026-10-24
+> **Base verificada:** `fb8875e` (branch `main`) · **Revisado em:** 2026-10-25
 >
 > [Voltar ao README](../README.md)
 
 ## Índice rápido
 
+- [Árvore de decisão](#árvore-de-decisão)
 - [Ambiente virtual](#o-ambiente-virtual-não-ativa)
 - [Dependências](#import-ou-dependência-ausente)
 - [PaddleOCR](#paddleocr-não-carrega)
@@ -19,6 +20,27 @@ Este guia reúne problemas comprovados e caminhos de diagnóstico não destrutiv
 - [Launcher](#a-execução-foi-interrompida)
 - [Cache](#cache-parece-incompatível)
 - [PDF](#o-pdf-não-foi-gerado)
+
+## Árvore de decisão
+
+```mermaid
+flowchart TD
+    A[Qual é o sintoma?] --> B{A UI abre em<br/>http://127.0.0.1:8080?}
+    B -->|não| B1[A UI não abre]
+    B -->|sim| C{Login funciona?}
+    C -->|não| C1[O login falha]
+    C -->|sim| D{Análise da fonte concluiu?}
+    D -->|não| D1[A análise da fonte falhou<br/>ou Chrome/ChromeDriver]
+    D -->|sim| E{Tradução iniciou?}
+    E -->|não| E1[A tradução falha ou não inicia<br/>licença, backend, provider_mismatch]
+    E -->|sim| F{Como o job terminou?}
+    F -->|review_required| F1[Revisão pendente<br/>quality_report e review_manifest]
+    F -->|failed / erro| F2[O PDF não foi gerado<br/>progress.json, timing_report.json]
+    F -->|interrompido| F3[A execução foi interrompida<br/>exit_code.txt, launcher_events.jsonl]
+    F -->|lento ou travou| F4[Pouca memória]
+    F2 --> G{Import ou OCR ausente<br/>no stderr?}
+    G -->|sim| G1[Dependência, RapidOCR ou PaddleOCR]
+```
 
 ## Diagnóstico inicial
 
