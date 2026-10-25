@@ -393,7 +393,7 @@ def test_compared_fills_keep_the_one_consistent_with_the_ring(monkeypatch):
         assert set(group.fill_choice) >= {"chosen", "classic", "learned", "terms"}
         if expected:  # a flat (11, 22, 33) block in random texture loses
             assert group.fill_choice["chosen"] == expected
-            assert group.fill_alternative is not None
+            assert group.fill_alternatives
 
 
 def _outlined_bars(bottom_extra=4, art_left=False):

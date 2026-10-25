@@ -111,6 +111,7 @@ def test_render_residual_english_is_retranslated_once(answer, accepted):
     assert "GOALONE" in calls[0]
     assert retried == (1 if accepted else 0)
     assert (group.translation == answer) is accepted
-    # One request per region, however many preflight passes follow.
+    # At most two requests per region, however many preflight passes follow.
+    bp._retry_residual_source_translations([group], Translator(), records)
     assert bp._retry_residual_source_translations([group], Translator(), records) == 0
-    assert len(calls) == 1
+    assert len(calls) == (1 if accepted else 2)

@@ -137,7 +137,8 @@ Duas flags de tipografia existem só no código (fora do template, como os demai
 finos de CLEAN/render), ambas com default `True`: `RENDER_FIT_BALLOON_SHAPE` quebra a tradução
 seguindo o formato do balão fechado quando isso permite uma fonte maior, e
 `RENDER_MATCH_SOURCE_SLANT` inclina o texto como o lettering original quando a fonte escolhida
-é reta.
+é reta. Também só no código: `CLEAN_SURFACE_FILL` (default `True`) acrescenta o preenchimento
+de degradê suave como candidato da limpeza (ver Documentação Técnica §16).
 
 `FONT_PATH` também é suportada fora do template. Quando vazia, o código usa a resolução de fonte existente; quando definida, deve apontar para um arquivo local válido.
 

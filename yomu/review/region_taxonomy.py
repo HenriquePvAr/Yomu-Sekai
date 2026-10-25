@@ -99,6 +99,7 @@ _CREDIT_ATTRIBUTION_RE = re.compile(
 _DIALOGUE_LABELS = frozenset({"speech", "dialogue", "thought", "narration"})
 _WATERMARK_HINT_RE = re.compile(r"\b(read|scans?|toon|manga|manhwa|webtoon|comic|\.(com|net))\b", re.I)
 _PROMO_COMPACT_HINTS = (
+    "tobecontinued",
     "readthisseriesfirstat",
     "readfirstat",
     "unlockuptothelatestchapter",
@@ -145,8 +146,23 @@ def looks_like_url(text: str) -> bool:
     return bool(_URL_RE.search(str(text or "")))
 
 
+# A staff roll in mixed case, role glued to the name or before a colon:
+# "ArtPlanA AdaptationPyoPyo", "Story: X". Case-sensitive on purpose - all-caps
+# dialogue ("A WORK OF ART EXACTLY") never has the Title-case role shape.
+_STAFF_ROLE_RE = re.compile(
+    r"(?<![A-Za-z])(Art|Story|Adaptation|Illustration|Illustrator|Writer|Artist|Script|"
+    r"Colou?rs?|Colou?rist|Letter(?:er|ing)|Original|Lettering|Editor)(?::\s*|\s*)(?=[A-Z][A-Za-z])"
+)
+
+
+def _staff_roll(body: str) -> bool:
+    return len(_STAFF_ROLE_RE.findall(body)) >= 2
+
+
 def looks_like_credit(text: str) -> bool:
     body = str(text or "")
+    if _staff_roll(body):
+        return True
     compact = _compact_alnum(body)
     words = _words(body)
     comma_credit_roll = (
@@ -162,6 +178,8 @@ def looks_like_credit(text: str) -> bool:
 def looks_like_strong_credit(text: str) -> bool:
     """Credit evidence that ordinary dialogue cannot produce by itself."""
     body = str(text or "")
+    if _staff_roll(body):
+        return True
     compact = _compact_alnum(body)
     words = _words(body)
     comma_credit_roll = (

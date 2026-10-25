@@ -45,6 +45,7 @@ from yomu.ocr.ocr_balloon import (
     analyze_image_array,
     apply_rapidocr_region_recovery,
     apply_variant_votes,
+    resolve_split_word_ambiguity,
     apply_selective_ocr_fallbacks,
     apply_speech_container_reocr,
     apply_group_translations,
@@ -2108,6 +2109,8 @@ def process_pre_translation_page(
                     page_index=state["index"],
                 )
                 apply_variant_votes(groups)
+    with _RAPIDOCR_INFERENCE_LOCK:
+        resolve_split_word_ambiguity(original, groups, ocr_lang, state["index"])
     selective_started = time.perf_counter()
     with profile_step(
         "pipeline.selective_ocr_fallbacks",
@@ -4644,6 +4647,9 @@ _RESIDUAL_RENDER_REASONS = frozenset({
 })
 
 
+RESIDUAL_SOURCE_MAX_RETRIES = 2
+
+
 def _render_residual_source_tokens(group):
     """English tokens the post-render OCR still read on this group's render."""
     tokens = []
@@ -4670,9 +4676,12 @@ def _retry_residual_source_translations(groups, translator, retry_records, force
     retried = 0
     for group in groups:
         residual = _render_residual_source_tokens(group)
-        if not residual or getattr(group, "_residual_source_retry_done", False):
+        # Up to two requests: the provider's answer varies, and a second one
+        # often drops the word the first one kept.
+        tries = int(getattr(group, "_residual_source_retries", 0) or 0)
+        if not residual or tries >= RESIDUAL_SOURCE_MAX_RETRIES:
             continue
-        group._residual_source_retry_done = True
+        group._residual_source_retries = tries + 1
         previous = str(getattr(group, "translation", "") or getattr(group, "translation_candidate", "") or "").strip()
         source = str(getattr(group, "canonical_source_text", "") or group.text)
         try:
@@ -4710,6 +4719,7 @@ def _retry_residual_source_translations(groups, translator, retry_records, force
         if accepted:
             group.translation_retry_count += 1
             group.translation_validation_reason = "residual_retry_ok"
+            group._residual_source_retries = RESIDUAL_SOURCE_MAX_RETRIES
             retried += 1
         else:
             group.translation = previous

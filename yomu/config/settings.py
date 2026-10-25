@@ -512,6 +512,8 @@ CLEAN_LEARNED_LAST_RESORT = _env_bool("CLEAN_LEARNED_LAST_RESORT", True)
 # When the learned model is available, build both the classic and the learned
 # reconstruction and keep the one that agrees better with the surrounding art.
 CLEAN_COMPARE_FILLS = _env_bool("CLEAN_COMPARE_FILLS", True)
+# Fitted gradient surface as a third fill candidate (smooth glows/skies behind lettering).
+CLEAN_SURFACE_FILL = _env_bool("CLEAN_SURFACE_FILL", True)
 REJECT_FLAT_PATCH_ON_TEXTURED_ART = _env_bool(
     "REJECT_FLAT_PATCH_ON_TEXTURED_ART",
     True,

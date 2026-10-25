@@ -1492,6 +1492,37 @@ Décima passada (mesmo capítulo, 2026-10-25, **IMPLEMENTADO**):
 - Medido nas 33 páginas problemáticas com DeepL: traduzidos 92 → 102, sem tradução 28 → 11,
   marcados para revisão 50 → 32.
 
+Décima primeira passada (reconstrução e regiões restantes, 2026-10-25, **IMPLEMENTADO**):
+
+- Terceiro candidato de preenchimento `surface` (`_surface_fill`, `CLEAN_SURFACE_FILL`, padrão
+  `True`): um ajuste quadrático robusto do anel prova que o fundo é um degradê suave (resíduo
+  ≤ 9, ≥ 93 % do anel no ajuste, nenhuma estrutura atravessando o anel até a máscara) e o
+  preenchimento é difundido da borda (`cv2.INPAINT_NS`) com grão do nível do entorno; em fundo
+  uniforme só é oferecido quando a máscara absorveu resíduo de contorno. Os candidatos
+  (`classic`, `learned`, `surface`) são ordenados pela consistência com o anel e o portão de
+  reconstrução tenta cada um (`group.fill_alternatives`) antes de recusar.
+- Máscara de preenchimento compartilhada `_grown_fill_mask`: +2 px e a borda externa suave do
+  contorno (`_outline_residue_mask`) dentro da caixa do grupo — remove o fantasma do contorno.
+- `dark_blotch`: tom escuro preenchido que casa com um fundo liso logo fora da máscara, sem arte
+  clara continuando para fora dela, é o fundo restaurado, não mancha.
+- Reenvio por inglês residual: até 2 vezes (`RESIDUAL_SOURCE_MAX_RETRIES`).
+- `source_ocr_suspicious`: palavra do dicionário não é lixo de OCR (IRONCLAD); um token que
+  ≥ 2 releituras por variante leem igual é um nome real (HG FASHION).
+- Créditos: rol de equipe colado em caixa mista ("ArtPlanA AdaptationPyoPyo") e "To be
+  continued" são `credit_preserve`; nomes próprios nunca são traduzidos.
+- Rótulo de som/ação sozinho que não pode ser desenhado (GRIN) mantém o letreiro
+  (`sfx_original_lettering_kept`); "VISIT OR" e afins: texto curto cujas palavras vizinhas
+  formam uma palavra do dicionário é decidido pelo voto por variantes
+  (`resolve_split_word_ambiguity`).
+- Som/nome preservado por eco (`source_echo_preserved_original`) não carrega marca de revisão
+  de etapa anterior; token suspeito que são palavras coladas ("LEATHERTHIS") é separado pelo
+  dicionário na fonte da nova tentativa.
+- Medido nas 33 páginas com DeepL (antes destas duas últimas mudanças): traduzidos 102 → 104,
+  não selecionados 1 → 0, revisão 10 → 6.
+- Modos verificados com DeepL em 4 páginas: Tradução pronta (PDF), Apenas Clean
+  (`images/clean/NNN.png`), Apenas tradução (`translation/translation.json`), Tradução + Clean,
+  Completo (PDF + PSD).
+
 ## 17. Qualidade, validação física e proveniência
 
 O sistema separa **sucesso técnico** de **aprovação de qualidade**. Um PDF pode existir e a

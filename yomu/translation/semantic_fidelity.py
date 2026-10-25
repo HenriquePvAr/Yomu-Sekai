@@ -815,9 +815,16 @@ def suspicious_source_tokens(source, candidate, *, known_entities=(), is_source_
             or _known_word(token, is_source_word)
         ):
             continue
-        if token in candidate_words and _IMPROBABLE_TOKEN.match(token):
+        if token in candidate_words and _IMPROBABLE_TOKEN.match(token) and not _dictionary_word(token):
             suspicious.append(token)
     return tuple(token.upper() for token in suspicious)
+
+
+def _dictionary_word(token):
+    """A real English word is not OCR garbage, however its consonants cluster ("IRONCLAD")."""
+    from yomu.review.region_taxonomy import is_english_word
+
+    return is_english_word(token)
 
 
 # --- repairing a source the detector just called untrustworthy ----------------

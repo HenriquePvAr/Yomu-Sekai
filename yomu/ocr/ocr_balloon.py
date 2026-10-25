@@ -2433,6 +2433,16 @@ def _finalize_proper_name_only(group, candidate, *, proven=False):
     return True
 
 
+def _is_sound_lettering(group):
+    """A sound effect, or a lone sound/action label lettered as art ("GRIN")."""
+    if group.classification == "sfx":
+        return True
+    from yomu.translation.sfx_glossary import translate_sfx
+
+    words = re.findall(r"[A-Za-z]+", str(group.text or ""))
+    return 0 < len(words) <= 2 and translate_sfx(group.text) is not None
+
+
 def _finalize_translation_failure(
     group,
     reason,
@@ -2441,7 +2451,7 @@ def _finalize_translation_failure(
     rejected_candidate=None,
     validator_reason="",
 ):
-    if reason == "translation_not_rendered_after_validation" and group.classification == "sfx":
+    if reason == "translation_not_rendered_after_validation" and _is_sound_lettering(group):
         # A sound effect whose translation could not be drawn safely keeps its
         # own lettering - part of the art, nothing a reader loses - instead of
         # becoming a review item.
@@ -2717,6 +2727,9 @@ def _render_analyzed_image(
                 # ``proper_name_only`` survive: the precedence policy in
                 # ``_set_translation_terminal_state`` keeps the specific reason and only
                 # takes this generic one when none was proven earlier.
+                # A clean, no-review preserve: a flag an earlier stage raised on
+                # the same lone token does not survive it.
+                group.manual_review_required = False
                 _set_translation_terminal_state(
                     group,
                     "preserved_original",
@@ -6024,6 +6037,46 @@ def _adopt_variant_vote(group, vote):
               "agreement_count": int(vote.get("agreement_count") or 0)}
     for line in group.lines:
         line.metadata = {**(line.metadata or {}), "variant_vote": marker}
+
+
+def _split_word_ambiguous(text):
+    """A short text where two neighbouring words also spell one word ("VISIT OR")."""
+    words = re.findall(r"[A-Za-z]+", str(text or ""))
+    if not 2 <= len(words) <= 4:
+        return False
+    return any(
+        len(left + right) >= 5 and region_taxonomy.is_english_word(left + right)
+        for left, right in zip(words, words[1:])
+    )
+
+
+def resolve_split_word_ambiguity(original_bgr, groups, ocr_lang, page_index=None):
+    """Let the variant vote decide a short read that may have split one word."""
+    resolved = 0
+    engine = None
+    for group in groups:
+        if group.ignored or not _split_word_ambiguous(group.text):
+            continue
+        if engine is None:
+            engine = OCREngine(ocr_lang, engine="rapidocr", fallback_engine="")
+        probe = TextGroup(group_id=group.group_id, lines=list(group.lines), text=group.text)
+        vote = recover_source_with_rapidocr_variants(
+            original_bgr, probe, ocr_lang, page_index=page_index, engine=engine
+        )
+        canonical = clean_ocr_text(str(vote.get("canonical_source") or ""))
+        own = len(_source_recovery_normalized(group.text))
+        if (
+            vote.get("trusted")
+            and canonical
+            and _source_recovery_normalized(canonical) == _source_recovery_normalized(group.text)
+            and canonical.split() != group.text.split()
+            and len(_source_recovery_normalized(canonical)) <= own * 1.3 + 4
+        ):
+            _adopt_variant_vote(group, vote)
+            resolved += 1
+    if resolved:
+        record_count("rapidocr_recovery.split_word_resolved", resolved, page_index=page_index)
+    return resolved
 
 
 def apply_variant_votes(groups):
@@ -9929,6 +9982,32 @@ def _source_recovery_context(source_recovery_context, group):
     )
 
 
+def _suspicious_tokens_confirmed_by_reads(group, reason, source_recovery_context):
+    """True when independent variant reads all agree on the suspicious tokens."""
+    if not str(reason or "").startswith(semantic_fidelity.SOURCE_OCR_SUSPICIOUS):
+        return False
+    tokens = semantic_fidelity.suspicious_source_tokens(
+        group.text,
+        group.translation_candidate or group.translation,
+        known_entities=group_proper_name_spans(group),
+        is_source_word=_token_is_source_vocabulary,
+    )
+    context = _source_recovery_context(source_recovery_context, group)
+    if not tokens or not context or context.get("original_bgr") is None:
+        return False
+    probe = TextGroup(group_id=group.group_id, lines=list(group.lines), text=group.text)
+    record = recover_source_with_rapidocr_variants(
+        context["original_bgr"], probe, context.get("ocr_lang", "eng"),
+        page_index=context.get("page_index"), engine=context.get("engine"),
+    )
+    reads = [
+        re.sub(r"[^A-Z]", "", str(attempt.get("text") or "").upper())
+        for attempt in record.get("attempts") or []
+        if float(attempt.get("confidence") or 0.0) >= 0.55
+    ]
+    return all(sum(token in read for read in reads) >= 2 for token in tokens)
+
+
 def _ensure_local_source_recovery_before_retry(group, reason, source_recovery_context):
     if not str(reason or "").startswith(semantic_fidelity.SOURCE_SEGMENTATION_INCOMPLETE):
         return None
@@ -9993,6 +10072,16 @@ def _canonical_retry_source(group, reason):
         source_repair_vocabulary(context),
         protected=group_proper_name_spans(group),
     )
+    # A suspicious token that is several dictionary words glued together
+    # ("LEATHERTHIS") is split instead; the provider then reads real words.
+    for token in suspicious:
+        if any(token in str(repair) for repair in repairs):
+            continue
+        pieces = region_taxonomy.segment_words(token)
+        if pieces and len(pieces) > 1:
+            spaced = " ".join(pieces)
+            canonical = re.sub(re.escape(token), spaced, canonical, count=1, flags=re.I)
+            repairs = tuple(repairs) + (f"{token}->{spaced}:dictionary_segmentation",)
     if not repairs:
         return group.text
     group.source_repairs = tuple(repairs)
@@ -10114,6 +10203,13 @@ def validate_and_retry_translations(
         # hold (which the finalize rescue would ship as PT-BR under review) into an
         # untranslated-source failure that leaves English on the page.
         pre_retry_reason = reason
+        if _suspicious_tokens_confirmed_by_reads(group, reason, source_recovery_context):
+            # Every "suspicious" token reads the same in independent variant
+            # reads: it is a real name ("HG FASHION"), carried verbatim on
+            # purpose, not OCR garbage.
+            group.translation_valid = True
+            group.translation_validation_reason = "ok"
+            continue
         _ensure_local_source_recovery_before_retry(
             group,
             reason,
@@ -12814,22 +12910,22 @@ def _remove_text_for_group(
     gate_metrics = {}
     failure = _reconstruction_gate_failure(
         original_bgr, cleaned, group, cleanup_mask, background_type, strategy, gate_metrics)
-    alternative = getattr(group, "fill_alternative", None)
-    group.fill_alternative = None
-    if failure and alternative is not None:
-        # The other candidate (classic vs learned) may pass where the chosen one
-        # did not: an editor tries the other tool before giving up on the region.
+    alternatives = list(getattr(group, "fill_alternatives", None) or [])
+    group.fill_alternatives = []
+    for name, alternative in alternatives if failure else ():
+        # Another candidate may pass where the chosen one did not: an editor
+        # tries the other tools before giving up on the region.
         alternative_metrics = {}
         if _reconstruction_gate_failure(original_bgr, alternative, group, cleanup_mask,
                                         background_type, strategy, alternative_metrics) is None:
             metrics["fill_switched_by_gate"] = failure
             if isinstance(getattr(group, "fill_choice", None), dict):
-                group.fill_choice["chosen"] = "classic" if group.fill_choice.get("chosen") == "learned" else "learned"
+                group.fill_choice["chosen"] = name
                 group.fill_choice["switched_by_gate"] = failure
                 group.spatial_harmonic_gate_rejected = bool(
-                    group.fill_choice["chosen"] == "classic"
-                    and group.fill_choice.get("classic_spatial_gate_rejected"))
+                    name == "classic" and group.fill_choice.get("classic_spatial_gate_rejected"))
             cleaned, gate_metrics, failure = alternative, alternative_metrics, None
+            break
     metrics.update(gate_metrics)
     if failure:
         metrics["mask_valid"] = False
@@ -13704,13 +13800,30 @@ def _dark_blotch_artifact_metrics(
     in_mask = original_gray[np.asarray(cleanup_mask) > 0]
     ink = float(np.percentile(in_mask, 95)) if in_mask.size else 255.0
     lettering_colored = original_gray >= ink - 0.25 * max(0.0, ink - 45.0)
+    outside = np.asarray(cleanup_mask) == 0
     islands = np.zeros(new_dark.shape, dtype=bool)
     for label in range(1, count):
         component = labels == label
         touch = cv2.dilate(component.astype(np.uint8), np.ones((7, 7), np.uint8)) > 0
         continues_dark_art = (np.any(touch & dark_context)
                               and np.mean(lettering_colored[component]) >= 0.8)
-        if not continues_dark_art:
+        # Light lettering on a dark (not black) backdrop: the fill matches the
+        # backdrop right outside the mask, so it is that backdrop restored.
+        around = (cv2.dilate(component.astype(np.uint8), np.ones((25, 25), np.uint8)) > 0) & outside
+        backdrop = original_gray[around].astype(np.float32) if np.count_nonzero(around) >= 30 else None
+        restores_backdrop = bool(
+            backdrop is not None
+            # The tone match on a plain (low-spread) backdrop is the evidence; the
+            # letters' antialiased edge keeps the lettering share near 0.7 even
+            # where the region was all letters. Busy art never qualifies.
+            and float(np.median(np.abs(backdrop - np.median(backdrop)))) <= 12.0
+            # Light art that continues out of the mask (a line under the text)
+            # was erased, not lettering removed.
+            and not np.any(touch & outside & (original_gray >= 90))
+            and np.mean(lettering_colored[component]) >= 0.5
+            and abs(float(np.mean(cleaned_gray[component])) - float(np.median(backdrop))) <= 25
+        )
+        if not continues_dark_art and not restores_backdrop:
             islands |= component
     new_dark = islands
     count, _, stats, _ = cv2.connectedComponentsWithStats(new_dark.astype(np.uint8), 8)
@@ -14514,7 +14627,8 @@ def _measure_structure_continuations(original_bgr, group, cleanup_mask):
 
 def _apply_cleanup_mask(current_bgr, original_bgr, group, cleanup_mask, strategy="primary",
                         accepted_candidate=None):
-    group.fill_alternative = None
+    group.fill_alternatives = []
+    group._fill_source_bgr = original_bgr
     if (not hasattr(group, "structure_continuations") and strategy != "lama_large"
             and getattr(group, "lines", None)):
         # A mask handed in ready-made (not built by _remove_text_for_group) never
@@ -14534,32 +14648,134 @@ def _apply_cleanup_mask(current_bgr, original_bgr, group, cleanup_mask, strategy
             and not _inside_white_enclosure(current_bgr, group, cleanup_mask):
         learned = _learned_texture_fill(current_bgr, group, cleanup_mask, strategy, force=True)
     result = learned if classic is None else classic
-    if learned is not None and classic is not None:
-        # Try both, keep the one the surroundings agree with (what an editor does
-        # when stamp and fill disagree): lower boundary/tone mismatch wins.
+    surface = None
+    if config.CLEAN_SURFACE_FILL and strategy != "lama_large":
+        surface, surface_metrics = _surface_fill(current_bgr, cleanup_mask, group)
+        group.surface_fill = surface_metrics
+    options = {name: candidate for name, candidate in
+               (("classic", classic), ("learned", learned), ("surface", surface)) if candidate is not None}
+    if len(options) > 1:
+        # Try them all, keep the one the surroundings agree with (what an editor
+        # does when stamp and fill disagree); the rest stay as fallbacks the
+        # reconstruction gate tries in order before giving up on the region.
         parts = {name: _fill_consistency_parts(current_bgr, candidate, cleanup_mask)
-                 for name, candidate in (("classic", classic), ("learned", learned))}
+                 for name, candidate in options.items()}
         # The edge step is reported, not scored: the outside band it reads is the
-        # same for both candidates and still holds the lettering's halo, so it
+        # same for every candidate and still holds the lettering's halo, so it
         # rewarded copying that halo inward (measured on a translucent balloon).
-        # The learned fill is the stronger prior on textured art; the classic one
-        # replaces it only when clearly (>20 %) more consistent with the ring.
         scores = {name: sum(v for k, v in terms.items() if k != "step") for name, terms in parts.items()}
-        chosen = "classic" if scores["classic"] < 0.8 * scores["learned"] else "learned"
-        result = learned if chosen == "learned" else classic
-        group.fill_alternative = _draw_structure_continuations(
-            classic if chosen == "learned" else learned, group, cleanup_mask)
+        # The learned fill is the stronger prior on textured art; the classic one
+        # replaces it only when clearly (>20 %) more consistent with the ring, and
+        # a fitted surface only when clearly (>10 %) more consistent than both.
+        if "learned" in scores and "classic" in scores:
+            chosen = "classic" if scores["classic"] < 0.8 * scores["learned"] else "learned"
+        else:
+            chosen = "classic" if "classic" in scores else "learned"
+        if "surface" in scores and scores["surface"] <= 0.9 * min(v for k, v in scores.items() if k != "surface"):
+            chosen = "surface"
+        order = [chosen] + sorted((name for name in scores if name != chosen), key=scores.get)
+        result = options[chosen]
+        group.fill_alternatives = [
+            (name, _draw_structure_continuations(options[name], group, cleanup_mask)) for name in order[1:]
+        ]
         group.fill_choice = {"chosen": chosen, **{k: round(v, 2) for k, v in scores.items()},
                              "terms": {name: {k: round(v, 2) for k, v in terms.items()} for name, terms in parts.items()}}
         # The spatial-gate refusal is a verdict on the classic candidate only.
         group.fill_choice["classic_spatial_gate_rejected"] = bool(
             getattr(group, "spatial_harmonic_gate_rejected", False))
-        if chosen == "learned":
+        if chosen != "classic":
             group.spatial_harmonic_gate_rejected = False
         if isinstance(getattr(group, "background_metrics", None), dict) and chosen == "classic":
             group.background_metrics["cleanup_fill_source"] = group.background_metrics.get(
                 "cleanup_fill_source_classic", group.background_metrics.get("cleanup_fill_source"))
     return _draw_structure_continuations(result, group, cleanup_mask)
+
+
+# A smooth gradient behind lettering (a purple glow, a blue sky) is a surface,
+# not a texture: fitted to the ring around the mask it can be filled exactly,
+# where a learned fill invents blotches and a stamp copies the glyph halo.
+SURFACE_FILL_MAX_RMSE = 9.0
+SURFACE_FILL_MAX_PIXELS = 450_000
+SURFACE_FILL_MIN_RING_KEPT = 0.93
+SURFACE_FILL_MIN_SPAN = 12.0
+
+
+def _surface_fill(current_bgr, cleanup_mask, group=None):
+    """``(filled, metrics)`` from a robust quadratic fit to the ring, or ``(None, metrics)``."""
+    mask = (_grown_fill_mask(group, cleanup_mask) if group is not None else np.asarray(cleanup_mask)) > 0
+    area = int(mask.sum())
+    metrics = {"surface_fill_pixels": area}
+    if area < 30 or area > SURFACE_FILL_MAX_PIXELS:
+        return None, {**metrics, "surface_fill_reason": "mask_size"}
+    ys, xs = np.nonzero(mask)
+    h_img, w_img = mask.shape
+    x0, x1 = max(0, xs.min() - 24), min(w_img, xs.max() + 25)
+    y0, y1 = max(0, ys.min() - 24), min(h_img, ys.max() + 25)
+    local = mask[y0:y1, x0:x1].astype(np.uint8)
+    near = cv2.dilate(local, np.ones((5, 5), np.uint8)) > 0
+    far = cv2.dilate(local, np.ones((25, 25), np.uint8)) > 0
+    ring = far & ~near
+    roi = current_bgr[y0:y1, x0:x1].astype(np.float32)
+    ry, rx = np.nonzero(ring)
+    if ry.size < 60:
+        return None, {**metrics, "surface_fill_reason": "ring_too_small"}
+    hh, ww = local.shape
+    def design(yv, xv):
+        u = (xv / max(1, ww - 1)) * 2 - 1
+        v = (yv / max(1, hh - 1)) * 2 - 1
+        return np.stack([np.ones_like(u), u, v, u * u, u * v, v * v], axis=1)
+    A = design(ry.astype(np.float32), rx.astype(np.float32))
+    values = roi[ry, rx]
+    keep = np.ones(len(values), bool)
+    coef = None
+    for _ in range(3):
+        if keep.sum() < 40:
+            return None, {**metrics, "surface_fill_reason": "ring_not_background"}
+        coef, *_ = np.linalg.lstsq(A[keep], values[keep], rcond=None)
+        residual = np.abs(values - A @ coef).max(axis=1)
+        sigma = float(np.median(residual[keep])) * 1.4826 + 1.0
+        keep = residual <= max(6.0, 3.0 * sigma)
+    rmse = float(np.sqrt(np.mean((values[keep] - A[keep] @ coef) ** 2)))
+    metrics.update({"surface_fill_rmse": round(rmse, 2),
+                    "surface_fill_ring_kept": round(float(keep.mean()), 3)})
+    # Art crossing the ring (a door frame behind the balloon) shows up as the
+    # outliers the fit dropped: 16 % on a wall, under 3 % on real gradients.
+    if rmse > SURFACE_FILL_MAX_RMSE or keep.mean() < SURFACE_FILL_MIN_RING_KEPT:
+        return None, {**metrics, "surface_fill_reason": "not_a_smooth_surface"}
+    # Art entering the mask (a line, a frame edge) is what the fit dropped next
+    # to the mask: a diffused fill would smear it, so the other fills decide.
+    dropped = np.zeros(local.shape, np.uint8)
+    dropped[ry[~keep], rx[~keep]] = 1
+    # It crosses the whole ring; a glyph's leftover glow only hugs the mask.
+    entry = cv2.dilate(near.astype(np.uint8), np.ones((3, 3), np.uint8)) > 0
+    exit_edge = ring & ~cv2.erode(far.astype(np.uint8), np.ones((3, 3), np.uint8)).astype(bool)
+    count, labels, stats, _ = cv2.connectedComponentsWithStats(dropped, connectivity=8)
+    for label in range(1, count):
+        component = labels == label
+        if stats[label, cv2.CC_STAT_AREA] >= 20 and np.any(entry & component) and np.any(exit_edge & component):
+            return None, {**metrics, "surface_fill_reason": "structure_enters_mask"}
+    # A uniform backdrop is not a gradient: the plain fills are exact there.
+    fitted = A[keep] @ coef
+    span = float((fitted.max(axis=0) - fitted.min(axis=0)).max())
+    metrics["surface_fill_span"] = round(span, 1)
+    my, mx = np.nonzero(local > 0)
+    filled = current_bgr.copy()
+    if span < SURFACE_FILL_MIN_SPAN:
+        # A uniform backdrop: its own colour, exactly, over the grown mask (which
+        # also takes the outline's faint outer edge that a plain fill leaves).
+        # Without such an edge the plain fills are already exact.
+        residue = _outline_residue_mask(group, (np.asarray(cleanup_mask) > 0).astype(np.uint8))             if group is not None else None
+        if residue is None or not np.any(residue):
+            return None, {**metrics, "surface_fill_reason": "uniform_backdrop"}
+        filled[y0 + my, x0 + mx] = np.clip(np.median(values[keep], axis=0), 0, 255).astype(np.uint8)
+        return filled, {**metrics, "surface_fill_reason": "uniform_backdrop"}
+    # The fit only proves the backdrop is a smooth surface; the fill itself is
+    # diffused from the mask boundary, so it meets the surroundings exactly even
+    # where one global quadratic cannot follow them (a light arc through a sky).
+    diffused = cv2.inpaint(current_bgr[y0:y1, x0:x1], local * 255, 3, cv2.INPAINT_NS).astype(np.float32)
+    grain = np.random.default_rng(area).normal(0.0, min(rmse, 4.0) * 0.6, (my.size, 3))
+    filled[y0 + my, x0 + mx] = np.clip(diffused[my, mx] + grain, 0, 255).astype(np.uint8)
+    return filled, {**metrics, "surface_fill_reason": "fitted"}
 
 
 def _fill_consistency_parts(source_bgr, candidate_bgr, cleanup_mask):
@@ -14785,25 +15001,69 @@ def _learned_texture_fill(current_bgr, group, cleanup_mask, strategy, force=Fals
     return _learned_inpaint(current_bgr, group, cleanup_mask)
 
 
-def _learned_inpaint(current_bgr, group, cleanup_mask):
-    """The verified local model's reconstruction of ``cleanup_mask``, or ``None``.
+def _outline_residue_mask(group, mask_u8, band=6):
+    """The outline's soft outer edge left just outside the mask, or ``None``.
 
-    Shared by the texture fill and the last resort so both get the same margin,
-    tone correction and cache; an unavailable model is recorded on the group.
+    Thick dark outlines fade into the backdrop over a few pixels; the mask stops
+    before that fade, and every fill diffuses its dark values back in as ghost
+    letters. Pixels within ``band`` px of the mask that stand clearly off the
+    backdrop measured further out, and touch the mask, join the fill - only
+    inside the group's own box, where the render may change pixels anyway.
+    """
+    source = getattr(group, "_fill_source_bgr", None)
+    if source is None or not np.any(mask_u8):
+        return None
+    x, y, w, h = [int(v) for v in group.box]
+    pad = band + 2
+    y0, y1 = max(0, y - pad), min(mask_u8.shape[0], y + h + pad)
+    x0, x1 = max(0, x - pad), min(mask_u8.shape[1], x + w + pad)
+    local = mask_u8[y0:y1, x0:x1]
+    gray = cv2.cvtColor(source[y0:y1, x0:x1], cv2.COLOR_BGR2GRAY).astype(np.float32)
+    distance = cv2.distanceTransform((local == 0).astype(np.uint8), cv2.DIST_L2, 3)
+    near = (distance > 0) & (distance <= band)
+    far = (distance > band + 2) & (distance <= band + 14)
+    if np.count_nonzero(far) < 40:
+        return None
+    backdrop = float(np.median(gray[far]))
+    spread = float(np.median(np.abs(gray[far] - backdrop))) * 1.4826
+    off = near & (np.abs(gray - backdrop) > max(14.0, 3.0 * spread))
+    count, labels = cv2.connectedComponents((off | (local > 0)).astype(np.uint8), connectivity=8)
+    touching = np.unique(labels[local > 0])
+    residue_local = off & np.isin(labels, touching[touching > 0])
+    residue = np.zeros(mask_u8.shape, dtype=bool)
+    residue[y0:y1, x0:x1] = residue_local
+    return residue
+
+
+def _grown_fill_mask(group, cleanup_mask):
+    """The mask a fill works on: ``cleanup_mask`` grown by 2 px.
+
+    A mask that hugs each letter, with the faint halo just outside, lets a fill
+    redraw the letters' shapes as ghosts (measured on 3 cases; 4-6 px added
+    nothing). Protected structure and the outside of a known balloon are never
+    grown into.
     """
     mask_u8 = (np.asarray(cleanup_mask) > 0).astype(np.uint8)
-    # The model is given (and composites) the mask grown by 2 px: a mask that
-    # hugs each letter, with the faint halo just outside, lets it redraw the
-    # letters' shapes as ghosts (measured on 3 cases; 4-6 px added nothing).
-    # Protected structure and the outside of a known balloon are never grown into.
     grown = cv2.dilate(mask_u8, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5)))
+    residue = _outline_residue_mask(group, mask_u8)
+    if residue is not None:
+        grown[residue] = 1
     protect = getattr(group, "structure_protect_mask", None)
     if isinstance(protect, np.ndarray) and protect.shape == grown.shape:
         grown[(protect > 0) & (mask_u8 == 0)] = 0
     enclosure = getattr(group, "light_enclosure_interior", None)
     if isinstance(enclosure, np.ndarray) and enclosure.shape == grown.shape:
         grown[~enclosure.astype(bool) & (mask_u8 == 0)] = 0
-    mask_u8 = grown
+    return grown
+
+
+def _learned_inpaint(current_bgr, group, cleanup_mask):
+    """The verified local model's reconstruction of ``cleanup_mask``, or ``None``.
+
+    Shared by the texture fill and the last resort so both get the same margin,
+    tone correction and cache; an unavailable model is recorded on the group.
+    """
+    mask_u8 = _grown_fill_mask(group, cleanup_mask)
     ys, xs = np.nonzero(mask_u8)
     pad = 32
     y1, y2 = max(0, ys.min() - pad), min(mask_u8.shape[0], ys.max() + pad + 1)
