@@ -3502,10 +3502,12 @@ def _line_belongs_to_group(line, group):
         and line_region_enclosed
     ):
         return False
+    # Sound lettering beside dialogue is drawn at least 2.5x its height
+    # ("THUMP" 133 px against 45 px text in A Wimp's Tower ep. 33).
     if (
         line_letters <= 6
         and (
-            lh > base_height * 3.0
+            lh > base_height * 2.5
             or lw * lh > base_area * 6.0
         )
     ):
@@ -3513,13 +3515,12 @@ def _line_belongs_to_group(line, group):
     # The same veto the other way round: lines arrive top to bottom, so a sound
     # effect drawn above a balloon becomes the group first, and its height would
     # otherwise stretch the allowed gap enough to swallow the dialogue below it.
-    # One word is enough ("RUSTLE", "SPARKLE"); a single line three times the
-    # height of the text below it never shares a balloon with that text.
+    # Short words only ("RUSTLE", "THUMP THUMP"): lettering 2.5x the height of
+    # the text below it never shares a balloon with that text.
     if (
-        len(group.lines) == 1
-        and len(re.sub(r"[^A-Za-z]", "", group.lines[0].text or "")) <= 12
+        all(len(re.sub(r"[^A-Za-z]", "", item.text or "")) <= 12 for item in group.lines)
         and (
-            base_height > lh * 3.0
+            base_height > lh * 2.5
             or base_area > lw * lh * 6.0
         )
     ):
@@ -4453,6 +4454,20 @@ def _recover_lexical_dialogue_on_plain_field(group, metrics, words, saturation):
     group.inside_balloon_like_region = True
 
 
+def _lines_sit_on_white(group):
+    """Every line is lettered on open white, whatever the coarse box caught.
+
+    The background bucket comes from the draw box, which can take in the spikes
+    of the balloon above; the lines' own white-region coverage says the text is
+    on the page's white, not on art.
+    """
+    lines = getattr(group, "lines", None) or []
+    return bool(lines) and all(
+        float((getattr(line, "metadata", None) or {}).get("visual_white_region_coverage") or 0.0) >= 0.95
+        for line in lines
+    )
+
+
 def _decorative_textured_story_promotion_allowed(group):
     """Allow strong ordinary prose mislabelled as decorative art to translate.
 
@@ -4676,6 +4691,7 @@ def _apply_classification_policy(group):
             (group.background_metrics or {}).get("open_white_narration")
             or (group.background_metrics or {}).get("open_dark_narration")
         )
+        and not _lines_sit_on_white(group)
     ):
         weak_promotion_allowed = False
 
@@ -4769,6 +4785,7 @@ def _should_translate_group(group):
             (group.background_metrics or {}).get("open_white_narration")
             or (group.background_metrics or {}).get("open_dark_narration")
         )
+        and not _lines_sit_on_white(group)
     ):
         return False
     return True
@@ -5991,6 +6008,40 @@ def reconcile_recovery_lines(predecessor_lines, candidate_lines):
     )
 
 
+def _adopt_variant_vote(group, vote):
+    """Make a trusted variant vote the group's source, on the group and its lines.
+
+    The lines carry it too because a page whose other regions accepted a re-read
+    is regrouped from its lines afterwards (``apply_variant_votes``).
+    """
+    canonical = clean_ocr_text(str(vote.get("canonical_source") or ""))
+    group.source_recovery = dict(vote)
+    group.canonical_source_text = canonical
+    group.text = canonical
+    group.quality_score, group.quality_reasons = score_group_ocr_quality(group)
+    marker = {"id": f"{id(group)}:{canonical}", "canonical_source": canonical,
+              "reason": str(vote.get("reason") or ""),
+              "agreement_count": int(vote.get("agreement_count") or 0)}
+    for line in group.lines:
+        line.metadata = {**(line.metadata or {}), "variant_vote": marker}
+
+
+def apply_variant_votes(groups):
+    """Re-apply trusted votes to groups rebuilt from exactly the voted lines."""
+    for group in groups:
+        votes = [(line.metadata or {}).get("variant_vote") for line in group.lines]
+        if not votes or not all(votes) or len({vote["id"] for vote in votes}) != 1:
+            continue
+        vote = votes[0]
+        group.source_recovery = {"trusted": True, "reason": vote["reason"],
+                                 "canonical_source": vote["canonical_source"],
+                                 "agreement_count": vote["agreement_count"]}
+        group.canonical_source_text = vote["canonical_source"]
+        group.text = vote["canonical_source"]
+        group.quality_score, group.quality_reasons = score_group_ocr_quality(group)
+    return groups
+
+
 def apply_rapidocr_region_recovery(
     original_bgr,
     raw_lines,
@@ -6158,18 +6209,20 @@ def apply_rapidocr_region_recovery(
             != pair_attempts[1]["word_signature"]
         )
         credible_alternative = float(candidate.quality_score) >= float(group.quality_score)
-        if materially_variant and credible_alternative:
-            record["rejected_recovery_observation"]["unresolved_material_disagreement"] = True
-            group.source_recovery = {
-                **(getattr(group, "source_recovery", {}) or {}),
-                "trusted": False,
-                "reason": "material_variant_disagreement",
-                "rejected_recovery": record["rejected_recovery_observation"],
-            }
+        # The crop reaches past the region; a re-read with clearly more letters
+        # than the region holds took a neighbour's line with it ("COMEON,
+        # CHEERS!" -> "ON A DAY SIHI COME ON, CHEERS!"), duplicating it.
+        own_letters = len(pair_attempts[0]["normalized_text"])
+        if len(pair_attempts[1]["normalized_text"]) > own_letters * 1.3 + 4:
+            record["reason"] = "recovery_reads_beyond_region"
+            record_count("rapidocr_recovery.retry_rejected", page_index=page_index)
+            continue
+        if materially_variant:
             # Two reads disagree: let the bounded variant vote decide instead of
-            # sending the region to review. Only an agreement of independent
-            # reads (or a strictly cleaner one, see _lexical_variant_winner) is
-            # adopted; anything else stays untrusted exactly as before.
+            # sending the region to review (or keeping a worse primary). Only an
+            # agreement of independent reads (or a strictly cleaner one, see
+            # _lexical_variant_winner) is adopted; anything else falls through
+            # to the rules below unchanged.
             vote = recover_source_with_rapidocr_variants(
                 original_bgr, group, ocr_lang, page_index=page_index, engine=engine
             )
@@ -6179,15 +6232,29 @@ def apply_rapidocr_region_recovery(
                 "canonical_source": str(vote.get("canonical_source") or ""),
                 "agreement_count": int(vote.get("agreement_count") or 0),
             }
+            # The crop reaches past the region; a vote that reads clearly more
+            # letters than the region holds took a neighbour's line with it
+            # ("COMEON, CHEERS!" -> "ON A DAY SIHL COME ON, CHEERS!").
+            own = len(_source_recovery_normalized(group.text))
+            voted = len(_source_recovery_normalized(vote.get("canonical_source") or ""))
+            if voted > own * 1.3 + 4:
+                vote["trusted"] = False
+                record["variant_vote"]["trusted"] = False
+                record["variant_vote"]["reason"] = "vote_reads_beyond_region"
             if vote.get("trusted") and str(vote.get("canonical_source") or "").strip():
                 vote["rejected_recovery"] = record["rejected_recovery_observation"]
-                group.source_recovery = dict(vote)
-                group.canonical_source_text = clean_ocr_text(vote["canonical_source"])
-                group.text = group.canonical_source_text
-                group.quality_score, group.quality_reasons = score_group_ocr_quality(group)
+                _adopt_variant_vote(group, vote)
                 record["reason"] = "variant_vote_resolved_disagreement"
                 record_count("rapidocr_recovery.variant_vote_resolved", page_index=page_index)
                 continue
+        if materially_variant and credible_alternative:
+            record["rejected_recovery_observation"]["unresolved_material_disagreement"] = True
+            group.source_recovery = {
+                **(getattr(group, "source_recovery", {}) or {}),
+                "trusted": False,
+                "reason": "material_variant_disagreement",
+                "rejected_recovery": record["rejected_recovery_observation"],
+            }
         # Attempt 1 already failed the policy, so there is no "both acceptable"
         # tie to break: attempt 2 wins only by clearing the same bar attempt 1
         # could not. Nothing is preferred merely for being newer.
@@ -8848,6 +8915,14 @@ def _is_stuttered_name_fragment(text):
     )
 
 
+def _same_sound_in_target(source_text, translated):
+    """A known sound that pt-BR writes the same way ("HUM HUM", "AH...")."""
+    from yomu.translation.sfx_glossary import translate_sfx
+
+    rendered = translate_sfx(source_text)
+    return bool(rendered) and _normalized_translation_text(rendered) == _normalized_translation_text(translated)
+
+
 def _is_nonlexical_vocalization_token(source_tokens):
     if len(source_tokens) != 1:
         return False
@@ -9031,6 +9106,7 @@ def validate_translation_text(
         and not source_has_name_like_token
         and not _is_stuttered_name_fragment(source_text)
         and not _is_nonlexical_vocalization_token(source_tokens)
+        and not _same_sound_in_target(source_text, translated)
     ):
         if not (
             len(source_tokens) == 1
@@ -13094,10 +13170,14 @@ def _reconstruction_gate_failure(original_bgr, cleaned, group, cleanup_mask, bac
     # balloon), so a flat fill there is not a fidelity finding.
     fidelity_ratio = flat_patch_metrics.get("flat_patch_typical_ratio")
     metrics["texture_synthesized"] = bool(getattr(group, "texture_synthesized", False))
+    # A plain container is meant to come back flat: its ring texture is the
+    # balloon outline and the art beyond it, not texture the fill lost.
+    plain_container = str(background_type or "") in {"white_balloon", "narration_box", "dark_balloon"}
     metrics["art_fidelity_uncertain"] = bool(
         (
             fidelity_ratio is not None
             and fidelity_ratio < config.MIN_ART_FIDELITY_TEXTURE_RATIO
+            and not plain_container
         )
         # Synthesised grain fixes the *visible* flat-block defect, but it is a
         # statistical match, not a recovered original - it must not by itself

@@ -1470,6 +1470,28 @@ flowchart LR
   PyInstaller): Comic Relief Regular/Bold (fala) e Bangers (grito/SFX), SIL OFL 1.1; têm
   prioridade sobre a fonte do Windows de mesmo papel.
 
+Décima passada (mesmo capítulo, 2026-10-25, **IMPLEMENTADO**):
+
+- O voto por variantes roda em toda divergência material (não só quando a releitura pontua
+  melhor) e fica gravado nas linhas (`_adopt_variant_vote`); `apply_variant_votes` o reaplica
+  quando a página é reagrupada depois de uma releitura aceita. O portão de qualidade aceita
+  uma fonte votada confiável.
+- Releitura ou voto com bem mais letras que a região (> 1,3× + 4) é descartado: o recorte
+  pegou a linha do balão vizinho.
+- Veto de tamanho do SFX em 2,5× e para grupos só de palavras curtas ("THUMP THUMP").
+- Som conhecido que o pt-BR escreve igual (HUM, AH, HAHA…; `assets/lexicon/sfx_en_pt.json`) é
+  aceito quando o provider o devolve igual (`_same_sound_in_target`).
+- `_state_replaced_action` ignora `-ing` predicativo depois de sujeito impessoal
+  ("IT'S AMAZING" → "É INCRÍVEL").
+- Texto decorativo: palavras coladas são segmentadas antes da contagem semântica, e linhas
+  inteiramente sobre branco (`visual_white_region_coverage` ≥ 0,95) não sofrem o veto de
+  "decorativo sobre arte".
+- `art_fidelity_uncertain` não se aplica a recipientes lisos (balão branco, caixa de narração,
+  balão escuro).
+- Snapshot de pasta local em `runtime_root()/local_sources` (antes `<repo>/.cache/runtime`).
+- Medido nas 33 páginas problemáticas com DeepL: traduzidos 92 → 102, sem tradução 28 → 11,
+  marcados para revisão 50 → 32.
+
 ## 17. Qualidade, validação física e proveniência
 
 O sistema separa **sucesso técnico** de **aprovação de qualidade**. Um PDF pode existir e a

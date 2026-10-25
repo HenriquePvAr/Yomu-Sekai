@@ -94,7 +94,7 @@ existir).
 
 A política recusa caminhos relativos, traversal, UNC/dispositivos, `file:`, symlinks e junctions.
 Ela inspeciona somente arquivos diretos, valida bytes de imagem e limita tamanho/quantidade. Um
-snapshot de nomes gerados é criado em `.cache/runtime/local_sources/`; jobs, manifests de saída e
+snapshot de nomes gerados é criado em `local_sources/` da raiz de runtime (`%LOCALAPPDATA%\TradutorIAuntime` por padrão), fora da pasta de instalação; jobs, manifests de saída e
 a UI recebem fingerprint, contagens e referência opaca, não o caminho original. A materialização
 posterior revalida o snapshot e não limpa uma saída não marcada como pertencente ao pipeline.
 

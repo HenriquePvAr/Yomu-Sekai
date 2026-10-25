@@ -534,10 +534,26 @@ _TARGET_PASSIVE_INFINITIVE = re.compile(
 )
 
 
+# After an impersonal subject the -ing word is a predicate adjective, not an
+# action in progress: "IT'S AMAZING" -> "E INCRIVEL" is faithful.
+_IMPERSONAL_SUBJECTS = frozenset({"it", "that", "this", "what", "there", "here"})
+
+
+def _personal_progressive(folded_source):
+    for match in _SOURCE_PROGRESSIVE.finditer(folded_source):
+        before = re.findall(r"[a-z]+", folded_source[: match.start() + 1])
+        subject = before[-1] if before else ""
+        if subject in _IMPERSONAL_SUBJECTS or (subject in {"is", "s"} and len(before) > 1
+                                               and before[-2] in _IMPERSONAL_SUBJECTS):
+            continue
+        return True
+    return False
+
+
 def _state_replaced_action(source, candidate):
     folded_source = _fold(source)
     folded_candidate = _fold(candidate)
-    if not _SOURCE_PROGRESSIVE.search(folded_source):
+    if not _personal_progressive(folded_source):
         return False
     if _TARGET_GERUND.search(folded_candidate):
         return False

@@ -44,6 +44,7 @@ from yomu.ocr.ocr_balloon import (
     TRANSLATION_TERMINAL_STATES,
     analyze_image_array,
     apply_rapidocr_region_recovery,
+    apply_variant_votes,
     apply_selective_ocr_fallbacks,
     apply_speech_container_reocr,
     apply_group_translations,
@@ -2106,6 +2107,7 @@ def process_pre_translation_page(
                     recovery_lines,
                     page_index=state["index"],
                 )
+                apply_variant_votes(groups)
     selective_started = time.perf_counter()
     with profile_step(
         "pipeline.selective_ocr_fallbacks",

@@ -363,7 +363,12 @@ def weak_label_semantic_promotion_allowed(legacy_label: str, text: str) -> bool:
     if label not in _WEAK_LABELS:
         return True
     body = str(text or "")
-    words = _words(body)
+    # Glued OCR ("THEMORE WERUNIT, THEEASIER") hides the words a sentence is
+    # made of; split a non-word into dictionary words before counting.
+    words = []
+    for word in _words(body):
+        pieces = None if _is_real_word(word) else segment_words(word)
+        words.extend(pieces if pieces and len(pieces) > 1 else [word])
     real_words = [word for word in words if _is_real_word(word)]
     if len(real_words) >= 4:
         return True

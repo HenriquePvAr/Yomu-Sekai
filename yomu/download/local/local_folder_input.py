@@ -34,10 +34,13 @@ from yomu.download.local.local_folder_source import (
     LOCAL_WORKSPACE_INVALID,
     LocalFolderError,
 )
-from yomu.runtime.paths import REPO_ROOT
+from yomu.runtime.paths import REPO_ROOT  # noqa: F401 - patched by older tests
+from yomu.runtime.runtime_paths import runtime_root
 
 
-LOCAL_SNAPSHOT_ROOT = REPO_ROOT / ".cache" / "runtime" / "local_sources"
+# ``None`` resolves under the runtime root (``runtime_root()``, under %LOCALAPPDATA% by
+# default) at use time; it used to live in the repository/install directory.
+LOCAL_SNAPSHOT_ROOT = None
 _SNAPSHOT_FILE_RE = re.compile(r"^\d{4}\.(?:png|jpg|jpeg|webp|avif)$", re.IGNORECASE)
 _OUTPUT_FILE_RE = re.compile(r"^\d{3}\.(?:png|jpg|jpeg|webp|avif)$", re.IGNORECASE)
 _OWNERSHIP_MARKER = ".tradutor_local_snapshot_input"
@@ -54,7 +57,9 @@ def local_source_reference(source_fingerprint: object) -> str:
 def snapshot_workspace_root() -> Path:
     """Create only the ignored internal workspace root, never the user input root."""
     test_root = str(os.getenv("TRADUTOR_TEST_RUNTIME_ROOT") or "").strip() if os.getenv("YOMU_CANCEL_TEST_MARKER_DIR") else ""
-    root = (Path(test_root) / "local_sources") if test_root else LOCAL_SNAPSHOT_ROOT
+    root = (Path(test_root) / "local_sources") if test_root else (
+        Path(LOCAL_SNAPSHOT_ROOT) if LOCAL_SNAPSHOT_ROOT else runtime_root() / "local_sources"
+    )
     root.mkdir(parents=True, exist_ok=True)
     return root.resolve()
 
