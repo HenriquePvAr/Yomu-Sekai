@@ -307,8 +307,11 @@ class UiDefaultTests(unittest.TestCase):
         self.assertNotIn("|| 'nemotron'", self.script)
 
     def test_the_shell_does_not_advertise_nvidia_as_the_translation_engine(self):
-        row = self.shell[self.shell.index('<span class="sc-role">Tradução</span>'):][:200]
-        self.assertNotIn("NVIDIA", row)
+        # The credits block that named the engine left Configurações; NVIDIA may only
+        # appear in the developer canary and the explicit remote-clean consent.
+        for line in self.shell.splitlines():
+            if "NVIDIA" in line:
+                self.assertTrue("nvidiaContractCanary" in line or "Autorizo a NVIDIA" in line, line)
 
 
 class Tdd42PreflightUntouchedTests(unittest.TestCase):

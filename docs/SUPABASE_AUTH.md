@@ -4,9 +4,9 @@
 
 ## Backend ativo após o cutover local (2026-09-29)
 
-O runtime local do Yomu Sekai usa o projeto **Yomu Sekai** (`ybxwjiycujminbwbdtlb`)
-em `https://ybxwjiycujminbwbdtlb.supabase.co`, com publishable key pública. O projeto
-**Tradutor IA Community** (`mimrsxnhqbqkffsekxuw`) permanece intacto como rollback
+O runtime local do Yomu Sekai usa o projeto **Yomu Sekai** (`<projeto-supabase-ativo>`)
+em `https://<projeto-supabase-ativo>.supabase.co`, com publishable key pública. O projeto
+**Tradutor IA Community** (`<projeto-supabase-legado>`) permanece intacto como rollback
 temporário até sua aposentadoria formal; não é o destino de novas sessões. Signup,
 confirmação de e-mail, login, logout e recuperação/alteração de senha foram validados
 fisicamente no projeto novo.

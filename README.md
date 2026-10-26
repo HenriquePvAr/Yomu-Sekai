@@ -283,7 +283,7 @@ Esses mecanismos reduzem falsos positivos, mas não garantem tradução perfeita
 | Saída QC Profissional | Automático + imagens limpas, PSD editável com Type Layers, Quality Report e Review Manifest. |
 | Review | QC linguístico; `review_required` significa concluído com revisão recomendada, não falha automática. |
 | PSD | `editable_psd_writer.py`; M15 validou edição física no Photoshop 2025 e Photopea. Cross-editor round-trip direto não foi executado. |
-| Auth/backend | Projeto ativo Yomu Sekai: `ybxwjiycujminbwbdtlb`; fluxo signup/confirmar/login e recovery validados fisicamente. |
+| Auth/backend | Projeto ativo Yomu Sekai: `<projeto-supabase-ativo>`; fluxo signup/confirmar/login e recovery validados fisicamente. |
 | Profile Media | Removida do produto ativo. |
 | Tradução | **IMPLEMENTADO** — jobs habilitados sempre via `yomu_backend` autenticado (motor remoto DeepL no servidor); seletor de provider oculto na UI. |
 | SFX | **IMPLEMENTADO** — traduzidos por padrão (`TRANSLATE_SFX=True`) com glossário pt-BR; tipografia ajustada ao formato do balão e à inclinação da fonte original (`RENDER_FIT_BALLOON_SHAPE`, `RENDER_MATCH_SOURCE_SLANT`, padrão `True`). |

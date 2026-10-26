@@ -10,7 +10,7 @@
 > project was **not** re-verified (no remote access in this review). The statements about
 > remote state below are true only for the date of the snapshot.
 
-Read-only snapshot of Supabase project `mimrsxnhqbqkffsekxuw`
+Read-only snapshot of Supabase project `<projeto-supabase-legado>`
 (`Tradutor IA Community`) reconciled against local migration sources on
 2026-09-27. No remote writes, migration repair, or Edge Function deployment
 were performed.

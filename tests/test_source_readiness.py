@@ -317,8 +317,9 @@ class UiContractTests(unittest.TestCase):
         html = (root / "ui" / "ui_shell.html").read_text(encoding="utf-8")
         script = (root / "static" / "tradutor_ui.js").read_text(encoding="utf-8")
         self.assertIn("Fonte analisada", html)
-        self.assertIn("Política das fontes", html)
-        self.assertIn("workspaceSourcePolicyDialog", html)
+        # The authorization is asked on Iniciar tradução (app dialog), once.
+        self.assertIn("title: 'Autorizar fontes'", script)
+        self.assertIn("'/api/ui/source-policy'", script)
         self.assertNotIn("downloadAuthorizationDialog", html)
         self.assertNotIn("window.alert(", script)
         self.assertIn("source_analysis_ready", script)

@@ -519,8 +519,8 @@ class TranslatedHistoryReviewEntry(unittest.TestCase):
         self.assertIn(".quality-review-actions{min-width:0;width:100%;}", css)
 
     def test_developer_mode_toggle_is_a_real_ui_option(self):
-        self.assertIn('id="developerModeToggle"', self.shell)
-        self.assertIn("developerModeToggle", self.js)
+        # No toggle in the user's Configurações any more; developers enable it with
+        # localStorage.tradutorDeveloperMode = '1'.
         self.assertIn("tradutorDeveloperMode", self.js)
         self.assertIn("updateQualityReviewDeveloperActions()", self.js)
 

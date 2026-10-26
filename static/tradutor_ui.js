@@ -13,6 +13,50 @@
     return node.innerHTML;
   };
   const escapeAttr = value => escapeHtml(value).replace(/"/g, '&quot;');
+  // The app's own confirmation dialog (the browser's confirm() box looks foreign
+  // and shows "127.0.0.1:8080 diz"). Resolves true only on the confirm button.
+  function yomuConfirm(message, {title = 'Confirmar ação', confirmLabel = 'Confirmar', cancelLabel = 'Cancelar', danger = false} = {}) {
+    let overlay = document.getElementById('yomuConfirmOverlay');
+    if (!overlay) {
+      overlay = document.createElement('div');
+      overlay.className = 'modal-overlay';
+      overlay.id = 'yomuConfirmOverlay';
+      overlay.innerHTML = `<div class="modal-card yomu-dialog" role="alertdialog" aria-modal="true" aria-labelledby="yomuConfirmTitle" aria-describedby="yomuConfirmText">
+        <div class="panel-label">confirmação</div><h2 id="yomuConfirmTitle"></h2><p class="yomu-dialog-text" id="yomuConfirmText"></p>
+        <div class="sc-modal-actions"><button type="button" class="btn-ghost" data-yomu-confirm="0"></button><button type="button" class="btn-primary" data-yomu-confirm="1"></button></div></div>`;
+      document.body.appendChild(overlay);
+    }
+    overlay.querySelector('#yomuConfirmTitle').textContent = title;
+    overlay.querySelector('#yomuConfirmText').textContent = message;
+    const ok = overlay.querySelector('[data-yomu-confirm="1"]');
+    const cancel = overlay.querySelector('[data-yomu-confirm="0"]');
+    ok.textContent = confirmLabel;
+    cancel.textContent = cancelLabel;
+    ok.classList.toggle('danger', danger);
+    const previousFocus = document.activeElement;
+    overlay.classList.add('show');
+    overlay.setAttribute('aria-hidden', 'false');
+    (danger ? cancel : ok).focus();
+    return new Promise(resolve => {
+      const finish = value => {
+        overlay.classList.remove('show');
+        overlay.setAttribute('aria-hidden', 'true');
+        overlay.removeEventListener('click', onClick);
+        document.removeEventListener('keydown', onKey, true);
+        try { previousFocus?.focus?.(); } catch (_) { /* element may be gone */ }
+        resolve(value);
+      };
+      const onClick = event => {
+        const choice = event.target.closest('[data-yomu-confirm]');
+        if (choice) finish(choice.dataset.yomuConfirm === '1');
+        else if (event.target === overlay) finish(false);
+      };
+      const onKey = event => { if (event.key === 'Escape') { event.stopPropagation(); finish(false); } };
+      overlay.addEventListener('click', onClick);
+      document.addEventListener('keydown', onKey, true);
+    });
+  }
+  window.yomuConfirm = yomuConfirm;
   const safeGlobals = Object.create(null);
   function getGlobal(name, fallback = undefined) {
     try {
@@ -381,8 +425,11 @@
     // A token returned while auth is still booting may belong to a persisted
     // session that has not been canonically confirmed. Never let anonymous
     // bootstrap/control-plane reads trigger JWT/JWKS verification.
-    if (!bearer && authState === 'authenticated' && typeof canonicalAccessToken === 'function') {
-      try { bearer = await canonicalAccessToken(); } catch (_) { bearer = ''; }
+    // Authenticated requests always go through the canonical getter: it returns the
+    // cached token while it has >= 11 min left and refreshes it otherwise, so a job
+    // start is never refused for a token about to expire.
+    if (authState === 'authenticated' && typeof canonicalAccessToken === 'function') {
+      try { bearer = (await canonicalAccessToken()) || bearer; } catch (_) { /* keep the cached token */ }
       if (bearer) setGlobal('__tradutorAccessToken', bearer);
     }
     if (bearer) headers['Authorization'] = `Bearer ${bearer}`;
@@ -846,21 +893,13 @@
     let refreshing = false;
     try {
       await Promise.all($$('[data-source-preview]', $('#view-fontes')).map(async preview => {
-        const status = preview.parentElement.querySelector('.source-preview-status');
         try {
           const data = await api(`/api/ui/sources/preview/${encodeURIComponent(preview.dataset.sourcePreview)}`);
           refreshing = refreshing || data.refreshing;
           if (/^data:image\/jpeg;base64,[A-Za-z0-9+/=]+$/.test(data.image || '')) {
             preview.style.backgroundImage = `url("${data.image}")`;
           }
-          const time = data.captured_at ? new Date(data.captured_at * 1000).toLocaleTimeString('pt-BR') : '';
-          if (status) status.textContent = data.error
-            ? (time ? `Última prévia às ${time} · nova tentativa em 1 min` : 'Prévia indisponível · nova tentativa em 1 min')
-            : data.refreshing ? 'Atualizando prévia…'
-              : `Atualizada às ${time} · atualização a cada minuto`;
-        } catch (_) {
-          if (status) status.textContent = 'Sem conexão para atualizar a prévia';
-        }
+        } catch (_) { /* the last preview stays; the next refresh retries */ }
       }));
     } finally {
       appState.sourcePreviewsLoading = false;
@@ -2559,7 +2598,18 @@
       all_submitted_sources_authorized: policy.all_submitted_sources_authorized === true,
       guard_result: sourceType === 'url' ? (policyAllows ? 'ALLOW' : 'BLOCK') : 'ALLOW',
     });
-    if (sourceType === 'url' && !policyAllows) {
+    // The authorization used to live only in Configurações; it is asked where it is
+    // needed, once, through the same endpoint.
+    if (sourceType === 'url' && !policyAllows && await yomuConfirm(
+      'Para traduzir por URL, confirme que você só processará conteúdo próprio, licenciado, autorizado ou de domínio público. A confirmação vale para os próximos capítulos e nada é publicado automaticamente.',
+      {title: 'Autorizar fontes', confirmLabel: 'Confirmo'})) {
+      try {
+        const result = await api('/api/ui/source-policy', {method: 'POST', body: JSON.stringify({active: true})});
+        appState.settings = appState.settings || {};
+        appState.settings.workspace_source_policy = result.policy || {};
+      } catch (_) { /* stays blocked below */ }
+    }
+    if (sourceType === 'url' && !workspacePolicyAllowsProcessing()) {
       sourceTrace('TRANSLATION_START_BLOCKED', {sequence, elapsed_ms: 0, block_reason: 'workspace_policy_blocked', form_valid: true, request_count: 0});
       sourceTrace('SOURCE_POLICY_GUARD_BLOCKED', {
         trace_id: traceId,
@@ -2805,7 +2855,7 @@
   }
   async function cancelTranslation(queue = false, jobId = '') {
     if (appState.cancelBusy) return;
-    if (!window.confirm('Deseja cancelar este processamento? Os arquivos ja produzidos serao preservados.')) return;
+    if (!await yomuConfirm('Deseja cancelar este processamento? Os arquivos ja produzidos serao preservados.', {title: 'Cancelar processamento', confirmLabel: 'Cancelar processamento', cancelLabel: 'Continuar', danger: true})) return;
     appState.cancelBusy = true;
     const button = visibleCancelControl() || $('#cancelSourceReview');
     if (button) { button.disabled = true; button.textContent = 'Cancelando...'; }
@@ -3540,7 +3590,7 @@
     if (appState.resumeBusyJobId) return;
     const id = String(jobId || '');
     if (!/^[0-9a-f]{32}$/i.test(id)) return;
-    if (!window.confirm('Descartar esta tentativa interrompida? O histórico será preservado.')) return;
+    if (!await yomuConfirm('Descartar esta tentativa interrompida? O histórico será preservado.', {title: 'Descartar tentativa', confirmLabel: 'Descartar', danger: true})) return;
     appState.resumeBusyJobId = id;
     if (button) { button.disabled = true; button.textContent = 'Descartando…'; }
     try {
@@ -4299,7 +4349,7 @@
     if (!remove) return;
     const article = remove.closest('[data-review-key]');
     const item = reviewItemByKey(article?.dataset.reviewKey);
-    if (!item || !item.is_manual_region || !window.confirm('Desativar esta região manual? O histórico será preservado.')) return;
+    if (!item || !item.is_manual_region || !await yomuConfirm('Desativar esta região manual? O histórico será preservado.', {title: 'Desativar região', confirmLabel: 'Desativar', danger: true})) return;
     try {
       const result = await api('/api/ui/quality-review/manual-region/remove', {method:'POST', body:JSON.stringify({
         job_id:appState.qualityReview.job_id, region_id:item.region_id, expected_version:Number(item.region_control_version || 0),
@@ -4728,9 +4778,9 @@
     if (confirmation && selected.length) {
       const highCount = (appState.qualityReview.items || []).filter(item => selected.includes(String(item.key)) && String(item.risk || '').toUpperCase() === 'HIGH').length;
       const pages = Array.from(new Set((appState.qualityReview.items || []).filter(item => selected.includes(String(item.key))).map(item => item.page))).sort((a, b) => Number(a) - Number(b));
-      const ok = window.confirm(`Você está prestes a aceitar ${selected.length} itens pendentes em ${pages.length} páginas. Alto risco: ${highCount}. Esta ação não publica o capítulo.`);
+      const ok = await yomuConfirm(`Você está prestes a aceitar ${selected.length} itens pendentes em ${pages.length} páginas. Alto risco: ${highCount}. Esta ação não publica o capítulo.`, {title: 'Aceitar itens pendentes', confirmLabel: 'Aceitar'});
       if (!ok) return;
-      if (highCount > 0 && !window.confirm('Esta seleção inclui itens de alto risco. Confirme novamente para continuar.')) {
+      if (highCount > 0 && !await yomuConfirm('Esta seleção inclui itens de alto risco. Confirme novamente para continuar.', {title: 'Itens de alto risco', confirmLabel: 'Aceitar mesmo assim', danger: true})) {
         setQualityReviewBulkMessage('Ação cancelada: itens de alto risco não foram aceitos.', 'warn');
         return;
       }
@@ -6483,7 +6533,7 @@
   $('#cancelRevisionAction')?.addEventListener('click', async () => {
     const jobId = appState.qualityReview?.job_id;
     if (!jobId || appState.qualityReviewBulkBusy) return;
-    if (!window.confirm('Cancelar a revisão em andamento? O progresso já revisado é preservado e você pode retomar depois.')) return;
+    if (!await yomuConfirm('Cancelar a revisão em andamento? O progresso já revisado é preservado e você pode retomar depois.', {title: 'Cancelar revisão', confirmLabel: 'Cancelar revisão', cancelLabel: 'Continuar', danger: true})) return;
     appState.qualityReviewBulkBusy = true;
     setQualityReviewBulkMessage('Cancelando revisão...', 'busy');
     try {
@@ -8345,13 +8395,9 @@
     appState.localDeleteRecord = record;
     appState.localDeleteBusy = false;
     const published = String(record.publication_status || '').toLowerCase() === 'published';
-    $('#localDeleteSummary').innerHTML = [
-      ['Obra', record.series_name || record.chapter_name || '—'],
-      ['Capítulo', record.chapter_name || record.slug || '—'],
-      ['Páginas', Number(record.pages_processed || 0)],
-      ['Pasta', record.output_folder ? String(record.output_folder).replace(/^.*\\output\\?/i, 'output\\') : '—'],
-      ['Publicação', published ? 'existe e será preservada' : 'nenhuma vinculada'],
-    ].map(([label, value]) => `<div class="pub-meta"><small>${escapeHtml(label)}</small><strong>${escapeHtml(value)}</strong></div>`).join('');
+    const chapterTitle = record.chapter_name || record.series_name || record.slug || 'Capítulo';
+    $('#localDeleteSummary').innerHTML = `<div class="delete-target"><strong>${escapeHtml(chapterTitle)}</strong>`
+      + `<span>${Number(record.pages_processed || 0)} páginas · ${published ? 'publicado na Comunidade' : 'não publicado'}</span></div>`;
     $('#localDeleteNotice').textContent = published
       ? 'Este capítulo já possui publicação na Comunidade. A exclusão local não removerá a publicação, e os arquivos usados por ela não serão apagados por este fluxo.'
       : 'Esta ação remove o item selecionado do histórico. Marque a opção de arquivos apenas para apagar a pasta deste capítulo.';
@@ -8969,7 +9015,7 @@
     }
   }
   async function deleteCommunityComment(commentId, button) {
-    if (!commentId || !window.confirm('Excluir este comentário?')) return;
+    if (!commentId || !await yomuConfirm('Excluir este comentário?', {title: 'Excluir comentário', confirmLabel: 'Excluir', danger: true})) return;
     button.disabled = true;
     try {
       await api(`/api/community/comments/${encodeURIComponent(commentId)}`, {method: 'DELETE'});
@@ -8986,7 +9032,7 @@
     void deleteCommunityComment(button.dataset.commentDeleteId || '', button);
   });
   async function deleteOwnPublication(postId, button) {
-    if (!postId || !window.confirm('Remover esta publicação da Comunidade? O PDF local será preservado.')) return;
+    if (!postId || !await yomuConfirm('Remover esta publicação da Comunidade? O PDF local será preservado.', {title: 'Remover publicação', confirmLabel: 'Remover', danger: true})) return;
     button.disabled = true;
     button.textContent = 'Excluindo...';
     try {
@@ -9306,65 +9352,14 @@
   });
 
   /* ---------- settings ---------- */
-  function trueValue(value) { return String(value).toLowerCase() === 'true'; }
-  let remoteReadinessFetchedAt = 0;
-  async function refreshRemoteCleanReadiness(force = false) {
-    const status = $('#remoteCleanReadinessStatus');
-    const detail = $('#remoteCleanReadinessDetail');
-    if (!status || !detail || (!force && Date.now() - remoteReadinessFetchedAt < 30000)) return;
-    remoteReadinessFetchedAt = Date.now();
-    status.textContent = 'verificando…';
-    detail.textContent = 'A autenticação do Gemini não é inferida pela disponibilidade da interface.';
-    try {
-      const response = await fetch('/api/remote-clean/readiness', {cache: 'no-store'});
-      if (!response.ok) throw new Error('readiness unavailable');
-      const result = await response.json();
-      const ready = result?.ready_for_remote_dispatch === true;
-      status.textContent = ready ? 'API, fila, worker e schema disponíveis' : 'Remoto indisponível ou degradado';
-      const code = String(result?.remote_error_code || '');
-      detail.textContent = `Gemini: ${result?.gemini_ui_state || 'UNKNOWN'}; login/provedor não verificado${code ? ` · ${code}` : ''}.`;
-    } catch (_) {
-      status.textContent = 'Não foi possível verificar o remoto';
-      detail.textContent = 'A disponibilidade do navegador Gemini não comprova login nem prontidão para gerar.';
-    }
-  }
   function renderSettings(settings) {
-    refreshRemoteCleanReadiness();
     const apiReady = Boolean(settings.nvidia_configured);
-    // Configuration is not connectivity. This used to paint the rail badge
-    // "serviço conectado" straight from `nvidia_configured`, once, at bootstrap
-    // -- so the badge stayed green after the local backend was gone. It now only
-    // publishes the configuration fact; static/service_health.js owns the badge
-    // and will not claim CONNECTED without a recent successful health probe.
+    // Configuration is not connectivity: static/service_health.js owns the rail
+    // badge and will not claim CONNECTED without a recent successful health probe.
     document.documentElement.dataset.tradutorApiConfigured = apiReady ? '1' : '0';
     window.dispatchEvent(new CustomEvent('tradutor:api-configured-changed'));
-    $('#settingServiceFriendly').textContent = apiReady ? 'Pronto' : 'Indisponível';
-    const serviceSummary = $('#settingServiceSummary');
-    if (serviceSummary) serviceSummary.hidden = true;
-    $('#settingModeFriendly').textContent = 'Qualidade';
-    $('#settingReadingFriendly').textContent = settings.rapidocr_available ? 'Disponível' : 'Indisponível';
-    $('#settingParallelFriendly').textContent = trueValue(settings.ocr_parallel) ? 'Ativo' : 'Automático';
-    $('#settingContextFriendly').textContent = 'Ativo';
-    $('#settingTranslationMode').textContent = settings.translation_mode || '—';
     applyProviderDefault(settings.translation_provider);
-    $('#settingApiKey').textContent = apiReady ? 'configurada' : 'não configurada';
-    $('#settingApiKey').className = `kv-val ${apiReady ? 'ok' : 'warn'}`;
-    $('#settingModel').textContent = settings.translation_model || '—';
-    $('#settingBatch').textContent = settings.translation_batch_size || '—';
-    $('#settingRate').textContent = settings.max_requests_per_minute || '—';
-    $('#settingTranslateSfx').checked = trueValue(settings.translate_sfx);
-    $('#settingPrioritize').checked = trueValue(settings.prioritize_enclosed_text);
-    // RapidOCR is the beta's only engine. Paddle is an optional escalation that is not
-    // installed and is never substituted in silently, so it gets no row of its own.
-    $('#settingRapid').textContent = settings.rapidocr_available ? `disponível · ${settings.rapidocr_version}` : 'não disponível';
-    $('#confRange').value = Number(settings.rapidocr_min_confidence || .55);
-    $('#confVal').textContent = Number(settings.rapidocr_min_confidence || .55).toFixed(2);
-    $('#settingParallel').textContent = settings.ocr_parallel || '—';
-    $('#settingRepair').textContent = settings.ocr_text_repair_mode || '—';
-    $('#settingPython').textContent = settings.python_version || '—';
-    $('#settingNicegui').textContent = settings.nicegui_version || '—';
     const buildVersion = String(window.__tradutorDisplayVersion || window.__tradutorBuildVersion || '').trim();
-    $('#settingBuild').textContent = buildVersion || 'local';
     const installedVersion = $('#installedUpdateVersion');
     if (installedVersion) installedVersion.textContent = buildVersion || 'Versão atual';
     applyOcrEngineStatus(settings.ocr_engine);
@@ -9536,11 +9531,74 @@
       if (button) { button.disabled = false; button.textContent = 'Salvar configurações'; }
     }
   });
+  /* ---------- contact: source requests and feedback ---------- */
+  // Both go to the contact-request Edge Function, which stores the message and
+  // e-mails the team; the sender is the signed-in account, never a typed address.
+  const CONTACT_ERRORS = {
+    invalid_url: 'Cole um endereço completo, começando com https://.',
+    invalid_message: 'Escreva pelo menos algumas palavras.',
+    rate_limited: 'Você enviou várias mensagens na última hora. Tente de novo mais tarde.',
+    server_unavailable: 'Entre na sua conta para enviar.',
+  };
+  async function sendContact(kind, fields) {
+    const cp = window.__yomuControlPlane;
+    if (!cp?.call) throw Object.assign(new Error('server_unavailable'), {code: 'server_unavailable'});
+    return cp.call('contact-request', {kind, ...fields});
+  }
+  function contactErrorText(error) {
+    return CONTACT_ERRORS[error?.code] || CONTACT_ERRORS[error?.message] || 'Não foi possível enviar agora. Tente novamente em instantes.';
+  }
+  function setSourceRequestOpen(open) {
+    const overlay = $('#sourceRequestOverlay');
+    if (!overlay) return;
+    overlay.classList.toggle('show', open);
+    overlay.setAttribute('aria-hidden', open ? 'false' : 'true');
+    if (open) {
+      $('#sourceRequestForm')?.reset();
+      $('#sourceRequestError').hidden = true;
+      $('#sourceRequestUrl')?.focus();
+    }
+  }
+  $('#sourceRequestOpen')?.addEventListener('click', () => setSourceRequestOpen(true));
+  $('#sourceRequestClose')?.addEventListener('click', () => setSourceRequestOpen(false));
+  $('#sourceRequestCancel')?.addEventListener('click', () => setSourceRequestOpen(false));
+  $('#sourceRequestOverlay')?.addEventListener('click', event => { if (event.target === event.currentTarget) setSourceRequestOpen(false); });
+  $('#sourceRequestOverlay')?.addEventListener('keydown', event => { if (event.key === 'Escape') setSourceRequestOpen(false); });
+  $('#sourceRequestForm')?.addEventListener('submit', async event => {
+    event.preventDefault();
+    const url = String($('#sourceRequestUrl')?.value || '').trim();
+    const error = $('#sourceRequestError');
+    const button = $('#sourceRequestSubmit');
+    if (!/^https?:\/\/\S+\.\S+/i.test(url)) { error.textContent = CONTACT_ERRORS.invalid_url; error.hidden = false; return; }
+    button.disabled = true; button.textContent = 'Enviando…'; error.hidden = true;
+    try {
+      await sendContact('source_request', {url, message: String($('#sourceRequestNote')?.value || '').trim()});
+      setSourceRequestOpen(false);
+      showToast('Pedido enviado. Obrigado pela sugestão!', 'ok');
+    } catch (errorValue) {
+      error.textContent = contactErrorText(errorValue); error.hidden = false;
+    } finally { button.disabled = false; button.textContent = 'Enviar pedido'; }
+  });
+  $('#feedbackSubmit')?.addEventListener('click', async () => {
+    const field = $('#feedbackMessage');
+    const error = $('#feedbackError');
+    const button = $('#feedbackSubmit');
+    const message = String(field?.value || '').trim();
+    if (message.length < 3) { error.textContent = CONTACT_ERRORS.invalid_message; error.hidden = false; field?.focus(); return; }
+    button.disabled = true; button.textContent = 'Enviando…'; error.hidden = true;
+    try {
+      await sendContact('feedback', {message});
+      field.value = '';
+      showToast('Feedback enviado. Obrigado!', 'ok');
+    } catch (errorValue) {
+      error.textContent = contactErrorText(errorValue); error.hidden = false;
+    } finally { button.disabled = false; button.textContent = 'Enviar feedback'; }
+  });
   $('#interfaceLanguageSelect')?.addEventListener('change', event => {
     window.TradutorI18n?.setLanguage(event.target.value);
   });
   $('#settingsClearSession')?.addEventListener('click', async () => {
-    if (!window.confirm('Limpar a sessão atual neste navegador?')) return;
+    if (!await yomuConfirm('Limpar a sessão atual neste navegador?', {title: 'Limpar sessão', confirmLabel: 'Limpar'})) return;
     try {
       await api('/api/community/auth/logout', {method: 'POST', body: JSON.stringify({})});
     } catch (_) {
@@ -9554,8 +9612,8 @@
     }));
     showToast('Sessão local limpa.', 'ok');
   });
-  $('#settingsClearLocalData')?.addEventListener('click', () => {
-    if (!window.confirm('Limpar preferências locais deste navegador? Outputs e cache do projeto não serão apagados.')) return;
+  $('#settingsClearLocalData')?.addEventListener('click', async () => {
+    if (!await yomuConfirm('Limpar preferências locais deste navegador? Outputs e cache do projeto não serão apagados.', {title: 'Limpar dados locais', confirmLabel: 'Limpar', danger: true})) return;
     try {
       localStorage.removeItem('tradutor.interfaceLanguage');
       sessionStorage.clear();
@@ -9740,7 +9798,7 @@
 
     checkBtn.addEventListener('click', checkForUpdate);
     if (headerBadge) headerBadge.addEventListener('click', () => {
-      activateTab('settings');
+      activateTab('updates');
       $('#updaterPanel')?.scrollIntoView({behavior: 'smooth', block: 'start'});
     });
     installBtn.addEventListener('click', async () => {

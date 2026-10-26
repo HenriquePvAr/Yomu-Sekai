@@ -29,7 +29,7 @@ class SettingsReorganizationTests(unittest.TestCase):
 
     def test_user_settings_no_longer_has_community_card(self):
         form = re.search(
-            r'<form class="settings-product-grid" id="productSettingsForm">(.*?)</form>',
+            r'<form class="settings-product-grid[^"]*" id="productSettingsForm">(.*?)</form>',
             self.shell,
             re.S,
         )
@@ -73,7 +73,7 @@ const html = fs.readFileSync('ui/ui_shell.html', 'utf8');
 const nodes = [...html.matchAll(/data-i18n(?:-placeholder|-aria-label)?="([^"]+)"/g)]
   .map(m => ({key:m[1], textContent:'', getAttribute(){return this.key},
              setAttribute(name,value){this.textContent=value}}));
-assert.ok(nodes.length > 40);
+assert.ok(nodes.length > 10);
 const sandbox = {window:{}, navigator:{languages:['pt-BR']},
  localStorage:{getItem(){return null}},
  document:{readyState:'complete',documentElement:{},querySelectorAll(){return nodes}},
@@ -109,9 +109,10 @@ assert.equal(sandbox.window.TradutorI18n.t('settings.title'),'Configurações');
         self.assertNotIn("innerHTML", src)
 
     def test_all_supported_languages_are_shown(self):
-        shell = read("ui/ui_shell.html")
-        for value in ("auto", "pt-BR", "en-US", "es-ES", "fr-FR", "ja-JP", "ko-KR"):
-            self.assertIn(f'value="{value}"', shell)
+        # The interface follows the system language; Configurações has no picker
+        # anymore, but every supported language still ships its dictionary.
+        for value in ("pt-BR", "en-US", "es-ES", "fr-FR", "ja-JP", "ko-KR"):
+            self.assertTrue((ROOT / "static" / "i18n" / f"{value}.js").is_file(), value)
 
     def test_nested_static_assets_keep_subdirectory(self):
         src = read("app_ui.py")

@@ -1631,7 +1631,14 @@ async def api_run(
                 "code": reason_code,
                 "stage": "autorizacao_de_conteudo",
                 "message": message,
-                "action": "Abra Configurações para revisar a política das fontes.",
+                "action": "Clique em Iniciar tradução de novo e confirme a autorização das fontes.",
+            }) from exc
+        if reason_code in {"auth_refresh_required", "auth_expired"}:
+            raise HTTPException(status_code=401, detail={
+                "code": reason_code,
+                "stage": "sessao",
+                "message": "Sua sessão estava perto de expirar e foi renovada.",
+                "action": "Clique em Iniciar tradução novamente.",
             }) from exc
         if reason_code == "device_limit_reached":
             raise HTTPException(status_code=409, detail={

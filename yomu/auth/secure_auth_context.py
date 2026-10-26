@@ -118,6 +118,26 @@ class AuthContext:
                 "token_length": len(self.access_token), "user_id": self.user_id}
 
 
+def require_token_lifetime(access_token: str, *, expires_at: float | None = None,
+                           now: float | None = None) -> float:
+    """The token's expiry, or the error ``seal`` would raise for it.
+
+    Checked before a job exists: a token too close to expiry used to fail only at
+    sealing, after the job was already queued, and the worker then ran the whole
+    chapter without a credential and failed at translation.
+    """
+    now = time.time() if now is None else now
+    jwt_exp = _jwt_exp(str(access_token or ""))
+    token_exp = _finite_number(expires_at, "invalid_token_expiry") if expires_at is not None else (jwt_exp or 0.0)
+    if jwt_exp is not None:
+        token_exp = min(token_exp, jwt_exp) if token_exp else jwt_exp
+    if token_exp and token_exp <= now:
+        raise AuthContextError("auth_expired")
+    if token_exp and token_exp - now < MIN_TOKEN_LIFETIME_SECONDS:
+        raise AuthContextError("auth_refresh_required")
+    return token_exp
+
+
 class AuthEnvelopeStore:
     def __init__(self, runtime_root: Path, *, ttl_seconds: int = DEFAULT_TTL_SECONDS, clock=time.time):
         self.root = Path(runtime_root).resolve() / "auth"
@@ -149,14 +169,7 @@ class AuthEnvelopeStore:
         if not _TOKEN_RE.fullmatch(token):
             raise AuthContextError("invalid_access_token")
         now = _finite_number(self.clock(), "invalid_auth_clock")
-        jwt_exp = _jwt_exp(token)
-        token_exp = _finite_number(expires_at, "invalid_token_expiry") if expires_at is not None else (jwt_exp or 0.0)
-        if jwt_exp is not None:
-            token_exp = min(token_exp, jwt_exp) if token_exp else jwt_exp
-        if token_exp and token_exp <= now:
-            raise AuthContextError("auth_expired")
-        if token_exp and token_exp - now < MIN_TOKEN_LIFETIME_SECONDS:
-            raise AuthContextError("auth_refresh_required")
+        token_exp = require_token_lifetime(token, expires_at=expires_at, now=now)
         envelope_exp = min(now + self.ttl_seconds, token_exp) if token_exp else now + self.ttl_seconds
         normalized_user_id = str(user_id or "")
         if len(normalized_user_id) > 200 or any(ord(ch) < 32 for ch in normalized_user_id):

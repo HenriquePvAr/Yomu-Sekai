@@ -318,8 +318,10 @@ class RapidOcrBetaSurfaceTests(unittest.TestCase):
         cls.shell = SHELL_HTML.read_text(encoding="utf-8")
 
     def test_the_ocr_engine_is_shown_next_to_the_translation_engine(self):
-        self.assertIn("Motor de OCR", self.shell)
-        self.assertIn("RapidOCR", self.shell)
+        # The read-only engine field lives in Nova tradução; Configurações no longer
+        # carries a developer OCR panel.
+        self.assertIn('aria-label="Motor de OCR"', self.shell)
+        self.assertIn('id="ocrEngineSelect"', self.shell)
 
     def test_no_paddle_engine_is_offered_as_a_choice(self):
         self.assertNotIn("Paddle", self.shell)

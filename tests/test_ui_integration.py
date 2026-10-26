@@ -211,14 +211,13 @@ class UiIntegrationTests(unittest.TestCase):
 
     def test_common_settings_hide_technical_internals_behind_developer_mode(self):
         shell = (ROOT / "ui" / "ui_shell.html").read_text(encoding="utf-8")
-        common = shell[
-            shell.index('<form class="settings-product-grid"')
-            :shell.index('<details class="advanced-details">')
-        ]
+        start = shell.index('id="view-cfg"')
+        common = shell[start:shell.index('</section>', start)]
         for forbidden in ("NVIDIA_API_KEY", "Python", "NiceGUI", "Repositório", "Stack", "PaddleOCR", "RapidOCR"):
             self.assertNotIn(forbidden, common, forbidden)
-        self.assertIn("Modo Desenvolvedor", shell)
-        self.assertIn("diagnóstico técnico opcional", shell)
+        # Configurações shows only ads and feedback.
+        self.assertIn('id="passiveAdsToggle"', common)
+        self.assertIn('id="feedbackSubmit"', common)
 
     def test_publication_payload_has_no_local_or_secret_fields(self):
         source = (ROOT / "static" / "tradutor_ui.js").read_text(encoding="utf-8")

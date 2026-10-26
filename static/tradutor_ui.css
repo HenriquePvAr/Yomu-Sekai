@@ -829,20 +829,25 @@
   @media (max-width:520px){.output-profile-grid{grid-template-columns:1fr;}}
   /* ---------- output plan preset selector (three-up card grid) ---------- */
   .output-plan-grid{display:grid; grid-template-columns:repeat(auto-fit,minmax(205px,1fr)); gap:12px;}
-  #outputPlanField .output-plan-card{display:flex; flex-direction:column; align-items:flex-start; gap:12px; padding:20px; margin:0; min-height:210px; border-radius:12px; background:linear-gradient(145deg,#222124,#141416); text-transform:none; letter-spacing:normal; transition:border-color .18s,background .18s,transform .18s;}
-  #outputPlanField .output-plan-card::before{content:'PDF'; display:grid; place-items:center; height:32px; padding:0 10px; border:1px solid rgba(239,231,216,.16); border-radius:8px; color:var(--paper); font:600 10px/1 'JetBrains Mono',monospace; letter-spacing:.08em;}
+  /* Plan cards follow the panel language of the app: square corners, dotted panel fill,
+     mono kicker, vermillion edge on the chosen one. */
+  #outputPlanField .output-plan-card{display:flex; flex-direction:column; align-items:flex-start; gap:8px; padding:16px 16px 14px; margin:0; min-height:0; border:1px solid var(--line); border-radius:2px; background:radial-gradient(rgba(239,231,216,0.04) 1px, transparent 1.3px) 0 0/7px 7px, linear-gradient(160deg, rgba(239,231,216,0.05), rgba(239,231,216,0.012)); text-transform:none; letter-spacing:normal; transition:border-color .18s,background .18s;}
+  #outputPlanField .output-plan-card::before{content:'PDF'; color:var(--muted); font:500 9.5px/1 'JetBrains Mono',monospace; letter-spacing:.14em; text-transform:uppercase;}
   #outputPlanField [data-output-plan-card="apenas_clean"]::before{content:'CLEAN';}
-  #outputPlanField [data-output-plan-card="profissional"]::before{content:'STUDIO';}
+  #outputPlanField [data-output-plan-card="profissional"]::before{content:'PDF · CLEAN · PSD';}
   #outputPlanField [data-output-plan-card="apenas_traducao"]::before{content:'TEXTO';}
   #outputPlanField [data-output-plan-card="traducao_clean"]::before{content:'TEXTO + CLEAN';}
   #outputPlanField [data-output-plan-card="personalizado"]::before{content:'AJUSTES';}
-  #outputPlanField .output-plan-card:hover{transform:translateY(-2px); border-color:rgba(239,231,216,.45);}
-  #outputPlanField .output-plan-card.selected{background:linear-gradient(145deg,#342123,#1c1719); border-color:var(--vermillion); box-shadow:0 0 0 1px var(--vermillion);}
-  #outputPlanField .output-plan-card input{top:23px; right:18px; margin:0; width:18px; height:18px;}
-  #outputPlanField .output-profile-card-title{display:flex; flex-wrap:wrap; align-items:center; gap:7px; padding:0; color:var(--paper); font-size:15px; line-height:1.35;}
-  #outputPlanField .output-profile-card-description{display:block; color:#b6b0aa; font:400 12px/1.65 'Space Grotesk',sans-serif;}
-  #outputPlanField .plan-result{display:block; margin-top:auto; padding:5px 9px; font-size:10px; color:#e0c981; background:rgba(201,162,39,.10);}
-  #outputPlanField .plan-badge-rec{display:inline-block; margin:0; padding:3px 6px; font-size:9px;}
+  #outputPlanField .output-plan-card:hover{border-color:rgba(239,231,216,.34);}
+  #outputPlanField .output-plan-card.selected{border-color:var(--vermillion); background:linear-gradient(160deg, rgba(197,55,44,.13), rgba(197,55,44,.03)); box-shadow:inset 3px 0 0 var(--vermillion);}
+  #outputPlanField .output-plan-card.selected::before{color:var(--vermillion);}
+  #outputPlanField .output-plan-card input{top:14px; right:14px; margin:0; width:15px; height:15px;}
+  #outputPlanField .output-profile-card-title{display:flex; flex-wrap:wrap; align-items:center; gap:8px; padding:0 20px 0 0; color:var(--paper); font:600 14.5px/1.3 'Space Grotesk',sans-serif;}
+  #outputPlanField .output-plan-card.selected .output-profile-card-title{color:var(--paper);}
+  #outputPlanField .output-profile-card-description{display:block; color:var(--muted); font:400 12px/1.55 'Space Grotesk',sans-serif;}
+  #outputPlanField .plan-result{display:block; margin-top:auto; padding:6px 0 0; border-top:1px solid var(--line); width:100%; border-radius:0; background:none; color:var(--gold); font:500 9.5px/1.4 'JetBrains Mono',monospace; letter-spacing:.08em; text-transform:uppercase;}
+  #outputPlanField .output-plan-card.selected .plan-result{background:none; color:var(--paper-dim);}
+  #outputPlanField .plan-badge-rec{display:inline-block; margin:0; padding:2px 6px; border:1px solid rgba(201,162,39,.6); border-radius:2px; background:none; color:var(--gold); font:500 8.5px/1.3 'JetBrains Mono',monospace; letter-spacing:.1em; text-transform:uppercase;}
   #outputPlanHint{display:block; margin-top:14px; line-height:1.6;}
   .pipeline-timing{margin:0 0 16px; padding:12px; border:1px solid var(--line); border-radius:8px; color:var(--paper); font:12px/1.6 'Space Grotesk',sans-serif; background:rgba(239,231,216,.03);}
   #outputPlanOptions[aria-disabled="true"] .output-plan-card{cursor:not-allowed; opacity:.55;}
@@ -3608,7 +3613,6 @@ html[data-visual-reduced-motion="1"] .auth-login-shell[data-entered] .auth-login
 .source-card { display: flex; flex-direction: column; gap: 10px; }
 .source-card{overflow:hidden; border-radius:12px; background:#151517;}
 .source-preview{aspect-ratio:16/9; margin:-24px -24px 0; background-color:#242428; background-size:cover; background-position:top center; border-bottom:1px solid var(--line);}
-.source-preview-status{color:var(--muted); font:10px/1.5 'JetBrains Mono',monospace; margin-bottom:6px;}
 .source-card-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .source-card-head h2 { margin: 0; font-size: 18px; line-height: 1.2; }
 .source-card p { margin: 0; flex: 1 1 auto; opacity: .82; font-size: 13px; line-height: 1.5; }
@@ -3627,3 +3631,36 @@ html[data-visual-reduced-motion="1"] .auth-login-shell[data-entered] .auth-login
 .job-completion-artifacts li{display:flex;gap:8px;align-items:flex-start;color:var(--muted);font-size:13px}.job-completion-artifacts li[data-status="produced"]{color:var(--success)}.job-completion-artifacts li[data-status="missing"],.job-completion-artifacts li[data-status="failed"]{color:var(--muted)}
 .job-completion-actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:3px}.job-completion-actions button{min-width:0;max-width:100%;white-space:normal}
 @media (max-width:560px){.job-completion{padding:14px}.job-completion-actions{display:grid;grid-template-columns:1fr}.job-completion-actions button{width:100%}}
+
+/* ---------- app dialogs: confirmation, delete, source request ---------- */
+.modal-card.yomu-dialog,#localDeleteModalOverlay .modal-card,#bulkDeleteModalOverlay .modal-card{max-width:480px;border-radius:2px;padding:26px 28px 24px;box-shadow:inset 0 3px 0 var(--vermillion),0 30px 60px -20px rgba(0,0,0,.7)}
+.yomu-dialog h2,#localDeleteModalOverlay h2,#bulkDeleteModalOverlay h2{font:600 21px/1.25 'Space Grotesk',sans-serif;color:var(--paper);margin:8px 0 10px;padding-right:34px}
+.yomu-dialog-text{color:var(--paper-dim);font-size:13px;line-height:1.6;margin:0 0 18px}
+.modal-card .sc-modal-actions{display:flex;justify-content:flex-end;align-items:center;gap:10px;margin-top:20px;flex-wrap:wrap}
+.modal-card .sc-modal-actions .btn-primary,.modal-card .sc-modal-actions .btn-ghost{display:inline-flex;align-items:center;justify-content:center;width:auto;min-width:118px;margin:0;padding:11px 18px;font-size:12px}
+.modal-card .btn-primary.danger{background:var(--vermillion);color:var(--paper);border:0}
+.modal-card .btn-primary.danger:hover{background:#d8443a}
+.modal-card .field{margin-bottom:14px}
+.modal-card input[type=url]{width:100%;background:rgba(12,12,15,.6);border:1px solid var(--line);color:var(--paper);padding:11px 13px;font:12.5px 'JetBrains Mono',monospace;border-radius:2px;outline:none}
+.modal-card input[type=url]:focus{border-color:var(--vermillion);box-shadow:0 0 0 3px rgba(197,55,44,.12)}
+.delete-target{display:flex;flex-direction:column;gap:4px;padding:12px 14px;border:1px solid var(--line);border-left:3px solid var(--vermillion);background:rgba(239,231,216,.03);grid-column:1/-1}
+.delete-target strong{color:var(--paper);font:600 14px/1.35 'Space Grotesk',sans-serif;overflow-wrap:anywhere}
+.delete-target span{color:var(--muted);font:10.5px/1.4 'JetBrains Mono',monospace;letter-spacing:.04em}
+#localDeleteSummary{display:block;margin-bottom:12px}
+#localDeleteModalOverlay .publication-pending,#bulkDeleteModalOverlay .publication-pending{border:0;background:none;color:var(--muted);padding:0;margin:0 0 14px;line-height:1.55}
+#localDeleteConfirm,#bulkDeleteConfirm{letter-spacing:.2em;text-transform:uppercase}
+
+/* ---------- Fontes: request a new source ---------- */
+.source-request-strip{display:flex;align-items:center;justify-content:space-between;gap:18px;margin-top:18px;padding:18px 22px;border-style:dashed}
+.source-request-strip strong{display:block;color:var(--paper);font:600 15px/1.3 'Space Grotesk',sans-serif}
+.source-request-strip p{margin:4px 0 0;color:var(--muted);font-size:12.5px;line-height:1.5}
+.source-request-strip .btn-ghost{display:inline-flex;flex:none;white-space:nowrap}
+@media (max-width:640px){.source-request-strip{flex-direction:column;align-items:stretch}}
+
+/* ---------- Configurações: ads and feedback only ---------- */
+.settings-product-grid.settings-simple{grid-template-columns:repeat(2,minmax(0,1fr));max-width:980px}
+.settings-simple #feedbackPanel textarea{min-height:120px;margin:4px 0 12px}
+.settings-simple #feedbackPanel .btn-primary{margin-top:0}
+@media (max-width:820px){.settings-product-grid.settings-simple{grid-template-columns:1fr}}
+.updates-signed{max-width:980px;margin:0 auto 28px}
+.updates-signed>.panel-label,.updates-signed>.kv-row:first-of-type{display:none}

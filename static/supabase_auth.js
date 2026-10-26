@@ -129,14 +129,24 @@ export async function hasPkceCodeVerifier() {
 }
 
 // Canonical asynchronous source used by all community requests.
+// The local backend seals the token for a job only with >= 10 min left (the
+// worker translates with it later). The SDK refreshes much closer to expiry, so
+// a token inside that window is refreshed here instead of being refused there.
+const MIN_TOKEN_LIFETIME_SECONDS = 11 * 60;
+let refreshInFlight = null;
 export async function getCanonicalAccessToken() {
   const now = Math.floor(Date.now() / 1000);
-  if (memorySession?.access_token && (!memorySession.expires_at || memorySession.expires_at > now + 30)) {
-    return memorySession.access_token;
-  }
+  const fresh = session => session?.access_token && (!session.expires_at || session.expires_at > now + MIN_TOKEN_LIFETIME_SECONDS);
+  if (fresh(memorySession)) return memorySession.access_token;
   const client = await getSupabaseClient();
   if (!client) return '';
-  const {data, error} = await client.auth.getSession();
+  let {data, error} = await client.auth.getSession();
+  if (!error && data?.session?.access_token && !fresh(data.session)) {
+    // Concurrent requests share one refresh.
+    refreshInFlight = refreshInFlight || client.auth.refreshSession().finally(() => { refreshInFlight = null; });
+    const refreshed = await refreshInFlight;
+    if (!refreshed.error && refreshed.data?.session?.access_token) ({data, error} = refreshed);
+  }
   if (error || !data?.session?.access_token) return '';
   memorySession = {...memorySession, ...data.session, expires_at: data.session.expires_at || 0};
   return memorySession.access_token || '';

@@ -1,6 +1,6 @@
 # Yomu Sekai — Guia do Usuário
 
-> **Base verificada:** `129e169` · **Revisado em:** 2026-10-26
+> **Base verificada:** `b990cc8` · **Revisado em:** 2026-10-26
 > **Para quem é:** Scans, tradutores, editores e testadores da Beta. Nenhum conhecimento
 > técnico é necessário.
 
@@ -174,7 +174,7 @@ Na lateral existe um menu com as áreas do programa:
 | **Scans** | Scan Studio — ainda **em desenvolvimento**; a aba só apresenta o que está planejado |
 | **Comunidade** | Ainda **em desenvolvimento**: a aba avisa que "A comunidade ainda não está disponível nesta versão." |
 | **Atualizações** | Mostra sua versão e permite **Verificar atualizações** (ver [seção 19](#19-configurações)) |
-| **Configurações** | Preferências do programa |
+| **Configurações** | Anúncios e envio de feedback para a equipe |
 
 No topo da janela aparecem também seu saldo de **YK** (Yomu Keys), seu rank e, quando houver uma
 atualização disponível, o selo **↑ Atualizar**.
@@ -190,6 +190,11 @@ o Yomu pelo navegador (o Yomu continua aberto). Lá você encontra o capítulo, 
 e volta ao Yomu para colar na aba **Nova tradução** — o processamento continua no fluxo
 normal. A aba Fontes não baixa nem processa nada por conta própria e não consulta os sites
 ao ser aberta.
+
+Se o site que você usa não está na lista, clique em **Solicitar fonte** (abaixo dos cartões),
+cole a URL de uma obra ou capítulo desse site e clique em **Enviar pedido**. O pedido chega à
+equipe do Yomu com o seu nome de usuário; enviar não adiciona o site na hora, o suporte é
+avaliado depois.
 
 ## 8. Traduzindo um capítulo, passo a passo
 
@@ -271,8 +276,8 @@ ao voltar à aba. O tempo restante é uma estimativa **da etapa atual**, calcula
 progresso suficiente; se os eventos pararem, o painel informa que aguarda atualização.
 
 Em **Fontes**, as miniaturas são capturas novas dos sites públicos, atualizadas a cada minuto
-enquanto a aba está aberta e visível. O horário identifica a captura. Em caso de falha, a última
-prévia permanece com aviso; ela não é apresentada como atual. A primeira captura pode demorar
+enquanto a aba está aberta e visível. Em caso de falha, a última prévia continua na tela até a
+próxima captura dar certo. A primeira captura pode demorar
 alguns segundos. Nenhuma conta dos sites é usada nas capturas.
 
 A escolha do resultado é separada do modo. Três cartões aparecem primeiro; **Mais opções**
@@ -470,7 +475,7 @@ branco com contorno — como nas traduções feitas por grupos de scan. Da mesma
 ou narração escrita sobre a arte que não pôde ser apagada com segurança recebe uma **caixa de
 legenda** (clara ou escura, conforme o fundo) por cima do texto original, com a tradução
 dentro; a caixa também é usada quando a tradução não cabe no espaço do texto original, e
-alarga em vez de partir uma palavra no meio. Esse comportamento não tem um botão na tela de configurações; se a sua instalação precisar manter todos os
+alarga em vez de partir uma palavra no meio. Esse comportamento não tem um botão na tela; se a sua instalação precisar manter todos os
 efeitos sonoros em inglês, peça a quem preparou a instalação.
 
 ### Texto dentro dos balões
@@ -570,6 +575,12 @@ Cada item tem **LER** como ação principal e, conforme os arquivos que existem,
 **Abrir pasta**, **Reprocessar** e **Excluir capítulo**. O botão **Selecionar** permite marcar
 vários capítulos e excluí-los de uma vez (**Excluir selecionados**).
 
+A janela de exclusão mostra o capítulo, o número de páginas e se ele foi publicado. Para
+confirmar, digite **EXCLUIR** e clique em **Excluir capítulo**; marque a opção de arquivos só se
+quiser apagar também a pasta do capítulo. As outras confirmações do programa (cancelar um
+processamento, descartar uma tentativa interrompida, remover uma publicação) abrem uma janela
+do próprio Yomu com **Cancelar** e o botão da ação.
+
 Capítulos traduzidos em versões antigas do programa também aparecem: eles são descobertos
 pela pasta `output/`, mesmo sem registro interno.
 
@@ -652,31 +663,22 @@ precisa marcar as duas confirmações (permissão para publicar e revisão do re
 
 ## 19. Configurações
 
-Principais preferências disponíveis:
+A tela tem só duas partes:
 
-No topo há cartões de resumo (modo padrão, leitura de texto, processamento paralelo, contexto
-de capítulo) e o indicador **Worker remoto de limpeza**, que mostra apenas a disponibilidade
-técnica desse serviço; ele não inicia um job nem comprova login no Gemini.
-
-- **Geral** — idioma da interface (Automático — sistema, Português do Brasil, English,
-  Español, Français, 日本語, 한국어), tema, página inicial, abrir pasta ao terminar,
-  notificações no dispositivo, confirmar ações destrutivas;
-- **Processamento** — modo padrão, escopo padrão (capítulo inteiro ou amostra de teste), usar
-  cache quando seguro, usar contexto temporário, concorrência segura;
-- **Arquivos** — retenção de outputs, limite de cache, confirmar antes de apagar, limpeza
-  manual de temporários;
-- **Acessibilidade e privacidade** — reduzir animações, aumentar contraste, escala da
-  interface, mostrar tooltips, atalhos de teclado, **limpar sessão**, **limpar dados deste
-  dispositivo**;
 - **Anúncios** — **Anúncios passivos**: com eles ligados, você pode usar YK diários; YK
   permanentes continuam disponíveis com os anúncios desligados;
-- **Atualizações** — versão instalada e o botão **Verificar atualizações** (ver abaixo);
-- **Sobre** — botões **Salvar configurações** e **Restaurar padrão**.
+- **Feedback** — escreva um problema ou uma ideia e clique em **Enviar feedback**. A mensagem
+  vai para a equipe do Yomu junto com o seu nome de usuário. Dá para enviar até 5 mensagens por
+  hora (somando feedback e pedidos de fonte).
+
+A autorização das fontes, que antes ficava aqui, agora é pedida na primeira vez que você clica
+em **Iniciar tradução** com uma URL: leia o aviso e clique em **Confirmo**. A confirmação vale
+para os próximos capítulos e nada é publicado automaticamente.
 
 ### Atualizações
 
-**Estado: PARCIAL.** A verificação existe na aba **Atualizações** (botão **Verificar
-atualizações**) e em **Configurações › Atualizações**. O programa também verifica sozinho
+**Estado: PARCIAL.** A verificação fica na aba **Atualizações** (botão **Verificar
+atualizações**). O programa também verifica sozinho
 alguns segundos depois de abrir e, se houver novidade, mostra o selo **↑ Atualizar** no topo.
 
 - *Você está na versão mais recente.* — nada a fazer;
@@ -855,8 +857,7 @@ Não pela tela. O serviço é o configurado para a sua instalação (padrão: **
 programa nunca troca de serviço por conta própria.
 
 **E o motor de leitura de texto (OCR)?**
-Nesta beta há um só, **RapidOCR**; não há troca nesta versão. O cartão **Leitura de texto**
-em **Configurações** mostra o estado dele.
+Nesta beta há um só, **RapidOCR**; não há troca nesta versão.
 
 **Como recebo uma atualização?**
 Na aba **Atualizações**, clique em **Verificar atualizações** (veja a

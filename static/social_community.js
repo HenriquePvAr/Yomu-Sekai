@@ -404,8 +404,8 @@ function chapterRow(c, work, owner) {
   return row;
 }
 
-function confirmRestore(c) {
-  if (!window.confirm('Restaurar este PDF retido como arquivo ativo do capítulo?')) return;
+async function confirmRestore(c) {
+  if (!await window.yomuConfirm('Restaurar este PDF retido como arquivo ativo do capítulo?', {title: 'Restaurar PDF', confirmLabel: 'Restaurar'})) return;
   api.restoreAsset(c.id)
     .then(() => { toast('PDF restaurado.'); render(); })
     .catch((e) => fail(e && e.status === 409

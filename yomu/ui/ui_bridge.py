@@ -7198,7 +7198,14 @@ class UiBridge:
         The commercial device context carries the ``device_uuid`` the translation
         provider needs; a job created without it was refused with
         ``commercial_device_id_missing`` (the queue used to skip this gate).
+        A token too close to expiry is refused here, before any job row exists.
         """
+        if license_access_token:
+            from yomu.auth.secure_auth_context import AuthContextError, require_token_lifetime
+            try:
+                require_token_lifetime(license_access_token)
+            except AuthContextError as exc:
+                raise ValueError(str(exc.args[0] if exc.args else "auth_refresh_required")) from exc
         if getattr(self, "commercial_device_authorizer", None) is not None:
             return None, self._require_commercial_device_access(
                 principal=principal, operation="start_translation", access_token=license_access_token)

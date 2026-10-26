@@ -555,7 +555,7 @@ RLS/grants e negação autenticada antes de qualquer grant real.
 | `docs/user/GUIA_DO_USUARIO.md` | **Não requer mudança** | Ainda não há UX final de licença para tester externo. |
 | Capturas de tela | **Não requer** | Evidência canônica está nos metadados remotos e testes locais. |
 
-**Resultado #78:** no projeto Supabase `mimrsxnhqbqkffsekxuw` (`Tradutor IA Community`) foram
+**Resultado #78:** no projeto Supabase `<projeto-supabase-legado>` (`Tradutor IA Community`) foram
 aplicadas apenas migrations de licensing:
 
 - `20260824192515 beta_tester_licensing_foundation`

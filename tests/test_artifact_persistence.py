@@ -72,6 +72,15 @@ class ArtifactPersistenceTests(unittest.TestCase):
             self.assertTrue((self.root / "images" / "translated" / f"{i:03}.png").is_file())
         self.assertFalse((self.root / "images" / "clean").exists())
 
+    def test_plan_that_owes_clean_persists_it_under_automatic(self):
+        # "Tradução pronta" declares clean_image in its manifest; the job failed its own
+        # contract (required_artifact_missing) when only the legacy profile decided.
+        st = self._state(1, cleaned=True)
+        rep = bp._persist_canonical_artifacts(self.root, [st], 1, ac.OutputProfile.AUTOMATIC,
+                                              plan_wants_clean=True)
+        self.assertEqual(rep["clean_produced"], [1])
+        self.assertEqual(rep["translated_produced"], [1])
+
     # --- B) TRANSLATED canonical is the SAME buffer used for the PDF (byte-identical) -----
     def test_translated_is_same_buffer_as_output_path(self):
         st = self._state(5)

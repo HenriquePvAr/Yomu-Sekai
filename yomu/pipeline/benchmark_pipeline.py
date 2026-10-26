@@ -910,7 +910,8 @@ def _copy_canonical_artifact(src, dst) -> int | None:
     return os.path.getsize(dst)
 
 
-def _persist_canonical_artifacts(output_root, completed_states, total_pages, profile, *, typeset=True):
+def _persist_canonical_artifacts(output_root, completed_states, total_pages, profile, *, typeset=True,
+                                 plan_wants_clean=False):
     """Persist CLEAN and TRANSLATED as canonical per-page artifacts (Artifact Contract v2).
 
     Additive: the legacy ``pages/page_NNN.png`` (translated) and ``*_cleaned.png`` are left in
@@ -930,7 +931,10 @@ def _persist_canonical_artifacts(output_root, completed_states, total_pages, pro
     # When typeset did not run (clean-only / translate+clean) there is no translated page to
     # persist -- the rendered buffer IS the clean art. Persist CLEAN only and never write a
     # phantom translated image. Clean becomes mandatory regardless of profile.
-    want_clean = (not typeset) or ac.ArtifactType.CLEAN_IMAGE in ac.profile_artifacts(profile)
+    # The output plan's manifest owes CLEAN for "Tradução pronta" too (plan_artifact_types);
+    # deciding by the legacy profile alone left that run failing its own contract.
+    want_clean = ((not typeset) or plan_wants_clean
+                  or ac.ArtifactType.CLEAN_IMAGE in ac.profile_artifacts(profile))
     want_translated = typeset
     requested = sorted(int(s["index"]) for s in completed_states)
     translated_ok, clean_ok = {}, {}
@@ -3803,6 +3807,8 @@ def run_benchmark(args):
     artifact_export = _persist_canonical_artifacts(
         output_folder, completed_states, len(image_paths), output_profile,
         typeset=_pipeline_flags["want_typeset"],
+        plan_wants_clean=(not _pipeline_flags["legacy"] and ac.ArtifactType.CLEAN_IMAGE
+                          in _plan_requested_artifacts(_pipeline_flags["effective_ops"])),
     )
     # Translate+clean (translation ran, text not typeset): also persist the readable
     # translation so the "Ver tradução" viewer works, same file as translate-only.

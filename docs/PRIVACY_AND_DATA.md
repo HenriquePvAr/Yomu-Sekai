@@ -16,9 +16,9 @@ Arquivos/cache antigos no computador não são removidos automaticamente. O sche
 migrations históricas permanecem intactos.
 
 `REMOTE_PROFILE_MEDIA_DECOMMISSION: COMPLETE_FOR_ACTIVE_BACKEND` — no Supabase ativo
-`ybxwjiycujminbwbdtlb`, a Edge Function `profile-media` está ausente, nenhuma Edge Function
+`<projeto-supabase-ativo>`, a Edge Function `profile-media` está ausente, nenhuma Edge Function
 ativa a referencia e a consulta read-only de logs não encontrou chamadas nas últimas 24h.
 O source órfão foi removido deste repositório. O projeto legado
-`mimrsxnhqbqkffsekxuw` permanece intacto como rollback temporário; a função, secrets e
+`<projeto-supabase-legado>` permanece intacto como rollback temporário; a função, secrets e
 dados desse projeto não foram removidos. Os campos de avatar/banner no schema ativo são
 legado inerte e foram mantidos para uma futura manutenção deliberada.

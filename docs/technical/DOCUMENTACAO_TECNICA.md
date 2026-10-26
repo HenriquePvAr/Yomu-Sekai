@@ -1,6 +1,6 @@
 # Tradutor IA — Documentação Técnica
 
-> **Base verificada:** `129e169` (branch `main`) em 2026-10-26 (passo 15 de §29); `d14edac` para os diagramas Mermaid de §15
+> **Base verificada:** `b990cc8` (branch `main`) em 2026-10-26 (passos 15–16 de §29); `d14edac` para os diagramas Mermaid de §15
 > (validação/retries/liquidação), §16 (três candidatos de preenchimento, escolha e portões,
 > tipografia) e §25 (paralelismo por página) conferidos contra `yomu/ocr/ocr_balloon.py`,
 > `yomu/pipeline/benchmark_pipeline.py` e `yomu/clean/ownership/font_fidelity.py`. O restante do
@@ -1676,6 +1676,31 @@ Décima primeira passada (reconstrução e regiões restantes, 2026-10-25, **IMP
   `control_plane_client.heartbeat` só chama `device-heartbeat` com dispositivo verificado e para
   em 401/403 (a aba do navegador repetia 403 a cada 2 min); o trace de Fontes não gera mais
   rejeição não tratada.
+- Jobs da UI e telas (passo 16): **todo job do worker terminava `failed`/`interrupted` com o PDF
+  pronto.** Três causas, todas corrigidas: (1) o launcher `run_webtoon.py` fazia
+  `SystemExit(main())` e `main()` devolve o relatório (dict), o que sai com código 1; o
+  mapeamento `pipeline_report_exit_code` se perdeu no refactor `978f991` e voltou ao launcher
+  (`tests/test_run_webtoon_launcher_exit.py`); (2) o manifesto do plano **Tradução pronta**
+  deve `clean_image` (`plan_artifact_types`), mas o export decidia só pelo perfil legado
+  `automatic`, que não grava imagens limpas, e o contrato falhava com `required_artifact_missing`;
+  `_persist_canonical_artifacts(plan_wants_clean=...)` agora segue o plano; (3) o selo do token
+  (`AuthEnvelopeStore.seal`, exige ≥ 10 min de vida) rodava depois de o job já estar `queued`:
+  com o token perto de expirar a rota respondia 500 e o worker processava o capítulo sem
+  credencial até falhar na tradução (`auth_context_missing_or_corrupt`). `require_token_lifetime`
+  roda em `_authorize_translation_start`, antes de existir job (HTTP 401 `auth_refresh_required`),
+  e `getCanonicalAccessToken` (`static/supabase_auth.js`) renova a sessão quando faltam < 11 min,
+  com uma renovação compartilhada; `api()` usa sempre esse getter. UI: confirmações usam
+  `yomuConfirm` (modal do app) em vez de `window.confirm`; a autorização das fontes é pedida no
+  **Iniciar tradução** (mesmo `/api/ui/source-policy`); Configurações ficou com Anúncios e
+  Feedback, e o painel do updater assinado (`updaterPanel`) foi para a aba Atualizações; Fontes
+  perdeu o status "Atualizando prévia…" e ganhou **Solicitar fonte**. Contato: a Edge Function
+  `contact-request` (`supabase/functions/contact-request`) grava o pedido por
+  `submit_contact_request` (migração `20261026120000_contact_requests.sql`: tabela
+  `contact_requests` sem acesso direto, RLS, 5 envios/h por usuário) e envia o e-mail pela API
+  da Resend. Destino e chave são secrets da função, nunca do repositório: `RESEND_API_KEY`,
+  `CONTACT_INBOX_EMAIL` e opcional `CONTACT_FROM_EMAIL`. **PARCIAL:** função e migração ainda
+  precisam ser publicadas no projeto Supabase e os secrets configurados; até lá o envio responde
+  erro e a UI mostra "Não foi possível enviar agora".
 - Desempenho (passo 3, GPU): com `GPU_INFERENCE=auto` e `onnxruntime-directml`, o RapidOCR roda
   com `det/cls/rec_use_dml` e o LaMa por uma sessão ONNX DirectML (`yomu/clean/inpainting/lama_onnx.py`).
   O exportador não tem forma ONNX das FFTs reais 2-D das Fourier units, então `rfftn`/`irfftn`
@@ -2593,7 +2618,7 @@ O contrato remoto está nas migrations:
 - `20260824130000_beta_tester_authorization_rpc.sql`
 - `20260824140000_beta_tester_grants_hardening.sql`
 
-No Supabase remoto `Tradutor IA Community` (`mimrsxnhqbqkffsekxuw` — hoje o projeto legado
+No Supabase remoto `Tradutor IA Community` (`<projeto-supabase-legado>` — hoje o projeto legado
 mantido como rollback, ver §26; o registro abaixo não foi revalidado no backend ativo), o
 conector registrou:
 
@@ -3246,7 +3271,7 @@ fluxo mais uma cópia anterior, espelhando a rotação de `runtime.log`. A falha
 sessão chegou a ~297 MB em `app_current.jsonl`).
 
 O legado local de mídia social foi removido: não há rota/backend handler, método de bridge,
-cache local, upload nem fetcher de avatar/banner. No Supabase ativo `ybxwjiycujminbwbdtlb`,
+cache local, upload nem fetcher de avatar/banner. No Supabase ativo `<projeto-supabase-ativo>`,
 `profile-media` está ausente, as 25 Edge Functions ativas auditadas não a referenciam e a
 consulta read-only de logs não encontrou chamadas nas últimas 24h. O source órfão foi
 removido do repositório. Os campos de avatar/banner e migrations históricas permanecem como
@@ -3254,7 +3279,7 @@ schema legado inerte; perfis textuais da Comunidade e identidade da conta contin
 preservados. Caches/arquivos locais antigos não são apagados automaticamente.
 
 `REMOTE_PROFILE_MEDIA_DECOMMISSION: COMPLETE_FOR_ACTIVE_BACKEND`. O Supabase legado
-`mimrsxnhqbqkffsekxuw` e sua Edge Function/secrets permanecem intactos como rollback
+`<projeto-supabase-legado>` e sua Edge Function/secrets permanecem intactos como rollback
 temporário; aposentadoria destrutiva do rollback requer missão e autorização separadas.
 
 ### 26.1 Artifact Contract V2 (ativo, com compatibilidade legada)
