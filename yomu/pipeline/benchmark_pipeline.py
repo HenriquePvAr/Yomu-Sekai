@@ -54,6 +54,7 @@ from yomu.ocr.ocr_balloon import (
     get_translatable_groups,
     normalize_recurring_compact_names,
     propagate_chapter_declared_names,
+    split_glued_source_words,
     recover_protected_term_boundaries,
     summarize_speech_container_reocr,
     render_analyzed_image,
@@ -3327,8 +3328,18 @@ def run_benchmark(args):
         local = [(translate_sfx(group.text) or group.text) if group.classification == "sfx" else None
                  for group in translation_targets]
         remote_index = [i for i, value in enumerate(local) if value is None]
+        # Words the OCR glued together ("WEPLANTO") go to the provider split; it
+        # read the glued forms as names. The first pass and every retry then see
+        # the same source (canonical_source_text).
+        for i in remote_index:
+            group = translation_targets[i]
+            source = str(getattr(group, "canonical_source_text", "") or group.text)
+            split = split_glued_source_words(source, protected=getattr(group, "detected_proper_names", ()))
+            if split != source:
+                group.canonical_source_text = split
         remote = translator.translate_many(
-            [translation_targets[i].text for i in remote_index],
+            [str(getattr(translation_targets[i], "canonical_source_text", "") or translation_targets[i].text)
+             for i in remote_index],
             force=args.force,
         ) if remote_index else []
         translations = list(local)

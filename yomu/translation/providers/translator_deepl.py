@@ -20,11 +20,13 @@ Deliberately absent, and each absence is a contract:
 """
 from __future__ import annotations
 
+import html
 import json
 import time
 from urllib.parse import urlparse
 
 import yomu.config.settings as config
+import yomu.translation.honorific_names as honorific_names
 import yomu.translation.semantic_fidelity as semantic_fidelity
 from yomu.translation.providers.provider_transport import ProviderTimeoutPolicy
 
@@ -116,7 +118,8 @@ def reason_for_status(status_code) -> str:
     return PROVIDER_HTTP_ERROR
 
 
-def _body_bytes(texts, source_lang: str, model_type: str, context: str = "") -> bytes:
+def _body_bytes(texts, source_lang: str, model_type: str, context: str = "",
+                xml_protected: bool = False) -> bytes:
     """The exact bytes that go on the wire.  Chunk sizing measures this."""
     body = {
         "text": list(texts),
@@ -125,6 +128,11 @@ def _body_bytes(texts, source_lang: str, model_type: str, context: str = "") -> 
         "model_type": model_type,
         "show_billed_characters": True,
     }
+    if xml_protected:
+        # Names an honorific addresses travel in <x>, which DeepL keeps verbatim
+        # and translates the sentence around ("MS. <x>GO</x> ALONE" -> "Sra. Go sozinha").
+        body["tag_handling"] = "xml"
+        body["ignore_tags"] = [honorific_names.PROTECT_TAG]
     if context:
         # DeepL's documented `context` field: read to disambiguate, never
         # translated and never returned. The first, batched pass sends none.
@@ -368,7 +376,12 @@ class DeepLTranslator:
         return candidate
 
     def _translate_chunk(self, texts, context: str = "") -> list[str]:
-        body = _body_bytes(texts, self.source_lang, self.model_type, context)
+        protected = [honorific_names.protect_for_xml(text) for text in texts]
+        xml = any(item is not None for item in protected)
+        if xml:
+            texts = [item if item is not None else html.escape(str(text), quote=False)
+                     for item, text in zip(protected, texts)]
+        body = _body_bytes(texts, self.source_lang, self.model_type, context, xml_protected=xml)
         if len(body) > PROVIDER_MAX_REQUEST_BYTES:
             raise DeepLProviderError(
                 PROVIDER_HTTP_ERROR, detail="request_body_exceeds_provider_maximum")
@@ -393,7 +406,8 @@ class DeepLTranslator:
             self._bump("api_requests")
             self._bump("provider_request_count")
             self._bump("api_seconds", time.perf_counter() - started)
-        return self._parse_response(status, payload, len(texts))
+        rows = self._parse_response(status, payload, len(texts))
+        return [honorific_names.unprotect_xml(row) for row in rows] if xml else rows
 
     def _parse_response(self, status, payload, expected: int) -> list[str]:
         if int(status or 0) != 200:

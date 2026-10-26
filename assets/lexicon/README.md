@@ -6,3 +6,10 @@ filtered from `words_alpha.txt` of https://github.com/dwyl/english-words
 
 Used by `yomu.review.region_taxonomy.is_english_word` to tell a written word
 ("INCREDIBLE...") from an onomatopoeia ("PAEHYEOK...") without a hand-made list.
+
+`english_freq.tsv.gz` — `WORD<TAB>zipf` for ~114,000 English words (apostrophes
+removed), exported from the `wordfreq` 3.1.1 `best` English list
+(https://github.com/rspeer/wordfreq). The data is CC BY-SA 4.0 (attribution:
+Robyn Speer, wordfreq); this derived table is distributed under the same licence.
+Used by `yomu.review.region_taxonomy.segment_words` to split words the OCR glued
+together ("WEPLANTO" -> WE PLAN TO) by word frequency.

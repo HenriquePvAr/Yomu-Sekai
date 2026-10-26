@@ -23,6 +23,7 @@ import yomu.clean.ownership.font_fidelity as font_fidelity
 import yomu.ocr.ocr_line_provenance as ocr_line_provenance
 import yomu.ocr.source_completeness as source_completeness
 import yomu.translation.semantic_fidelity as semantic_fidelity
+import yomu.translation.honorific_names as honorific_names
 from yomu.translation.providers.yomu_backend_provider import SystemicTranslationFailure
 
 # One LaMa call per page worker (MAX_PIPELINE_PAGE_WORKERS): the TorchScript
@@ -933,6 +934,12 @@ def propagate_chapter_declared_names(groups):
     chapter_names = set()
     for group in groups:
         text = clean_ocr_text(getattr(group, "text", "") or "")
+        # A name an honorific addresses is a name in *this* group only: the same
+        # word elsewhere ("GO") is usually the verb, so it is never propagated.
+        for raw in honorific_addressed_names(text):
+            key = _name_token_of(raw)
+            if key and key not in {_name_token_of(n) for n in group.detected_proper_names}:
+                group.detected_proper_names.append(key)
         # Declared names ("X... but people call me Y") override the vocabulary
         # heuristic: the sentence structure is stronger evidence than the -LESS
         # or -FUL suffix that _token_is_source_vocabulary would flag.
@@ -1423,6 +1430,41 @@ def _declared_name_tokens(text):
     return result
 
 
+def split_glued_source_words(text, protected=()):
+    """``text`` with tokens the OCR glued together split into words.
+
+    "IT'S SOLIFELIKE" -> "IT'S SO LIFE LIKE", "WEPLANTO MAKETHESE" -> "WE PLAN TO
+    MAKE THESE": the provider read the glued forms as names ("A WEPLANTO") or
+    nonsense ("SOLIFEL"). A real word, a protected name, and anything the
+    frequency segmenter cannot split into common words are left as they are.
+    """
+    protected_keys = {_name_token_of(name) for name in protected or ()}
+
+    def split(match):
+        token = match.group(0)
+        key = token.upper()
+        if (len(key) < 4 or key in protected_keys or region_taxonomy.is_english_word(key)
+                or region_taxonomy.word_zipf(key) >= 3.0):
+            return token
+        pieces = region_taxonomy.segment_words(key)
+        if not pieces or len(pieces) < 2:
+            return token
+        joined = " ".join(pieces)
+        return joined if token.isupper() else joined.lower()
+
+    return re.sub(r"[A-Za-z]+", split, str(text or ""))
+
+
+def honorific_addressed_names(text):
+    """Tokens a source-language honorific abbreviation addresses ("MS. GO")."""
+    cleaned = clean_ocr_text(text)
+    names = []
+    for start, end in honorific_names.honorific_name_spans(cleaned):
+        if cleaned[start:end] not in names:
+            names.append(cleaned[start:end])
+    return names
+
+
 def detect_proper_name_spans(text, known_names=()):
     """Return the tokens of ``text`` that are confidently proper names.
 
@@ -1445,7 +1487,7 @@ def detect_proper_name_spans(text, known_names=()):
         if _name_token_of(part)
     }
     spans = []
-    for raw in declared:
+    for raw in [*declared, *honorific_addressed_names(cleaned)]:
         if raw not in spans:
             spans.append(raw)
     for index, match in enumerate(matches):

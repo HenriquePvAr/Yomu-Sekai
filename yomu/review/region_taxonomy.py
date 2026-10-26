@@ -334,35 +334,115 @@ def is_english_word(token: str) -> bool:
     return re.sub(r"[^A-Z]", "", str(token or "").upper()) in _lexicon()
 
 
-def segment_words(token: str) -> list[str] | None:
-    """Split letters the OCR glued together into dictionary words, or ``None``.
+_FREQUENCIES: dict[str, float] | None = None
+# Zipf frequency of a piece the frequency table lacks but the lexicon has: real,
+# but rarer than any listed word, so "SOL IFE LIKE" never beats "SO LIFELIKE".
+_LEXICON_ONLY_ZIPF = 1.0
+# Every piece of a split must be at least this common (Zipf 2.5 ~ once per
+# 3 million words): glued *ordinary* words are split, a name made of rare
+# dictionary scraps ("ICHIGONYANYAN" -> I CHI GON YAN YAN) is left alone.
+# Three-letter pieces need 3.5: web-noise scraps ("DAE HYE ON", "SIT A GER")
+# score 3.0-3.3, the real ones of a split ("SIT", "DUST") 4+.
+SEGMENT_MIN_PIECE_ZIPF = 2.5
+SEGMENT_MIN_SHORT_PIECE_ZIPF = 3.5
 
-    "IFIATLEAST" -> IF I AT LEAST. Dynamic programming over the lexicon plus the
-    short function words; the split with the fewest words wins (it prefers real
-    words over letter runs). ``None`` when the letters cannot be covered.
+
+def _min_piece_zipf(piece: str) -> float:
+    return SEGMENT_MIN_SHORT_PIECE_ZIPF if len(piece) == 3 else SEGMENT_MIN_PIECE_ZIPF
+
+
+def _frequencies() -> dict[str, float]:
+    """English Zipf frequencies (assets/lexicon, from wordfreq, CC BY-SA 4.0)."""
+    global _FREQUENCIES
+    if _FREQUENCIES is None:
+        import gzip
+        from yomu.runtime.paths import REPO_ROOT
+        path = REPO_ROOT / "assets" / "lexicon" / "english_freq.tsv.gz"
+        table = {}
+        try:
+            with gzip.open(path, "rt", encoding="ascii") as handle:
+                for line in handle:
+                    word, _, zipf = line.strip().partition("	")
+                    if word:
+                        table[word] = float(zipf or 0.0)
+        except (OSError, ValueError):
+            table = {}
+        _FREQUENCIES = table
+    return _FREQUENCIES
+
+
+# The frequency table also ranks abbreviations and fragments ("ES", "TS", "HG"); a
+# piece of one or two letters must be one of the real short English words.
+_SHORT_WORDS = frozenset({
+    "A", "I", "AH", "AM", "AN", "AS", "AT", "BE", "BY", "DO", "EH", "GO", "HE", "HI",
+    "IF", "IN", "IS", "IT", "ME", "MY", "NO", "OF", "OH", "OK", "ON", "OR", "OW", "SO",
+    "TO", "UH", "UM", "UP", "US", "WE", "YO",
+})
+
+
+def word_zipf(token: str) -> float:
+    """Zipf frequency of an English word (0.0 when unlisted)."""
+    return _frequencies().get(re.sub(r"[^A-Z]", "", str(token or "").upper()), 0.0)
+
+
+def _piece_zipf(piece: str) -> float | None:
+    if len(piece) <= 2:
+        return _frequencies().get(piece, 6.0) if piece in _SHORT_WORDS else None
+    if piece not in _lexicon() and piece not in _STORY_CLAUSE_MARKERS:
+        return None
+    zipf = _frequencies().get(piece)
+    if zipf is not None:
+        return zipf
+    return 6.0 if piece in _STORY_CLAUSE_MARKERS else _LEXICON_ONLY_ZIPF
+
+
+def _misread_tail(split: list[str]) -> bool:
+    """A split ending in a tiny word that is really one misread letter of a longer
+    one: "SUMMON OR" for SUMMONOR, i.e. SUMMONER with the E read as O."""
+    if len(split) < 2 or len(split[-1]) > 2:
+        return False
+    head, tail = "".join(split[:-1]), split[-1]
+    alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+    for index in range(len(tail)):
+        for char in alphabet:
+            if char != tail[index] and head + tail[:index] + char + tail[index + 1:] in _lexicon():
+                return True
+    return False
+
+
+def segment_words(token: str) -> list[str] | None:
+    """Split letters the OCR glued together into English words, or ``None``.
+
+    "SOLIFELIKE" -> SO LIFELIKE, "WEPLANTO" -> WE PLAN TO. The most probable
+    split under English word frequencies wins (each word costs 8 - its Zipf
+    frequency), so frequent words beat a run of rare dictionary scraps
+    ("SOL IFE LIKE"). ``None`` when the letters cannot be covered, when a piece
+    of the split is too rare (``_min_piece_zipf``), or when its tiny last word is
+    really a misread letter of a longer word (``_misread_tail``).
     """
     letters = re.sub(r"[^A-Z]", "", str(token or "").upper())
-    if not letters or len(letters) > 40:
+    # A drawn-out interjection ("AAAAAH", "NOOOO") is one word, never A A A A AH.
+    if not letters or len(letters) > 40 or re.search(r"(.)", letters):
         return None
-    vocabulary = _lexicon()
-    best: list[list[str] | None] = [None] * (len(letters) + 1)
-    best[0] = []
+    best: list[tuple[float, list[str]] | None] = [None] * (len(letters) + 1)
+    best[0] = (0.0, [])
     for end in range(1, len(letters) + 1):
         for start in range(max(0, end - 20), end):
             prefix = best[start]
-            piece = letters[start:end]
             if prefix is None:
                 continue
-            if piece in vocabulary or piece in _STORY_CLAUSE_MARKERS:
-                candidate = prefix + [piece]
-                if best[end] is None or len(candidate) < len(best[end]):
-                    best[end] = candidate
-    split = best[-1]
-    # A plausible split, not a run of dictionary scraps ("ICHIGONYANYAN" ->
-    # I CHI GON YAN YAN): pieces average >= 3 letters, at most one single letter.
-    if split is None or (len(split) > 1 and (
-            sum(len(w) for w in split) / len(split) < 3.0
-            or sum(len(w) == 1 for w in split) > 1)):
+            zipf = _piece_zipf(letters[start:end])
+            if zipf is None:
+                continue
+            cost = prefix[0] + (8.0 - zipf)
+            if best[end] is None or cost < best[end][0]:
+                best[end] = (cost, prefix[1] + [letters[start:end]])
+    if best[-1] is None:
+        return None
+    split = best[-1][1]
+    if len(split) > 1 and (any(_piece_zipf(word) < _min_piece_zipf(word) for word in split)
+                           or sum(len(word) == 1 for word in split) > 1
+                           or _misread_tail(split)):
         return None
     return split
 

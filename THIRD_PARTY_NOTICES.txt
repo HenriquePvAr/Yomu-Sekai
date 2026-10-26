@@ -44,6 +44,10 @@ https://github.com/euske/aggdraw/blob/master/LICENSE
 english-words (dwyl), words_alpha.txt — Unlicense (public domain)
 https://github.com/dwyl/english-words/blob/master/LICENSE.md
 
+wordfreq English frequency data (assets/lexicon/english_freq.tsv.gz, derived) —
+CC BY-SA 4.0, (c) Robyn Speer; the derived table is shared under the same licence.
+https://github.com/rspeer/wordfreq
+
 Comic Relief (Copyright 2013 The Comic Relief Project Authors) — SIL Open Font License 1.1
 https://github.com/loudifier/Comic-Relief — full text: assets/fonts/OFL-ComicRelief.txt
 

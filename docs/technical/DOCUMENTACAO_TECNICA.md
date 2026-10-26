@@ -1586,6 +1586,20 @@ Décima primeira passada (reconstrução e regiões restantes, 2026-10-25, **IMP
   ser serializado: `_LAMA_INFERENCE_LOCK` admite uma inferência por worker (4), e o cache de
   preenchimentos aprendidos passou de 16 para 64 entradas, com trava. 33 páginas com DeepL:
   730 s → 629 s, mesmos contadores de qualidade (107 traduzidos).
+- Tradução (passo 12): palavras que o OCR grudou ("WEPLANTO", "SOLIFELIKE", "WHENISAFRONT")
+  são separadas antes da primeira tradução (`split_glued_source_words`, gravado em
+  `canonical_source_text`, que o primeiro envio e todos os reenvios usam). A divisão
+  (`region_taxonomy.segment_words`) é a mais provável pelas frequências do inglês
+  (`assets/lexicon/english_freq.tsv.gz`, custo 8 − Zipf por palavra); cada pedaço precisa
+  ser comum (Zipf ≥ 2,5; ≥ 3,5 com 3 letras; 1–2 letras só de uma lista de palavras curtas
+  reais), no máximo um pedaço de uma letra, nada de letra triplicada ("AAAAAH"), e uma
+  divisão terminada em palavrinha que é uma letra lida errado ("SUMMON OR") é recusada.
+  Nomes detectados, palavras reais e tokens que não se dividem bem ficam como estão.
+  Um nome logo após um tratamento abreviado (MR, MRS, MS, DR, PROF) é nome próprio mesmo
+  sendo palavra inglesa ("MS. GO"; `honorific_addressed_names`, só no próprio grupo); o
+  DeepL o recebe em `<x>` com `tag_handling=xml` e `ignore_tags=["x"]`
+  (`yomu/translation/honorific_names.py`), e só os lotes com um nome assim mudam de formato.
+  ep33, 33 páginas: 106 → 108 traduzidos, mesmas falhas visuais.
 - Desempenho (passo 3, GPU): com `GPU_INFERENCE=auto` e `onnxruntime-directml`, o RapidOCR roda
   com `det/cls/rec_use_dml` e o LaMa por uma sessão ONNX DirectML (`yomu/clean/inpainting/lama_onnx.py`).
   O exportador não tem forma ONNX das FFTs reais 2-D das Fourier units, então `rfftn`/`irfftn`
