@@ -1611,7 +1611,13 @@ Décima primeira passada (reconstrução e regiões restantes, 2026-10-25, **IMP
   `session.run` (o pré e pós-processamento do RapidOCR seguem em paralelo), e com DirectML a
   trava de página `_RAPIDOCR_INFERENCE_LOCK` é dispensada (`_rapidocr_section`). Medidos e
   descartados: LaMa em fp16 (muito mais lento com as conversões), níveis de otimização do grafo
-  (inicialização de ~10–17 s igual) e OCR numa cópia em CPU quando a GPU está ocupada (empate). Medido (RX 6600):
+  (inicialização de ~10–17 s igual) e OCR numa cópia em CPU quando a GPU está ocupada (empate).
+- Medição do capítulo completo (ep33, 158 imagens de origem, DeepL, RX 6600, máquina livre,
+  `d91791e`): 287 s do início ao fim, contra 1784 s da execução original do mesmo capítulo;
+  287 grupos, 198 traduzidos (antes 165), 36 em revisão (antes 63). As 16 falhas visuais são
+  15 onomatopeias sobre arte (antes preservadas sem tentativa de limpeza, hoje traduzidas; o
+  portão de reconstrução mantém o letreiro original quando a limpeza não é segura) e o
+  "VISITOR" sobre arte. Medido (RX 6600):
   OCR 3,5× e LaMa ~19× por inferência; 33 páginas com DeepL 629 s → 223 s, mesmos contadores e
   as 33 páginas limpas idênticas às da CPU.
 - Limpeza: máscara larga sobre arte não é vetada quando o preenchimento escolhido foi o
