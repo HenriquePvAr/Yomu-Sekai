@@ -24,10 +24,32 @@ def honorific_name_spans(text):
             if match.group(2).strip("'’").upper() not in _NOT_A_NAME]
 
 
-def protect_for_xml(text):
-    """``text`` XML-escaped with each addressed name in ``<x>``, or ``None`` if none."""
+def _name_spans(text, names):
+    spans = []
+    for name in names or ():
+        for match in re.finditer(rf"(?<![A-Za-z]){re.escape(name)}(?![A-Za-z])", text, re.IGNORECASE):
+            spans.append(match.span())
+    return spans
+
+
+def _merge_spans(spans):
+    merged = []
+    for start, end in sorted(spans):
+        if merged and start < merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], end))
+        else:
+            merged.append((start, end))
+    return merged
+
+
+def protect_for_xml(text, names=()):
+    """``text`` XML-escaped with each protected name in ``<x>``, or ``None`` if none.
+
+    Protected: names an honorific addresses, plus the chapter's detected names
+    (``names``), which DeepL otherwise sometimes renders ("ARISU" -> "ALICE").
+    """
     text = str(text or "")
-    spans = honorific_name_spans(text)
+    spans = _merge_spans(honorific_name_spans(text) + _name_spans(text, names))
     if not spans:
         return None
     parts, last = [], 0

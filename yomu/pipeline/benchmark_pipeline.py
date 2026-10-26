@@ -7650,7 +7650,10 @@ def _validate_quality(states, pdf_path, expected_page_count=None, full=False, *,
         for item in all_items
         if item.get("classification") == "sfx"
     ]
-    sfx_policy_ok = all(
+    # The policy is TRANSLATE_SFX. Translated sound effects are the configured
+    # behaviour, not a violation; only with it off must every sound stay out of the
+    # provider. (Treating translation itself as the violation failed every chapter.)
+    sfx_policy_ok = bool(config.TRANSLATE_SFX) or all(
         item.get("classification") == "sfx"
         and item.get("ignored")
         and not item.get("sent_to_nvidia")

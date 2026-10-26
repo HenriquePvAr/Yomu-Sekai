@@ -251,6 +251,12 @@ O diretório padrão é `%LOCALAPPDATA%\TradutorIA\cache` (`yomu/runtime/runtime
 | `TRANSLATION_PARALLEL` | `True` | Permite lotes de tradução concorrentes |
 | `TRANSLATION_WORKERS` | `2` | Quantidade máxima de workers de tradução |
 
+`TRANSLATION_LABEL_FALLBACK` (só no código, default `True`): quando reconstruir a arte sob uma
+região traduzida não é seguro, a tradução entra sem tocar na arte — legenda ao lado do efeito
+sonoro original, ou caixa opaca sobre a fala/narração. `False` mantém o texto original em inglês
+para revisão. `OCR_RECOVER_ADJACENT_ROWS` (default `True`) relê linhas curtas que o detector
+pulou logo acima/abaixo de uma linha lida.
+
 `GPU_INFERENCE` (só no código, default `auto`): roda o RapidOCR e o LaMa na GPU via DirectML
 (qualquer placa DirectX 12 no Windows: AMD, Intel ou NVIDIA) quando o `onnxruntime-directml`
 expõe `DmlExecutionProvider`. `off` mantém tudo na CPU. O LaMa é exportado uma vez do `.pt`

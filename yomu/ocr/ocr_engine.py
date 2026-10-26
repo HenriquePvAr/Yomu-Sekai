@@ -779,11 +779,40 @@ class OCREngine:
         return OCRLine(clean_ocr_text(text), 1.0, polygon, (0, 0, w, h), text)
 
 
+_LINE_BREAK_HYPHEN = re.compile(r"\b([A-Za-z]{2,})-\s+([A-Za-z]{2,})\b")
+
+
+def _join_line_break_hyphens(text):
+    """Rejoin a word the lettering broke across lines ("EMBAR- RASSING").
+
+    Joined only when the result is a real word: "COINCI- DENCE" -> COINCIDENCE,
+    while "UME- KUN" and "TERUI- SENPAI" (a name and its honorific) stay apart.
+    Unjoined, the halves reached the provider as two words and the chapter ledger
+    learned "EMBAR" as a term.
+    """
+    if "-" not in text:
+        return text
+    from yomu.review.region_taxonomy import is_english_word, word_zipf
+
+    def join(match):
+        head, tail = match.group(1), match.group(2)
+        # A word the lettering broke keeps one case on both sides ("EMBAR- RASSING");
+        # "Sh- Ela" is a stutter before a different word, not one word.
+        if not ((head.isupper() and tail.isupper()) or (head.islower() and tail.islower())):
+            return match.group(0)
+        joined = head + tail
+        if is_english_word(joined) or word_zipf(joined) >= 3.0:
+            return joined
+        return match.group(0)
+
+    return _LINE_BREAK_HYPHEN.sub(join, text)
+
+
 def clean_ocr_text(text):
     text = (text or "").replace("\r", "\n")
     text = re.sub(r"[ \t]+", " ", text)
     text = re.sub(r"\s*\n\s*", " ", text)
-    return text.strip()
+    return _join_line_break_hyphens(text.strip())
 
 
 COMMON_REPEATED_WORDS = {

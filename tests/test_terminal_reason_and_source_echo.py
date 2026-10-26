@@ -151,7 +151,7 @@ class CandidateBearingTerminalTests(unittest.TestCase):
 
     def test_every_strategy_refusing_is_an_explicit_review_not_a_silent_preserve(self):
         image, grp = self._uniform_balloon_group()
-        with patch("yomu.ocr.ocr_balloon._remove_text_for_group") as remove:
+        with patch("yomu.ocr.ocr_balloon._remove_text_for_group") as remove,                 patch.object(config, "TRANSLATION_LABEL_FALLBACK", False):
             remove.side_effect = lambda current, original, group, strategy="primary": (
                 current.copy(),
                 np.zeros(original.shape[:2], dtype=np.uint8),
@@ -166,6 +166,21 @@ class CandidateBearingTerminalTests(unittest.TestCase):
             "translation_not_rendered_after_validation",
         )
         self.assertEqual(grp.translation_quality_impact, "review_required")
+
+    def test_every_strategy_refusing_places_the_translation_in_a_caption(self):
+        """With the label fallback on, the art stays untouched and the reader still
+        gets the translation instead of the English source."""
+        image, grp = self._uniform_balloon_group()
+        with patch("yomu.ocr.ocr_balloon._remove_text_for_group") as remove,                 patch.object(config, "TRANSLATION_LABEL_FALLBACK", True):
+            remove.side_effect = lambda current, original, group, strategy="primary": (
+                current.copy(),
+                np.zeros(original.shape[:2], dtype=np.uint8),
+                {"mask_valid": False, "reason": f"{strategy}_not_needed_on_uniform_background"},
+            )
+            render_analyzed_image(image, [], [], [grp], page_index=1)
+        self.assertTrue(grp.redrawn)
+        self.assertEqual(grp.translation_final_state, "translated")
+        self.assertTrue(grp.translation_final_reason.startswith("translation_label_"))
 
 
 class MixedCaseNoiseTests(unittest.TestCase):

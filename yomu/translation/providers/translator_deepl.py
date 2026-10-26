@@ -227,6 +227,7 @@ class DeepLTranslator:
         self.ptbr_naturalizer = None
         # Attached to strict retries only - see ``translate_strict``.
         self.session_context_text = ""
+        self._protected_names: list[str] = []
         self.stats = {
             "provider_name": PROVIDER_NAME,
             "provider_family": PROVIDER_FAMILY,
@@ -376,7 +377,7 @@ class DeepLTranslator:
         return candidate
 
     def _translate_chunk(self, texts, context: str = "") -> list[str]:
-        protected = [honorific_names.protect_for_xml(text) for text in texts]
+        protected = [honorific_names.protect_for_xml(text, self._protected_names) for text in texts]
         xml = any(item is not None for item in protected)
         if xml:
             texts = [item if item is not None else html.escape(str(text), quote=False)
@@ -480,8 +481,20 @@ class DeepLTranslator:
         self.stats["context_enabled"] = bool(self.session_context_text)
 
     def set_detected_names(self, names):
-        """Proper-name handling is DeepL-internal; nothing to inject."""
-        self.stats["detected_name_count"] = len(list(names or []))
+        """Chapter names travel in an ignored XML tag so DeepL keeps them verbatim.
+
+        A name that is also an ordinary English word ("GO", "MAY") is left out:
+        protecting it everywhere would freeze the verb too; honorific-addressed
+        uses are protected separately.
+        """
+        from yomu.review.region_taxonomy import is_english_word, word_zipf
+
+        names = [str(name or "").strip() for name in (names or [])]
+        self._protected_names = sorted(
+            {name for name in names if len(name) >= 3 and name.replace("-", "").isalpha()
+             and not is_english_word(name) and word_zipf(name) < 3.0},
+            key=len, reverse=True)
+        self.stats["detected_name_count"] = len(names)
 
 
 def usage(api_key=None, base_url=None, transport=None) -> dict:

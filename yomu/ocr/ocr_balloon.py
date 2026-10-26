@@ -1470,6 +1470,9 @@ def _restore_shape(token, letters):
     return letters if token.isupper() or not token.isalpha() else letters.lower()
 
 
+_ENGLISH_CONTRACTION_TAILS = frozenset({"S", "T", "LL", "RE", "VE", "D", "M", "EM", "CAUSE", "N"})
+
+
 def split_glued_source_words(text, protected=(), chapter_names=(), chapter_words=frozenset()):
     """``text`` with OCR-damaged tokens repaired before translation.
 
@@ -1503,6 +1506,14 @@ def split_glued_source_words(text, protected=(), chapter_names=(), chapter_words
             if pieces and len(pieces) > 1:
                 joined = " ".join(pieces)
                 return joined if token.isupper() else joined.lower()
+        head, apostrophe, tail = (re.split(r"(['’])", token, maxsplit=1) + ["", ""])[:3]
+        if apostrophe and tail.upper() not in _ENGLISH_CONTRACTION_TAILS:
+            # Not a contraction ("OUTON'AWALKWITHNO"): the OCR read a space as an
+            # apostrophe. The letters are split like any glued token.
+            words = region_taxonomy.segment_words(key)
+            if words and len(words) > 1:
+                joined = " ".join(words)
+                return joined if token.upper() == token else joined.lower()
         corrected = _misread_correction(key, vocabulary)
         return (_restore_shape(token, corrected) or token) if corrected else token
 
@@ -2774,6 +2785,7 @@ def _render_analyzed_image(
         group.neighbor_text_boxes = [tuple(int(v) for v in other.box) for other in groups
                                      if other is not group and not getattr(other, "ignored", False)]
     for group in valid_groups:
+        group._review_before_render = bool(getattr(group, "manual_review_required", False))
         # Boundary immediately before inpainting/redraw consume the group: this is
         # the exact text/geometry the renderer sees, not a later reconstruction.
         render_lines = _cleanup_lines_for_group(group)
@@ -3263,6 +3275,25 @@ def _render_analyzed_image(
                 group.translation_quality_impact = "review_required"
                 _set_translation_terminal_state(
                     group, "manual_review", "rendered_on_learned_clean_rescue", preserved_original=False)
+                continue
+            labelled = None
+            if typeset and config.TRANSLATION_LABEL_FALLBACK and _translation_label_eligible(group):
+                labelled = _render_translation_label(
+                    before_group, original, group, font_path,
+                    occupied_boxes=[other.box for other in valid_groups if other is not group])
+            if labelled is not None:
+                final, label_allowed, _label_box, label_mode = labelled
+                allowed_mask = cv2.bitwise_or(allowed_mask, label_allowed)
+                group.redrawn = True
+                group.render_mode = label_mode
+                # The caption settles what the render attempts flagged; a review
+                # raised before rendering (OCR or evidence findings) still stands.
+                group.manual_review_required = bool(getattr(group, "_review_before_render", False))
+                group.render_disposition = RENDER_WITH_REVIEW if group.manual_review_required else RENDER_CLEAN
+                group.render_disposition_reason = f"translation_label_{label_mode}"
+                group.translation_quality_impact = "review_required" if group.manual_review_required else "none"
+                _set_translation_terminal_state(
+                    group, "translated", f"translation_label_{label_mode}", preserved_original=False)
                 continue
             final = before_group
             group.redrawn = False
@@ -4944,7 +4975,13 @@ def _should_translate_group(group):
     if group.sent_to_translation and not group.translation_valid:
         # ...unless the only objection is terminology: that region has a usable PT-BR
         # target and refusing it would put the English source back in front of the
-        # reader. It renders under review, never as clean.
+        # reader. It renders under review, never as clean. Not fitting the region is
+        # not a defect of the translation either: the renderer's caption fallback can
+        # place it (TRANSLATION_LABEL_FALLBACK).
+        if (config.TRANSLATION_LABEL_FALLBACK
+                and str(group.translation_validation_reason or "") == "text_does_not_fit_region"
+                and str(group.translation or "").strip()):
+            return True
         return bool(terminology_review_render_candidate(group))
     if not _group_has_story_translation_authority(group):
         return False
@@ -4995,7 +5032,17 @@ def _group_has_story_translation_authority(group):
 
 def _score_group_quality(groups):
     for group in groups:
-        score, reasons = score_group_ocr_quality(group)
+        # Glued words ("SHEWASACTUALLY OUTON'AWALK") read as garbage to the quality
+        # heuristics and the region was dropped before the repair that sends it
+        # split to the provider: judge the text the provider will actually get.
+        raw_text = group.text
+        repaired = split_glued_source_words(raw_text, protected=group.detected_proper_names)
+        if repaired != raw_text:
+            group.text = repaired
+        try:
+            score, reasons = score_group_ocr_quality(group)
+        finally:
+            group.text = raw_text
         if _ignored_decorative_requires_review(group, reasons):
             reasons.append("ignored_decorative_linguistic_content")
             group.manual_review_required = True
@@ -7842,7 +7889,99 @@ def apply_speech_container_reocr(original_bgr, raw_lines, ocr_lang, page_index=N
         lines, record = _extend_lines_to_edge_glyphs(original_bgr, lines, ocr_lang, page_index)
         if record:
             records.append(record)
+    if (original_bgr is not None and getattr(original_bgr, "size", 0) and lines
+            and config.OCR_REGION_SELECTIVE_FALLBACK and config.OCR_RECOVER_ADJACENT_ROWS):
+        lines, record = _recover_adjacent_unread_rows(original_bgr, lines, ocr_lang, page_index)
+        if record:
+            records.append(record)
     return lines, records
+
+
+def _recover_adjacent_unread_rows(original_bgr, lines, ocr_lang, page_index=None):
+    """Read a short row the detector skipped right above or below a read line.
+
+    "SO" (two italic letters) over "COLD..." was never detected: it stayed on the
+    page in English beside the Portuguese "FRIO...". Ink components with the line's
+    glyph height (0.6-1.3 h), in the same column (within 0.6 w of the line on either
+    side), one row away (up to 1.8 h) and covered by no detected box form the
+    candidate row; it is read with the recogniser alone and kept only if made of
+    common English words (the guard: a stroke of the art never reads as one) at a
+    recogniser confidence >= 0.6 (two italic letters read "SO" at 0.68).
+    """
+    from yomu.review.region_taxonomy import is_english_word, word_zipf
+
+    gray = cv2.cvtColor(original_bgr, cv2.COLOR_BGR2GRAY)
+    height, width = gray.shape
+    errors = []
+    engines = None
+    record = {"trigger": "recover_adjacent_row", "page": page_index, "accepted": False,
+              "reason": "no_unread_adjacent_row", "engine_errors": errors}
+    boxes = [tuple(int(v) for v in line.box) for line in lines]
+    recovered = []
+    for x, y, w, h in list(boxes):
+        if h < 8:
+            continue
+        for y1, y2 in ((max(0, y - int(1.8 * h)), y), (y + h, min(height, y + h + int(1.8 * h)))):
+            x1, x2 = max(0, x - int(0.6 * w)), min(width, x + w + int(0.6 * w))
+            band = gray[y1:y2, x1:x2]
+            if band.size == 0 or band.shape[0] < int(0.6 * h):
+                continue
+            _t, ink = cv2.threshold(band, 0, 255, cv2.THRESH_BINARY_INV | cv2.THRESH_OTSU)
+            if float(np.median(band)) < 127:
+                ink = cv2.bitwise_not(ink)
+            count, _labels, stats, _ = cv2.connectedComponentsWithStats(ink, 8)
+            glyphs = []
+            for label in range(1, count):
+                cx, cy, cw, ch, _area = [int(v) for v in stats[label]]
+                gx1, gy1 = x1 + cx, y1 + cy
+                if not (0.6 * h <= ch <= 1.3 * h) or cw > 2.5 * h:
+                    continue
+                if any(not (gx1 + cw <= bx or gx1 >= bx + bw or gy1 + ch <= by or gy1 >= by + bh)
+                       for bx, by, bw, bh in boxes):
+                    continue
+                glyphs.append((gx1, gy1, cw, ch))
+            if not glyphs:
+                continue
+            # One row: glyphs sharing the rows of the tallest one, joined by word gaps.
+            glyphs.sort()
+            anchor = max(glyphs, key=lambda g: g[3])
+            row = [g for g in glyphs if min(g[1] + g[3], anchor[1] + anchor[3]) - max(g[1], anchor[1])
+                   >= 0.5 * min(g[3], anchor[3])]
+            rx1 = min(g[0] for g in row)
+            rx2 = max(g[0] + g[2] for g in row)
+            ry1 = min(g[1] for g in row)
+            ry2 = max(g[1] + g[3] for g in row)
+            if rx2 - rx1 < 0.5 * h or any(not (rx2 <= bx or rx1 >= bx + bw or ry2 <= by or ry1 >= by + bh)
+                                          for bx, by, bw, bh in boxes):
+                continue
+            if engines is None:
+                engines = _reocr_engines_for(ocr_lang, errors)
+            if not engines:
+                return lines, record
+            # A tight crop: extra margin lowered the recogniser on short words.
+            pad = max(2, h // 12)
+            box = (max(0, rx1 - pad), max(0, ry1 - pad),
+                   min(width, rx2 + pad) - max(0, rx1 - pad), min(height, ry2 + pad) - max(0, ry1 - pad))
+            read = _recognize_single_row(
+                engines[0], original_bgr[box[1]:box[1] + box[3], box[0]:box[0] + box[2]], page_index)
+            text = clean_ocr_text(read[0].text) if read else ""
+            words = re.findall(r"[A-Za-z']+", text)
+            if not (read and float(read[0].confidence) >= 0.6 and words
+                    and sum(len(re.sub(r"[^A-Za-z]", "", word)) for word in words) >= 2
+                    and all(is_english_word(word.replace("'", "")) or word_zipf(word.replace("'", "")) >= 3.0
+                            for word in words)):
+                continue
+            recovered.append(OCRLine(text=text, confidence=float(read[0].confidence),
+                                     polygon=_polygon_from_box(box), box=box, raw_text=read[0].text,
+                                     engine=lines[0].engine, page=page_index,
+                                     metadata={"recovered_adjacent_row": True}))
+            boxes.append(box)
+            record.setdefault("rows", []).append({"text": text, "box": list(box)})
+    if not recovered:
+        return lines, record
+    record["accepted"] = True
+    record["reason"] = "adjacent_row_recovered"
+    return list(lines) + recovered, record
 
 
 def _extend_lines_to_edge_glyphs(original_bgr, lines, ocr_lang, page_index=None):
@@ -16859,6 +16998,121 @@ def _safe_draw_box(box, image_shape, group=None):
     return x1, y1, max(1, x2 - x1), max(1, y2 - y1)
 
 
+def _boxes_overlap(a, b):
+    ax, ay, aw, ah = a
+    bx, by, bw, bh = b
+    return ax < bx + bw and bx < ax + aw and ay < by + bh and by < ay + ah
+
+
+def _translation_label_eligible(group):
+    """A translation the validators accepted (or one refused only because it did not
+    fit), still waiting for a place on the page. Rejected translations stay review."""
+    if not str(group.translation or group.translation_candidate or "").strip():
+        return False
+    if group.translation_valid:
+        return True
+    return str(group.translation_validation_reason or "") == "text_does_not_fit_region"
+
+
+def _render_translation_label(page_bgr, original_bgr, group, font_path, occupied_boxes=()):
+    """Place a translation without reconstructing the art under the source text.
+
+    The last resort when every cleanup strategy was refused because rebuilding the
+    art there was unsafe: the English used to stay on the page. Scanlation practice
+    instead leaves the art alone - a sound effect keeps its drawn lettering with
+    the Portuguese set beside it, and dialogue over art goes in an opaque caption
+    box laid over the source text, grown until the translation fits (which also
+    covers text that did not fit its narrow region). Returns ``(page, allowed
+    mask, label box, mode)`` or ``None`` when there is nothing to place.
+    """
+    text = str(group.translation or group.translation_candidate or "").strip()
+    if not text or text.casefold() == str(group.text or "").strip().casefold():
+        return None
+    page_h, page_w = page_bgr.shape[:2]
+    gx, gy, gw, gh = (int(v) for v in group.box)
+    if gw <= 0 or gh <= 0:
+        return None
+    gray = cv2.cvtColor(original_bgr, cv2.COLOR_BGR2GRAY)
+    ring = np.zeros(gray.shape, np.uint8)
+    cv2.rectangle(ring, (max(0, gx - 12), max(0, gy - 12)),
+                  (min(page_w - 1, gx + gw + 12), min(page_h - 1, gy + gh + 12)), 255, -1)
+    cv2.rectangle(ring, (gx, gy), (gx + gw, gy + gh), 0, -1)
+    surround = gray[ring > 0]
+    light = float(np.median(surround)) >= 128 if surround.size else True
+    image = Image.fromarray(cv2.cvtColor(page_bgr, cv2.COLOR_BGR2RGB))
+    draw = ImageDraw.Draw(image)
+    line_heights = [line.box[3] for line in group.lines if line.box[3] > 0]
+    source_line = float(np.median(line_heights)) if line_heights else gh
+    pad = 4
+
+    def text_block(font, width):
+        lines = _wrap_text(draw, text, font, max_width=max(12, width), split_long_words=True)
+        block = "\n".join(lines)
+        box = draw.multiline_textbbox((0, 0), block, font=font, spacing=2, align="center", stroke_width=2)
+        return lines, block, box[2] - box[0], box[3] - box[1], box
+
+    if group.classification == "sfx":
+        size = int(min(36, max(12, gh * 0.35)))
+        font = get_font(font_path, size, role="shout", text=text)
+        lines, block, tw, th, tb = text_block(font, max(gw * 1.4, size * 4))
+        candidates = [
+            (gx + (gw - tw) // 2, gy + gh + pad), (gx + (gw - tw) // 2, gy - th - pad),
+            (gx + gw + pad, gy + (gh - th) // 2), (gx - tw - pad, gy + (gh - th) // 2),
+        ]
+        chosen = None
+        for x, y in candidates:
+            box = (int(x), int(y), int(tw), int(th))
+            if x < 0 or y < 0 or x + tw > page_w or y + th > page_h:
+                continue
+            if any(_boxes_overlap(box, other) for other in occupied_boxes):
+                continue
+            chosen = box
+            break
+        if chosen is None:
+            # Nowhere free: over the lower part of the drawn sound itself.
+            chosen = (int(min(max(0, gx + (gw - tw) // 2), max(0, page_w - tw))),
+                      int(min(max(0, gy + gh - th), max(0, page_h - th))), int(tw), int(th))
+        x, y, tw, th = chosen
+        draw.multiline_text((x - tb[0], y - tb[1]), block, font=font, fill=(255, 255, 255),
+                            spacing=2, align="center", stroke_width=2, stroke_fill=(0, 0, 0))
+        label = chosen
+        mode = "sfx_subtitle"
+    else:
+        fill, ink = ((255, 255, 255), (20, 20, 20)) if light else ((24, 24, 24), (245, 245, 245))
+        chosen = None
+        for size in range(int(min(40, max(10, source_line * 0.78))), 7, -1):
+            font = get_font(font_path, size, role="bold_dialogue", text=text)
+            for grow in (1.0, 1.25, 1.5):
+                width = int(min(page_w - 2 * pad, gw * grow))
+                lines, block, tw, th, tb = text_block(font, width - 2 * pad)
+                box_w = max(gw, tw + 2 * pad)
+                box_h = max(gh, th + 2 * pad)
+                if box_w <= page_w and box_h <= max(gh * 2.2, th + 2 * pad) and box_h <= page_h:
+                    chosen = (font, block, tw, th, tb, box_w, box_h)
+                    break
+            if chosen:
+                break
+        if chosen is None:
+            return None
+        font, block, tw, th, tb, box_w, box_h = chosen
+        x1 = int(min(max(0, gx + (gw - box_w) // 2), max(0, page_w - box_w)))
+        y1 = int(min(max(0, gy + (gh - box_h) // 2), max(0, page_h - box_h)))
+        radius = max(4, int(min(box_w, box_h) * 0.18))
+        draw.rounded_rectangle((x1, y1, x1 + box_w, y1 + box_h), radius=radius, fill=fill,
+                               outline=ink, width=2)
+        draw.multiline_text((x1 + (box_w - tw) / 2 - tb[0], y1 + (box_h - th) / 2 - tb[1]), block,
+                            font=font, fill=ink, spacing=2, align="center")
+        label = (x1, y1, int(box_w), int(box_h))
+        mode = "caption_box"
+    allowed = np.zeros(page_bgr.shape[:2], np.uint8)
+    lx, ly, lw, lh = label
+    cv2.rectangle(allowed, (max(0, lx - 3), max(0, ly - 3)),
+                  (min(page_w - 1, lx + lw + 3), min(page_h - 1, ly + lh + 3)), 255, -1)
+    group.translation_box = tuple(label)
+    group.rendered_lines = block.split("\n")
+    return cv2.cvtColor(np.asarray(image), cv2.COLOR_RGB2BGR), allowed, label, mode
+
+
 def _draw_allowed_group_mask(image_shape, group, cleanup_mask=None):
     mask = (
         cleanup_mask.copy()
@@ -18469,11 +18723,26 @@ def typography_profile_for_region(img_bgr, group, box, *, style=None):
     # --- STROKE_STYLE: measured outline colour, independent of fill/role ----------
     profile["source_stroke_confident"] = False
     stroke_bgr = lettering.get("stroke_color")
+    # A "stroke" whose tone lies between the ink and the background is the
+    # anti-aliased edge of plain lettering on a low-resolution scan (black text on
+    # a white manga balloon came back with a 4 px grey outline), not an outline.
+    stroke_is_blend = False
+    if stroke_bgr:
+        fill_rgb = profile.get("fill_color") or (0, 0, 0)
+        fill_lum = 0.299 * fill_rgb[0] + 0.587 * fill_rgb[1] + 0.114 * fill_rgb[2]
+        stroke_lum = 0.114 * stroke_bgr[0] + 0.587 * stroke_bgr[1] + 0.299 * stroke_bgr[2]
+        bg_lum = float(lettering.get("background_brightness") or 255.0)
+        low, high = min(fill_lum, bg_lum), max(fill_lum, bg_lum)
+        stroke_is_blend = (high - low) >= 60 and low + 15 < stroke_lum < high - 15
+    profile["stroke_is_antialias_blend"] = bool(stroke_is_blend)
+    if stroke_is_blend and not _stylized:
+        profile["stroke_width"] = 0
     # Only as a pair with the measured fill: when the fill was refused the
     # fill/outline split itself is suspect (it can come out inverted).
     if (
         lettering.get("stroke_present")
         and stroke_bgr
+        and not stroke_is_blend
         and float(lettering.get("stroke_confidence") or 0.0) >= 0.55
         and (profile["source_text_color_confident"] or not _stylized)
     ):

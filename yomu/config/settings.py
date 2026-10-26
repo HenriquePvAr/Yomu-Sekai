@@ -371,6 +371,9 @@ OCR_SPLIT_AT_CROSSING_BORDERS = _env_bool("OCR_SPLIT_AT_CROSSING_BORDERS", True)
 # A glyph the detector clipped at a line's start/end ("I" of "I DO INDEED!") extends the
 # line when it has the line's glyph height and is re-read confidently.
 OCR_EXTEND_CLIPPED_EDGE_GLYPHS = _env_bool("OCR_EXTEND_CLIPPED_EDGE_GLYPHS", True)
+# A short row the detector skipped right above or below a read line ("SO" over
+# "COLD..."): read with the recogniser alone, kept only as common English words.
+OCR_RECOVER_ADJACENT_ROWS = _env_bool("OCR_RECOVER_ADJACENT_ROWS", True)
 OCR_GROUP_FALLBACK_MAX_GROUPS = max(0, _env_int("OCR_GROUP_FALLBACK_MAX_GROUPS", 8))
 OCR_GROUP_FALLBACK_PADDING = max(8, _env_int("OCR_GROUP_FALLBACK_PADDING", 34))
 OCR_GROUP_MIN_QUALITY_SCORE = _env_float("OCR_GROUP_MIN_QUALITY_SCORE", 0.62)
@@ -586,6 +589,10 @@ SEAM_HIGH_CONFIDENCE_SCORE = _env_float("SEAM_HIGH_CONFIDENCE_SCORE", 1.0)
 MAX_NEW_DARK_COMPONENT_AREA = max(1, _env_int("MAX_NEW_DARK_COMPONENT_AREA", 120))
 MAX_NEW_DARK_PIXEL_RATIO = _env_float("MAX_NEW_DARK_PIXEL_RATIO", 0.04)
 TEXTURED_CAPTION_OVERLAY = _env_bool("TEXTURED_CAPTION_OVERLAY", True)
+# Last resort when rebuilding the art under a translated region is unsafe: a sound
+# keeps its drawn lettering with the Portuguese set beside it; dialogue over art goes
+# in an opaque caption box. Off keeps the English source on the page for review.
+TRANSLATION_LABEL_FALLBACK = _env_bool("TRANSLATION_LABEL_FALLBACK", True)
 # Last-resort cleanup for proven ordinary speech whose broad masks were refused
 # on nonuniform artwork.  It never widens a mask: it only measures art risk
 # against the owned source-line evidence instead of the source text bbox.

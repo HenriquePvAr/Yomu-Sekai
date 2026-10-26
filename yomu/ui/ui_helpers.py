@@ -524,7 +524,9 @@ def classify_quality_validation(
     if ((quality.get("zero_processing_errors") is False or count(quality.get("pages_with_error")))
             and not ocr_review_accounts_for_source_gate):
         structural.append("page_processing_error")
-    if quality.get("sfx_policy_valid") is False or quality.get("translate_sfx_disabled") is False:
+    # ``translate_sfx_disabled`` only reports the setting; with sound-effect
+    # translation enabled it is False by design and is not, by itself, a violation.
+    if quality.get("sfx_policy_valid") is False:
         structural.append("translation_policy_violation")
     if translation and (
         translation.get("accounting_closed") is False

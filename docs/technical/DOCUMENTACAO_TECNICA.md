@@ -1636,6 +1636,28 @@ Décima primeira passada (reconstrução e regiões restantes, 2026-10-25, **IMP
   (Seitokai cap. 188: 38 → 50 traduzidos, 58 → 41 em revisão, 285 s → 196 s). Balões com
   frases em colunas lado a lado são lidos coluna por coluna (`_text_columns`), e texto feito só
   de sons do glossário fora de balão fechado vira efeito sonoro (`_promote_glossary_sounds`).
+- Tradução e renderização (passo 14): **por que nenhum capítulo passava.** O portão de qualidade
+  marcava `translation_policy_violation` sempre que `translate_sfx_disabled` era falso, isto é,
+  com a tradução de efeitos sonoros ligada (o padrão): todo capítulo reprovava. A política agora
+  é `TRANSLATE_SFX` (`sfx_policy_ok` em `benchmark_pipeline.py`; `ui_helpers.classify_quality_validation`
+  só reprova com `sfx_policy_valid` falso). Último recurso de renderização
+  (`_render_translation_label`, `TRANSLATION_LABEL_FALLBACK`, padrão ligado): quando todas as
+  estratégias de limpeza recusam reconstruir a arte, a tradução válida (ou recusada só por não
+  caber, `text_does_not_fit_region`) entra sem tocar na arte: efeito sonoro mantém o letreiro e
+  ganha legenda em Bangers ao lado, numa posição livre de outros textos (`sfx_subtitle`); fala e
+  narração vão numa caixa opaca arredondada sobre o texto original, clara ou escura conforme o
+  entorno, crescida até caber (`caption_box`). Outros reparos: palavra quebrada por hífen na
+  linha é juntada em `clean_ocr_text` quando vira palavra real e as duas metades têm a mesma
+  caixa ("EMBAR- RASSING", não "UME- KUN"); apóstrofo que não é contração é lido como espaço
+  ("OUTON'AWALKWITHNO" → OUT ON A WALK WITH NO); a nota de qualidade do OCR é calculada sobre o
+  texto já reparado; linha curta não detectada logo acima/abaixo de uma linha lida
+  (`_recover_adjacent_unread_rows`, `OCR_RECOVER_ADJACENT_ROWS`: "SO" sobre "COLD...") é lida
+  só pelo reconhecedor e aceita apenas se todas as palavras forem inglês comum; os nomes do
+  capítulo vão ao DeepL em `<x>` (exceto os que também são palavras comuns); um "contorno" cujo
+  tom fica entre a tinta e o fundo é borda suavizada e não é desenhado. Seitokai cap. 188:
+  38 → 68 traduzidos, 33 → 0 falhas visuais, falha estrutural → só revisão. GPU (item 6):
+  otimizar o grafo do LaMa na CPU reduz 9.739 → 5.184 nós mas a inicialização DirectML só cai
+  de 10,4 s para 9,4 s (o custo é a compilação das convoluções); não adotado.
 - Desempenho (passo 3, GPU): com `GPU_INFERENCE=auto` e `onnxruntime-directml`, o RapidOCR roda
   com `det/cls/rec_use_dml` e o LaMa por uma sessão ONNX DirectML (`yomu/clean/inpainting/lama_onnx.py`).
   O exportador não tem forma ONNX das FFTs reais 2-D das Fourier units, então `rfftn`/`irfftn`
