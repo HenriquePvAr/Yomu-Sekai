@@ -1,5 +1,6 @@
 import importlib.util
 import functools
+import os
 import re
 import threading
 import unicodedata
@@ -707,14 +708,15 @@ class OCREngine:
                     from yomu.core.gpu import directml_enabled
 
                     # DirectML: same reads as the CPU (24/24 page crops), 3.5x faster.
-                    # Every caller goes through the one DirectML lock (yomu.core.gpu).
+                    # Every session Run goes through the one DirectML lock (yomu.core.gpu).
                     gpu = directml_enabled()
                     print("Inicializando RapidOCR / ONNX Runtime" + (" (GPU DirectML)..." if gpu else "..."))
                     if gpu:
                         from yomu.core.gpu import DIRECTML_LOCK
 
                         with DIRECTML_LOCK:
-                            engine = _SerialCall(RapidOCR(det_use_dml=True, cls_use_dml=True, rec_use_dml=True))
+                            engine = _serialize_rapidocr_sessions(
+                                RapidOCR(det_use_dml=True, cls_use_dml=True, rec_use_dml=True))
                     else:
                         engine = RapidOCR()
                     self._rapidocr_instances[cache_key] = engine
@@ -2025,20 +2027,31 @@ def _deduplicate_tiled_ocr_lines(lines):
     return kept, duplicates
 
 
-class _SerialCall:
-    """Calls the wrapped DirectML engine under the one GPU lock."""
+class _SerialRun:
+    """An ONNX Runtime session whose ``run`` takes the one DirectML lock.
 
-    def __init__(self, engine):
-        self._engine = engine
+    Only the GPU call is serialised; RapidOCR's resize, normalisation and box
+    post-processing (CPU) stay concurrent across page workers.
+    """
 
-    def __call__(self, *args, **kwargs):
+    def __init__(self, session):
+        self._session = session
+
+    def run(self, *args, **kwargs):
         from yomu.core.gpu import DIRECTML_LOCK
 
         with DIRECTML_LOCK:
-            return self._engine(*args, **kwargs)
+            return self._session.run(*args, **kwargs)
 
     def __getattr__(self, name):
-        return getattr(self._engine, name)
+        return getattr(self._session, name)
+
+
+def _serialize_rapidocr_sessions(engine):
+    for stage in (engine.text_det, engine.text_cls, engine.text_rec):
+        holder = getattr(stage, "infer", None) or getattr(stage, "session", None)
+        holder.session = _SerialRun(holder.session)
+    return engine
 
 
 def rapidocr_runtime_smoke() -> dict:

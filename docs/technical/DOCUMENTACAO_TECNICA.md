@@ -1593,7 +1593,11 @@ Décima primeira passada (reconstrução e regiões restantes, 2026-10-25, **IMP
   diferença máxima de 0,002/255 contra o TorchScript). A exportação é derivada do `.pt`
   verificado e cacheada com sidecar de SHA-256; falha de exportação ou de sessão volta ao
   PyTorch na CPU. Todas as sessões DirectML rodam sob uma trava única (`yomu.core.gpu.DIRECTML_LOCK`):
-  RapidOCR e LaMa ao mesmo tempo derrubam o processo com access violation. Medido (RX 6600):
+  RapidOCR e LaMa ao mesmo tempo derrubam o processo com access violation. A trava cobre só o
+  `session.run` (o pré e pós-processamento do RapidOCR seguem em paralelo), e com DirectML a
+  trava de página `_RAPIDOCR_INFERENCE_LOCK` é dispensada (`_rapidocr_section`). Medidos e
+  descartados: LaMa em fp16 (muito mais lento com as conversões), níveis de otimização do grafo
+  (inicialização de ~10–17 s igual) e OCR numa cópia em CPU quando a GPU está ocupada (empate). Medido (RX 6600):
   OCR 3,5× e LaMa ~19× por inferência; 33 páginas com DeepL 629 s → 223 s, mesmos contadores e
   as 33 páginas limpas idênticas às da CPU.
 - Limpeza: máscara larga sobre arte não é vetada quando o preenchimento escolhido foi o

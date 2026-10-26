@@ -10,6 +10,7 @@ import shutil
 import subprocess
 import time
 import traceback
+import contextlib
 import threading
 import queue
 import tempfile
@@ -97,6 +98,14 @@ from yomu.export.png_output import export_final_pages_png, PngExportError
 from yomu.translation.providers.yomu_backend_provider import SystemicTranslationFailure
 
 _RAPIDOCR_INFERENCE_LOCK = threading.BoundedSemaphore(1)
+
+
+def _rapidocr_section():
+    """The page-level RapidOCR lock on the CPU; on DirectML each session Run already
+    takes the GPU lock, so the CPU work around it (crops, variants) runs per page."""
+    from yomu.core.gpu import directml_enabled
+
+    return contextlib.nullcontext() if directml_enabled() else _RAPIDOCR_INFERENCE_LOCK
 _PERF_JOB_ORIGIN_NS = None
 _PERF_EVENTS = []
 _PIPELINE_TELEMETRY = None
@@ -2133,7 +2142,7 @@ def process_pre_translation_page(
         page_index=state["index"],
         items=len(groups),
     ):
-        with _RAPIDOCR_INFERENCE_LOCK:
+        with _rapidocr_section():
             recovery_lines, recovery_records = apply_rapidocr_region_recovery(
                 original,
                 state.get("raw_lines", []),
@@ -2166,7 +2175,7 @@ def process_pre_translation_page(
                     page_index=state["index"],
                 )
                 apply_variant_votes(groups)
-    with _RAPIDOCR_INFERENCE_LOCK:
+    with _rapidocr_section():
         resolve_split_word_ambiguity(original, groups, ocr_lang, state["index"])
     selective_started = time.perf_counter()
     with profile_step(
@@ -2174,7 +2183,7 @@ def process_pre_translation_page(
         page_index=state["index"],
         items=len(groups),
     ):
-        with _RAPIDOCR_INFERENCE_LOCK:
+        with _rapidocr_section():
             fallback_lines, selective_records = apply_selective_ocr_fallbacks(
                 original,
                 state.get("raw_lines", []),
