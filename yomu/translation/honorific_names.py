@@ -18,10 +18,37 @@ _PATTERN = re.compile(
 PROTECT_TAG = "x"
 
 
+# A word in vocative position ("WAKE UP, SUNLESS!", "SUNLESS, WAKE UP!") that is
+# rare as an English word (Zipf < 3) is a name: ordinary vocatives are frequent
+# words ("GUYS" 5.4, "SIR" 5.1, "KID" 5.0); "SUNLESS" (2.3) was rendered "SEM SOL".
+_VOCATIVE_AFTER = re.compile(r",\s*([A-Za-z][A-Za-z'’-]{3,})\s*(?=[!?.…\]]|$)")
+_VOCATIVE_BEFORE = re.compile(r"^[\W]*([A-Za-z][A-Za-z'’-]{3,})\s*,")
+VOCATIVE_NAME_MAX_ZIPF = 3.0
+
+
+def _vocative_name_spans(text):
+    from yomu.review.region_taxonomy import is_english_word, word_zipf
+
+    spans = []
+    for pattern in (_VOCATIVE_AFTER, _VOCATIVE_BEFORE):
+        for match in pattern.finditer(text):
+            word = match.group(1).strip("'’")
+            key = word.upper()
+            # Only a dictionary word is at risk of being translated ("SUNLESS"); an
+            # unknown token ("ARSKAN", OCR damage like "IPROMISE") is left unclaimed.
+            if key not in _NOT_A_NAME and is_english_word(key) and word_zipf(word) < VOCATIVE_NAME_MAX_ZIPF:
+                spans.append(match.span(1))
+    return spans
+
+
 def honorific_name_spans(text):
-    """(start, end) of each name an honorific abbreviation addresses in ``text``."""
-    return [match.span(2) for match in _PATTERN.finditer(str(text or ""))
-            if match.group(2).strip("'’").upper() not in _NOT_A_NAME]
+    """(start, end) of each name ``text`` addresses: after an honorific abbreviation
+    ("MS. GO"), or in vocative position when rare as an English word ("SUNLESS")."""
+    text = str(text or "")
+    return sorted(set(
+        [match.span(2) for match in _PATTERN.finditer(text)
+         if match.group(2).strip("'’").upper() not in _NOT_A_NAME]
+        + _vocative_name_spans(text)))
 
 
 def _name_spans(text, names):

@@ -408,8 +408,18 @@ async function bootstrap() {
 async function heartbeat() {
   if (!state.authenticated) return;
   trace('DEVICE_HEARTBEAT_STARTED', {step: 'heartbeat'});
-  try { state.device = await call('device-heartbeat', state.device ? {device_uuid: state.device.device_uuid || state.device.id} : {}); trace('DEVICE_HEARTBEAT_RESULT', {step: 'heartbeat', ok: true, status: 200}); trace('CONTROL_PLANE_HEARTBEAT_SUCCESS'); }
-  catch (error) { trace('DEVICE_HEARTBEAT_RESULT', {step: 'heartbeat', ok: false, http_status: Number(error.status || 0), reason_code: String(error.code || '').slice(0, 80)}); trace('CONTROL_PLANE_HEARTBEAT_FAILED', {code: String(error.code || '').slice(0, 80), status: Number(error.status || 0)}); if (['license_revoked','license_expired','device_not_found'].includes(error.code)) { state.license = {status: 'revoked'}; render(); } }
+  // No verified device (a browser tab never registers one; only the desktop shell
+  // signs the challenge): there is nothing to keep alive, and the call only ever
+  // answered 403 - every two minutes, all night.
+  if (!state.device?.verified) { stopHeartbeat(); return; }
+  try { state.device = {...state.device, ...(await call('device-heartbeat', {device_uuid: state.device.device_uuid || state.device.id}))}; trace('DEVICE_HEARTBEAT_RESULT', {step: 'heartbeat', ok: true, status: 200}); trace('CONTROL_PLANE_HEARTBEAT_SUCCESS'); }
+  catch (error) {
+    trace('DEVICE_HEARTBEAT_RESULT', {step: 'heartbeat', ok: false, http_status: Number(error.status || 0), reason_code: String(error.code || '').slice(0, 80)}); trace('CONTROL_PLANE_HEARTBEAT_FAILED', {code: String(error.code || '').slice(0, 80), status: Number(error.status || 0)});
+    if (['license_revoked','license_expired','device_not_found'].includes(error.code)) { state.license = {status: 'revoked'}; render(); }
+    // Refused, not unreachable: retrying the same credentials cannot succeed. The
+    // next sign-in restarts the heartbeat.
+    if ([401, 403].includes(Number(error.status || 0))) stopHeartbeat();
+  }
 }
 function nextDailyClaimText(claimDay = '') {
   const now = new Date();

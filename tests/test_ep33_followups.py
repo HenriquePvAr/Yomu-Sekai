@@ -33,6 +33,13 @@ class GluedSentencePromotionTests(unittest.TestCase):
         self.assertTrue(region_taxonomy.weak_label_semantic_promotion_allowed(
             "decorative", "THEMORE WERUNIT, THEEASIER IT'LL GET."))
 
+    def test_contraction_is_a_clause_but_a_possessive_sign_is_not(self):
+        allowed = region_taxonomy.weak_label_semantic_promotion_allowed
+        self.assertTrue(allowed("unknown", "I'M SORRY!!"))
+        self.assertTrue(allowed("decorative", "THAT'S RIGHT."))
+        self.assertFalse(allowed("decorative", "JOE'S DINER."))
+        self.assertFalse(allowed("decorative", "CRASH!"))
+
 
 class LocalSnapshotRootTests(unittest.TestCase):
     def test_snapshots_live_under_the_runtime_root(self):

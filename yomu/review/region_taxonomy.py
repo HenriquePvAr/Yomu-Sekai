@@ -120,6 +120,14 @@ _STORY_CLAUSE_MARKERS = frozenset({
     "HAVE", "HAS", "HAD", "WILL", "WOULD", "CAN", "COULD", "SHOULD",
     "DON'T", "DONT", "DIDN'T", "DIDNT", "CAN'T", "CANT",
 })
+# A contraction is a subject and its verb ("I'M SORRY!!", "THAT'S RIGHT."). 'S only
+# after a pronoun-like head: "JOE'S" is a possessive, the start of a shop sign.
+_CLAUSE_CONTRACTION = re.compile(
+    r"[A-Z]+'(?:M|RE|LL|VE|D|T)|(?:IT|THAT|THERE|HERE|HE|SHE|WHAT|WHO|WHERE|HOW|LET)'S")
+
+
+def _is_clause_marker(key: str) -> bool:
+    return key in _STORY_CLAUSE_MARKERS or bool(_CLAUSE_CONTRACTION.fullmatch(key))
 
 
 def _compact_alnum(text: str) -> str:
@@ -488,9 +496,12 @@ def weak_label_semantic_promotion_allowed(legacy_label: str, text: str) -> bool:
     if len(real_words) >= 4:
         return True
     folded = [re.sub(r"[^A-Z']", "", word.upper()) for word in words]
-    has_clause_marker = any(word in _STORY_CLAUSE_MARKERS for word in folded)
+    has_clause_marker = any(_is_clause_marker(word) for word in folded)
     has_sentence_punctuation = bool(re.search(r"[.!?…]", body))
-    if len(real_words) >= 2 and has_clause_marker and has_sentence_punctuation:
+    # Short clause words ("IS", "IT") are words of the sentence too: "TH... THIS IS..."
+    # is a stutter of real speech, not a label.
+    sentence_words = [word for word, key in zip(words, folded) if _is_real_word(word) or _is_clause_marker(key)]
+    if len(sentence_words) >= 2 and has_clause_marker and has_sentence_punctuation:
         return True
     # Prose without punctuation ("BY THE NIGHTMARE SPELL"): a function word *inside*
     # the phrase joins content words; a leading article alone ("THE TOWER") does not.

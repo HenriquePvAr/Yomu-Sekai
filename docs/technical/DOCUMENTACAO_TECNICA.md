@@ -1,6 +1,6 @@
 # Tradutor IA — Documentação Técnica
 
-> **Base verificada:** `d14edac` (branch `main`) em 2026-10-26 — diagramas Mermaid de §15
+> **Base verificada:** `129e169` (branch `main`) em 2026-10-26 (passo 15 de §29); `d14edac` para os diagramas Mermaid de §15
 > (validação/retries/liquidação), §16 (três candidatos de preenchimento, escolha e portões,
 > tipografia) e §25 (paralelismo por página) conferidos contra `yomu/ocr/ocr_balloon.py`,
 > `yomu/pipeline/benchmark_pipeline.py` e `yomu/clean/ownership/font_fidelity.py`. O restante do
@@ -1658,6 +1658,24 @@ Décima primeira passada (reconstrução e regiões restantes, 2026-10-25, **IMP
   38 → 68 traduzidos, 33 → 0 falhas visuais, falha estrutural → só revisão. GPU (item 6):
   otimizar o grafo do LaMa na CPU reduz 9.739 → 5.184 nós mas a inicialização DirectML só cai
   de 10,4 s para 9,4 s (o custo é a compilação das convoluções); não adotado.
+- Revisão visual (passo 15): **texto fora do balão e inglês restante.** Agrupamento: duas
+  linhas sobre fundo claro separadas por um traço escuro longo (borda de balão,
+  `_balloon_border_mask`/`_border_separates`) não se juntam, e um grupo cujas linhas formam
+  colunas (`_text_columns`) é dividido em um grupo por coluna (balão duplo com interior branco
+  comum). Classificação: roda sobre o texto já reparado ("...AREONEUGLY" deixou de virar SFX);
+  som do glossário dentro de balão continua fala; placa colorida com frase não é decorativa;
+  contração sujeito+verbo ("I'M", "THAT'S"; `'S` só após pronome) conta como marca de oração em
+  `weak_label_semantic_promotion_allowed`, e uma oração pontuada sobre fundo saturado é legenda
+  da história (`_decorative_short_display_story_promotion_allowed`). Nomes: palavra em posição
+  de vocativo (", SUNLESS!", "SUNLESS, ...") que é palavra do dicionário com Zipf < 3 é nome e
+  vai ao DeepL em `<x>` (`honorific_names._vocative_name_spans`; "GUYS", "SIR" são comuns demais;
+  token desconhecido, "ARSKAN" ou dano de OCR como "IPROMISE", não é reivindicado). Renderização: o último recurso também
+  cobre `translation_box_outside_safe_area`; a caixa de legenda alarga até a palavra mais longa
+  em vez de quebrá-la ("NECE/SSID/ADE") e prefere altura ≤ 2,2× a original; SFX também pode usar
+  o resgate por reconstrução aprendida (`rendered_on_learned_clean_rescue`, revisão). UI:
+  `control_plane_client.heartbeat` só chama `device-heartbeat` com dispositivo verificado e para
+  em 401/403 (a aba do navegador repetia 403 a cada 2 min); o trace de Fontes não gera mais
+  rejeição não tratada.
 - Desempenho (passo 3, GPU): com `GPU_INFERENCE=auto` e `onnxruntime-directml`, o RapidOCR roda
   com `det/cls/rec_use_dml` e o LaMa por uma sessão ONNX DirectML (`yomu/clean/inpainting/lama_onnx.py`).
   O exportador não tem forma ONNX das FFTs reais 2-D das Fourier units, então `rfftn`/`irfftn`

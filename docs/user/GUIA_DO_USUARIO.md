@@ -1,6 +1,6 @@
 # Yomu Sekai — Guia do Usuário
 
-> **Base verificada:** `d14edac` · **Revisado em:** 2026-10-26
+> **Base verificada:** `129e169` · **Revisado em:** 2026-10-26
 > **Para quem é:** Scans, tradutores, editores e testadores da Beta. Nenhum conhecimento
 > técnico é necessário.
 
@@ -462,14 +462,15 @@ português — por exemplo, "BANG" vira "BAM" e "\*bite\*" vira "\*morde\*". Let
 maiúsculas e asteriscos do original são mantidos. Um som que o programa não conhece
 **mantém o letreiro original**, em vez de receber uma tradução literal.
 
-Quando o efeito sonoro está desenhado **sobre a arte** e apagá-lo estragaria o desenho, o
+Quando o efeito sonoro está desenhado **sobre a arte**, o programa primeiro tenta reconstruir
+o desenho por baixo dele a partir dos pixels ao redor e escrever a tradução no lugar; quando
+isso acontece, a região fica marcada para revisão. Se nem essa reconstrução for segura, o
 letreiro original fica e a tradução aparece como uma **legenda pequena ao lado** dele, em
 branco com contorno — como nas traduções feitas por grupos de scan. Da mesma forma, uma fala
 ou narração escrita sobre a arte que não pôde ser apagada com segurança recebe uma **caixa de
 legenda** (clara ou escura, conforme o fundo) por cima do texto original, com a tradução
-dentro; a caixa também é usada quando a tradução não cabe no espaço do texto original. Esse
-comportamento
-não tem um botão na tela de configurações; se a sua instalação precisar manter todos os
+dentro; a caixa também é usada quando a tradução não cabe no espaço do texto original, e
+alarga em vez de partir uma palavra no meio. Esse comportamento não tem um botão na tela de configurações; se a sua instalação precisar manter todos os
 efeitos sonoros em inglês, peça a quem preparou a instalação.
 
 ### Texto dentro dos balões

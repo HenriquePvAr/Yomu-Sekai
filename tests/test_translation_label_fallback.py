@@ -61,6 +61,13 @@ class TranslationLabelTests(unittest.TestCase):
         self.assertFalse(ob._translation_label_eligible(group))
         group.translation_validation_reason = "text_does_not_fit_region"
         self.assertTrue(ob._translation_label_eligible(group))
+        group.translation_validation_reason = "translation_box_outside_safe_area"
+        self.assertTrue(ob._translation_label_eligible(group))
+
+    def test_narrow_box_widens_instead_of_breaking_words(self):
+        group = _group("THERE'S NO NEED, REALLY!", "NÃO HÁ NECESSIDADE, DE VERDADE!", (220, 300, 40, 70), "speech")
+        ob._render_translation_label(self.page.copy(), self.page, group, None)
+        self.assertIn("NECESSIDADE,", " ".join(group.rendered_lines).split())
 
 
 if __name__ == "__main__":

@@ -24,6 +24,17 @@ class HonorificNameTests(unittest.TestCase):
         self.assertEqual(ob.honorific_addressed_names("LET'S GO NOW"), [])
         self.assertEqual(ob.honorific_addressed_names("MR. AND MRS. KIM"), ["KIM"])
 
+    def test_rare_vocative_is_a_name_but_glued_words_are_not(self):
+        def names(text):
+            return [text[a:b] for a, b in honorific_names.honorific_name_spans(text)]
+
+        self.assertEqual(names("WAKE UP, SUNLESS!"), ["SUNLESS"])
+        self.assertEqual(names("COME ON, COSSACK!"), ["COSSACK"])
+        self.assertEqual(names("WAIT, ARSKAN"), [])
+        self.assertEqual(names("HEY, GUYS!"), [])
+        self.assertEqual(names("IT DOESN'T HURT AT ALL, IPROMISE!"), [])
+        self.assertEqual(names("FLRTHERMORE, CHILDREN BORN INTO POWER..."), [])
+
     def test_name_is_local_to_its_group(self):
         addressed = ob.TextGroup(group_id="BALAO_1", lines=[], text="TALK WITH MS. GO ALONE.")
         verb = ob.TextGroup(group_id="BALAO_2", lines=[], text="LET'S GO.")

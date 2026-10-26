@@ -3557,7 +3557,9 @@
     const traceId = getGlobal('__sourceTraceId') || correlationId();
     setGlobal('__sourceTraceId', traceId);
     uiTrace(event, {trace_id: traceId, ...fields});
-    try { void fetch('/api/ui/source-trace', {method:'POST', headers:{'Content-Type':'application/json'}, credentials:'same-origin', body: JSON.stringify({trace_id: traceId, event, ...fields}), keepalive:true}); } catch (_) { /* diagnostics must never affect UX */ }
+    // A rejected fetch is asynchronous: try/catch alone left it as an uncaught
+    // promise rejection in the console whenever the server was unreachable.
+    try { void fetch('/api/ui/source-trace', {method:'POST', headers:{'Content-Type':'application/json'}, credentials:'same-origin', body: JSON.stringify({trace_id: traceId, event, ...fields}), keepalive:true}).catch(() => {}); } catch (_) { /* diagnostics must never affect UX */ }
     return traceId;
   }
 

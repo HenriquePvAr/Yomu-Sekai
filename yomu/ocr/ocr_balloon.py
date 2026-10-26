@@ -711,7 +711,7 @@ def _analyze_image_array(original_bgr, raw_lines, page_index=None):
         page_index=page_index,
         items=len(usable_lines),
     ):
-        groups = _group_lines(usable_lines, page_index=page_index)
+        groups = _group_lines(usable_lines, page_index=page_index, image_bgr=original_bgr)
     with profile_step(
         "analyze.split_sentence_boundaries",
         page_index=page_index,
@@ -753,7 +753,16 @@ def _analyze_image_array(original_bgr, raw_lines, page_index=None):
         page_index=page_index,
         items=len(groups),
     ):
-        _classify_groups(groups, original, page_index=page_index)
+        # Classify the text the provider will get: glued words ("...AREONEUGLY") read
+        # as one sound-effect word and the sentence was kept as an English "sound".
+        raw_texts = [group.text for group in groups]
+        for group in groups:
+            group.text = split_glued_source_words(group.text, protected=group.detected_proper_names)
+        try:
+            _classify_groups(groups, original, page_index=page_index)
+        finally:
+            for group, raw_text in zip(groups, raw_texts):
+                group.text = raw_text
         _promote_glossary_sounds(groups)
     with profile_step(
         "analyze.score_group_quality",
@@ -3252,12 +3261,11 @@ def _render_analyzed_image(
             if clean_ok and clean_mask is not None:
                 text_mask = cv2.bitwise_or(text_mask, clean_mask)
             rescued_render, rescued_allowed = None, None
-            # Not for a sound effect: it is part of the art, and when every regular
-            # strategy refused it the rescue paints a flat patch over that art and
-            # block letters over the lettering ("STEP" -> "PASSO"). The original
-            # sound costs the reader nothing.
+            # Sound effects too: the learned reconstruction follows the art around
+            # the lettering (GPU LaMa), and the Portuguese sound is drawn in its
+            # place. Only when even that cannot remove the source does the
+            # translation fall back to a subtitle beside the original lettering.
             if (clean_ok and clean_mask is not None and typeset
-                    and group.classification != "sfx"
                     and str(group.translation_candidate or group.translation or "").strip()):
                 # The CLEAN pass (learned last resort included) removed the source
                 # where every render strategy was refused: the translation can be
@@ -3603,15 +3611,67 @@ def reading_order(lines):
     ]
 
 
-def _group_lines(lines, page_index=None):
+def _balloon_border_mask(image_bgr, lines):
+    """Long dark strokes of the page (balloon and panel borders), or ``None``.
+
+    Dark components much larger than a glyph: letters are small components, a
+    balloon outline runs the length of the balloon.
+    """
+    if image_bgr is None or not getattr(image_bgr, "size", 0) or not lines:
+        return None
+    gray = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2GRAY)
+    heights = [int(line.box[3]) for line in lines if line.box[3] > 0]
+    glyph = float(np.median(heights)) if heights else 20.0
+    dark = (gray < 100).astype(np.uint8)
+    count, labels, stats, _ = cv2.connectedComponentsWithStats(dark, 8)
+    big = np.zeros(count, dtype=bool)
+    extent = np.maximum(stats[:, cv2.CC_STAT_WIDTH], stats[:, cv2.CC_STAT_HEIGHT])
+    big[1:] = extent[1:] >= 3.0 * glyph
+    return gray, big[labels]
+
+
+def _border_separates(border, line_box, group):
+    """A long dark stroke crosses the gap between ``line_box`` and the group's
+    nearest line, both lettered on a light background: two touching balloons."""
+    if border is None or not group.lines:
+        return False
+    gray, big = border
+    height, width = gray.shape
+
+    def light_around(box):
+        x, y, w, h = (int(v) for v in box)
+        ring = gray[max(0, y - 3):min(height, y + h + 3), max(0, x - 3):min(width, x + w + 3)]
+        return ring.size and float(np.percentile(ring, 70)) >= 200
+
+    lx, ly, lw, lh = (int(v) for v in line_box)
+    if not light_around(line_box):
+        return False
+    center = np.array([lx + lw / 2.0, ly + lh / 2.0])
+    nearest = min(group.lines, key=lambda item: float(np.hypot(
+        item.box[0] + item.box[2] / 2.0 - center[0], item.box[1] + item.box[3] / 2.0 - center[1])))
+    if not light_around(nearest.box):
+        return False
+    gx, gy, gw, gh = (int(v) for v in nearest.box)
+    other = np.array([gx + gw / 2.0, gy + gh / 2.0])
+    steps = int(max(abs(other - center))) + 1
+    for t in np.linspace(0.0, 1.0, max(2, steps)):
+        px, py = (center + (other - center) * t).round().astype(int)
+        inside = (lx <= px < lx + lw and ly <= py < ly + lh) or (gx <= px < gx + gw and gy <= py < gy + gh)
+        if not inside and 0 <= px < width and 0 <= py < height and big[py, px]:
+            return True
+    return False
+
+
+def _group_lines(lines, page_index=None, image_bgr=None):
     groups = []
+    border = _balloon_border_mask(image_bgr, lines)
 
     for line in sorted(lines, key=lambda item: (item.box[1], item.box[0])):
         target = None
         for group in groups:
             record_count("group_lines.pair_checks", 1, page_index=page_index)
             with profile_step("group_lines.line_belongs_to_group", page_index=page_index):
-                belongs = _line_belongs_to_group(line, group)
+                belongs = _line_belongs_to_group(line, group) and not _border_separates(border, line.box, group)
             if belongs:
                 target = group
                 break
@@ -3624,7 +3684,23 @@ def _group_lines(lines, page_index=None):
         target.lines = reading_order(target.lines)
         target.text = clean_ocr_text(" ".join(item.text for item in target.lines))
 
-    return groups
+    # Two phrases set as side-by-side columns are two utterances (a manga double
+    # balloon: "IN FACT, ARE YOU EATING PROPERLY, SENPAI?" beside "YOU'RE MUCH
+    # LIGHTER THAN I EXPECTED."). Translated as one block, the Portuguese ran
+    # across both outlines; each column is its own group.
+    split = []
+    for group in groups:
+        columns = _text_columns(group.lines)
+        if not columns:
+            split.append(group)
+            continue
+        for column in columns:
+            part = TextGroup(group_id="", lines=reading_order(column))
+            part.text = clean_ocr_text(" ".join(item.text for item in part.lines))
+            split.append(part)
+    for index, group in enumerate(split, start=1):
+        group.group_id = f"BALAO_{index}"
+    return split
 
 
 def _repair_group_texts(groups):
@@ -3953,7 +4029,9 @@ def _promote_glossary_sounds(groups):
     for group in groups:
         if group.classification not in {"speech", "narration", "unknown"}:
             continue
-        if any((line.metadata or {}).get("visual_white_region_enclosed") for line in group.lines):
+        # Inside a balloon or box it is dialogue ("HUH?"), whatever its words.
+        if (str(getattr(group, "background_type", "") or "") in {"white_balloon", "dark_balloon", "narration_box"}
+                or any((line.metadata or {}).get("visual_white_region_enclosed") for line in group.lines)):
             continue
         words = re.findall(r"[A-Za-z]+", str(group.text or ""))
         if words and all(len(word) >= 2 and _lookup(word) is not None for word in words):
@@ -4581,6 +4659,9 @@ def _refine_classification_with_background(group):
         and 1 <= len(compact) <= 24
         and white_ratio < 0.65
         and saturation >= 25.0
+        # A sentence lettered over a saturated backdrop ("THE SPELL'S VOICE...?" on
+        # golden threads) is narration, not a sign - same evidence as compact_graphic.
+        and not region_taxonomy.weak_label_semantic_promotion_allowed("unknown", group.text)
     )
     compact_graphic = (
         len(words) == 1
@@ -4838,7 +4919,9 @@ def _decorative_short_display_story_promotion_allowed(group):
     if uppercase_ratio < 0.80:
         return False
     quoted = bool(re.search(r"[\"“”'‘’].+[\"“”'‘’]", body.strip()))
-    caption_like = quoted or len(semantic_words) >= 3
+    # A punctuated clause ("THAT'S RIGHT.") is a story line on a colored burst too.
+    clause = region_taxonomy.weak_label_semantic_promotion_allowed("decorative", body)
+    caption_like = quoted or clause or len(semantic_words) >= 3
     if not caption_like:
         return False
     def _metric(name, default=0.0):
@@ -4856,7 +4939,7 @@ def _decorative_short_display_story_promotion_allowed(group):
         _metric("context_saturation_mean") >= 55.0
         or _metric("saturation_mean") >= 55.0
     )
-    return dark_context and saturated_context
+    return (dark_context or clause) and saturated_context
 
 
 def _apply_classification_policy(group):
@@ -17011,7 +17094,8 @@ def _translation_label_eligible(group):
         return False
     if group.translation_valid:
         return True
-    return str(group.translation_validation_reason or "") == "text_does_not_fit_region"
+    return str(group.translation_validation_reason or "") in {
+        "text_does_not_fit_region", "translation_box_outside_safe_area"}
 
 
 def _render_translation_label(page_bgr, original_bgr, group, font_path, occupied_boxes=()):
@@ -17045,8 +17129,8 @@ def _render_translation_label(page_bgr, original_bgr, group, font_path, occupied
     source_line = float(np.median(line_heights)) if line_heights else gh
     pad = 4
 
-    def text_block(font, width):
-        lines = _wrap_text(draw, text, font, max_width=max(12, width), split_long_words=True)
+    def text_block(font, width, split_long_words=True):
+        lines = _wrap_text(draw, text, font, max_width=max(12, width), split_long_words=split_long_words)
         block = "\n".join(lines)
         box = draw.multiline_textbbox((0, 0), block, font=font, spacing=2, align="center", stroke_width=2)
         return lines, block, box[2] - box[0], box[3] - box[1], box
@@ -17079,19 +17163,27 @@ def _render_translation_label(page_bgr, original_bgr, group, font_path, occupied
         mode = "sfx_subtitle"
     else:
         fill, ink = ((255, 255, 255), (20, 20, 20)) if light else ((24, 24, 24), (245, 245, 245))
-        chosen = None
+        chosen = fallback = None
         for size in range(int(min(40, max(10, source_line * 0.78))), 7, -1):
             font = get_font(font_path, size, role="bold_dialogue", text=text)
+            # The box widens to the longest word: "NECE/SSID/ADE" is unreadable.
+            longest = max(draw.textlength(word, font=font) for word in text.split()) + 4
             for grow in (1.0, 1.25, 1.5):
-                width = int(min(page_w - 2 * pad, gw * grow))
-                lines, block, tw, th, tb = text_block(font, width - 2 * pad)
+                width = int(min(page_w - 2 * pad, max(gw * grow, longest + 2 * pad)))
+                lines, block, tw, th, tb = text_block(font, width - 2 * pad, split_long_words=False)
                 box_w = max(gw, tw + 2 * pad)
                 box_h = max(gh, th + 2 * pad)
-                if box_w <= page_w and box_h <= max(gh * 2.2, th + 2 * pad) and box_h <= page_h:
-                    chosen = (font, block, tw, th, tb, box_w, box_h)
+                if box_w > page_w or box_h > page_h:
+                    continue
+                # Smallest font that fits the page is the fallback; a box no taller
+                # than ~2x the source keeps the panel readable around it.
+                fallback = (font, block, tw, th, tb, box_w, box_h)
+                if box_h <= gh * 2.2:
+                    chosen = fallback
                     break
             if chosen:
                 break
+        chosen = chosen or fallback
         if chosen is None:
             return None
         font, block, tw, th, tb, box_w, box_h = chosen
