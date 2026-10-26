@@ -189,7 +189,7 @@
   // The legacy queued label remains in this compatibility note while the
   // visible copy adds the clearer waiting state.
   // queued: 'na fila'
-  const runStatusLabels = {ready: 'pronto', staging: 'preparando', queued: 'na fila · aguardando', running: 'processando', awaiting_source_review: 'confirme as páginas', waiting_source_verification: 'aguardando verificação da fonte', source_analysis_ready: 'fonte analisada', finished: 'concluído', review_required: 'concluído — revisão recomendada', review_completed: 'revisão concluída', failed: 'falhou', legacy_unverified: 'resultado antigo não verificado', error: 'falhou', cancelled: 'cancelado'};
+  const runStatusLabels = {ready: 'pronto', staging: 'preparando', queued: 'na fila · aguardando', claiming: 'iniciando', starting: 'iniciando', running: 'processando', cancelling: 'cancelando', interrupted: 'interrompido', awaiting_source_review: 'confirme as páginas', waiting_source_verification: 'aguardando verificação da fonte', source_analysis_ready: 'fonte analisada', finished: 'concluído', review_required: 'concluído — revisão recomendada', review_completed: 'revisão concluída', failed: 'falhou', legacy_unverified: 'resultado antigo não verificado', error: 'falhou', cancelled: 'cancelado'};
   const terminalRunStatuses = new Set(['finished', 'review_required', 'review_completed', 'failed', 'cancelled']);
   const inFlightStatuses = new Set(['staging', 'queued', 'claiming', 'starting', 'running', 'cancelling', 'awaiting_source_review', 'waiting_source_verification']);
   // Queued work remains visible in the queue, but is not currently owned by a runner.
@@ -756,7 +756,7 @@
       item.style.animation = `riseIn .42s cubic-bezier(.2,.8,.25,1) ${Math.min(index, 8) * 70}ms both`;
     });
   }
-  function activateTab(name) {
+  function activateTab(name, {preservePipeline = false} = {}) {
     const tab = $(`.rail-tab[data-tab="${name}"]`);
     const target = $(`#${views[name] || ''}`);
     if (!tab || !target) {
@@ -785,19 +785,19 @@
     const rect = tab.getBoundingClientRect();
     burstAt(rect.right, rect.top + rect.height / 2, 10);
     if (name === 'nova' && !appState.reviewMode) {
-      const wasFreshDraft = appState.newTranslationDraft;
-      appState.newTranslationDraft = true;
-      appState.suppressHistoricalResult = true;
-      // A genuinely new translation starts in the safest, least surprising
-      // cache mode: process the selected source again.  Once the draft is
-      // active, preserve an explicit operator choice (including force=false)
-      // while navigating within the form.
-      if (!wasFreshDraft) {
-        if ($('#forceToggle')) $('#forceToggle').checked = true;
-        if ($('#cacheToggle')) $('#cacheToggle').checked = false;
+      if (!preservePipeline) {
+        const wasFreshDraft = appState.newTranslationDraft;
+        appState.newTranslationDraft = true;
+        appState.suppressHistoricalResult = true;
+        // A fresh draft starts without cache; returning to a submitted job
+        // preserves its identity, progress and the operator's choices.
+        if (!wasFreshDraft) {
+          if ($('#forceToggle')) $('#forceToggle').checked = true;
+          if ($('#cacheToggle')) $('#cacheToggle').checked = false;
+        }
+        clearNewTranslationDraftPanels();
+        clearBootstrapSurfaceForFreshTranslation();
       }
-      clearNewTranslationDraftPanels();
-      clearBootstrapSurfaceForFreshTranslation();
     }
     if (name === 'hist') {
       renderHistory('tab_activation');
@@ -808,23 +808,70 @@
       startHistoryScrollWatch();
     }
     if (name === 'inicio') renderDashboard();
+    if (name === 'fontes') void refreshSourcePreviews();
     if (name === 'community') loadCommunityFeed();
   }
   $$('.rail-tab').forEach(tab => tab.addEventListener('click', () => {
     // Choosing "Nova tradução" from the rail means starting a fresh chapter, so
     // review_mode must release the form instead of pinning the reviewed chapter.
     if (tab.dataset.tab === 'nova' && appState.reviewMode) exitReviewMode();
-    activateTab(tab.dataset.tab);
+    activateTab(tab.dataset.tab, {preservePipeline: tab.dataset.tab === 'nova'
+      && Boolean(appState.currentJobId) && activeOperationStatuses.has(appState.status)});
   }));
   window.addEventListener('tradutor-navigate-tab', event => activateTab(event.detail?.tab || 'rewards'));
   $$('[data-goto]').forEach(button => button.addEventListener('click', () => activateTab(button.dataset.goto)));
-  // "Fontes" cards: open the allow-listed supported site in the system default browser
-  // via the desktop bridge (constant server-side URL; the page only sends an opaque key).
+  // "Fontes" cards: open one of the three allow-listed sites on an explicit click.
+  // Inside the desktop WebView the bridge opens the system browser (constant
+  // server-side URL; the page only sends an opaque key). In a browser tab there
+  // is no bridge, so the same constant URL opens in a new tab.
+  const SUPPORTED_SOURCE_SITES = {
+    webtoon: 'https://www.webtoons.com/en/',
+    comix: 'https://comix.to/browse?genres_in=101137',
+    vortex: 'https://vortexscans.org/',
+  };
   $$('.source-open').forEach(button => button.addEventListener('click', () => {
     const key = button.dataset.source;
-    if (!key) return;
-    try { window.pywebview?.api?.open_supported_source?.(key); } catch (_) { /* bridge optional */ }
+    const url = SUPPORTED_SOURCE_SITES[key];
+    if (!url) return;
+    const bridge = window.pywebview?.api?.open_supported_source;
+    if (typeof bridge === 'function') {
+      try { bridge(key); return; } catch (_) { /* fall through to a new tab */ }
+    }
+    window.open(url, '_blank', 'noopener,noreferrer');
   }));
+  async function refreshSourcePreviews() {
+    window.clearTimeout(appState.sourcePreviewTimer);
+    if (appState.sourcePreviewsLoading || document.hidden || !$('#view-fontes')?.classList.contains('active')) return;
+    appState.sourcePreviewsLoading = true;
+    let refreshing = false;
+    try {
+      await Promise.all($$('[data-source-preview]', $('#view-fontes')).map(async preview => {
+        const status = preview.parentElement.querySelector('.source-preview-status');
+        try {
+          const data = await api(`/api/ui/sources/preview/${encodeURIComponent(preview.dataset.sourcePreview)}`);
+          refreshing = refreshing || data.refreshing;
+          if (/^data:image\/jpeg;base64,[A-Za-z0-9+/=]+$/.test(data.image || '')) {
+            preview.style.backgroundImage = `url("${data.image}")`;
+          }
+          const time = data.captured_at ? new Date(data.captured_at * 1000).toLocaleTimeString('pt-BR') : '';
+          if (status) status.textContent = data.error
+            ? (time ? `Última prévia às ${time} · nova tentativa em 1 min` : 'Prévia indisponível · nova tentativa em 1 min')
+            : data.refreshing ? 'Atualizando prévia…'
+              : `Atualizada às ${time} · atualização a cada minuto`;
+        } catch (_) {
+          if (status) status.textContent = 'Sem conexão para atualizar a prévia';
+        }
+      }));
+    } finally {
+      appState.sourcePreviewsLoading = false;
+      if (!document.hidden && $('#view-fontes')?.classList.contains('active')) {
+        appState.sourcePreviewTimer = window.setTimeout(refreshSourcePreviews, refreshing ? 2500 : 60000);
+      }
+    }
+  }
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden && $('#view-fontes')?.classList.contains('active')) void refreshSourcePreviews();
+  });
   window.setTimeout(() => moveIndicator($('.rail-tab.active')), 60);
 
   /* ---------- visual feedback ---------- */
@@ -917,8 +964,10 @@
     ocr: 'Lendo textos...',
     classification: 'Lendo textos...',
     translating: 'Traduzindo o capítulo...',
+    translation: 'Traduzindo o capítulo...',
     translate: 'Traduzindo o capítulo...',
     redrawing: 'Reconstruindo a arte...',
+    rendering: 'Reconstruindo a arte...',
     render: 'Reconstruindo a arte...',
     generating_pdf: 'Gerando o arquivo final...',
     pdf: 'Gerando o arquivo final...',
@@ -1054,8 +1103,11 @@
       const url = new URL(value);
       const parts = url.pathname.split('/').filter(Boolean);
       if (parts.at(-1)?.toLowerCase() === 'viewer') parts.pop();
-      const chapterSlug = parts.at(-1) || 'chapter';
-      const seriesSlug = parts.at(-2) || 'webtoon';
+      // Comix prefixes its slugs with internal ids ("0g9q-seitokai-...",
+      // "11500234-chapter-188"); they are not part of the title.
+      const comix = /(^|\.)comix\.to$/i.test(url.hostname);
+      const chapterSlug = (parts.at(-1) || 'chapter').replace(comix ? /^\d{4,}[-_]+(?=[a-z])/i : /^$/, '');
+      const seriesSlug = (parts.at(-2) || 'webtoon').replace(comix ? /^(?=[a-z]*\d)[a-z0-9]{3,6}[-_]+(?=[a-z])/i : /^$/, '');
       const queryKeys = ['episode_no', 'episode', 'chapter_no', 'chapter', 'ep', 'cap', 'capitulo'];
       const number = queryKeys.map(key => url.searchParams.get(key)).find(Boolean) || '';
       const match = chapterSlug.match(/^(episode|chapter|capitulo|cap|ep|ch)[-_ ]*(\d+)$/i);
@@ -2020,12 +2072,13 @@
     $('#artifactActions') && ($('#artifactActions').innerHTML = '');
     $('#balloonText') && ($('#balloonText').textContent = window.TradutorI18n?.t('pipeline.idle') || 'Pronto para iniciar');
     $$('.stage-item').forEach(item => {
-      item.classList.remove('active', 'done', 'indeterminate');
+      item.classList.remove('active', 'done', 'indeterminate', 'failed', 'cancelled');
       const pct = $('.stage-pct', item);
       const fill = $('.stage-fill', item);
       if (pct) pct.textContent = '—';
       if (fill) fill.style.width = '0%';
     });
+    if ($('#pipelineTiming')) $('#pipelineTiming').hidden = true;
   }
 
   function resetActivePipelineIdentity(sourceUrl = '') {
@@ -2275,6 +2328,15 @@
         const snap = await api(`/api/ui/source/analyze/progress/${encodeURIComponent(traceId)}`);
         if (active && snap && snap.message && appState.sourceValidation.status === 'validating') {
           const secs = Math.round((snap.elapsed_ms || 0) / 1000);
+          const progress = {
+            stage_key: 'source_analysis', stage: 'Análise segura da fonte',
+            current: 0, total: 0, fraction: null, indeterminate: true,
+            elapsed_seconds: secs, elapsed_label: `${secs}s`,
+            eta_seconds: null, eta_label: 'Estimativa disponível após as primeiras páginas',
+            last_message: String(snap.message),
+          };
+          const state = buildPipelineState({status: 'staging'}, progress);
+          renderProgress(progress, state);
           const el = $('#balloonText');
           if (el) el.textContent = secs > 1 ? `${snap.message} (${secs}s)` : String(snap.message);
         }
@@ -2581,6 +2643,8 @@
         status: 'staging',
         message: 'Analisando a fonte...',
       });
+      appState.sourceAnalysisTraceId = traceId;
+      const stopProgressPoll = startSourceAnalysisProgressPoll(traceId);
       let analysisResult;
       try {
         sourceTrace('TRANSLATION_START_REQUEST', {sequence, elapsed_ms: 0, request_count: 1, route: '/api/ui/source/analyze'});
@@ -2624,6 +2688,10 @@
         if (button) delete button.dataset.busy;
         updateTranslationStartControls();
         return;
+      }
+      finally {
+        stopProgressPoll();
+        appState.sourceAnalysisTraceId = '';
       }
       // `ready` is the semantic authorization for the next stage.  Older clients
       // incorrectly treated a non-canonical status string as a block even when the
@@ -2718,7 +2786,7 @@
         showToast(result && result.duplicate
           ? 'Este capítulo já está na fila.' : 'Pipeline real iniciado.', 'ok');
       }
-      activateTab('nova');
+      activateTab('nova', {preservePipeline: true});
       return result;
     } catch (error) {
       sourceTrace('TRANSLATION_START_ERROR', {sequence, elapsed_ms: Math.round(performance.now() - runStartedAt), request_count: 2, error_code: String(error.code || 'run_failed').slice(0, 80)});
@@ -3036,9 +3104,11 @@
     // Kept for jobs persisted before the stage label became provider-neutral.
     'tradução nvidia': 'translate',
     translating: 'translate',
+    translation: 'translate',
     translate: 'translate',
     'renderização': 'render',
     redrawing: 'render',
+    rendering: 'render',
     render: 'render',
     'geração de pdf': 'pdf',
     generating_pdf: 'pdf',
@@ -3193,7 +3263,8 @@
     const visualStage = visualStageKey(rawStage);
     const current = Number(progress.current || 0);
     const total = Number(progress.total || 0);
-    const fraction = Number.isFinite(Number(progress.fraction)) ? Number(progress.fraction) : (total ? current / total : null);
+    const fraction = progress.fraction != null && Number.isFinite(Number(progress.fraction))
+      ? Number(progress.fraction) : (total ? current / total : null);
     const isTerminal = terminalRunStatuses.has(status) || ['failed', 'cancelled'].includes(status);
     const totalPages = Number(record?.target_page_count || record?.page_count || record?.pages || progress.pages || progress.total_pages || 0);
     const pendingReview = Number(runtime.quality_review?.pending_count || record?.manual_review_count || record?.rejected_count || 0);
@@ -3262,7 +3333,8 @@
       appState.activeJobId = '';
       appState.latestJobId = '';
       setRunControls(sourceAnalysisPending, false);
-      $('#runStatusCard') && ($('#runStatusCard').hidden = true);
+      // Source analysis has its own progress poll until a durable job exists.
+      if (!sourceAnalysisPending) $('#runStatusCard') && ($('#runStatusCard').hidden = true);
       $('#jobCompletionPanel') && ($('#jobCompletionPanel').hidden = true);
       $('#artifactActions') && ($('#artifactActions').innerHTML = '');
       return;
@@ -6708,6 +6780,16 @@
     const terminalOk = ['finished', 'review_required', 'review_completed'].includes(state.status);
     const sourceReady = appState.status === 'source_analysis_ready';
     const stageActiveStatus = String(state.status || appState.status || '').toLowerCase();
+    const timing = $('#pipelineTiming');
+    if (timing) {
+      const active = inFlightStatuses.has(stageActiveStatus);
+      timing.hidden = !active;
+      const elapsed = progress.elapsed_label || 'Calculando…';
+      const eta = progress.stale ? 'Aguardando atualização do processamento'
+        : progress.eta_seconds != null ? `Cerca de ${progress.eta_label} restantes nesta etapa`
+        : progress.eta_label || 'Calculando estimativa após as primeiras páginas';
+      timing.textContent = `${elapsed} decorridos · ${eta}`;
+    }
     $$('.stage-item').forEach(item => {
       const index = stageOrder.indexOf(item.dataset.stage);
       const pct = $('.stage-pct', item);
@@ -7153,8 +7235,13 @@
       reprocess: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M4 12a8 8 0 0 1 13.7-5.7L20 8"/><path d="M20 4v4h-4M20 12a8 8 0 0 1-13.7 5.7L4 16"/><path d="M4 20v-4h4"/></svg>',
       retry: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M4 12a8 8 0 0 1 13.7-5.7L20 8"/><path d="M20 4v4h-4M20 12a8 8 0 0 1-13.7 5.7L4 16"/><path d="M4 20v-4h4"/></svg>',
       delete: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M4 7h16"/><path d="M9 7V4h6v3"/><path d="M7 7l1 14h8l1-14"/><path d="M10 11v6M14 11v6"/></svg>',
+      translation: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M4 5h9M8.5 3v2M6 5c0 4 3 7 6 8M11 5c-.6 3.6-3.4 6.6-6 8"/><path d="m13 21 4-9 4 9M14.5 18h5"/></svg>',
+      psd_folder: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="m12 3 9 5-9 5-9-5z"/><path d="m3 13 9 5 9-5"/><path d="m3 17.5 9 5 9-5"/></svg>',
+      review: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><circle cx="11" cy="11" r="6"/><path d="m20 20-4.5-4.5M8.5 11l1.8 1.8L14 9"/></svg>',
     };
-    const icon = icons[action] || '';
+    // Every action carries a visible icon; an unknown one falls back to a generic
+    // mark instead of drawing an empty, invisible button.
+    const icon = icons[action] || '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><circle cx="12" cy="12" r="8"/><path d="M12 8v5M12 16h.01"/></svg>';
     return `<button class="btn-ghost icon-action" data-action="${action}" data-path="${encodeURIComponent(path || '')}" aria-label="${escapeAttr(label)}" title="${escapeAttr(label)}">${icon}<span class="sr-only">${escapeHtml(label)}</span></button>`;
   }
   function artifactIsAvailable(record, kind, legacyValue = '') {
@@ -8996,12 +9083,22 @@
   });
 
   /* ---------- queue ---------- */
+  // A queued chapter must carry the same decisions as one started from the main
+  // form: without the output plan and the control-plane translation flag the
+  // backend fails closed and the chapter ran without being translated.
   function queuePayload(url) {
     const guess = guessFromUrl(url);
+    const downloadOnly = appState.selectedMode === 'download_only';
     return {
-      url, chapter_name: guess.title, slug: guess.slug, mode: appState.selectedMode,
+      source_type: 'url', url, chapter_name: guess.title, slug: guess.slug,
+      mode: downloadOnly ? 'fast' : appState.selectedMode, download_only: downloadOnly,
+      output_format: 'pdf', output_profile: 'automatic', typesetting_mode: 'on',
+      ...(downloadOnly ? {} : {output_plan: appState.outputPlan === 'personalizado' ? 'traducao_pronta' : (appState.outputPlan || 'traducao_pronta')}),
       full: true, use_cache: $('#cacheToggle').checked, force: $('#forceToggle').checked,
       use_context: $('#ctxToggle').checked, open_output: false,
+      translation_provider: normalizeTranslationProvider(appState.settings?.translation_provider) || 'deepl',
+      translation_enabled: appState.translationEnabled === true,
+      pipeline_intent: {requested: true, mode: downloadOnly ? 'download_only' : appState.selectedMode, scope: 'full'},
     };
   }
   async function addQueueItem() {

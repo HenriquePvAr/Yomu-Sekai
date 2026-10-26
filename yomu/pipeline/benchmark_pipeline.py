@@ -55,6 +55,7 @@ from yomu.ocr.ocr_balloon import (
     normalize_recurring_compact_names,
     propagate_chapter_declared_names,
     split_glued_source_words,
+    chapter_source_words,
     recover_protected_term_boundaries,
     summarize_speech_container_reocr,
     render_analyzed_image,
@@ -2771,9 +2772,7 @@ def run_benchmark(args):
 
     requested_provider = normalize_translation_provider(
         getattr(args, "translation_provider", ""))
-    translation_enabled = str(os.getenv("TRANSLATION_ENABLED", "true") or "").strip().lower() not in {
-        "0", "false", "no", "off", "disabled"
-    }
+    translation_enabled = _translation_enabled_from_env()
     translator, ocr_lang = _resolve_translation_runtime(
         requested_provider, translation_enabled=translation_enabled
     )
@@ -3328,13 +3327,17 @@ def run_benchmark(args):
         local = [(translate_sfx(group.text) or group.text) if group.classification == "sfx" else None
                  for group in translation_targets]
         remote_index = [i for i, value in enumerate(local) if value is None]
-        # Words the OCR glued together ("WEPLANTO") go to the provider split; it
-        # read the glued forms as names. The first pass and every retry then see
-        # the same source (canonical_source_text).
+        # OCR-damaged tokens are repaired before the provider sees them: glued words
+        # ("WEPLANTO", read as a name), a chapter name glued to a token ("ILJEON")
+        # and one misread letter the chapter itself attests ("HIPES" -> HIDES).
+        # The first pass and every retry then see the same source.
+        chapter_words = chapter_source_words(group.text for group in translation_targets)
         for i in remote_index:
             group = translation_targets[i]
             source = str(getattr(group, "canonical_source_text", "") or group.text)
-            split = split_glued_source_words(source, protected=getattr(group, "detected_proper_names", ()))
+            split = split_glued_source_words(
+                source, protected=getattr(group, "detected_proper_names", ()),
+                chapter_names=detected_names, chapter_words=chapter_words)
             if split != source:
                 group.canonical_source_text = split
         remote = translator.translate_many(
@@ -7363,6 +7366,12 @@ def _empty_debug_data(image_path, precheck_reason):
     }
 
 
+def _translation_enabled_from_env():
+    return str(os.getenv("TRANSLATION_ENABLED", "true") or "").strip().lower() not in {
+        "0", "false", "no", "off", "disabled"
+    }
+
+
 def _relevant_output_config(pipeline_fingerprint):
     font_signature = config.FONT_PATH
     if config.FONT_PATH and os.path.isfile(config.FONT_PATH):
@@ -7400,6 +7409,9 @@ def _relevant_output_config(pipeline_fingerprint):
         "ocr_region_selective_fallback": config.OCR_REGION_SELECTIVE_FALLBACK,
         "ocr_group_min_quality_score": config.OCR_GROUP_MIN_QUALITY_SCORE,
         "translation_validation": config.TRANSLATION_VALIDATION,
+        # A page processed without translation (provider off for that run) must never be
+        # served to a run that translates: it rendered the source text back.
+        "translation_enabled": _translation_enabled_from_env(),
         "text_mask_padding": config.TEXT_MASK_PADDING,
         "max_mask_expansion": config.MAX_MASK_EXPANSION,
         "strict_mask_bounds": config.STRICT_MASK_BOUNDS,

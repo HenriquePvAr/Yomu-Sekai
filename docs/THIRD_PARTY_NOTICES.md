@@ -16,7 +16,7 @@ english-words, entre outros). A tabela abaixo lista o que ainda depende de revis
 | NVIDIA OCR / DeepL | providers externos | termos pendentes |
 | Anime-Manga Big-LaMa (checkpoint TorchScript) | preenchimento aprendido da limpeza local, ligado por padrão (`CLEAN_LEARNED_TEXTURE_FILL`, `ADVANCED_ART_INPAINTING`) | **NOT CLEARED** — direitos de redistribuição do checkpoint não resolvidos; não empacotado (lido de `ADVANCED_ART_INPAINT_MODEL_PATH`). Ver [matriz de licenças de modelos](research/colab-clean-models/MODEL_LICENSE_MATRIX.md) |
 | english-words (dwyl) | léxico `assets/lexicon/english_words.txt.gz`, empacotado | Unlicense — listado em `THIRD_PARTY_NOTICES.txt` e `assets/lexicon/LICENSE-english-words.md` |
-| wordfreq (Robyn Speer), dados de frequência | tabela `assets/lexicon/english_freq.tsv.gz`, empacotada (derivada) | CC BY-SA 4.0 — a tabela derivada segue a mesma licença; ver `assets/lexicon/README.md` |
+| wordfreq (Robyn Speer), dados de frequência | tabelas `assets/lexicon/english_freq.tsv.gz` e `portuguese_freq.tsv.gz`, empacotadas (derivadas) | CC BY-SA 4.0 — a tabela derivada segue a mesma licença; ver `assets/lexicon/README.md` |
 | Comic Relief, Bangers | fontes de letreiro `assets/fonts/`, empacotadas | SIL OFL 1.1 — `assets/fonts/OFL-*.txt`, listadas em `THIRD_PARTY_NOTICES.txt` |
 | Glossário de SFX | `assets/lexicon/sfx_en_pt.json`, empacotado com `assets/lexicon/` | origem não registrada em `assets/lexicon/README.md` — confirmar autoria/licença |
 | Fontes / ícones / outros modelos | assets | origem/licença pendentes |

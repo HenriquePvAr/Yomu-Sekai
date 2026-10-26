@@ -1205,6 +1205,17 @@ def api_state(request: Request, cursor: int = Query(0, ge=0)) -> dict[str, Any]:
     return BRIDGE.runtime_state_for_owner(principal.owner_id, cursor)
 
 
+@app.get("/api/ui/sources/preview/{source_key}")
+def api_source_preview(request: Request, source_key: str):
+    from yomu.ui.source_previews import source_preview
+
+    _ui_principal(request)
+    try:
+        return JSONResponse(source_preview(source_key), headers={"Cache-Control": "no-store"})
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail="unsupported_source") from exc
+
+
 @app.post("/api/ui/source/analyze")
 async def api_source_analyze(
     request: Request,
@@ -3077,6 +3088,7 @@ def api_queue_add(
             BRIDGE.add_queue_item,
             payload,
             principal=_ui_principal(request, mutate=True),
+            license_access_token=_license_bearer_token(request),
         ),
     }
 

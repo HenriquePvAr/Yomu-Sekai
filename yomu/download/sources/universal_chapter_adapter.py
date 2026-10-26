@@ -584,7 +584,9 @@ def _to_candidate(raw: dict[str, Any], page_url: str, order: int) -> list[ImageC
             continue
         actual_order = _number(raw.get("order")) or order
         candidates.append(ImageCandidate(
-            id=_candidate_id(url, source, actual_order),
+            # How the page was observed (currentSrc after a scroll, data-url declared
+            # before it) differs between analysis and download; the page does not.
+            id=_candidate_id(url, "", actual_order),
             url=url,
             source=source,
             order=actual_order,

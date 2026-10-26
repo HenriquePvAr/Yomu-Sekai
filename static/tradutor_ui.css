@@ -828,7 +828,23 @@
   #outputProfileOptions[aria-disabled="true"] .output-profile-card{cursor:not-allowed; opacity:.55;}
   @media (max-width:520px){.output-profile-grid{grid-template-columns:1fr;}}
   /* ---------- output plan preset selector (three-up card grid) ---------- */
-  .output-plan-grid{display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:9px;}
+  .output-plan-grid{display:grid; grid-template-columns:repeat(auto-fit,minmax(205px,1fr)); gap:12px;}
+  #outputPlanField .output-plan-card{display:flex; flex-direction:column; align-items:flex-start; gap:12px; padding:20px; margin:0; min-height:210px; border-radius:12px; background:linear-gradient(145deg,#222124,#141416); text-transform:none; letter-spacing:normal; transition:border-color .18s,background .18s,transform .18s;}
+  #outputPlanField .output-plan-card::before{content:'PDF'; display:grid; place-items:center; height:32px; padding:0 10px; border:1px solid rgba(239,231,216,.16); border-radius:8px; color:var(--paper); font:600 10px/1 'JetBrains Mono',monospace; letter-spacing:.08em;}
+  #outputPlanField [data-output-plan-card="apenas_clean"]::before{content:'CLEAN';}
+  #outputPlanField [data-output-plan-card="profissional"]::before{content:'STUDIO';}
+  #outputPlanField [data-output-plan-card="apenas_traducao"]::before{content:'TEXTO';}
+  #outputPlanField [data-output-plan-card="traducao_clean"]::before{content:'TEXTO + CLEAN';}
+  #outputPlanField [data-output-plan-card="personalizado"]::before{content:'AJUSTES';}
+  #outputPlanField .output-plan-card:hover{transform:translateY(-2px); border-color:rgba(239,231,216,.45);}
+  #outputPlanField .output-plan-card.selected{background:linear-gradient(145deg,#342123,#1c1719); border-color:var(--vermillion); box-shadow:0 0 0 1px var(--vermillion);}
+  #outputPlanField .output-plan-card input{top:23px; right:18px; margin:0; width:18px; height:18px;}
+  #outputPlanField .output-profile-card-title{display:flex; flex-wrap:wrap; align-items:center; gap:7px; padding:0; color:var(--paper); font-size:15px; line-height:1.35;}
+  #outputPlanField .output-profile-card-description{display:block; color:#b6b0aa; font:400 12px/1.65 'Space Grotesk',sans-serif;}
+  #outputPlanField .plan-result{display:block; margin-top:auto; padding:5px 9px; font-size:10px; color:#e0c981; background:rgba(201,162,39,.10);}
+  #outputPlanField .plan-badge-rec{display:inline-block; margin:0; padding:3px 6px; font-size:9px;}
+  #outputPlanHint{display:block; margin-top:14px; line-height:1.6;}
+  .pipeline-timing{margin:0 0 16px; padding:12px; border:1px solid var(--line); border-radius:8px; color:var(--paper); font:12px/1.6 'Space Grotesk',sans-serif; background:rgba(239,231,216,.03);}
   #outputPlanOptions[aria-disabled="true"] .output-plan-card{cursor:not-allowed; opacity:.55;}
   @media (max-width:720px){.output-plan-grid{grid-template-columns:repeat(2,minmax(0,1fr));}}
   @media (max-width:460px){.output-plan-grid{grid-template-columns:1fr;}}
@@ -3590,6 +3606,9 @@ html[data-visual-reduced-motion="1"] .auth-login-shell[data-entered] .auth-login
 .sources-help { margin: 0 0 18px; opacity: .8; font-size: 14px; line-height: 1.5; }
 .sources-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 16px; }
 .source-card { display: flex; flex-direction: column; gap: 10px; }
+.source-card{overflow:hidden; border-radius:12px; background:#151517;}
+.source-preview{aspect-ratio:16/9; margin:-24px -24px 0; background-color:#242428; background-size:cover; background-position:top center; border-bottom:1px solid var(--line);}
+.source-preview-status{color:var(--muted); font:10px/1.5 'JetBrains Mono',monospace; margin-bottom:6px;}
 .source-card-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .source-card-head h2 { margin: 0; font-size: 18px; line-height: 1.2; }
 .source-card p { margin: 0; flex: 1 1 auto; opacity: .82; font-size: 13px; line-height: 1.5; }

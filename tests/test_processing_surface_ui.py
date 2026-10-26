@@ -734,7 +734,7 @@ class TheNormalFlowKeepsTheInlinePipeline(unittest.TestCase):
 
     def test_starting_a_job_keeps_the_user_on_nova_traducao(self):
         """Start means start; it must never navigate to another surface."""
-        anchor = self.text.index("activateTab('nova');\n      return result;")
+        anchor = self.text.index("activateTab('nova', {preservePipeline: true});\n      return result;")
         start = self.text[max(0, anchor - 4000):anchor + 40]
         for other in ("activateTab('logs')", "activateTab('hist')",
                       "activateTab('inicio')", "activateTab('leitor')"):

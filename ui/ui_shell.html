@@ -564,6 +564,7 @@
 
           <div class="panel">
             <div class="panel-label">Pipeline</div>
+            <p class="pipeline-timing" id="pipelineTiming" role="status" hidden></p>
             <div class="stage-list" id="stageList">
               <div class="stage-item" data-stage="source_analysis"><div class="stage-fill"></div><span class="stage-dot"></span><span>Análise segura da fonte</span><span class="stage-pct">—</span></div>
               <div class="stage-item" data-stage="awaiting_source_review"><div class="stage-fill"></div><span class="stage-dot"></span><span>Revisão das páginas</span><span class="stage-pct">—</span></div>
@@ -832,16 +833,22 @@
       <p class="sources-help">Abra uma fonte, escolha o capítulo desejado, copie a URL e volte ao Yomu para iniciar a tradução.</p>
       <div class="sources-grid">
         <article class="panel source-card">
+          <div class="source-preview" data-source-preview="webtoon" role="img" aria-label="Prévia atualizada da página inicial do Webtoon"></div>
+          <small class="source-preview-status" role="status">Atualizando prévia…</small>
           <div class="source-card-head"><h2>Webtoon</h2><span class="source-badge">Suportado</span></div>
           <p>Encontre um episódio no Webtoon e copie a URL do capítulo.</p>
           <button type="button" class="btn-primary source-open" data-source="webtoon" aria-label="Abrir Webtoon no navegador">Abrir Webtoon</button>
         </article>
         <article class="panel source-card">
+          <div class="source-preview" data-source-preview="comix" role="img" aria-label="Prévia atualizada da página inicial do Comix"></div>
+          <small class="source-preview-status" role="status">Atualizando prévia…</small>
           <div class="source-card-head"><h2>Comix</h2><span class="source-badge">Suportado</span></div>
           <p>Encontre um capítulo no Comix e copie a URL do capítulo.</p>
           <button type="button" class="btn-primary source-open" data-source="comix" aria-label="Abrir Comix no navegador">Abrir Comix</button>
         </article>
         <article class="panel source-card">
+          <div class="source-preview" data-source-preview="vortex" role="img" aria-label="Prévia atualizada da página inicial do Vortex Scans"></div>
+          <small class="source-preview-status" role="status">Atualizando prévia…</small>
           <div class="source-card-head"><h2>Vortex Scans</h2><span class="source-badge">Suportado</span></div>
           <p>Encontre um capítulo no Vortex Scans e copie a URL do capítulo.</p>
           <button type="button" class="btn-primary source-open" data-source="vortex" aria-label="Abrir Vortex Scans no navegador">Abrir Vortex Scans</button>
@@ -1540,13 +1547,13 @@
       <form id="authForm" data-auth-login autocomplete="on">
         <div class="auth-login-field auth-name-field" id="authNameField" hidden>
           <label for="authName">Nome</label>
-          <div class="auth-login-input-wrap"><input type="text" id="authName" autocomplete="name" placeholder="Seu nome completo" /></div>
+          <div class="auth-login-input-wrap"><input type="text" id="authName" autocomplete="name" /></div>
         </div>
         <div class="auth-login-field" id="authEmailField">
           <label for="authEmail" data-i18n="auth.email">E-mail</label>
           <div class="auth-login-input-wrap">
             <svg class="auth-login-leading" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 21a8 8 0 0 0-16 0"/><circle cx="12" cy="8" r="5"/></svg>
-            <input type="email" id="authEmail" name="email" required autocomplete="email" placeholder="voce@exemplo.com" data-i18n-placeholder="auth.email" />
+            <input type="email" id="authEmail" name="email" required autocomplete="email" />
           </div>
         </div>
 
@@ -1554,22 +1561,22 @@
           <label for="authPasswordConfirm">Confirmar senha</label>
           <div class="auth-login-input-wrap">
             <svg class="auth-login-leading" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>
-            <input type="password" id="authPasswordConfirm" autocomplete="new-password" placeholder="Repita sua senha" />
+            <input type="password" id="authPasswordConfirm" autocomplete="new-password" />
           </div>
         </div>
         <div class="auth-login-field auth-recovery-password-field" id="authRecoveryPasswordField" hidden>
           <label for="authRecoveryPassword">Nova senha</label>
-          <div class="auth-login-input-wrap"><input type="password" id="authRecoveryPassword" autocomplete="new-password" placeholder="Crie uma nova senha" minlength="8" /><button type="button" class="auth-login-toggle-pw" id="authToggleRecoveryPassword" aria-label="Mostrar nova senha" aria-pressed="false"><span aria-hidden="true">◉</span></button></div>
+          <div class="auth-login-input-wrap"><input type="password" id="authRecoveryPassword" autocomplete="new-password" minlength="8" /><button type="button" class="auth-login-toggle-pw" id="authToggleRecoveryPassword" aria-label="Mostrar nova senha" aria-pressed="false"><span aria-hidden="true">◉</span></button></div>
         </div>
         <div class="auth-login-field auth-recovery-password-field" id="authRecoveryPasswordConfirmField" hidden>
           <label for="authRecoveryPasswordConfirm">Confirmar nova senha</label>
-          <div class="auth-login-input-wrap"><input type="password" id="authRecoveryPasswordConfirm" autocomplete="new-password" placeholder="Repita sua nova senha" minlength="8" /><button type="button" class="auth-login-toggle-pw" id="authToggleRecoveryPasswordConfirm" aria-label="Mostrar confirmação de senha" aria-pressed="false"><span aria-hidden="true">◉</span></button></div>
+          <div class="auth-login-input-wrap"><input type="password" id="authRecoveryPasswordConfirm" autocomplete="new-password" minlength="8" /><button type="button" class="auth-login-toggle-pw" id="authToggleRecoveryPasswordConfirm" aria-label="Mostrar confirmação de senha" aria-pressed="false"><span aria-hidden="true">◉</span></button></div>
         </div>
         <div class="auth-login-field">
           <label for="authPassword" data-i18n="auth.password">Senha</label>
           <div class="auth-login-input-wrap">
             <svg class="auth-login-leading" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>
-            <input type="password" id="authPassword" name="password" required minlength="8" autocomplete="current-password" placeholder="••••••••" />
+            <input type="password" id="authPassword" name="password" required minlength="8" autocomplete="current-password" />
             <button type="button" class="auth-login-toggle-pw" id="authTogglePassword" aria-label="Mostrar senha" aria-pressed="false">
               <svg class="auth-login-eye-on" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z"/><circle cx="12" cy="12" r="3"/></svg>
               <svg class="auth-login-eye-off" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17.9 17.9A10.9 10.9 0 0 1 12 19c-7 0-11-7-11-7a19.7 19.7 0 0 1 5-5.6M9.9 4.2A9.6 9.6 0 0 1 12 4c7 0 11 7 11 7a19.6 19.6 0 0 1-3.2 4.1M14.1 14.1a3 3 0 1 1-4.2-4.2"/><path d="M1 1l22 22"/></svg>

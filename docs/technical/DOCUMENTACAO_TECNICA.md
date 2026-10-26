@@ -1,6 +1,6 @@
 # Tradutor IA — Documentação Técnica
 
-> **Base verificada:** `fb8875e` (branch `main`) em 2026-10-25 — diagramas Mermaid de §15
+> **Base verificada:** `d14edac` (branch `main`) em 2026-10-26 — diagramas Mermaid de §15
 > (validação/retries/liquidação), §16 (três candidatos de preenchimento, escolha e portões,
 > tipografia) e §25 (paralelismo por página) conferidos contra `yomu/ocr/ocr_balloon.py`,
 > `yomu/pipeline/benchmark_pipeline.py` e `yomu/clean/ownership/font_fidelity.py`. O restante do
@@ -301,6 +301,22 @@ o exercita.
 ## 6. Ciclo de vida da UI
 
 `app_ui.py` (shim de `yomu/ui/app.py`) sobe um app FastAPI/NiceGUI:
+
+- **Fila (`/api/ui/queue/add`)** passa pelo mesmo portão do formulário principal
+  (`UiBridge._authorize_translation_start`: dispositivo comercial ou licença Beta), sela o
+  contexto de tradução com o token da requisição e garante o worker. O payload da página
+  (`queuePayload`) leva o `output_plan`, o provider e o `translation_enabled` do control plane,
+  como o formulário. Antes, a fila pulava o portão (`commercial_device_id_missing`) e, sem
+  `translation_enabled`, o job rodava sem traduzir. `/api/ui/queue/start` não exige mais
+  `NVIDIA_API_KEY`.
+- **Sessão Supabase repetida:** o SDK reanuncia `SIGNED_IN`/`TOKEN_REFRESHED` da mesma sessão
+  sempre que a página volta a ficar visível. `renderSession` (`static/auth_ui.js`) trata o mesmo
+  usuário já confirmado como "sem mudança" (só guarda o token novo); antes cada troca de aba
+  refazia a sincronização com o backend, o bootstrap remoto (`beta-bootstrap`) e o bootstrap
+  da UI, e num painel que alterna visibilidade virou um laço a cada 2 s, com rajadas de
+  `control-plane-trace` respondidas com 429.
+- **Fontes:** sem a ponte `pywebview` (UI aberta num navegador) o botão abre a URL fixa numa
+  nova aba; na janela desktop continua indo pela ponte para o navegador do sistema.
 
 - Porta: `TRADUTOR_UI_PORT` (padrão `8080`; lida em `yomu/ui/app.py` e `yomu/desktop/app.py`,
   ausente do `.env.example`); host: `community_auth.configured_bind_host()` (`TRADUTOR_UI_HOST`,
@@ -798,6 +814,12 @@ Decisão por score, verificada em `docs/UNIVERSAL_CHAPTER_ADAPTER.md` e no códi
 Falham fechados, antes de qualquer OCR: cobertura incompleta (`incomplete_download`),
 autenticação exigida, challenge interativo, conteúdo protegido, leitor não observável,
 mais de 400 páginas, paginação ambígua (`pagination_incomplete`).
+
+Leitor do Webtoons (`yomu/download/webtoons_reader_bridge.py`): toda tag de página traz a URL
+real em `data-url` e o tamanho em `width`/`height`; só o placeholder transparente do `src`
+espera a rolagem. Com esses valores declarados o slot já é resolvido (`source:
+"data-url-declared"`), sem rolar o leitor inteiro (~1 s por página: 87 s num episódio de 111
+imagens); o portão de download continua baixando e validando cada imagem.
 
 `source_analysis_phase.py` isola a decisão que segue à análise (cobertura incompleta,
 revisão manual, resultado não suportado, ambiente ausente, pronto para rodar). Depende
@@ -1600,6 +1622,15 @@ Décima primeira passada (reconstrução e regiões restantes, 2026-10-25, **IMP
   DeepL o recebe em `<x>` com `tag_handling=xml` e `ignore_tags=["x"]`
   (`yomu/translation/honorific_names.py`), e só os lotes com um nome assim mudam de formato.
   ep33, 33 páginas: 106 → 108 traduzidos, mesmas falhas visuais.
+- Tradução (passo 13): `split_glued_source_words` passou a reparar também um nome do capítulo
+  grudado no fim de um token ("GWANG-ILJEON" → GWANG-IL JEON, `chapter_names`) e uma letra lida
+  errado (`_misread_correction`: "HIPES" → HIDES quando o capítulo escreve HIDES em outro balão,
+  "PLRCHASED" → PURCHASED, "COLLDN'T" → COULDN'T; sem prova, só uma palavra comum dominante,
+  Zipf ≥ 3 e um ponto acima da rival). Uma tradução válida com palavra que o português não
+  tem ("ESTOVA", "CURTIRE"; `yomu/translation/portuguese_words.py`, tabela
+  `assets/lexicon/portuguese_freq.tsv.gz`) ganha uma tentativa `translate_strict`
+  (`_retry_unknown_target_words`), adotada só se for válida e tiver menos palavras desconhecidas;
+  senão a região fica exatamente como estava.
 - Desempenho (passo 3, GPU): com `GPU_INFERENCE=auto` e `onnxruntime-directml`, o RapidOCR roda
   com `det/cls/rec_use_dml` e o LaMa por uma sessão ONNX DirectML (`yomu/clean/inpainting/lama_onnx.py`).
   O exportador não tem forma ONNX das FFTs reais 2-D das Fourier units, então `rfftn`/`irfftn`

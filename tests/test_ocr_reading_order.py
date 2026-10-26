@@ -188,5 +188,31 @@ class RecoveryOrderingSafetyTests(unittest.TestCase):
         self.assertEqual(_ordered_text(lines), "I LOST CONTROL")
 
 
+
+
+class ColumnReadingOrderTests(unittest.TestCase):
+    """Seitokai ch. 188: one balloon stacking "UME-KUN?!" (upper right) and
+    "WHAT A COINCIDENCE.." (lower left) read as "UME- WHAT KUN?! A COINCI- DENCE.."."""
+
+    def test_side_by_side_columns_are_read_one_after_the_other(self):
+        lines = [
+            _line("UME-", (818, 638, 40, 23)),
+            _line("KUN?!", (812, 659, 49, 24)),
+            _line("WHAT A", (746, 665, 70, 24)),
+            _line("COINCI-", (746, 686, 70, 24)),
+            _line("DENCE..", (747, 705, 68, 27)),
+        ]
+        self.assertEqual(_ordered_text(lines), "UME- KUN?! WHAT A COINCI- DENCE..")
+
+    def test_centred_lines_of_one_column_keep_row_order(self):
+        lines = [
+            _line("IF WE WANT", (100, 100, 120, 20)),
+            _line("THE HIDES", (110, 122, 100, 20)),
+            _line("WE NEED", (115, 144, 90, 20)),
+            _line("TO HURRY", (112, 166, 96, 20)),
+        ]
+        self.assertEqual(_ordered_text(lines), "IF WE WANT THE HIDES WE NEED TO HURRY")
+
+
 if __name__ == "__main__":
     unittest.main()

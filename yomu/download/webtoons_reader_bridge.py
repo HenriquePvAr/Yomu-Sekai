@@ -79,7 +79,15 @@ return {
     const src = el.getAttribute("src") || "";
     const dataUrl = el.getAttribute("data-url") || "";
     const dataSrc = el.getAttribute("data-src") || "";
-    const url = resolve(currentSrc || src || dataUrl || dataSrc);
+    // Webtoons ships every page's real URL in data-url and its size in width/height;
+    // only the transparent placeholder in src waits for the viewport. Those declared
+    // values identify the page without scrolling the whole reader (~1 s per page);
+    // the download gate still fetches and validates every image afterwards.
+    const declaredWidth = Math.round(Number(el.getAttribute("width")) || 0);
+    const declaredHeight = Math.round(Number(el.getAttribute("height")) || 0);
+    const placeholder = (el.naturalWidth || 0) <= 1 || /bg_transparency/i.test(src);
+    const declared = Boolean(dataUrl) && placeholder && declaredWidth > 1 && declaredHeight > 1;
+    const url = declared ? resolve(dataUrl) : resolve(currentSrc || src || dataUrl || dataSrc);
     return {
       tag: "img",
       url,
@@ -87,13 +95,13 @@ return {
       src: resolve(src),
       data_url: resolve(dataUrl),
       data_src: resolve(dataSrc),
-      source: currentSrc ? "currentSrc" : (src ? "src" : (dataUrl ? "data-url" : "data-src")),
+      source: declared ? "data-url-declared" : (currentSrc ? "currentSrc" : (src ? "src" : (dataUrl ? "data-url" : "data-src"))),
       order: index,
       width: Math.round(rect.width || el.width || 0),
       height: Math.round(rect.height || el.height || 0),
-      naturalWidth: el.naturalWidth || 0,
-      naturalHeight: el.naturalHeight || 0,
-      complete: !!el.complete,
+      naturalWidth: declared ? declaredWidth : (el.naturalWidth || 0),
+      naturalHeight: declared ? declaredHeight : (el.naturalHeight || 0),
+      complete: declared || !!el.complete,
       y: Math.round((window.scrollY || 0) + rect.top),
       inContainer: true,
       isChapterCandidate: true,

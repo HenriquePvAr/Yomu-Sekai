@@ -1,6 +1,6 @@
 # Yomu Sekai — Guia do Usuário
 
-> **Base verificada:** `5f482ce1` · **Revisado em:** 2026-10-24
+> **Base verificada:** `d14edac` · **Revisado em:** 2026-10-26
 > **Para quem é:** Scans, tradutores, editores e testadores da Beta. Nenhum conhecimento
 > técnico é necessário.
 
@@ -185,7 +185,8 @@ atualização disponível, o selo **↑ Atualizar**.
 A aba **Fontes** é só um atalho: ela mostra os sites com atalho integrado — **Webtoon**
 (https://www.webtoons.com/en/), **Comix** (https://comix.to/browse?genres_in=101137) e
 **Vortex Scans** (https://vortexscans.org/). Ao clicar em "Abrir …", o site abre no seu
-**navegador padrão** (o Yomu continua aberto). Lá você encontra o capítulo, **copia a URL**
+**navegador padrão** quando você usa a janela do aplicativo, ou numa **nova aba** quando usa
+o Yomu pelo navegador (o Yomu continua aberto). Lá você encontra o capítulo, **copia a URL**
 e volta ao Yomu para colar na aba **Nova tradução** — o processamento continua no fluxo
 normal. A aba Fontes não baixa nem processa nada por conta própria e não consulta os sites
 ao ser aberta.
@@ -610,8 +611,12 @@ A aba **Fila** serve para lotes — ideal para vários capítulos da mesma séri
 2. Repita quantas vezes quiser;
 3. Clique em **Iniciar fila**.
 
-Os capítulos são processados **um por vez, em sequência**. Você pode **limpar** a fila ou
-**cancelar** o processamento.
+Os capítulos são processados **um por vez, em sequência**, e cada um sai igual a um capítulo
+iniciado pela tela **Nova tradução**: o mesmo resultado (**Tradução pronta**), a mesma
+tradução e a mesma verificação da sua conta. Se o serviço de processamento estiver livre, o
+primeiro capítulo já começa ao ser adicionado; **Iniciar fila** confirma que há capítulos
+aguardando e que o serviço está ativo. Você pode **limpar** a fila ou **cancelar** o
+processamento.
 
 > 💡 Um de cada vez é proposital: leitura de imagem e tradução consomem bastante memória, e
 > processar vários em paralelo tornaria tudo mais lento e menos confiável.

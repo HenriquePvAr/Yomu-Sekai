@@ -913,6 +913,19 @@ function renderSession(session, authEvent = '') {
       auth_event: authEvent,
     });
   }
+  // The SDK re-announces SIGNED_IN for the session it already holds whenever the
+  // page becomes visible again (and the token on each refresh). That is not an
+  // auth transition: re-verifying it ran the backend sync, the remote bootstrap
+  // and a UI bootstrap on every tab switch - in a pane that flips visibility it
+  // became a loop every 2 s. Same user, already confirmed: keep the fresh token,
+  // change nothing else.
+  if (session?.access_token && (authEvent === 'SIGNED_IN' || authEvent === 'TOKEN_REFRESHED')
+      && window.__tradutorAuthState === 'authenticated' && window.__tradutorCommunityAuthenticated === true
+      && String(session.user?.id || '') && String(session.user?.id || '') === String(window.__tradutorCommunityUserId || '')) {
+    window.__tradutorAccessToken = session.access_token;
+    authTrace('sdk_session_unchanged', {auth_event: authEvent, authenticated: true});
+    return;
+  }
   const area = $('#authArea');
   const status = $('#authStatus');
   const openBtn = $('#authOpenBtn');
@@ -1063,6 +1076,8 @@ function initRealProductPreview() {
     });
     slide.querySelectorAll('.rail-tab').forEach((tab) => tab.classList.toggle('active', tab.dataset.tab === id.replace('view-', '')));
     slide.querySelectorAll('[id]').forEach((el) => el.removeAttribute('id'));
+    // Decorative clones must not join the live form's radio groups.
+    slide.querySelectorAll('[name]').forEach((el) => el.removeAttribute('name'));
     track.appendChild(slide);
     slides.push(slide);
     const dot = document.createElement('i');

@@ -106,6 +106,27 @@ class UiPersistentQueueTests(unittest.TestCase):
         job = self.bridge.store.get_job(item["id"])
         self.assertEqual(job["configuration"]["community_owner_id"], "owner-a")
 
+    def test_queue_item_passes_the_commercial_device_gate(self):
+        """The queue used to skip the gate the main form uses, so every queued
+        chapter was refused with commercial_device_id_missing."""
+        from yomu.auth.commercial_device import CommercialDeviceContext
+
+        principal = RequestPrincipal("owner-a", True, auth_source="test")
+        seen = []
+
+        class FakeAuthorizer:
+            def authorize(self, *, principal, operation, access_token=""):
+                seen.append((operation, access_token))
+                return CommercialDeviceContext(
+                    device_uuid="11111111-2222-4333-8444-555555555555", device_id="device-a",
+                    user_id=principal.user_id)
+
+        self.bridge.commercial_device_authorizer = FakeAuthorizer()
+        item = self.bridge.add_queue_item(self._payload(), principal=principal, license_access_token="token-a")
+        job = self.bridge.store.get_job(item["id"])
+        self.assertEqual(seen, [("start_translation", "token-a")])
+        self.assertEqual(job["configuration"]["device_uuid"], "11111111-2222-4333-8444-555555555555")
+
     def test_state_comes_from_sqlite(self):
         # A job inserted straight into the store shows up in UI state.
         store = JobStore(self.db)

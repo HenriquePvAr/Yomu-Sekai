@@ -43,5 +43,24 @@ class SplitGluedSourceWordsTests(unittest.TestCase):
         self.assertEqual(ob.split_glued_source_words("ASK TOSKIN."), "ASK TO SKIN.")
 
 
+class SourceRepairTests(unittest.TestCase):
+    def test_misread_letter_attested_by_the_chapter(self):
+        words = ob.chapter_source_words(["IF WE WANT THE HIDES,"])
+        self.assertEqual(ob.split_glued_source_words("MAKE THESE HIPES AVAILABLE", chapter_words=words),
+                         "MAKE THESE HIDES AVAILABLE")
+
+    def test_dominant_common_word_and_apostrophe_shape(self):
+        self.assertEqual(ob.split_glued_source_words("WE'VE PLRCHASED"), "WE'VE PURCHASED")
+        self.assertEqual(ob.split_glued_source_words("WHY COLLDN'T IT"), "WHY COULDN'T IT")
+
+    def test_chapter_name_glued_to_a_token(self):
+        self.assertEqual(ob.split_glued_source_words("I'M GWANG-ILJEON,", chapter_names=["JEON"]),
+                         "I'M GWANG-IL JEON,")
+
+    def test_unproven_tokens_stay(self):
+        for text in ("DAEHYEON TRADING", "CLUNA", "SUMMONOR,"):
+            self.assertEqual(ob.split_glued_source_words(text), text)
+
+
 if __name__ == "__main__":
     unittest.main()

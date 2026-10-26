@@ -44,7 +44,8 @@ https://github.com/euske/aggdraw/blob/master/LICENSE
 english-words (dwyl), words_alpha.txt — Unlicense (public domain)
 https://github.com/dwyl/english-words/blob/master/LICENSE.md
 
-wordfreq English frequency data (assets/lexicon/english_freq.tsv.gz, derived) —
+wordfreq English and Portuguese frequency data (assets/lexicon/english_freq.tsv.gz,
+portuguese_freq.tsv.gz, derived) —
 CC BY-SA 4.0, (c) Robyn Speer; the derived table is shared under the same licence.
 https://github.com/rspeer/wordfreq
 

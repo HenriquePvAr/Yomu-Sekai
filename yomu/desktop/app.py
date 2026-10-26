@@ -240,11 +240,7 @@ def _load_external_provider_config(env: dict[str, str]) -> None:
 # The "Fontes" tab is a shortcut hub to the supported content sites. Only these three
 # constant, allow-listed URLs may be opened, and only in the system default browser (never
 # inside the privileged WebView). No arbitrary URL from the page is ever accepted here.
-SUPPORTED_SOURCE_URLS = {
-    "webtoon": "https://www.webtoons.com/en/",
-    "comix": "https://comix.to/browse?genres_in=101137",
-    "vortex": "https://vortexscans.org/",
-}
+from yomu.ui.source_previews import SUPPORTED_SOURCE_URLS
 
 
 class DesktopApi:

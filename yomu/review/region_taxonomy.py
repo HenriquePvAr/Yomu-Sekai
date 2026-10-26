@@ -380,6 +380,23 @@ _SHORT_WORDS = frozenset({
 })
 
 
+def one_edit_words(token: str) -> list[str]:
+    """Dictionary words one substitution, insertion or deletion away from ``token``."""
+    letters = re.sub(r"[^A-Z]", "", str(token or "").upper())
+    alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+    variants = set()
+    for index in range(len(letters) + 1):
+        for char in alphabet:
+            variants.add(letters[:index] + char + letters[index:])
+            if index < len(letters) and char != letters[index]:
+                variants.add(letters[:index] + char + letters[index + 1:])
+        if index < len(letters):
+            variants.add(letters[:index] + letters[index + 1:])
+    variants.discard(letters)
+    lexicon, table = _lexicon(), _frequencies()
+    return sorted(word for word in variants if len(word) >= 3 and (word in lexicon or table.get(word, 0.0) >= 3.0))
+
+
 def word_zipf(token: str) -> float:
     """Zipf frequency of an English word (0.0 when unlisted)."""
     return _frequencies().get(re.sub(r"[^A-Z]", "", str(token or "").upper()), 0.0)

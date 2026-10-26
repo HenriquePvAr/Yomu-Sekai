@@ -24,6 +24,7 @@ import yomu.ocr.ocr_line_provenance as ocr_line_provenance
 import yomu.ocr.source_completeness as source_completeness
 import yomu.translation.semantic_fidelity as semantic_fidelity
 import yomu.translation.honorific_names as honorific_names
+import yomu.translation.portuguese_words as portuguese_words
 from yomu.translation.providers.yomu_backend_provider import SystemicTranslationFailure
 
 # One LaMa call per page worker (MAX_PIPELINE_PAGE_WORKERS): the TorchScript
@@ -753,6 +754,7 @@ def _analyze_image_array(original_bgr, raw_lines, page_index=None):
         items=len(groups),
     ):
         _classify_groups(groups, original, page_index=page_index)
+        _promote_glossary_sounds(groups)
     with profile_step(
         "analyze.score_group_quality",
         page_index=page_index,
@@ -1430,29 +1432,92 @@ def _declared_name_tokens(text):
     return result
 
 
-def split_glued_source_words(text, protected=()):
-    """``text`` with tokens the OCR glued together split into words.
+def _misread_correction(key, chapter_words):
+    """The one word a misread token stands for ("HIPES" -> HIDES), or ``None``.
 
-    "IT'S SOLIFELIKE" -> "IT'S SO LIFE LIKE", "WEPLANTO MAKETHESE" -> "WE PLAN TO
-    MAKE THESE": the provider read the glued forms as names ("A WEPLANTO") or
-    nonsense ("SOLIFEL"). A real word, a protected name, and anything the
-    frequency segmenter cannot split into common words are left as they are.
+    Proof first: a candidate this chapter itself writes elsewhere ("IF WE WANT THE
+    HIDES") wins when it is the only such one. Otherwise only a clearly dominant
+    common word (Zipf >= 3, one full point above any rival) is taken.
+    """
+    candidates = region_taxonomy.one_edit_words(key)
+    if not candidates:
+        return None
+    attested = [word for word in candidates if word in chapter_words]
+    if len(attested) == 1:
+        return attested[0]
+    if attested:
+        return None
+    ranked = sorted(candidates, key=region_taxonomy.word_zipf, reverse=True)
+    best = region_taxonomy.word_zipf(ranked[0])
+    rival = region_taxonomy.word_zipf(ranked[1]) if len(ranked) > 1 else 0.0
+    return ranked[0] if best >= 3.0 and best - rival >= 1.0 else None
+
+
+def _restore_shape(token, letters):
+    """``letters`` (upper case, no apostrophe) written back in ``token``'s shape."""
+    if "'" in token or "’" in token:
+        plain = re.sub(r"['’]", "", token)
+        if len(plain) != len(letters):
+            return None
+        chars, cursor = [], 0
+        for char in token:
+            if char in "'’":
+                chars.append(char)
+            else:
+                chars.append(letters[cursor])
+                cursor += 1
+        letters = "".join(chars)
+    return letters if token.isupper() or not token.isalpha() else letters.lower()
+
+
+def split_glued_source_words(text, protected=(), chapter_names=(), chapter_words=frozenset()):
+    """``text`` with OCR-damaged tokens repaired before translation.
+
+    Three repairs, each only when it is clear, in this order:
+
+    * a chapter name glued to the end of a token: "GWANG-ILJEON" -> GWANG-IL JEON;
+    * glued words split by frequency: "IT'S SOLIFELIKE" -> "IT'S SO LIFE LIKE",
+      "WEPLANTO" -> WE PLAN TO (the provider read the glued forms as names);
+    * one misread letter: "HIPES" -> HIDES, "PLRCHASED" -> PURCHASED,
+      "COLLDN'T" -> COULDN'T (``_misread_correction``).
+
+    A real word, a protected name, and anything ambiguous are left as they are.
     """
     protected_keys = {_name_token_of(name) for name in protected or ()}
+    names = sorted({key for key in (_name_token_of(name) for name in chapter_names or ())
+                    if len(key) >= 3}, key=len, reverse=True)
+    vocabulary = frozenset(chapter_words or ())
 
-    def split(match):
+    def repair(match):
         token = match.group(0)
-        key = token.upper()
-        if (len(key) < 4 or key in protected_keys or region_taxonomy.is_english_word(key)
+        key = re.sub(r"[^A-Z]", "", token.upper())
+        if (len(key) < 4 or key in protected_keys or key in names or region_taxonomy.is_english_word(key)
                 or region_taxonomy.word_zipf(key) >= 3.0):
             return token
-        pieces = region_taxonomy.segment_words(key)
-        if not pieces or len(pieces) < 2:
-            return token
-        joined = " ".join(pieces)
-        return joined if token.isupper() else joined.lower()
+        if token.isalpha():
+            for name in names:
+                if key.endswith(name) and len(key) - len(name) >= 2:
+                    head = token[:len(token) - len(name)]
+                    return f"{head} {token[len(head):]}"
+            pieces = region_taxonomy.segment_words(key)
+            if pieces and len(pieces) > 1:
+                joined = " ".join(pieces)
+                return joined if token.isupper() else joined.lower()
+        corrected = _misread_correction(key, vocabulary)
+        return (_restore_shape(token, corrected) or token) if corrected else token
 
-    return re.sub(r"[A-Za-z]+", split, str(text or ""))
+    return re.sub(r"[A-Za-z][A-Za-z'’]*[A-Za-z]|[A-Za-z]", repair, str(text or ""))
+
+
+def chapter_source_words(texts):
+    """Real words the chapter writes: the evidence a misread repair may lean on."""
+    words = set()
+    for text in texts or ():
+        for token in re.findall(r"[A-Za-z]+", str(text or "")):
+            key = token.upper()
+            if len(key) >= 3 and region_taxonomy.is_english_word(key):
+                words.add(key)
+    return frozenset(words)
 
 
 def honorific_addressed_names(text):
@@ -3438,6 +3503,35 @@ def _looks_like_noise(text):
     return False
 
 
+def _text_columns(lines):
+    """Side-by-side text columns of one balloon, in reading order, or ``None``.
+
+    Manga balloons stack two phrases as columns ("UME-/KUN?!" upper right, "WHAT A/
+    COINCI-/DENCE.." lower left); sorting all lines by height interleaved them into
+    "UME- WHAT KUN?! A COINCI- DENCE..". Columns barely overlap horizontally (under
+    20 % of the narrower one) and each holds at least two lines - a single row split
+    in two stays a row. The column that starts higher is read first.
+    """
+    lines = list(lines or [])
+    if len(lines) < 4:
+        return None
+    columns = []
+    for line in sorted(lines, key=lambda item: item.box[0]):
+        x1, x2 = line.box[0], line.box[0] + max(1, line.box[2])
+        if columns:
+            cx1, cx2, members = columns[-1]
+            overlap = min(cx2, x2) - max(cx1, x1)
+            if overlap > 0.2 * min(cx2 - cx1, x2 - x1):
+                columns[-1] = [min(cx1, x1), max(cx2, x2), members + [line]]
+                continue
+        columns.append([x1, x2, [line]])
+    if len(columns) < 2 or any(len(members) < 2 for _, _, members in columns):
+        return None
+    ordered = sorted((members for _, _, members in columns),
+                     key=lambda members: (min(item.box[1] for item in members), min(item.box[0] for item in members)))
+    return ordered
+
+
 def reading_order(lines):
     """Lines of a text region in reading order: rows top to bottom, then left to right.
 
@@ -3454,6 +3548,9 @@ def reading_order(lines):
     geometry cannot separate keep the order they arrived in.
     """
 
+    columns = _text_columns(lines)
+    if columns:
+        return [line for column in columns for line in reading_order(column)]
     rows = []
     for line in sorted(lines or [], key=lambda item: (item.box[1], item.box[0])):
         top = line.box[1]
@@ -3812,6 +3909,26 @@ def _editorial_graphic_evidence(groups, image_bgr):
             record(first, "aligned_group_cluster", span_ratio, style)
             record(second, "aligned_group_cluster", span_ratio, style)
     return evidence_by_group
+
+
+def _promote_glossary_sounds(groups):
+    """Text made only of glossary sounds, drawn outside any closed balloon, is a sound.
+
+    "HUFF HUFF" lettered over the art (Shadow Slave ch. 13) was read as speech and
+    typeset in the dialogue font. Inside a closed balloon "AH..." stays dialogue.
+    """
+    from yomu.translation.sfx_glossary import _lookup
+
+    for group in groups:
+        if group.classification not in {"speech", "narration", "unknown"}:
+            continue
+        if any((line.metadata or {}).get("visual_white_region_enclosed") for line in group.lines):
+            continue
+        words = re.findall(r"[A-Za-z]+", str(group.text or ""))
+        if words and all(len(word) >= 2 and _lookup(word) is not None for word in words):
+            _set_group_classification(
+                group, "sfx", "glossary_sound_outside_balloon", confidence=0.8,
+                evidence={"previous_classification": group.classification, "tokens": len(words)})
 
 
 def _set_group_classification(
@@ -9658,6 +9775,63 @@ def _retry_terminology_drift(
     )
 
 
+def _retry_unknown_target_words(group, translator, force, retry_records, fidelity_check=None):
+    """One extra call when the translation carries a word Portuguese does not have.
+
+    DeepL returned "ESTOVA ESPERANDO" and "VAMOS CURTIRE"; every validator passed,
+    since the text is Portuguese overall. The new candidate is kept only if it is
+    valid and carries fewer unknown words; otherwise the region stays exactly as
+    it was - this retry can only ever improve a translation, never sink it.
+    """
+    if group.classification == "sfx" or not hasattr(translator, "translate_strict"):
+        return
+    source = _source_text_for_validation(group)
+    unknown = portuguese_words.unknown_target_words(group.translation, source)
+    if not unknown:
+        return
+    name_spans = group_proper_name_spans(group)
+    retry_source = str(getattr(group, "canonical_source_text", "") or group.text)
+    try:
+        candidate = translator.translate_strict(
+            retry_source,
+            previous_translation=group.translation,
+            validation_reason=f"target_unknown_words:{','.join(unknown)}",
+            force=force,
+            proper_names=name_spans,
+            retry_origin="unknown_target_word_retry",
+            retry_attempt=group.translation_retry_count + 1,
+            source_context=getattr(group, "page_context_texts", ()),
+        )
+    except Exception as exc:  # noqa: BLE001 - one region must not sink the chapter.
+        if isinstance(exc, SystemicTranslationFailure):
+            raise
+        return
+    candidate = _match_source_case(retry_source, clean_ocr_text(candidate))
+    valid = False
+    if candidate and candidate != group.translation:
+        valid, _reason = validate_translation_text(
+            source, candidate, group.classification,
+            _group_validation_allowed_proper_names(group), required_name_spans=name_spans)
+        valid = bool(valid) and len(portuguese_words.unknown_target_words(candidate, source)) < len(unknown)
+        if valid and fidelity_check is not None:
+            prior_review = group.semantic_review_reason
+            valid = not fidelity_check(candidate)
+            if not valid:
+                group.semantic_review_reason = prior_review
+    retry_records.append({
+        "group_id": group.group_id, "source": retry_source,
+        "previous_translation": group.translation, "candidate_translation": candidate,
+        "attempt": group.translation_retry_count + 1, "valid": valid,
+        "reason": "unknown_target_word_retry_ok" if valid else "unknown_target_word_kept",
+        "unknown_words": unknown, "retry_type": "unknown_target_word",
+    })
+    group.translation_retry_count += 1
+    if valid:
+        group.translation = candidate
+        group.translation_candidate = candidate
+        group.translation_validation_reason = "unknown_target_word_retry_ok"
+
+
 NATURALIZATION_ELIGIBILITY_SIGNALS = frozenset({
     "ptbr_naturalization_needed",
     "naturalization_needed",
@@ -10220,6 +10394,9 @@ def validate_and_retry_translations(
                 retry_records,
                 fidelity_check=fidelity_reason_for,
             )
+            if group.translation_valid:
+                _retry_unknown_target_words(
+                    group, translator, force, retry_records, fidelity_check=fidelity_reason_for)
             _maybe_naturalize_translation(
                 group,
                 ptbr_naturalizer,
@@ -15990,6 +16167,12 @@ def _draw_group_translation(img_bgr, group, font_path, strategy="primary", sourc
 
     source_line_heights = [line.box[3] for line in group.lines if line.box[3] > 0]
     source_height = float(np.median(source_line_heights)) if source_line_heights else h
+    # The smallest size this balloon may use: the global floor, unless the page's own
+    # lettering is smaller (manga scans at ~960 px wide letter at ~15 px). There the
+    # floor follows the source, down to 55 % of its line height and never below 8 px;
+    # Portuguese runs longer than English and did not fit the narrow balloons at 12.
+    min_font = max(8, min(int(config.MIN_FONT_SIZE), int(round(source_height * 0.55))))
+    group.min_font_size = int(min_font)
     size_scale = float(typography_profile.get("font_size_scale") or (
         0.72 if style.name == "decorative_purple" else 0.78))
     is_sfx = str(getattr(group, "classification", "") or "").lower() == "sfx"
@@ -16009,7 +16192,7 @@ def _draw_group_translation(img_bgr, group, font_path, strategy="primary", sourc
             int(max(1, h) * 0.42),
         )
         typography_profile["display_font_cap"] = int(font_cap)
-    font_size = min(font_cap, max(config.MIN_FONT_SIZE, int(source_height * size_scale)))
+    font_size = min(font_cap, max(min_font, int(source_height * size_scale)))
     # The cleanup measured the source outline's real width (``_group_stroke_band``);
     # an outline the colour sampler read thinner is drawn at that width, capped at
     # 15 % of the line height.
@@ -16017,7 +16200,7 @@ def _draw_group_translation(img_bgr, group, font_path, strategy="primary", sourc
     if measured_stroke > style.stroke_width and typography_profile.get("source_stroke_confident"):
         style = replace(style, stroke_width=int(min(measured_stroke, max(2, round(0.15 * source_height)))))
     if len(text) > max(1, len(group.text)) * 1.2:
-        font_size = max(config.MIN_FONT_SIZE, int(font_size * 0.92))
+        font_size = max(min_font, int(font_size * 0.92))
 
     preview_font_role = ""
     preview_font_path = ""
@@ -16076,7 +16259,7 @@ def _draw_group_translation(img_bgr, group, font_path, strategy="primary", sourc
     # translated text has an unambiguous line to land each source ratio on.
     line_scales = _source_line_scale_ratios(group, typography_source)
     start_font_size = font_size
-    while font_size >= config.MIN_FONT_SIZE:
+    while font_size >= min_font:
         font = get_font(preview_font_path or font_path, font_size, role=font_role,
                         prefer_role=prefer_preview_role, text=text)
         spacing = max(1, int(font_size * 0.1 * float(
@@ -16101,7 +16284,7 @@ def _draw_group_translation(img_bgr, group, font_path, strategy="primary", sourc
                 text,
                 font,
                 max_width=max(12, wrap_width),
-                split_long_words=font_size <= config.MIN_FONT_SIZE,
+                split_long_words=font_size <= min_font,
                 )
                 if config.AUTO_LINE_WRAP
                 else [text]
@@ -16157,7 +16340,7 @@ def _draw_group_translation(img_bgr, group, font_path, strategy="primary", sourc
             break
         font_size -= 1
 
-    font_size = max(config.MIN_FONT_SIZE, font_size)
+    font_size = max(min_font, font_size)
     # Inside a closed balloon the text follows the balloon's shape instead of the
     # source text's rectangle (the source width made "VENHA NOS / VISITAR / COMO"
     # columns in a wide balloon), at one uniform size up to the same cap. The area
@@ -16179,7 +16362,7 @@ def _draw_group_translation(img_bgr, group, font_path, strategy="primary", sourc
         center = (x + w / 2.0, y + h / 2.0)
         # Never below the size the rectangle reached (when it fit): the shape is
         # chosen for its lines, not paid for with smaller text.
-        lowest = font_size if overflow_ratio <= 0.0 else config.MIN_FONT_SIZE
+        lowest = font_size if overflow_ratio <= 0.0 else min_font
         for candidate_size in range(start_font_size, lowest - 1, -1):
             candidate_font = get_font(preview_font_path or font_path, candidate_size, role=font_role,
                                       prefer_role=prefer_preview_role, text=text)

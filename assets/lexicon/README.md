@@ -13,3 +13,8 @@ removed), exported from the `wordfreq` 3.1.1 `best` English list
 Robyn Speer, wordfreq); this derived table is distributed under the same licence.
 Used by `yomu.review.region_taxonomy.segment_words` to split words the OCR glued
 together ("WEPLANTO" -> WE PLAN TO) by word frequency.
+
+`portuguese_freq.tsv.gz` — `WORD<TAB>zipf` for ~148,000 Portuguese forms, exported the same
+way from the `wordfreq` 3.1.1 `best` Portuguese list (CC BY-SA 4.0, same attribution and
+licence). Used by `yomu.translation.portuguese_words` to find a word a translation carries
+that Portuguese does not have ("ESTOVA").

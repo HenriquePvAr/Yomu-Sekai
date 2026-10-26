@@ -123,7 +123,9 @@ _UI_STAGE_LABELS = {
     "smart_split": "Preparando as páginas",
     "ocr": "Lendo os textos",
     "translate": "Traduzindo os textos",
+    "translation": "Traduzindo os textos",
     "render": "Redesenhando as páginas",
+    "rendering": "Redesenhando as páginas",
     "pdf": "Gerando o PDF",
     "review_rerun": "Rerun de pendências",
     "final": "Finalizado",
@@ -4805,10 +4807,6 @@ class UiBridge:
         else:
             eta_label = None
         eta_seconds: float | None = None
-        if stage_elapsed is not None and current > 0 and total > current and stage_elapsed >= 2:
-            rate = current / stage_elapsed
-            if rate > 0:
-                eta_seconds = max(0.0, (total - current) / rate)
         last_update = _normalize_epoch((present_job or {}).get("updated_at"))
         stale_updates = bool(
             running and last_update is not None and (time.time() - last_update) > 120
@@ -4864,7 +4862,19 @@ class UiBridge:
                 current = max(0, int(canonical_counter.get("current") or 0))
                 total = max(0, int(canonical_counter.get("total") or 0))
                 counter_stage = stage
+                last_update = _normalize_epoch(canonical_counter.get("updated_at")) or last_update
+                stale_updates = bool(
+                    running and last_update is not None and (time.time() - last_update) > 120
+                )
             stage_fraction = (current / total) if current and total else None
+        # Estimate only after canonical counters have replaced legacy counters. A
+        # stale heartbeat or a terminal record cannot supply a live processing rate.
+        if (live and not stale_updates and counter_stage in {"", stage}
+                and stage_elapsed is not None and stage_elapsed >= 2
+                and 0 < current < total):
+            eta_seconds = (total - current) * stage_elapsed / current
+        if stale_updates:
+            eta_label = "Aguardando atualização do processamento"
         # A historical review never belongs to an active/staging operation. Returning it
         # here made a new source analysis render beside another chapter's PDF and metrics.
         quality_review = (
@@ -5301,15 +5311,8 @@ class UiBridge:
     ) -> dict[str, Any]:
         self.store.reconcile_confirmed_reviews()
         self.reconcile_orphans()
-        commercial_context = None
-        if getattr(self, "commercial_device_authorizer", None) is not None:
-            commercial_context = self._require_commercial_device_access(
-                principal=principal, operation="start_translation", access_token=license_access_token)
-            beta_decision = None
-        else:
-            beta_decision = self._require_beta_access(
-                principal=principal, operation="start_translation",
-                access_token=license_access_token)
+        beta_decision, commercial_context = self._authorize_translation_start(
+            principal=principal, license_access_token=license_access_token)
         source_type = self._requested_source_type(payload)
         media_selection_ids = payload.get("local_media_selection_ids")
         media_ids = payload.get("ordered_media_ids")
@@ -7187,11 +7190,28 @@ class UiBridge:
             raise ValueError(decision.reason_code or decision.state.value)
         return decision
 
+    def _authorize_translation_start(
+        self, *, principal: RequestPrincipal | None, license_access_token: str = "",
+    ) -> tuple[BetaAccessDecision | None, CommercialDeviceContext | None]:
+        """The one gate every translating submission passes: the main form and the queue.
+
+        The commercial device context carries the ``device_uuid`` the translation
+        provider needs; a job created without it was refused with
+        ``commercial_device_id_missing`` (the queue used to skip this gate).
+        """
+        if getattr(self, "commercial_device_authorizer", None) is not None:
+            return None, self._require_commercial_device_access(
+                principal=principal, operation="start_translation", access_token=license_access_token)
+        return self._require_beta_access(
+            principal=principal, operation="start_translation",
+            access_token=license_access_token), None
+
     def add_queue_item(
         self,
         payload: dict[str, Any],
         *,
         principal: RequestPrincipal | None = None,
+        license_access_token: str = "",
     ) -> dict[str, Any]:
         # A generic page cannot enter the background queue before its reader cluster is
         # confirmed.  Specific adapters retain the existing batch flow; a generic source is
@@ -7204,11 +7224,26 @@ class UiBridge:
         url = clean_url(str(payload.get("url") or ""))
         if not select_adapter(url).is_specific:
             raise ValueError("generic_sources_require_interactive_review")
+        beta_decision, commercial_context = self._authorize_translation_start(
+            principal=principal, license_access_token=license_access_token)
         job = self._create_job(
             {**payload, "full": True},
             require_environment=False,
             principal=principal,
+            beta_decision=beta_decision,
+            commercial_context=commercial_context,
         )
+        # Same sealing as the main form: the worker translates through the backend
+        # with this context, never with a token it would have to ask the page for.
+        job_configuration = self._seal_translation_context(
+            job, job.get("configuration", {}), principal=principal,
+            license_access_token=license_access_token,
+        )
+        if job_configuration != (job.get("configuration") or {}):
+            self.store.update_fields(
+                job["id"], configuration_json=json.dumps(job_configuration, ensure_ascii=False))
+            job = self.store.get_job(job["id"]) or job
+        self.ensure_worker()
         return self._job_record(job)  # type: ignore[return-value]
 
     def remove_queue_item_for_owner(self, owner_id: str, item_id: str) -> None:
@@ -7252,10 +7287,9 @@ class UiBridge:
                 owner_id, statuses=[JobStatus.QUEUED], limit=None)
         ):
             raise ValueError("A fila não tem itens aguardando.")
-        status = env_status()
-        if not status["env_exists"] or not status["nvidia_configured"]:
-            raise ValueError("Configure o arquivo .env e a NVIDIA_API_KEY antes de processar.")
-        return {"ok": True}
+        # Queued items were authorized when added (same gate as the main form), and
+        # the main form never required a NVIDIA key either.
+        return {"ok": True, "worker": self.ensure_worker()}
 
     async def start_queue(self) -> dict[str, Any]:
         """Operator-local compatibility surface; never expose through HTTP."""
