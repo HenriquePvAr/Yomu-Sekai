@@ -2086,6 +2086,22 @@ class PaginatedReaderSafetyTests(unittest.TestCase):
         selected = down._selected_source_candidates(analysis, ["second", "first"])
         self.assertEqual(selected, [second, first])
 
+    def test_whole_chapter_approval_survives_rekeyed_dynamic_pages(self):
+        # A dynamic reader may re-key a page between sessions; an approval that
+        # covers the whole chapter still means "every page" of the fresh read.
+        fresh = [SimpleNamespace(id="a"), SimpleNamespace(id="b2")]
+        analysis = SimpleNamespace(outcome="supported_specific_adapter", can_download=True,
+                                   accepted=fresh, warnings=[])
+        self.assertEqual(down._selected_source_candidates(analysis, ["a", "b"]), fresh)
+
+    def test_partial_approval_with_unknown_id_is_still_refused(self):
+        fresh = [SimpleNamespace(id="a"), SimpleNamespace(id="b"), SimpleNamespace(id="c")]
+        analysis = SimpleNamespace(outcome="supported_specific_adapter", can_download=True,
+                                   accepted=fresh, warnings=[])
+        with self.assertRaises(SourceError) as ctx:
+            down._selected_source_candidates(analysis, ["a", "x"])
+        self.assertIn("approved_candidate_missing", str(ctx.exception))
+
     def test_manual_review_cannot_override_known_incomplete_pagination(self):
         analysis = SimpleNamespace(
             outcome=REVIEW_REQUIRED_MEDIUM_CONFIDENCE,

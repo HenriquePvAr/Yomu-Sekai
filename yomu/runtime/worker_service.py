@@ -271,35 +271,11 @@ class Worker:
             selection = json.loads(job.get("source_selection_json") or "{}")
         except (TypeError, ValueError):
             public, selection = {}, {}
-        # A persisted preflight intentionally stores only URL-free public metadata and
-        # opaque candidate IDs.  That is sufficient for review/history, but it is not a
-        # materializable page manifest for the dynamic Comix reader: the ten logical pages
-        # rendered through canvas/network fallback lose their reader-owned resource payload
-        # when rehydrated from this sanitized snapshot.  Reopen the bounded public reader
-        # analysis in the worker so the downloader receives the real 105-page manifest.
-        persisted_adapter = str(
-            public.get("adapter") or public.get("adapter_name")
-            or public.get("provider") or public.get("source_type") or ""
-        ).casefold()
-        # Older UI snapshots did not persist the adapter key reliably.  The source URL is
-        # still authoritative for this safety decision: never rehydrate an opaque candidate
-        # list for Comix because the worker must re-materialize it with the current session.
-        if not persisted_adapter:
-            try:
-                from yomu.download.sources.chapter_source import select_adapter
-                persisted_adapter = str(
-                    getattr(select_adapter(str(job.get("source_url") or "")), "name", "")
-                ).casefold()
-            except Exception:
-                persisted_adapter = ""
-        source_host = str(job.get("source_url") or "").split("/", 3)[2].casefold() \
-            if "://" in str(job.get("source_url") or "") else ""
-        if persisted_adapter == "comix" or source_host == "comix.to" \
-                or source_host.endswith(".comix.to"):
-            self._append_job_log(
-                job["id"], "source_validation",
-                "SOURCE_REUSE_SKIPPED reason=dynamic_adapter_requires_materializable_manifest")
-            return None
+        # The persisted preflight keeps only opaque candidate IDs, never the reader's
+        # resource payload; that is enough, because the runner re-opens the reader and
+        # materializes every page itself, checking each approved ID against that fresh
+        # read (Comix included: preflight and worker IDs were identical, 28/28 and 22/22).
+        # Re-analysing here only opened the same reader a second time (~35 s/chapter).
         ids = [str(v) for v in (getattr(result, "resolved_selection", ()) or []) if str(v)]
         if not ids:
             ids = [str(v) for v in (selection.get("candidate_ids") or []) if str(v)]

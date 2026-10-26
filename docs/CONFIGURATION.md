@@ -264,6 +264,11 @@ verificado para `anime_manga_lama_large.dml.onnx`, ao lado dele, com um `.json` 
 SHA-256 da origem e o da exportação; qualquer falha volta ao PyTorch na CPU. Os testes forçam
 `off`.
 
+`YOMU_LAMA_PREWARM` (variável de ambiente, default `1`): cria a sessão DirectML do LaMa em segundo
+plano logo após o OCR das páginas, em vez de no meio da renderização (~7 s a menos por capítulo).
+`0` volta a criar sob demanda. Não é iniciada durante o download: lá ela atrasava o leitor do
+Comix em ~32 s.
+
 Em máquinas com pouca memória, reduza primeiro `OCR_WORKERS` e `TRANSLATION_WORKERS`. Não diminua reservas do sistema apenas para forçar uma execução.
 
 ## Precheck, observabilidade e debug

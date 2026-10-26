@@ -511,7 +511,7 @@ class WorkerPhaseTests(unittest.TestCase):
         self.assertEqual(reused.outcome, specific_outcome())
         self.assertEqual(len(reused.accepted), 2)
 
-    def test_comix_preflight_is_not_rehydrated_without_materializable_pages(self):
+    def test_comix_preflight_is_reused_instead_of_reopening_the_reader(self):
         analysis = FakeAnalysis(specific_outcome(), accepted=105)
         job = self.queued_url_job(
             source_analysis_json=json.dumps({
@@ -529,11 +529,12 @@ class WorkerPhaseTests(unittest.TestCase):
                 "job_type": "translation", "source_analysis_result_id": persisted.analysis_id}),
             source_analysis_json=json.dumps({
                 "adapter": "comix", "outcome": specific_outcome(), "accepted": []}))
-        worker = _Worker(self.store, error=AssertionError("test only exercises the reuse gate"))
+        # Only opaque IDs are reused; the runner re-materializes every page from a
+        # fresh reader and checks each ID against it (down._selected_source_candidates).
+        worker = _Worker(self.store, error=AssertionError("full analysis must not run"))
         reused = worker._reuse_persisted_source_analysis(self.store.get_job(job["id"]))
-        self.assertIsNone(reused)
-        log = (self.tmp / "logs" / f"{job['id']}.log").read_text(encoding="utf-8")
-        self.assertIn("dynamic_adapter_requires_materializable_manifest", log)
+        self.assertIsNotNone(reused)
+        self.assertEqual(len(reused.accepted), 105)
 
 
 class SelectionReuseTests(unittest.TestCase):

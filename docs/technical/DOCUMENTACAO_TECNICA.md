@@ -1708,6 +1708,20 @@ Décima primeira passada (reconstrução e regiões restantes, 2026-10-25, **IMP
   `FREQUENT_WORD_MIN_ZIPF`) como quase-erro ou palavras grudadas, e aceita aspas e til; linhas
   que precisaram ser desgrudadas continuam sinalizadas. Fujiyama-san cap. 66: 37 → 50 regiões
   traduzidas, 17 → 9 com o original, pipeline 224 s → 106 s.
+- Gargalos (passo 17): **o Comix era aberto três vezes por capítulo** (análise na UI, revalidação no
+  worker, download). O worker agora reaproveita a pré-análise da UI também no Comix
+  (`_reuse_persisted_source_analysis`): ela guarda só IDs opacos e o runner já reabre o leitor e confere
+  cada ID na leitura nova; IDs da UI e do worker eram idênticos (28/28, 22/22). Se uma aprovação do
+  capítulo inteiro não bater com a leitura nova do mesmo tamanho, `_selected_source_candidates` usa a
+  leitura nova; seleção parcial continua estrita. Criação → início do job: 35 s → 1,7 s. Smart split
+  só refatia tiras: imagens com formato de página (altura < 2× largura, `_images_are_page_shaped`)
+  não são mais recombinadas (22 páginas de mangá viravam 13). A sessão DirectML do LaMa (~12 s de
+  compilação) é criada em segundo plano logo após o OCR das páginas (`_prewarm_learned_inpainter`,
+  `YOMU_LAMA_PREWARM=0` desliga); durante o download ela deixava o leitor do Comix 32 s mais lento
+  (A/B 48,8/47,8 s × 16,4/16,4 s). Medido e mantido: a releitura de lacunas dos balões (~25 s/capítulo)
+  — filtro só-reconhecimento perdia falas manuscritas reais, e mosaico de recortes (10× mais rápido)
+  lia pior; CPU paralela é mais lenta que a GPU. Logs: `WALLET_RESERVE_RESULT` e
+  `TRANSLATION_EXECUTE_HTTP_RESULT` com `duration_ms` (backend 0,3–2,4 s por chamada).
 - Desempenho (passo 3, GPU): com `GPU_INFERENCE=auto` e `onnxruntime-directml`, o RapidOCR roda
   com `det/cls/rec_use_dml` e o LaMa por uma sessão ONNX DirectML (`yomu/clean/inpainting/lama_onnx.py`).
   O exportador não tem forma ONNX das FFTs reais 2-D das Fourier units, então `rfftn`/`irfftn`

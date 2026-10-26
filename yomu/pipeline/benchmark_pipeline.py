@@ -318,6 +318,60 @@ def _resolve_output_profile(args=None) -> str:
     return raw if raw in ac.PROFILE_ARTIFACTS else ac.OutputProfile.AUTOMATIC
 
 
+PAGE_SHAPED_MAX_ASPECT = 2.0
+
+
+def _images_are_page_shaped(paths, *, min_share=0.8):
+    """True when (almost) every image is page-shaped: height < 2x width.
+
+    Reads only the image headers. Webtoon strips are far taller than wide; a
+    chapter of ordinary pages has nothing for smart split to rebuild.
+    """
+    from PIL import Image
+
+    shapes = []
+    for path in paths or []:
+        try:
+            with Image.open(path) as image:
+                width, height = image.size
+        except Exception:  # noqa: BLE001 - an unreadable file is judged elsewhere
+            continue
+        if width > 0:
+            shapes.append(height / width < PAGE_SHAPED_MAX_ASPECT)
+    return bool(shapes) and sum(shapes) / len(shapes) >= min_share
+
+
+def _prewarm_learned_inpainter():
+    """Build the LaMa DirectML session in the background, after page OCR.
+
+    Session creation compiles the graph for the GPU (~12 s) and used to happen in the
+    middle of rendering, with every page waiting.
+    Best effort: any failure leaves the normal lazy load to run (and report) later.
+    """
+    if (os.getenv("TRADUTOR_IA_HERMETIC_TEST_ENV") == "1"
+            or os.getenv("YOMU_LAMA_PREWARM", "1") == "0"
+            or not config.ADVANCED_ART_INPAINTING
+            or not _plan_pipeline_flags()["want_render"]):
+        return None
+    try:
+        from yomu.core.gpu import directml_enabled
+        if not directml_enabled():
+            return None
+    except Exception:  # noqa: BLE001 - prewarm is an optimisation only
+        return None
+
+    def load():
+        try:
+            from yomu.clean.inpainting import advanced_art_inpainting
+            advanced_art_inpainting.get_default_inpainter().load()
+        except Exception:  # noqa: BLE001 - the lazy load reports real failures
+            pass
+
+    thread = threading.Thread(target=load, name="lama-prewarm", daemon=True)
+    thread.start()
+    return thread
+
+
 def _plan_pipeline_flags():
     """Resolve what the output plan asks the pipeline to execute, from ``YOMU_EFFECTIVE_OPS``.
 
@@ -2590,6 +2644,11 @@ def run_benchmark(args):
             + ", ".join(download_gate.get("reasons") or ["motivo desconhecido"])
         )
     resource_monitor.set_stage("validation")
+    if _images_are_page_shaped(all_image_paths):
+        # Smart split rebuilds pages from a long webtoon strip. Manga/comic pages are
+        # already pages; a reader that exposed a few <img> tags (Comix) used to have
+        # its 22 pages re-cut and merged into 13.
+        download_report["requires_smart_split"] = False
     source_selection = [] if (
         config.SMART_WEBTOON_PDF_SPLIT
         and bool(download_report.get("requires_smart_split", True))
@@ -3167,6 +3226,9 @@ def run_benchmark(args):
         f"failed_count={ocr_failed_count} duration_ms={int(stage_seconds['ocr'] * 1000)}",
         flush=True,
     )
+    # After the reader browser is gone: building the session during the download
+    # slowed the Comix canvas reader by ~32 s (A/B 48.8/47.8 s vs 16.4/16.4 s).
+    _prewarm_learned_inpainter()
 
     for index, result in ocr_results.items():
         state = state_by_index[index]

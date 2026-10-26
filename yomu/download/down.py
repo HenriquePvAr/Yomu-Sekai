@@ -1753,6 +1753,11 @@ def _selected_source_candidates(source_analysis, approved_candidate_ids=None):
     accepted_by_id = {candidate_id: candidate for candidate_id, candidate in
                       zip(accepted_ids, accepted)}
     if any(candidate_id not in accepted_by_id for candidate_id in selected_ids):
+        # An approval of the whole chapter (as many IDs as the fresh, complete read has
+        # pages) means "every page", even if a dynamic reader re-keyed some of them
+        # between sessions; a partial selection stays strict.
+        if len(selected_ids) == len(accepted) and outcome != REVIEW_REQUIRED_MEDIUM_CONFIDENCE:
+            return accepted
         raise SourceError(INCOMPLETE_DOWNLOAD, "approved_candidate_missing")
     return [accepted_by_id[candidate_id] for candidate_id in selected_ids]
 

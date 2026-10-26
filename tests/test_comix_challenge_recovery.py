@@ -30,7 +30,7 @@ def test_comix_transport_uses_persisted_cookie_and_user_agent(tmp_path, monkeypa
     assert transport._session.cookies.get("cf_clearance") == "cookie"
 
 
-def test_worker_reuse_guard_recognizes_comix_from_source_url(monkeypatch):
+def test_worker_reuses_comix_preflight_ids(monkeypatch):
     from yomu.runtime import worker_service
 
     service = object.__new__(worker_service.Worker)
@@ -43,6 +43,7 @@ def test_worker_reuse_guard_recognizes_comix_from_source_url(monkeypatch):
             b"https://comix.to/title/1"
         ).hexdigest()
         resolved_selection = ("page-1",)
+        adapter = "comix"
     class Store:
         def __init__(self, *_): pass
         def get_analysis(self, *_): return Result()
@@ -56,7 +57,10 @@ def test_worker_reuse_guard_recognizes_comix_from_source_url(monkeypatch):
         "source_analysis_json": json.dumps({"accepted": [], "source_type": "chapter"}),
         "source_selection_json": json.dumps({"candidate_ids": ["page-1"]}),
     }
-    assert service._reuse_persisted_source_analysis(job) is None
+    # Only opaque IDs are reused; the runner re-materializes the pages from a fresh
+    # reader and checks every ID, so the worker no longer reopens Comix itself.
+    reused = service._reuse_persisted_source_analysis(job)
+    assert [candidate.id for candidate in reused.accepted] == ["page-1"]
 
 
 def test_navigation_recovery_is_bounded_and_rechecks(monkeypatch):

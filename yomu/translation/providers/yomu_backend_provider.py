@@ -259,10 +259,13 @@ class HttpBackendClient:
             raise BackendTranslationError("backend_transport_failed") from exc
 
     def reserve(self, *, job_id: str, request_id: str, auth_token: str, device_id: str = "") -> dict[str, Any]:
-        return self._call("/functions/v1/wallet-reserve", {
+        started = time.perf_counter()
+        result = self._call("/functions/v1/wallet-reserve", {
             "job_id": job_id, "request_id": request_id, "operation": "translation",
             "device_id": str(device_id or ""),
         }, auth_token)
+        print(f"WALLET_RESERVE_RESULT duration_ms={int((time.perf_counter() - started) * 1000)}", flush=True)
+        return result
 
     def release(self, *, reservation_id: str, auth_token: str) -> dict[str, Any]:
         # Client-callable RELEASE of a still-held reservation (wallet-finalize ->
@@ -309,11 +312,14 @@ class HttpBackendClient:
             "total_chars": sum(len(item["text"]) for item in payload["items"]),
         }, separators=(",", ":")), flush=True)
         print("TRANSLATION_EXECUTE_HTTP_REQUEST_STARTED", flush=True)
+        started = time.perf_counter()
         try:
             raw = self._call("/functions/v1/translation-execute", payload, auth_token)
         except BackendTranslationError as exc:
             print(f"TRANSLATION_EXECUTE_RESPONSE_CODE code={str(exc)[:80]}", flush=True)
             raise
+        print("TRANSLATION_EXECUTE_HTTP_RESULT "
+              f"duration_ms={int((time.perf_counter() - started) * 1000)} items={len(payload['items'])}", flush=True)
         items = tuple(BatchItem(str(i.get("item_id") or ""), str(i.get("text") or i.get("translated_text") or ""))
                       for i in (raw.get("items") or []))
         return BatchResponse(str(raw.get("request_id") or request.request_id),
