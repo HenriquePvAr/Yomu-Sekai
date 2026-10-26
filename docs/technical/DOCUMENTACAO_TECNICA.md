@@ -1698,9 +1698,16 @@ Décima primeira passada (reconstrução e regiões restantes, 2026-10-25, **IMP
   `submit_contact_request` (migração `20261026120000_contact_requests.sql`: tabela
   `contact_requests` sem acesso direto, RLS, 5 envios/h por usuário) e envia o e-mail pela API
   da Resend. Destino e chave são secrets da função, nunca do repositório: `RESEND_API_KEY`,
-  `CONTACT_INBOX_EMAIL` e opcional `CONTACT_FROM_EMAIL`. **PARCIAL:** função e migração ainda
-  precisam ser publicadas no projeto Supabase e os secrets configurados; até lá o envio responde
-  erro e a UI mostra "Não foi possível enviar agora".
+  `CONTACT_INBOX_EMAIL` e opcional `CONTACT_FROM_EMAIL`. **IMPLEMENTADO:** migração aplicada, função
+  publicada e secrets configurados no projeto ativo (2026-10-26); envio real verificado
+  (`delivered: true`). Sem `RESEND_API_KEY` a função ainda grava o pedido e responde
+  `delivered: false` (`mail_not_configured`). OCR: a leitura de página roda com
+  `use_cls=False` — o classificador 0/180° do RapidOCR girava linhas corretas ("WHO?!" →
+  "j2OHM"), que iam para a tradução como lixo ou eram descartadas. A nota de qualidade do OCR
+  (`score_group_ocr_quality`) não marca mais palavras frequentes do léxico (Zipf ≥ 4,
+  `FREQUENT_WORD_MIN_ZIPF`) como quase-erro ou palavras grudadas, e aceita aspas e til; linhas
+  que precisaram ser desgrudadas continuam sinalizadas. Fujiyama-san cap. 66: 37 → 50 regiões
+  traduzidas, 17 → 9 com o original, pipeline 224 s → 106 s.
 - Desempenho (passo 3, GPU): com `GPU_INFERENCE=auto` e `onnxruntime-directml`, o RapidOCR roda
   com `det/cls/rec_use_dml` e o LaMa por uma sessão ONNX DirectML (`yomu/clean/inpainting/lama_onnx.py`).
   O exportador não tem forma ONNX das FFTs reais 2-D das Fourier units, então `rfftn`/`irfftn`

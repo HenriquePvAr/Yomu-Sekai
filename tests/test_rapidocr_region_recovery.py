@@ -148,13 +148,14 @@ class RapidOCRQualityDecisionTests(unittest.TestCase):
         for text in examples:
             with self.subTest(text=text):
                 group = _scored_group(text)
-                self.assertLess(group.quality_score, config.RAPIDOCR_RECOVERY_MIN_QUALITY_SCORE)
+                # Frequent dictionary words no longer earn near-miss/glued-word
+                # warnings, so ordinary dialogue scores clean instead of low.
+                self.assertGreaterEqual(group.quality_score, config.RAPIDOCR_RECOVERY_MIN_QUALITY_SCORE)
                 self.assertEqual(rapidocr_region_decision(group), "accept")
                 with patch.object(ocr_balloon, "record_count") as counter:
                     enforce_rapidocr_quality_gate([group])
                 self.assertTrue(_should_translate_group(group))
                 counted = {call.args[0] for call in counter.call_args_list}
-                self.assertIn("ocr_quality_warning_accept", counted)
                 self.assertNotIn("ocr_quality_blocked", counted)
 
     def test_pure_dictionary_near_miss_is_warning_not_retry(self):

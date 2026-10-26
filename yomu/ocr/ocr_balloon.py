@@ -5113,6 +5113,9 @@ def _group_has_story_translation_authority(group):
     )
 
 
+FREQUENT_WORD_MIN_ZIPF = 4.0
+
+
 def _score_group_quality(groups):
     for group in groups:
         # Glued words ("SHEWASACTUALLY OUTON'AWALK") read as garbage to the quality
@@ -5122,6 +5125,7 @@ def _score_group_quality(groups):
         repaired = split_glued_source_words(raw_text, protected=group.detected_proper_names)
         if repaired != raw_text:
             group.text = repaired
+        group.ocr_glue_repaired = repaired != raw_text
         try:
             score, reasons = score_group_ocr_quality(group)
         finally:
@@ -5238,8 +5242,20 @@ def score_group_ocr_quality(group):
         reasons.append("improbable_apostrophe_pattern")
         score -= 0.45
 
+    # Frequent dictionary words ("LET'S RACE", "ALRIGHT", "HOLDING FOX") are read
+    # correctly; near-miss and glued-word guesses about them only cost a good line
+    # its translation. Zipf 4.0 keeps rare spellings ("LEFTS", "FO") suspicious. A line
+    # that had to be un-glued first is still OCR damage and keeps its flags.
+    trust_lexicon = not getattr(group, "ocr_glue_repaired", False)
+
+    def _frequent_word(token):
+        return token in COMMON_ENGLISH_WORDS or (
+            trust_lexicon and region_taxonomy.word_zipf(token) >= FREQUENT_WORD_MIN_ZIPF)
+
+    all_frequent = bool(token_letters) and all(
+        _frequent_word(token) for token in token_letters if len(token) >= 2)
     repair_candidate, repair_reason = repair_ocr_text(text)
-    if repair_reason:
+    if repair_reason and not all_frequent:
         if "segment_compact_english_word" in repair_reason:
             reasons.append("compact_word_segmentation_candidate")
             score -= 0.28
@@ -5254,7 +5270,7 @@ def score_group_ocr_quality(group):
             score -= 0.08
 
     for token in token_letters:
-        if len(token) < 2 or token in COMMON_ENGLISH_WORDS or token in SFX_WORDS:
+        if len(token) < 2 or _frequent_word(token) or token in SFX_WORDS:
             continue
         suggestion, suggestion_score = suggest_english_word(token)
         if suggestion and suggestion_score >= 0.62:
@@ -5316,7 +5332,7 @@ def score_group_ocr_quality(group):
     odd = sum(
         1
         for char in text
-        if not (char.isalnum() or char.isspace() or char in "'!?.,:;+-&/()")
+        if not (char.isalnum() or char.isspace() or char in "'!?.,:;+-&/()\"“”‘’~…")
     )
     if odd / max(1, len(text)) > 0.14:
         reasons.append("many_improbable_characters")

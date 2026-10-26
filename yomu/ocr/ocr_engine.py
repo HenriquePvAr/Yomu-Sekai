@@ -612,7 +612,10 @@ class OCREngine:
             if scale != 1.0
             else img_bgr
         )
-        output = rapidocr(image_for_ocr)
+        # No 0/180 angle classifier: comic lettering is never upside down, and the
+        # classifier flipped upright lines ("WHO?!" -> "j2OHM", "YOU TWO," -> "'OML nOK"),
+        # which then went to translation as garbage or were dropped.
+        output = rapidocr(image_for_ocr, use_cls=False)
         results = output[0] if isinstance(output, tuple) else output
         lines = []
         for item in results or []:
