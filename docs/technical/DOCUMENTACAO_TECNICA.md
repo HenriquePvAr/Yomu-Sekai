@@ -1630,7 +1630,12 @@ Décima primeira passada (reconstrução e regiões restantes, 2026-10-25, **IMP
   tem ("ESTOVA", "CURTIRE"; `yomu/translation/portuguese_words.py`, tabela
   `assets/lexicon/portuguese_freq.tsv.gz`) ganha uma tentativa `translate_strict`
   (`_retry_unknown_target_words`), adotada só se for válida e tiver menos palavras desconhecidas;
-  senão a região fica exatamente como estava.
+  senão a região fica exatamente como estava. O piso da fonte por balão acompanha o letreiro
+  da página (`min_font = max(8, min(MIN_FONT_SIZE, 0,42 × altura da linha OCR))`): mangá a
+  ~960 px de largura letreira a ~15 px e o português não cabia nos balões estreitos a 12 px
+  (Seitokai cap. 188: 38 → 50 traduzidos, 58 → 41 em revisão, 285 s → 196 s). Balões com
+  frases em colunas lado a lado são lidos coluna por coluna (`_text_columns`), e texto feito só
+  de sons do glossário fora de balão fechado vira efeito sonoro (`_promote_glossary_sounds`).
 - Desempenho (passo 3, GPU): com `GPU_INFERENCE=auto` e `onnxruntime-directml`, o RapidOCR roda
   com `det/cls/rec_use_dml` e o LaMa por uma sessão ONNX DirectML (`yomu/clean/inpainting/lama_onnx.py`).
   O exportador não tem forma ONNX das FFTs reais 2-D das Fourier units, então `rfftn`/`irfftn`

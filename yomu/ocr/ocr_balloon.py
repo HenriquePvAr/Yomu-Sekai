@@ -16169,9 +16169,10 @@ def _draw_group_translation(img_bgr, group, font_path, strategy="primary", sourc
     source_height = float(np.median(source_line_heights)) if source_line_heights else h
     # The smallest size this balloon may use: the global floor, unless the page's own
     # lettering is smaller (manga scans at ~960 px wide letter at ~15 px). There the
-    # floor follows the source, down to 55 % of its line height and never below 8 px;
-    # Portuguese runs longer than English and did not fit the narrow balloons at 12.
-    min_font = max(8, min(int(config.MIN_FONT_SIZE), int(round(source_height * 0.55))))
+    # floor follows the source, down to 42 % of its OCR line box (the box carries
+    # padding: a 24 px box holds ~15 px lettering) and never below 8 px; Portuguese
+    # runs longer than English and did not fit the narrow balloons at 12.
+    min_font = max(8, min(int(config.MIN_FONT_SIZE), int(round(source_height * 0.42))))
     group.min_font_size = int(min_font)
     size_scale = float(typography_profile.get("font_size_scale") or (
         0.72 if style.name == "decorative_purple" else 0.78))
