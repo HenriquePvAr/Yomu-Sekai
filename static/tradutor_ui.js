@@ -7,6 +7,26 @@
 
   const $ = (selector, root = document) => root.querySelector(selector);
   const $$ = (selector, root = document) => Array.from(root.querySelectorAll(selector));
+  const YOMU_THEME_KEY = 'yomu.interface.theme';
+  function applyYomuTheme(value, persist = false) {
+    const theme = value === 'rubra' ? 'rubra' : 'original';
+    document.documentElement?.setAttribute?.('data-yomu-theme', theme);
+    $$('input[name="yomu-theme"]').forEach(input => { input.checked = input.value === theme; });
+    if (persist) {
+      const status = $('#themeSelectionStatus');
+      try {
+        localStorage.setItem(YOMU_THEME_KEY, theme);
+        if (status) status.textContent = 'Tema aplicado e salvo neste dispositivo.';
+      } catch (_) {
+        if (status) status.textContent = 'Tema aplicado. Não foi possível salvar a preferência neste navegador.';
+      }
+    }
+  }
+  try { applyYomuTheme(localStorage.getItem(YOMU_THEME_KEY)); }
+  catch (_) { applyYomuTheme('original'); }
+  window.addEventListener('storage', event => {
+    if (event.key === YOMU_THEME_KEY || event.key === null) applyYomuTheme(event.newValue);
+  });
   const escapeHtml = value => {
     const node = document.createElement('div');
     node.textContent = String(value ?? '');
@@ -9451,6 +9471,31 @@
       if (button) button.disabled = false;
     }
   });
+  const settingsTabs = [$('#settingsGeneralTab'), $('#settingsThemesTab')].filter(Boolean);
+  function selectSettingsTab(tab, focus = false) {
+    settingsTabs.forEach(item => {
+      const active = item === tab;
+      item.setAttribute('aria-selected', String(active));
+      item.tabIndex = active ? 0 : -1;
+      const panel = document.getElementById(item.getAttribute('aria-controls'));
+      if (panel) panel.hidden = !active;
+    });
+    if (focus) tab?.focus();
+  }
+  settingsTabs.forEach((tab, index) => {
+    tab.addEventListener('click', () => selectSettingsTab(tab));
+    tab.addEventListener('keydown', event => {
+      if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+      event.preventDefault();
+      const next = event.key === 'Home' ? 0 : event.key === 'End' ? settingsTabs.length - 1
+        : (index + (event.key === 'ArrowRight' ? 1 : -1) + settingsTabs.length) % settingsTabs.length;
+      selectSettingsTab(settingsTabs[next], true);
+    });
+  });
+  $$('input[name="yomu-theme"]').forEach(input => input.addEventListener('change', () => {
+    if (input.checked) applyYomuTheme(input.value, true);
+  }));
+
   function applyProductSettings(settings = {}) {
     const form = $('#productSettingsForm');
     if (!form) return;

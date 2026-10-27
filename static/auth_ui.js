@@ -4,6 +4,22 @@
 // Never logs a token, session, or password.
 const $ = (sel) => document.querySelector(sel);
 
+let authSceneModule = null;
+let authSceneLoading = null;
+function setAuthSceneActive(active) {
+  if (!authSceneModule && !authSceneLoading) {
+    if (!active) return;
+    authSceneLoading = import('./auth_scene.js?v=4').then(module => {
+      authSceneModule = module;
+      module.setActive(true);
+      return module;
+    }).catch(() => null);
+    return;
+  }
+  if (authSceneModule) authSceneModule.setActive(active);
+  else if (active) authSceneLoading?.then(module => module?.setActive(true));
+}
+
 function setError(msg) {
   const el = $('#authError');
   if (!el) return;
@@ -30,11 +46,13 @@ function showLoginSurface() {
   if (window.__tradutorVisualTestEnabled === true && document.documentElement.dataset.visualBootTest === '1') return;
   const surface = $('#authSurface');
   if (surface) surface.hidden = false;
+  setAuthSceneActive(true);
 }
 
 function hideLoginSurface() {
   const surface = $('#authSurface');
   if (surface) surface.hidden = true;
+  setAuthSceneActive(false);
   setError(''); setNote('');
 }
 
@@ -701,9 +719,11 @@ function setMode(next) {
     : recoveryErrorKind === 'invalid' ? 'Link de recuperação inválido'
     : recoveryErrorKind === 'same_password' ? 'Escolha uma senha diferente'
     : recoveryErrorKind === 'weak_password' ? 'Senha muito fraca' : '';
-  if (title) title.textContent = mode === 'signup' ? 'Criar conta' : recoveryErrorTitle || (recoveryPasswordView ? 'Crie uma nova senha' : recoverySuccessView ? 'Senha alterada' : recoveryInvalidView ? 'Link de recuperação inválido' : isForgot ? 'Esqueci minha senha' : 'Entrar');
-  if (lead) lead.textContent = mode === 'signup'
-    ? 'Crie sua conta para começar a ler no seu idioma.'
+  if (title) title.innerHTML = mode === 'login' ? 'Entre na <em>história.</em>'
+    : mode === 'signup' ? 'Sua próxima <em>história.</em>'
+    : recoveryErrorTitle || (recoveryPasswordView ? 'Crie uma nova senha' : recoverySuccessView ? 'Senha alterada' : recoveryInvalidView ? 'Link de recuperação inválido' : isForgot ? 'Esqueci minha senha' : 'Entrar');
+  if (lead) lead.textContent = mode === 'login' || mode === 'signup'
+    ? 'FAÇA PARTE DE UM UNIVERSO SEM FRONTEIRAS'
     : recoveryErrorKind === 'expired' ? 'Esse link de recuperação expirou. Solicite um novo link para continuar.'
     : recoveryErrorKind === 'invalid' ? 'Esse link não é mais válido. Solicite um novo link de recuperação para continuar.'
     : recoveryErrorKind === 'same_password' ? 'A nova senha não pode ser igual à senha atual. Digite uma senha diferente para continuar.'
@@ -712,8 +732,7 @@ function setMode(next) {
     : recoverySuccessView ? 'Sua senha foi atualizada com segurança.'
     : recoverySentView ? 'Confira sua caixa de entrada para continuar.'
     : recoveryInvalidView ? 'Este link de recuperação expirou ou não é mais válido.'
-    : isForgot ? 'Informe seu e-mail para recuperar o acesso.'
-    : 'Acesse sua conta para continuar.';
+    : 'Informe seu e-mail para recuperar o acesso.';
   if (submit) setSubmitLabel(submit, mode === 'signup' ? 'Criar conta' : recoveryPasswordView ? 'Salvar nova senha' : recoveryInvalidView ? 'Solicitar novo link' : isForgot ? (recoverySentView ? 'Enviar novo link' : 'Enviar link de recuperação') : 'Entrar');
   // The email-sent view disables this shared button for its cooldown. Re-enable
   // it when recovery_password is rendered so a valid handoff can be submitted.
@@ -721,15 +740,12 @@ function setMode(next) {
     submit.disabled = false;
     submit.setAttribute('aria-disabled', 'false');
   }
-  if (heroTitle) heroTitle.innerHTML = mode === 'login'
-    ? 'Seu tradutor pessoal de<br><em>manhwas e mangás.</em>'
-    : mode === 'forgot' ? 'Seus projetos seguros,<br>seu <em>acesso garantido.</em>'
-    : 'Seu tradutor pessoal de<br><em>manhwas e mangás.</em>';
-  if (heroSubtitle) heroSubtitle.innerHTML = mode === 'login'
-    ? 'Traduza seus capítulos com uma experiência pensada para preservar o sentido,<br>o contexto e o estilo de cada obra.'
-    : mode === 'forgot' ? 'Recupere o acesso à sua conta e continue suas traduções de onde parou.'
-    : 'Traduza capítulos com mais praticidade, acompanhe seu progresso<br>e organize suas leituras em um só lugar.';
-  const benefits = mode === 'forgot'
+  if (heroTitle) heroTitle.innerHTML = mode === 'forgot'
+    ? 'Entre em novos mundos.<br><em>Recupere seu acesso.</em>'
+    : 'Entre em novos mundos.<br><em>Leia no seu idioma.</em>';
+  if (heroSubtitle) heroSubtitle.textContent = mode === 'forgot'
+    ? 'Recupere sua conta e continue de onde parou.'
+    : 'Mangás e webtoons em PT-BR, com a arte e o contexto em primeiro lugar.';  const benefits = mode === 'forgot'
     ? [['Tradução fiel à obra', 'Preserve o sentido e o contexto dos diálogos.'], ['Capítulos no seu idioma', 'Leia suas histórias com uma tradução natural.'], ['Feito para suas histórias', 'Uma experiência pensada para manhwas e mangás.']]
     : [['Tradução fiel à obra', 'Preserve o sentido e o contexto dos diálogos.'], ['Capítulos no seu idioma', 'Leia suas histórias com uma tradução natural.'], ['Feito para suas histórias', 'Uma experiência pensada para manhwas e mangás.']];
   benefits.forEach(([heading, copy], index) => {
@@ -748,7 +764,7 @@ function setMode(next) {
   if (recoveryPasswordInput) recoveryPasswordInput.required = recoveryPasswordView;
   if (recoveryPasswordConfirmInput) recoveryPasswordConfirmInput.required = recoveryPasswordView;
   recovery?.toggleAttribute('hidden', mode !== 'login');
-  if (recovery) recovery.textContent = 'Esqueci minha senha';
+  if (recovery) recovery.textContent = 'Esqueceu a senha?';
   // Remember-me applies only to sign-in; hiding it on signup keeps the
   // four-field registration card compact and aligned with the reference.
   remember?.toggleAttribute('hidden', isForgot || mode === 'signup');

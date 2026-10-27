@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 520 370" role="img" aria-label="Livro aberto do Yomu Sekai">
+ <defs><linearGradient id="paper" x2="0" y2="1"><stop stop-color="#fff0d8"/><stop offset="1" stop-color="#e9c9aa"/></linearGradient><linearGradient id="cover" x2="1" y2="1"><stop stop-color="#631c28"/><stop offset="1" stop-color="#171923"/></linearGradient><filter id="shadow" x="-20%" y="-25%" width="150%" height="160%"><feGaussianBlur stdDeviation="9"/></filter></defs>
+ <ellipse cx="264" cy="324" rx="204" ry="25" fill="#000" opacity=".55" filter="url(#shadow)"/>
+ <g transform="translate(24 13) rotate(-8 236 175)" stroke-linejoin="round">
+  <path d="M39 85 222 111v207L34 284Z" fill="#8d282d" stroke="#4b1820" stroke-width="8"/><path d="m239 113 204-30 20 199-224 36Z" fill="#aa3034" stroke="#581b25" stroke-width="8"/>
+  <path d="M48 73 225 99v196L42 269Z" fill="url(#paper)" stroke="#40252a" stroke-width="7"/><path d="m242 101 192-28 15 188-207 33Z" fill="url(#paper)" stroke="#40252a" stroke-width="7"/>
+  <path d="M61 88 213 110v113L55 203Z" fill="#24232b" stroke="#b53b37" stroke-width="4"/><path d="m254 113 164-24 10 112-169 28Z" fill="#24232b" stroke="#b53b37" stroke-width="4"/>
+  <circle cx="153" cy="150" r="29" fill="#e34437"/><circle cx="357" cy="151" r="31" fill="#e34437"/>
+  <path d="M59 237 211 255v28L56 264Zm198-18 166-25 2 30-166 29Z" fill="#f4ddc3" stroke="#a15d4d" stroke-width="3"/>
+  <path d="m74 251 109 13m-111 10 86 10m132-39 110-17m-111 28 95-14m-96 25 77-12" stroke="#ac6557" stroke-width="3" opacity=".75"/>
+  <path d="M225 99 242 101v222l-17-28Z" fill="#b72d32" stroke="#5b1c24" stroke-width="5"/><path d="m219 103 6 3v187l-6-3Z" fill="#e36a53"/>
+  <text x="89" y="230" fill="#9e4338" font-family="Georgia,serif" font-size="19">物語</text><text x="286" y="240" fill="#9e4338" font-family="Georgia,serif" font-size="18">読む</text>
+  <path d="M45 273 228 300v13L43 286Zm199 25 210-34v13l-210 34Z" fill="#dcc1a8" stroke="#8e574c" stroke-width="2" opacity=".9"/>
+ </g>
+</svg>

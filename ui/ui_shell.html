@@ -92,6 +92,7 @@
 <div class="shell">
   <header class="masthead">
     <div class="mh-left">
+      <img class="rubra-brand-logo" src="/static/assets/auth/yomu-logo.png" alt="" aria-hidden="true">
       <div class="mh-brandwrap">
         <span class="mh-brand mh-brand-yomu">YOMU <span class="mh-dot">SEKAI</span></span>
       </div>
@@ -248,6 +249,8 @@
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/></svg>
             <span>Postar no mural</span>
           </button>
+          <button type="button" class="dash-action-btn rubra-quick-action" data-goto="hist"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M4 4h16v16H4zM8 8h8M8 12h8M8 16h5"/></svg><span>Minha biblioteca</span></button>
+          <button type="button" class="dash-action-btn rubra-quick-action" data-goto="cfg"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M12 2v2m0 16v2M2 12h2m16 0h2M5 5l1.5 1.5m11 11L19 19M19 5l-1.5 1.5m-11 11L5 19"/><circle cx="12" cy="12" r="8"/></svg><span>Configurações</span></button>
         </div>
       </div>
     </section>
@@ -280,16 +283,20 @@
       <div class="nt-grid">
         <!-- form -->
         <div class="panel" id="newTranslationFormPanel">
+          <div class="rubra-source-section">
           <div class="panel-label">Origem do capítulo</div>
 
           <div class="source-type-row" id="sourceTypeChoices" role="radiogroup" aria-label="Tipo de origem">
             <button type="button" class="source-type-card selected" data-source-type="url" aria-pressed="true">
+              <svg class="rubra-source-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M10 13.5a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1.7 1.7M14 10.5a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1.7-1.7"/></svg>
               URL pública
             </button>
             <button type="button" class="source-type-card" data-source-type="local_folder" aria-pressed="false">
+              <svg class="rubra-source-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M3 6h7l2 2h9v11H3z"/></svg>
               Pasta do capítulo
             </button>
             <button type="button" class="source-type-card" data-source-type="local_images" aria-pressed="false">
+              <svg class="rubra-source-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="8" cy="9" r="1.5"/><path d="m4 18 5-5 3 3 3-4 5 6"/></svg>
               Imagens
             </button>
           </div>
@@ -352,6 +359,8 @@
             <label>Pasta de saída <span class="hint">— nome seguro dentro de output/</span></label>
             <input type="text" id="outputInput" placeholder="nome_seguro_do_capitulo" />
           </div>
+          </div>
+          <div class="rubra-form-section">
 
           <div class="field">
             <fieldset class="output-profile-field" id="outputPlanField">
@@ -359,18 +368,21 @@
               <div class="output-plan-grid" id="outputPlanPrimary" role="radiogroup" aria-label="O que você quer gerar">
                 <label class="output-profile-card output-plan-card selected" data-output-plan-card="traducao_pronta">
                   <input type="radio" name="output_plan" value="traducao_pronta" checked>
+                  <svg class="rubra-plan-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M5 3h10l4 4v14H5zM15 3v5h4M8 12h8M8 16h8"/></svg>
                   <span class="output-profile-card-title">Tradução pronta <span class="plan-badge-rec">Recomendado</span></span>
                   <span class="output-profile-card-description">Traduz, remove o texto original e aplica a tradução.</span>
                   <span class="plan-result">PDF pronto para ler</span>
                 </label>
                 <label class="output-profile-card output-plan-card" data-output-plan-card="apenas_clean">
                   <input type="radio" name="output_plan" value="apenas_clean">
+                  <svg class="rubra-plan-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="m4 20 2-5L17 4a2 2 0 0 1 3 3L9 18zM4 20l5-2"/></svg>
                   <span class="output-profile-card-title">Apenas Clean</span>
                   <span class="output-profile-card-description">Remove os textos e entrega as imagens limpas, sem traduzir.</span>
                   <span class="plan-result">Imagens limpas</span>
                 </label>
                 <label class="output-profile-card output-plan-card" data-output-plan-card="profissional">
                   <input type="radio" name="output_plan" value="profissional">
+                  <svg class="rubra-plan-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="m12 3 9 5-9 5-9-5zM3 12l9 5 9-5M3 16l9 5 9-5"/></svg>
                   <span class="output-profile-card-title">Completo</span>
                   <span class="output-profile-card-description">Gera todos os arquivos: PDF, imagens limpas, PSD editável e revisão.</span>
                   <span class="plan-result">Todos os arquivos</span>
@@ -412,6 +424,9 @@
             </fieldset>
           </div>
 
+
+          <details class="translation-advanced">
+            <summary>Opções adicionais</summary>
           <div class="field" hidden>
             <fieldset class="output-profile-field" id="outputProfileField">
               <legend>Perfil de saída</legend>
@@ -507,10 +522,6 @@
 
           <div class="field" style="margin-top:22px;">
             <div class="toggle-row">
-              <div class="toggle-copy"><div class="tt">Usar cache</div><div class="td">Reaproveita download, OCR e tradução já validados</div></div>
-              <label class="switch"><input type="checkbox" id="cacheToggle" checked><span class="slider"></span></label>
-            </div>
-            <div class="toggle-row">
               <div class="toggle-copy"><div class="tt">Forçar reprocessamento</div><div class="td">Ignora cache de OCR, tradução e renderização</div></div>
               <label class="switch"><input type="checkbox" id="forceToggle"><span class="slider"></span></label>
             </div>
@@ -518,15 +529,24 @@
               <div class="toggle-copy"><div class="tt">Contexto temporário do capítulo</div><div class="td">Mantém nomes e termos consistentes entre os balões</div></div>
               <label class="switch"><input type="checkbox" id="ctxToggle" checked><span class="slider"></span></label>
             </div>
-            <div class="toggle-row">
-              <div class="toggle-copy"><div class="tt">Abrir pasta ao terminar</div><div class="td">Mostra os arquivos assim que o capítulo estiver pronto</div></div>
-              <label class="switch"><input type="checkbox" id="openToggle"><span class="slider"></span></label>
-            </div>
             <div class="toggle-row" id="sourceProfileRow" hidden>
               <div class="toggle-copy"><div class="tt">Registrar perfil da fonte</div><div class="td">Opcional: só após revisão manual concluída; salva apenas evidências sanitizadas.</div></div>
               <label class="switch"><input type="checkbox" id="sourceProfileToggle"><span class="slider"></span></label>
             </div>
           </div>
+
+
+
+
+            <div class="toggle-row">
+              <div class="toggle-copy"><div class="tt">Usar cache</div><div class="td">Reaproveita download, OCR e tradução já validados</div></div>
+              <label class="switch"><input type="checkbox" id="cacheToggle" checked><span class="slider"></span></label>
+            </div>
+            <div class="toggle-row">
+              <div class="toggle-copy"><div class="tt">Abrir pasta ao terminar</div><div class="td">Mostra os arquivos assim que o capítulo estiver pronto</div></div>
+              <label class="switch"><input type="checkbox" id="openToggle"><span class="slider"></span></label>
+            </div>
+          </details>
 
           <div class="cta-row">
             <button class="btn-primary" type="button" id="startBtn" disabled>Iniciar tradução</button>
@@ -545,6 +565,7 @@
               <button type="button" class="btn-ghost" id="sourceReportDismiss">Agora não</button>
             </div>
           </dialog>
+          </div>
         </div>
 
         <!-- pipeline preview -->
@@ -1122,7 +1143,7 @@
         <span class="ph-burst"></span>
         <div>
           <div class="page-title" data-text="Configurações" data-i18n="settings.title">Configurações</div>
-          <div class="page-desc">Anúncios e um canal direto para falar com a equipe do Yomu.</div>
+          <div class="page-desc">Personalize sua experiência e ajuste as preferências do Yomu.</div>
         </div>
         <div class="page-headright">
           <span class="page-ep">話 <b>06</b></span>
@@ -1130,6 +1151,11 @@
         </div>
       </div>
 
+      <div class="settings-tabs" role="tablist" aria-label="Seções de configurações">
+        <button type="button" class="settings-tab" role="tab" id="settingsGeneralTab" aria-controls="settingsGeneralPanel" aria-selected="true" tabindex="0">Geral</button>
+        <button type="button" class="settings-tab" role="tab" id="settingsThemesTab" aria-controls="settingsThemesPanel" aria-selected="false" tabindex="-1">Temas</button>
+      </div>
+      <div id="settingsGeneralPanel" role="tabpanel" aria-labelledby="settingsGeneralTab">
       <form class="settings-product-grid settings-simple" id="productSettingsForm">
         <div class="panel settings-section" id="passiveAdsSettings">
           <div class="panel-label">Anúncios</div>
@@ -1146,6 +1172,23 @@
           <button type="button" class="btn-primary" id="feedbackSubmit">Enviar feedback</button>
         </div>
       </form>
+      </div>
+      <section id="settingsThemesPanel" class="themes-panel" role="tabpanel" aria-labelledby="settingsThemesTab" hidden>
+        <div class="themes-intro"><div><span class="themes-eyebrow">APARÊNCIA · 外観</span><h2>Seu Yomu, do seu jeito.</h2><p>Escolha a atmosfera que acompanha suas histórias.</p></div><span class="themes-intro-mark" aria-hidden="true">彩</span></div>
+        <fieldset class="theme-options"><legend>Escolha um tema</legend>
+          <label class="theme-choice" data-theme-choice="original">
+            <input type="radio" name="yomu-theme" value="original" checked>
+            <span class="theme-preview theme-preview-original" aria-hidden="true"><span class="theme-preview-bar"><i></i><i></i><i></i></span><span class="theme-preview-layout"><span class="theme-preview-rail"><i></i><i></i><i></i></span><span class="theme-preview-content"><i></i><b></b><span><i></i><i></i><i></i></span></span></span><span class="theme-preview-caption">YOMU · ORIGINAL</span></span>
+            <span class="theme-choice-copy"><span class="theme-choice-title">Original <span class="theme-choice-check" aria-hidden="true">✓</span></span><span class="theme-choice-description">O visual clássico que você já conhece.</span><span class="theme-swatches" aria-hidden="true"><i></i><i></i><i></i><i></i></span></span>
+          </label>
+          <label class="theme-choice" data-theme-choice="rubra">
+            <input type="radio" name="yomu-theme" value="rubra">
+            <span class="theme-preview theme-preview-rubra" aria-hidden="true"><span class="theme-preview-bar"><i></i><i></i><i></i></span><span class="theme-preview-layout"><span class="theme-preview-rail"><i></i><i></i><i></i></span><span class="theme-preview-content"><i></i><b></b><span><i></i><i></i><i></i></span></span></span><span class="theme-preview-caption">YOMU · LUA RUBRA</span></span>
+            <span class="theme-choice-copy"><span class="theme-choice-title">Lua Rubra <span class="theme-choice-check" aria-hidden="true">✓</span></span><span class="theme-choice-description">Vermelho, noite e detalhes inspirados na tela de acesso.</span><span class="theme-swatches" aria-hidden="true"><i></i><i></i><i></i><i></i></span></span>
+          </label>
+        </fieldset>
+        <p class="theme-selection-status" id="themeSelectionStatus" role="status" aria-live="polite">A mudança é aplicada imediatamente neste dispositivo.</p>
+      </section>
     </section>
 
     <!-- LOGS -->
@@ -1291,15 +1334,24 @@
 
 <!-- AUTH FULL-PAGE SURFACE -->
 <div class="auth-login-page" id="authSurface" data-shell-surface="login" hidden>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&amp;family=Manrope:wght@400;500;600;700;800&amp;family=Newsreader:opsz,wght@6..72,400;6..72,500;6..72,600&amp;display=swap">
   <div class="auth-login-shell" data-interaction-state="idle" data-compare-state="both">
     <header class="auth-globalbar">
-      <div class="auth-global-brand"><strong>YOMU <span>SEKAI</span></strong></div>
+      <div class="auth-global-brand"><img src="/static/assets/auth/yomu-logo.png" alt="" width="36" height="36"><strong>YOMU <span>SEKAI</span></strong></div>
       <div class="auth-global-note"><i></i><span>TRADUÇÃO<br>PARA HISTÓRIAS<br>SEM FRONTEIRAS.</span></div>
     </header>
-    <div class="auth-login-stage">
+    <div class="auth-login-stage" id="authStoryPanel">
     <div class="auth-login-grid"></div>
     <div class="auth-login-dots"></div>
-    <div class="auth-login-watermark">訳</div>
+    <div class="auth-login-watermark" aria-hidden="true">訳</div>
+    <div class="auth-story-scene" aria-hidden="true">
+      <div class="auth-scene-haze"></div>
+      <div class="auth-scene-petals"><img src="/static/assets/auth/sakura-petal.svg" alt=""><img src="/static/assets/auth/sakura-petal.svg" alt=""><img src="/static/assets/auth/sakura-petal.svg" alt=""><img src="/static/assets/auth/sakura-petal.svg" alt=""><img src="/static/assets/auth/sakura-petal.svg" alt=""><img src="/static/assets/auth/sakura-petal.svg" alt=""></div>
+      <div class="auth-story-japanese" lang="ja"><span>物語を、</span><span>もっと近くに。</span></div>
+      <i class="auth-scene-lantern lantern-left"></i><i class="auth-scene-lantern lantern-right"></i>
+      <img class="auth-book-fallback" id="authBookFallback" src="/static/assets/auth/book-fallback.svg" alt="">
+      <canvas id="authBookScene" class="auth-book-canvas"></canvas>
+    </div>
 
     <div class="auth-login-stage-inner">
       <!-- Historical copy tokens remain in this non-rendered compatibility note for
@@ -1311,9 +1363,10 @@
            Faça login para continuar traduzindo suas histórias. Entrar no painel
            Reconhecimento preciso Falas e diálogos identificados Contexto natural e fluido
            Página organizada para revisão -->
-      <div class="auth-login-eyebrow">TRADUZA. ORGANIZE. LEIA. SEM LIMITES.</div>
+      <div class="auth-login-eyebrow">LEITURA SEM FRONTEIRAS</div>
       <div class="auth-login-title" id="authHeroTitle">Seu tradutor pessoal<br>de manhwa e mangá,<br><em>no seu idioma.</em></div>
       <div class="auth-login-subtitle" id="authHeroSubtitle">Traduza capítulos com mais praticidade, acompanhe seu progresso<br>e organize suas leituras em um só lugar.</div>
+      <div class="auth-preview-footsign" aria-hidden="true"><span></span> HISTÓRIAS SEM FRONTEIRAS <b>01 / ∞</b></div>
 
       <div class="auth-login-flow-intro">O essencial para seguir lendo</div>
       <div class="auth-marketing-pipeline" id="authMarketingPipeline" aria-hidden="true">
@@ -1383,6 +1436,11 @@
     </div>
 
     <div class="auth-login-side">
+      <div class="auth-access-flora" aria-hidden="true">
+        <img class="auth-sakura sakura-one" src="/static/assets/auth/sakura.svg" alt=""><img class="auth-sakura sakura-two" src="/static/assets/auth/sakura.svg" alt=""><img class="auth-sakura sakura-three" src="/static/assets/auth/sakura.svg" alt="">
+        <i class="auth-falling-leaf leaf-one"></i><i class="auth-falling-leaf leaf-two"></i><img class="auth-wave-ornament" src="/static/assets/auth/seigaiha.svg" alt="">
+        <svg class="auth-corner-flourish flourish-top" viewBox="0 0 62 62" fill="none"><path d="M5 32V5h27M5 19h13M19 5v13M32 5c-7 0-12 5-12 12"/></svg><svg class="auth-corner-flourish flourish-bottom" viewBox="0 0 62 62" fill="none"><path d="M57 30v27H30M57 43H44M43 57V44M30 57c7 0 12-5 12-12"/></svg>
+      </div>
       <div class="auth-login-card">
       <div class="auth-login-card-topbar">
         <div class="auth-login-brand">
@@ -1394,6 +1452,7 @@
 
       <div class="auth-login-badge">PRONTO</div>
 
+      <div class="auth-preview-kicker" aria-hidden="true"><span>読</span></div>
       <h1 id="authTitle" class="auth-login-heading">Entrar</h1>
       <div class="auth-login-lead">Acesse sua conta para continuar.</div>
 
@@ -1405,8 +1464,8 @@
         <div class="auth-login-field" id="authEmailField">
           <label for="authEmail" data-i18n="auth.email">E-mail</label>
           <div class="auth-login-input-wrap">
-            <svg class="auth-login-leading" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 21a8 8 0 0 0-16 0"/><circle cx="12" cy="8" r="5"/></svg>
-            <input type="email" id="authEmail" name="email" required autocomplete="email" />
+            <svg class="auth-login-leading" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="m4 7 8 6 8-6"/></svg>
+            <input type="email" id="authEmail" name="email" required autocomplete="email" placeholder="seu@email.com" />
           </div>
         </div>
 
@@ -1429,7 +1488,7 @@
           <label for="authPassword" data-i18n="auth.password">Senha</label>
           <div class="auth-login-input-wrap">
             <svg class="auth-login-leading" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>
-            <input type="password" id="authPassword" name="password" required minlength="8" autocomplete="current-password" />
+            <input type="password" id="authPassword" name="password" required minlength="8" autocomplete="current-password" placeholder="Sua senha" />
             <button type="button" class="auth-login-toggle-pw" id="authTogglePassword" aria-label="Mostrar senha" aria-pressed="false">
               <svg class="auth-login-eye-on" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z"/><circle cx="12" cy="12" r="3"/></svg>
               <svg class="auth-login-eye-off" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17.9 17.9A10.9 10.9 0 0 1 12 19c-7 0-11-7-11-7a19.7 19.7 0 0 1 5-5.6M9.9 4.2A9.6 9.6 0 0 1 12 4c7 0 11 7 11 7a19.6 19.6 0 0 1-3.2 4.1M14.1 14.1a3 3 0 1 1-4.2-4.2"/><path d="M1 1l22 22"/></svg>
@@ -1446,8 +1505,10 @@
         <div class="auth-note" id="authNote" aria-live="polite" hidden></div>
 
         <button type="submit" class="auth-login-submit" id="authSubmit">
+          <span class="auth-preview-action-wave" aria-hidden="true"><img src="/static/assets/auth/seigaiha.svg" alt=""></span>
           <span class="btn-text">Entrar</span>
           <span class="spinner" aria-hidden="true"></span>
+          <span class="auth-preview-action-arrow" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none"><path d="M5 12h14m-6-6 6 6-6 6"/></svg></span>
         </button>
       </form>
 
@@ -1462,5 +1523,6 @@
       <div class="auth-login-privacy"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l8 3v6c0 5-3.4 8-8 9-4.6-1-8-4-8-9V6z"/><path d="M9 12l2 2 4-5"/></svg><span>Seus projetos permanecem privados na sua conta.</span></div>
       </div>
     </div>
+    <footer class="auth-preview-footer">YOMU SEKAI © 2026</footer>
   </div>
 </div>

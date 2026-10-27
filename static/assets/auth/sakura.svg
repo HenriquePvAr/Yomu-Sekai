@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" fill="none">
+  <defs>
+    <linearGradient id="petal" x1="33" y1="12" x2="65" y2="72" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FFAA86"/><stop offset=".46" stop-color="#F2544B"/><stop offset="1" stop-color="#A91F35"/>
+    </linearGradient>
+    <linearGradient id="vein" x1="50" y1="14" x2="50" y2="52" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FFE2C2" stop-opacity=".7"/><stop offset="1" stop-color="#FFE2C2" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+  <g stroke="#FFAD8B" stroke-opacity=".55" stroke-width="1.2">
+    <g><path d="M50 51C40 40 34 30 37 20c2-9 11-13 18-8 10 7 7 22-5 39Z" fill="url(#petal)"/><path d="M50 49 49 16" stroke="url(#vein)"/></g>
+    <g transform="rotate(72 50 50)"><path d="M50 51C40 40 34 30 37 20c2-9 11-13 18-8 10 7 7 22-5 39Z" fill="url(#petal)"/><path d="M50 49 49 16" stroke="url(#vein)"/></g>
+    <g transform="rotate(144 50 50)"><path d="M50 51C40 40 34 30 37 20c2-9 11-13 18-8 10 7 7 22-5 39Z" fill="url(#petal)"/><path d="M50 49 49 16" stroke="url(#vein)"/></g>
+    <g transform="rotate(216 50 50)"><path d="M50 51C40 40 34 30 37 20c2-9 11-13 18-8 10 7 7 22-5 39Z" fill="url(#petal)"/><path d="M50 49 49 16" stroke="url(#vein)"/></g>
+    <g transform="rotate(288 50 50)"><path d="M50 51C40 40 34 30 37 20c2-9 11-13 18-8 10 7 7 22-5 39Z" fill="url(#petal)"/><path d="M50 49 49 16" stroke="url(#vein)"/></g>
+  </g>
+  <circle cx="50" cy="50" r="7" fill="#FFD49A" stroke="#FFF0D0" stroke-width="1.5"/>
+  <circle cx="50" cy="50" r="2" fill="#A93631"/>
+</svg>
