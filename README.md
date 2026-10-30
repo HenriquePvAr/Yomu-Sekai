@@ -14,21 +14,28 @@ O fluxo principal atual é voltado a capítulos web com texto-fonte em inglês e
 
 ## Demonstração visual
 
-Capturas da interface local (`http://127.0.0.1:8080`), versão 0.9.1-beta.18. Os anúncios foram
-ocultados e as prévias das fontes, desfocadas: o repositório não publica páginas nem capas de
-terceiros.
+Interface local do Yomu Sekai (`http://127.0.0.1:8080`), versão 0.9.1-beta.18,
+com o tema **Lua Rubra**. Capturas e vídeo atualizados em 29/10/2026.
 
-![Tela de entrada](docs/assets/screenshots/login.png)
+### Tela de entrada
+
+![Demonstração animada da tela de entrada com o tema Lua Rubra](docs/assets/videos/login-lua-rubra.gif)
+
+[Vídeo original em MP4](docs/assets/videos/login-lua-rubra.mp4)
 
 | Início | Nova tradução |
 | --- | --- |
 | ![Início](docs/assets/screenshots/inicio.png) | ![Nova tradução](docs/assets/screenshots/nova_traducao.png) |
 | **Fontes** | **Fila** |
 | ![Fontes](docs/assets/screenshots/fontes.png) | ![Fila](docs/assets/screenshots/fila.png) |
-| **Capítulos traduzidos** | **Atualizações** |
-| ![Capítulos traduzidos](docs/assets/screenshots/capitulos.png) | ![Atualizações](docs/assets/screenshots/atualizacoes.png) |
+| **Capítulos traduzidos** | **Leitor** |
+| ![Capítulos traduzidos](docs/assets/screenshots/capitulos.png) | ![Leitor](docs/assets/screenshots/leitor.png) |
+| **Recompensas** | **Scan Studio** |
+| ![Recompensas](docs/assets/screenshots/recompensas.png) | ![Scan Studio](docs/assets/screenshots/scans.png) |
+| **Comunidade** | **Atualizações** |
+| ![Comunidade](docs/assets/screenshots/comunidade.png) | ![Atualizações](docs/assets/screenshots/atualizacoes.png) |
 
-![Configurações](docs/assets/screenshots/configuracoes.png)
+![Configurações e seleção de temas](docs/assets/screenshots/configuracoes.png)
 
 ## Principais recursos
 
