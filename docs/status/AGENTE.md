@@ -30,20 +30,34 @@ externo), move o card para `blocked` com `blockedBy` descrevendo exatamente o qu
 Fica em `yomu/` (runtime modular canônico). Números e limites em constante com nome, num lugar só.
 Quando sair barato, configurável. Entre opções parecidas, a mais fácil de desfazer.
 
-## Comandos de teste e build
+## Ambiente de execução (máquina remota)
 
-```powershell
-python -m pytest -q          # suíte hermética
-python run_webtoon.py --help  # flags reais da CLI
+O agente roda numa máquina remota Linux com Python. O repositório **já está clonado no CWD**
+quando a sessão começa — nunca rodar `git clone`. Para buscar a branch `dev` (clone shallow
+só traz `main`):
+
+```bash
+git fetch origin dev:refs/remotes/origin/dev
+git checkout -b dev origin/dev 2>/dev/null || git checkout dev
+```
+
+Para instalar dependências e rodar a suíte hermética **na própria máquina remota**:
+
+```bash
+pip install -r requirements.txt -q 2>/dev/null || true
+python -m pytest -q
 ```
 
 A suíte hermética não toca banco de produção nem chama provider real. O agente nunca contorna
-esse guard.
+esse guard. Falhas não relacionadas ao card em andamento: registrar e continuar.
 
 ## Ciclo de cada rodada
 
-1. Anexar o repositório com `add_repo` (owner `HenriquePvAr`, repo `Yomu-Sekai`, access `push`),
-   clonar, `git fetch`, checkout de `dev`, ler `docs/status/board/board.js`, este arquivo e
+1. Anexar o repositório com `add_repo` (owner `HenriquePvAr`, repo `Yomu-Sekai`, access `push`).
+   **NÃO clonar** — o repo já está no CWD. Confirmar com `git rev-parse HEAD`.
+   Configurar identidade antes de qualquer commit:
+   `git config user.name "HenriquePvAr" && git config user.email "henriquepaiva128@gmail.com"`.
+   Fazer checkout de `dev` (ver seção acima), ler `docs/status/board/board.js`, este arquivo e
    `docs/status/decisoes.md`.
 2. Atualizar o quadro pelo git: branch mergeada na main → `prod` com SHA; commits de outras
    pessoas → criar ou atualizar card.
