@@ -23,11 +23,3 @@ As suítes frontend podem ser executadas individualmente com:
 node --experimental-vm-modules tests/test_chapter_reader.mjs
 ```
 
-Não execute smokes de rede ou providers pagos sem opt-in explícito e escopo autorizado.
-
-## Git e segurança
-
-- Nunca versione `.env`, tokens, chaves privadas, credenciais, caches, virtualenvs ou dados de usuário.
-- Mantenha produção e pesquisa separadas; não transforme resultados experimentais em afirmações de produto sem validação.
-- Prefira commits pequenos com escopo descritivo. Não faça push, release ou deploy sem solicitação explícita.
-- Antes de concluir, confira `git diff --check`, os testes relevantes e `git status`.
