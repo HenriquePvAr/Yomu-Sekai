@@ -63,29 +63,47 @@ class TranslatorGoogle:
         return text
 
 
-def ocr_code_for_choice(choice):
-    """Return the OCR language code without constructing a translator."""
-    return {"1": "jpn", "2": "kor"}.get(str(choice).strip(), "eng")
+_OCR_CODE_BY_CHOICE: dict[str, str] = {
+    "1": "jpn", "2": "kor", "3": "eng",
+    "jpn": "jpn", "japan": "jpn", "ja": "jpn",
+    "kor": "kor", "korean": "kor", "ko": "kor",
+    "eng": "eng", "en": "eng",
+    "zh": "ch", "ch": "ch", "chinese": "ch",
+    "ru": "ru", "cyrillic": "ru",
+    "es": "es", "latin": "es",
+}
+
+
+def ocr_code_for_choice(choice: str) -> str:
+    """Return the OCR language code for *choice* without constructing a translator."""
+    return _OCR_CODE_BY_CHOICE.get(str(choice or "").strip().lower(), "eng")
+
+
+_LANG_META: dict[str, tuple[str, str, str, str]] = {
+    # choice → (nllb_lang, google_lang, ocr_code, source_language_label)
+    "1":       ("jpn_Jpan", "ja", "jpn", "japones"),
+    "ja":      ("jpn_Jpan", "ja", "jpn", "japones"),
+    "jpn":     ("jpn_Jpan", "ja", "jpn", "japones"),
+    "japan":   ("jpn_Jpan", "ja", "jpn", "japones"),
+    "2":       ("kor_Hang", "ko", "kor", "coreano"),
+    "ko":      ("kor_Hang", "ko", "kor", "coreano"),
+    "kor":     ("kor_Hang", "ko", "kor", "coreano"),
+    "korean":  ("kor_Hang", "ko", "kor", "coreano"),
+    "zh":      ("zho_Hans", "zh", "ch",  "chines"),
+    "ch":      ("zho_Hans", "zh", "ch",  "chines"),
+    "chinese": ("zho_Hans", "zh", "ch",  "chines"),
+    "ru":      ("rus_Cyrl", "ru", "ru",  "russo"),
+    "cyrillic":("rus_Cyrl", "ru", "ru",  "russo"),
+    "es":      ("spa_Latn", "es", "es",  "espanhol"),
+    "latin":   ("spa_Latn", "es", "es",  "espanhol"),
+}
+_LANG_META_EN = ("eng_Latn", "en", "eng", "ingles")
 
 
 def get_translator(choice, *, translation_provider=None):
-    choice = str(choice).strip()
+    choice = str(choice or "").strip().lower()
 
-    if choice == "1":
-        nllb_lang = "jpn_Jpan"
-        google_lang = "ja"
-        ocr_code = "jpn"
-        source_language = "japones"
-    elif choice == "2":
-        nllb_lang = "kor_Hang"
-        google_lang = "ko"
-        ocr_code = "kor"
-        source_language = "coreano"
-    else:
-        nllb_lang = "eng_Latn"
-        google_lang = "en"
-        ocr_code = "eng"
-        source_language = "ingles"
+    nllb_lang, google_lang, ocr_code, source_language = _LANG_META.get(choice, _LANG_META_EN)
 
     mode = (config.TRANSLATION_MODE or "google").lower()
 
