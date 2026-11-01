@@ -53,6 +53,11 @@ esse guard. Falhas não relacionadas ao card em andamento: registrar e continuar
 
 ## Ciclo de cada rodada
 
+O agente processa **todos os cards disponíveis** em uma única sessão — não para após um card.
+Só encerra quando não sobrar nenhum card elegível ou o freio disparar.
+
+**Início da sessão (uma vez):**
+
 1. Anexar o repositório com `add_repo` (owner `HenriquePvAr`, repo `Yomu-Sekai`, access `push`).
    **NÃO clonar** — o repo já está no CWD. Confirmar com `git rev-parse HEAD`.
    Configurar identidade antes de qualquer commit:
@@ -60,11 +65,14 @@ esse guard. Falhas não relacionadas ao card em andamento: registrar e continuar
    Fazer checkout de `dev` (ver seção acima), ler `docs/status/board/board.js`, este arquivo e
    `docs/status/decisoes.md`.
 2. Atualizar o quadro pelo git: branch mergeada na main → `prod` com SHA; commits de outras
-   pessoas → criar ou atualizar card.
-3. Freio: com 3 ou mais branches `feat/` ou `fix/` abertas sem merge, não começar outro card;
-   atualizar o quadro, avisar no relatório e encerrar.
+   pessoas → criar ou atualizar card. Republicar o quadro neste ponto.
+
+**Loop por card (repetir até não sobrar card elegível):**
+
+3. Freio: com 5 ou mais branches `feat/` ou `fix/` abertas sem merge, não começar outro card;
+   avisar no relatório e encerrar o loop.
 4. Escolher: card em `dev` (continuar); senão, o de `design` com menor `fila`. Nenhum disponível:
-   atualizar o quadro e encerrar sem mensagem.
+   encerrar o loop.
 5. Ler o código atual da área; listar o que é regra de negócio; decidir ou mover para `blocked`.
 6. Implementar em branch `feat/<card-id>` (ou `fix/<card-id>`) criada a partir de `dev` atualizada.
    Estilo do projeto: Python 3.11, testes herméticos, sem comentários desnecessários.
@@ -74,6 +82,11 @@ esse guard. Falhas não relacionadas ao card em andamento: registrar e continuar
 10. Relatório `docs/status/relatorios/AAAA-MM-DD-<id>.md`: o que mudou; decisões (por quê, outras
     opções, como trocar); como testar (`git fetch origin` + `git switch feat/<id>`); o que precisa
     de HenriquePvAr.
-11. Quadro: reler cada card tocado, subir `updatedAt`, validar, commit em `dev`, `git pull --no-rebase
-    origin dev`, push, republicar na mesma URL de artifact (ler o artifact antes).
-12. Mandar o relatório para HenriquePvAr.
+11. Quadro: reler cada card tocado, subir `updatedAt`, validar, commit em `dev`,
+    `git pull --no-rebase origin dev`, push, republicar na mesma URL de artifact (ler antes).
+12. Voltar ao passo 3 (próximo card).
+
+**Fim da sessão:**
+
+13. Mandar o relatório consolidado a HenriquePvAr: lista de cards concluídos, decisions, branches
+    criadas, como testar cada uma e o que ainda precisa dele.
