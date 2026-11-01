@@ -111,6 +111,14 @@ def build_parser():
             "Quando informado, a execucao falha fechada se outro provider for efetivado."
         ),
     )
+    parser.add_argument(
+        "--source-lang",
+        default="3",
+        help=(
+            "Idioma de origem do capitulo: 3=ingles (padrao), 1=japones, 2=coreano, "
+            "ou codigo direto ja/ko/zh/ru/es."
+        ),
+    )
     return parser
 
 
@@ -177,6 +185,7 @@ def main(argv=None):
         job_run_id=str(os.getenv("TRADUTOR_JOB_RUN_ID", "") or ""),
         job_id=str(os.getenv("TRADUTOR_JOB_ID", "") or ""),
         resume_checkpoint=str(os.getenv("TRADUTOR_RESUME_CHECKPOINT", "") or "") == "1",
+        source_lang=str(getattr(args, "source_lang", None) or "3"),
     )
     print(
         f"PIPELINE_CONFIG_READY force={bool(benchmark_args.force)} "

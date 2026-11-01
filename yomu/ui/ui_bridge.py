@@ -6526,6 +6526,7 @@ class UiBridge:
             output_format=normalized.get("output_format", "pdf"),
             typesetting_mode=normalized.get("typesetting_mode", "on"),
             python_executable=sys.executable,
+            source_lang=normalized.get("source_lang", "3"),
         )
         details = suggest_chapter_details(normalized["url"])
         configuration = {
@@ -6551,6 +6552,7 @@ class UiBridge:
             "source_analysis": source_analysis or {},
             "source_selection": source_selection or {},
             "chapter_slug": normalized["slug"],
+            "source_lang": normalized.get("source_lang", "3"),
         }
         configuration.update(self._output_plan_configuration_snapshot(normalized))
         configuration.update(self._translation_configuration_snapshot(payload, normalized))
@@ -7798,6 +7800,16 @@ class UiBridge:
             translation_provider=self._normalize_translation_provider(payload),
             output_format=output_format,
         )
+        _VALID_SOURCE_LANGS = frozenset({
+            "3", "en", "eng",
+            "1", "ja", "jpn", "japan",
+            "2", "ko", "kor", "korean",
+            "zh", "ch", "chinese",
+            "ru", "cyrillic",
+            "es", "latin",
+        })
+        raw_lang = str(payload.get("source_lang") or "3").strip().lower()
+        source_lang = raw_lang if raw_lang in _VALID_SOURCE_LANGS else "3"
         return {
             "id": str(payload.get("id") or uuid.uuid4()),
             "url": url,
@@ -7816,6 +7828,7 @@ class UiBridge:
             "translation_enabled": translation_enabled,
             "output_format": output_format,
             "output_profile": output_profile,
+            "source_lang": source_lang,
             # Output-plan provenance: what the user asked to produce vs what will run.
             # Present for every job (inferred for legacy payloads) so the manifest and
             # finish screen can filter truthfully by requested operations.

@@ -246,6 +246,7 @@ def build_run_command(
     typesetting_mode: str = "on",
     python_executable: str | None = None,
     output_path: Path | None = None,
+    source_lang: str | None = None,
 ) -> list[str]:
     from yomu.download.sources.chapter_source import select_adapter
 
@@ -329,6 +330,9 @@ def build_run_command(
             command.extend(["--source-candidate-id", value])
     if open_output:
         command.append("--open-output")
+    effective_lang = str(source_lang or "").strip()
+    if effective_lang and effective_lang != "3":
+        command.extend(["--source-lang", effective_lang])
     return command
 
 
