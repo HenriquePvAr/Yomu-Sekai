@@ -472,7 +472,9 @@ def segment_words(token: str) -> list[str] | None:
     return split
 
 
-def weak_label_semantic_promotion_allowed(legacy_label: str, text: str) -> bool:
+def weak_label_semantic_promotion_allowed(
+    legacy_label: str, text: str, *, source_lang: str = "en"
+) -> bool:
     """Whether an uncertain/decorative legacy label has enough story evidence.
 
     This is deliberately stricter than ``has_semantic_content``.  A single label
@@ -481,10 +483,17 @@ def weak_label_semantic_promotion_allowed(legacy_label: str, text: str) -> bool:
     weak visual bucket.  Promotion therefore requires sentence/prose shape: either
     several real words, or a shorter punctuated clause with source-language
     function markers.
+
+    For non-English scripts the English word-detection logic does not apply.
+    Any text with 4+ characters is treated as semantic (conservative: avoids
+    mis-classifying CJK/Cyrillic speech as SFX).
     """
+    from yomu.ocr.ocr_models import source_is_english
     label = str(legacy_label or "").strip().lower()
     if label not in _WEAK_LABELS:
         return True
+    if not source_is_english(source_lang):
+        return len(str(text or "").strip()) >= 4
     body = str(text or "")
     # Glued OCR ("THEMORE WERUNIT, THEEASIER") hides the words a sentence is
     # made of; split a non-word into dictionary words before counting.

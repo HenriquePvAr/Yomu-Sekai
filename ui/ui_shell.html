@@ -462,9 +462,20 @@
 
           <div class="field">
             <label>Idioma original</label>
-            <select id="langSelect" disabled>
-              <option>3 · Inglês (pipeline atual)</option>
+            <select id="langSelect">
+              <option value="3">Inglês</option>
+              <option value="1">Japonês</option>
+              <option value="2">Coreano</option>
+              <option value="zh">Chinês simplificado</option>
+              <option value="ru">Russo / Cirílico</option>
+              <option value="es">Espanhol / Latino</option>
             </select>
+          </div>
+
+          <div class="field" id="nameGlossaryField">
+            <label for="nameGlossaryInput">Glossário de nomes</label>
+            <textarea id="nameGlossaryInput" rows="3" placeholder="Sunless = Sunny&#10;Jinwoo = Jin-woo" spellcheck="false"></textarea>
+            <small class="field-hint">Um por linha: NomeIngles = NomePtBr (salvo por série)</small>
           </div>
 
           <div class="field" id="translationProviderField" hidden>

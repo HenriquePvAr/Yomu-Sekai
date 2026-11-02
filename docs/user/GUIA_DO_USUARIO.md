@@ -1,6 +1,6 @@
 # Yomu Sekai — Guia do Usuário
 
-> **Base verificada:** `b990cc8` · **Revisado em:** 2026-10-26
+> **Base verificada:** `b990cc8` · **Revisado em:** 2026-11-02 · Seções sobre idioma original e glossário de nomes verificadas sobre `7e58e76` (feat/LANG-01) e `22f595d` (feat/GLOSSARY-01) — aguardam merge em `main`
 > **Para quem é:** Scans, tradutores, editores e testadores da Beta. Nenhum conhecimento
 > técnico é necessário.
 
@@ -257,8 +257,18 @@ capítulo.
 
 ### Modo de processamento
 
-Uma lista suspensa, logo abaixo de **Idioma original** (fixo em inglês). O padrão é
-**Qualidade**. Abaixo dela, uma linha curta descreve o modo selecionado.
+Uma lista suspensa, logo abaixo de **Idioma original**. O padrão é **Qualidade**. Abaixo
+dela, uma linha curta descreve o modo selecionado.
+
+**Idioma original** — seleciona em qual idioma o texto do capítulo está escrito. A versão
+atual aceita: **Inglês** (padrão), **Japonês**, **Coreano**, **Chinês**, **Russo** e
+**Espanhol**. O programa lê e traduz o texto no idioma escolhido; se o idioma estiver errado
+o OCR vai ler mal. Na primeira vez que você usar um idioma diferente do inglês, o programa
+pode demorar alguns minutos a mais para baixar o modelo de reconhecimento correspondente —
+isso acontece uma única vez por idioma.
+
+> **Disponibilidade:** idiomas além do inglês estão em revisão final (feat/LANG-01) e chegam
+> num próximo update. Na versão atual da main, o campo aparece fixo em **Inglês**.
 
 | Modo | Quando usar |
 | --- | --- |
@@ -324,6 +334,29 @@ escolher.
 Ao abrir uma tradução nova, o formulário começa com **Forçar reprocessamento** ligado e
 **Usar cache** desligado, para processar a fonte de novo. Inverta as duas opções se quiser
 reaproveitar o que já foi validado antes.
+
+### Glossário de nomes
+
+Abaixo das opções há um campo **Glossário de nomes** onde você define substituições de nomes
+específicas para a série. Cada linha deve ter o formato:
+
+```
+Nome original = Nome preferido
+```
+
+Exemplos:
+```
+Sunless = Sunny
+Haelstrom Tack = Haelstrom
+```
+
+O glossário é salvo automaticamente por série (baseado na URL) e reaplicado na próxima
+tradução do mesmo capítulo. O programa registra o nome original como protegido para que o
+serviço de tradução não o altere, e em seguida aplica a substituição na saída. Máximo de
+50 pares; cada par precisa ter nome de origem e nome de destino não vazios.
+
+> **Disponibilidade:** o glossário de nomes está em revisão final (feat/GLOSSARY-01) e chega
+> num próximo update.
 
 ## 10. Acompanhando o progresso
 

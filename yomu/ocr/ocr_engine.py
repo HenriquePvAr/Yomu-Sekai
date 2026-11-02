@@ -30,6 +30,16 @@ PADDLE_LANG_BY_CHOICE = {
     "ko": "korean",
     "eng": "en",
     "en": "en",
+    # Chinese simplified
+    "zh": "ch",
+    "ch": "ch",
+    "chinese": "ch",
+    # Cyrillic (Russian, Bulgarian, …)
+    "ru": "cyrillic",
+    "cyrillic": "cyrillic",
+    # Latin-script extras (Spanish, Portuguese, …)
+    "es": "latin",
+    "latin": "latin",
 }
 
 TESSERACT_LANG_BY_CHOICE = {
@@ -45,6 +55,8 @@ TESSERACT_LANG_BY_CHOICE = {
     "en": "eng",
     "eng": "eng",
 }
+
+from yomu.ocr.ocr_models import source_is_english, source_is_cjk  # noqa: F401 — re-exported
 
 
 # Import-name only: availability is a dependency question, never a filesystem or

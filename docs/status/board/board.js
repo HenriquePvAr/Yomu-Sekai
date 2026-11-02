@@ -4,7 +4,7 @@
 window.BOARD = {
   title: 'YomuSekai · Quadro',
   subtitle: 'HenriquePvAr/Yomu-Sekai',
-  updatedAt: '2026-11-01',
+  updatedAt: '2026-11-02',
   repoUrl: 'https://github.com/HenriquePvAr/Yomu-Sekai',
   defaultBranch: 'main',
   columns: [
@@ -170,15 +170,17 @@ window.BOARD = {
     {
       id: 'DOCS-01',
       title: 'Documentação técnica + guia do usuário atualizados',
-      domain: 'infra', column: 'dev', env: 'branch',
-      fila: 3,
-      updated: '2026-11-01',
-      summary: 'Fila do agente: 3º. Tech doc e guia do usuário precisam de seções sobre idioma original, glossário de nomes, modelos OCR (download automático, TRADUTOR_OCR_MODELS_DIR) e métricas de desempenho da GPU.',
-      pending: [
-        'Tech doc §18+: OCR multi-idioma, YOMU_SOURCE_LANG, ocr_models.py, gates, leitura vertical CJK',
-        'CONFIGURATION.md: TRADUTOR_OCR_MODELS_DIR, YOMU_SOURCE_LANG',
-        'Guia do usuário: "Idioma original", primeiro uso (download de modelo), status honesto por idioma',
-        'Bump de "Base verificada" nos metadados de verificação',
+      domain: 'infra', column: 'qas', env: 'branch',
+      updated: '2026-11-02',
+      branch: 'feat/DOCS-01',
+      commit: '5460cae',
+      summary: 'Documentação técnica (§14, §15), CONFIGURATION.md e Guia do Usuário atualizados para cobrir multi-idioma OCR (feat/LANG-01) e glossário de nomes (feat/GLOSSARY-01). Features marcadas como PARCIAL com ref de commit. Base verificada atualizada em todos os arquivos tocados.',
+      delivered: [
+        'DOCUMENTACAO_TECNICA.md §14: OCR multi-idioma — tabela idioma→motor, ocr_models.py, gates CJK/Cirílico, fluxo ponta a ponta (5460cae, 02/11)',
+        'DOCUMENTACAO_TECNICA.md §15: glossário de nomes — set_name_overrides, _apply_name_overrides, YOMU_NAME_GLOSSARY, limites (5460cae, 02/11)',
+        'CONFIGURATION.md: TRADUTOR_OCR_MODELS_DIR (OCR) e YOMU_NAME_GLOSSARY (Tradução) documentados (5460cae, 02/11)',
+        'GUIA_DO_USUARIO.md §9: idioma original com opções e nota de disponibilidade; glossário de nomes com exemplos (5460cae, 02/11)',
+        'Base verificada atualizada em todos os documentos tocados (5460cae, 02/11)',
       ],
       links: [
         { label: 'DOCUMENTACAO_TECNICA.md', path: 'docs/technical/DOCUMENTACAO_TECNICA.md' },

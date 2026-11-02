@@ -1485,7 +1485,12 @@ def _build_translation_provider(requested_provider: str, *, translation_enabled:
     )
 
 
-def _resolve_translation_runtime(requested_provider: str, *, translation_enabled: bool):
+def _resolve_translation_runtime(
+    requested_provider: str,
+    *,
+    translation_enabled: bool,
+    source_lang: str = "3",
+):
     """Resolve translation and OCR language at the pipeline boundary.
 
     A disabled job must not call the legacy ``get_translator`` factory: that
@@ -1497,7 +1502,7 @@ def _resolve_translation_runtime(requested_provider: str, *, translation_enabled
 
     if not translation_enabled:
         print("TRANSLATION_STAGE_CONFIGURED disabled provider_init=0", flush=True)
-        return None, ocr_code_for_choice("3")
+        return None, ocr_code_for_choice(source_lang)
     # An enabled production job always crosses the server-authoritative bridge.
     # Legacy CLI provider labels remain metadata only and must never select the
     # desktop DeepL/NLLB factories for an enabled job.
@@ -1507,7 +1512,7 @@ def _resolve_translation_runtime(requested_provider: str, *, translation_enabled
     if injected_provider is None:
         raise RuntimeError("yomu_backend_provider_unavailable")
     print("TRANSLATION_PROVIDER_INIT provider=yomu_backend", flush=True)
-    return get_translator("3", translation_provider=injected_provider)
+    return get_translator(source_lang, translation_provider=injected_provider)
 from yomu.translation.providers.translator_nvidia import PROMPT_VERSION
 from yomu.runtime.resource_monitor import ResourceMonitor, detect_gpu_basic
 from yomu.ui.ui_helpers import (
@@ -2836,8 +2841,11 @@ def run_benchmark(args):
     requested_provider = normalize_translation_provider(
         getattr(args, "translation_provider", ""))
     translation_enabled = _translation_enabled_from_env()
+    source_lang = str(getattr(args, "source_lang", None) or "3")
     translator, ocr_lang = _resolve_translation_runtime(
-        requested_provider, translation_enabled=translation_enabled
+        requested_provider,
+        translation_enabled=translation_enabled,
+        source_lang=source_lang,
     )
     if hasattr(translator, "force_cache"):
         translator.force_cache = bool(args.force)
@@ -3336,6 +3344,18 @@ def run_benchmark(args):
     )
     if hasattr(translator, "set_detected_names"):
         translator.set_detected_names(detected_names)
+    _raw_glossary = os.getenv("YOMU_NAME_GLOSSARY", "").strip()
+    if _raw_glossary and hasattr(translator, "set_name_overrides"):
+        try:
+            import json as _json
+            _glossary_pairs = _json.loads(_raw_glossary)
+            if isinstance(_glossary_pairs, list):
+                translator.set_name_overrides(
+                    [(str(p[0]), str(p[1])) for p in _glossary_pairs
+                     if isinstance(p, (list, tuple)) and len(p) >= 2]
+                )
+        except Exception:  # noqa: BLE001 - malformed env never breaks translation
+            pass
     # Reuse the page-local result objects after chapter-level name repair.  The
     # contained group references are the same production objects, so repairs
     # remain visible while the global list is rebuilt deterministically.
