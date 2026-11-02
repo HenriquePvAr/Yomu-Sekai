@@ -1157,6 +1157,37 @@
     return String(value || '').normalize('NFKD').replace(/[\u0300-\u036f]/g, '')
       .toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/_+/g, '_').replace(/^_|_$/g, '').slice(0, 80) || 'webtoon_chapter';
   }
+  function seriesKeyFromUrl(url) {
+    try {
+      const u = new URL(url);
+      const parts = u.pathname.split('/').filter(Boolean);
+      const key = (u.hostname + '/' + (parts[0] || '')).toLowerCase().replace(/[^a-z0-9./-]/g, '_');
+      return key.length > 3 ? key : '';
+    } catch (_) { return ''; }
+  }
+  function nameGlossaryPairs(text) {
+    const pairs = [];
+    for (const line of String(text || '').split('\n')) {
+      const eq = line.indexOf('=');
+      if (eq < 1) continue;
+      const src = line.slice(0, eq).trim();
+      const tgt = line.slice(eq + 1).trim();
+      if (src && tgt && pairs.length < 50) pairs.push([src, tgt]);
+    }
+    return pairs;
+  }
+  function rememberNameGlossary(seriesKey, text) {
+    if (!seriesKey) return;
+    try {
+      if (String(text || '').trim()) localStorage.setItem(NAME_GLOSSARY_STORAGE_KEY_PREFIX + seriesKey, String(text).trim());
+      else localStorage.removeItem(NAME_GLOSSARY_STORAGE_KEY_PREFIX + seriesKey);
+    } catch (_) {}
+  }
+  function loadNameGlossary(seriesKey) {
+    if (!seriesKey) return '';
+    try { return localStorage.getItem(NAME_GLOSSARY_STORAGE_KEY_PREFIX + seriesKey) || ''; }
+    catch (_) { return ''; }
+  }
   function guessFromUrl(value) {
     try {
       const url = new URL(value);
@@ -1201,6 +1232,13 @@
     const outputCanBeFilled = !appState.outputDirty || !outputValue;
     if (nameCanBeFilled && guess.title) programField(nameInput, guess.title);
     if (outputCanBeFilled && guess.slug) programField(outputInput, guess.slug);
+    const newSeriesKey = seriesKeyFromUrl(value);
+    if (newSeriesKey && newSeriesKey !== appState.currentSeriesKey) {
+      appState.currentSeriesKey = newSeriesKey;
+      appState.glossaryDirty = false;
+      const glossaryInput = $('#nameGlossaryInput');
+      if (glossaryInput && !appState.glossaryDirty) glossaryInput.value = loadNameGlossary(newSeriesKey);
+    }
     syncSourceFormState();
   }
   function setSourceType(value) {
@@ -1469,6 +1507,7 @@
   // preset (and, for custom, the chosen operations) and the backend normalizes + validates.
   // These JS mirrors drive only the on-screen hint and the custom-mode dependency UX.
   const OUTPUT_PLAN_STORAGE_KEY = 'yomu.outputPlan';
+  const NAME_GLOSSARY_STORAGE_KEY_PREFIX = 'yomu.nameGlossary.v1.';
   const OUTPUT_PLAN_PRESETS = {
     traducao_pronta: {ops: ['translate', 'clean', 'typeset', 'pdf'], profile: 'automatic',
       hint: 'Traduz, limpa, aplica a tradução e gera o PDF final.'},
@@ -1678,6 +1717,12 @@
     syncSourceFormState();
     try { event.target.setSelectionRange(start, start); } catch (_) { /* unsupported */ }
     updateTranslationStartControls();
+  });
+
+  $('#nameGlossaryInput')?.addEventListener('input', () => {
+    appState.glossaryDirty = true;
+    const key = appState.currentSeriesKey || seriesKeyFromUrl(appState.sourceForm?.url || '');
+    rememberNameGlossary(key, $('#nameGlossaryInput').value);
   });
 
   // Provider is execution configuration, not source identity: switching it must never
@@ -1940,6 +1985,7 @@
       output_format: 'pdf',
       output_profile: appState.selectedMode === 'download_only' ? 'automatic' : (form.outputProfile === 'professional_qc' ? 'professional_qc' : 'automatic'),
       typesetting_mode: form.typesettingMode || 'on',
+      name_glossary: nameGlossaryPairs($('#nameGlossaryInput')?.value || ''),
       chapter_name: form.chapterName || guess.title,
       slug: form.outputSlug || slugify(guess.slug),
       mode: appState.selectedMode === 'download_only' ? 'fast' : appState.selectedMode,
@@ -1963,6 +2009,7 @@
         // Mirrors ui_helpers.DEFAULT_TRANSLATION_PROVIDER; the backend re-resolves
         // an omitted provider anyway, so the two can never silently disagree.
         || 'deepl',
+      source_lang: document.getElementById('langSelect')?.value || '3',
       // Snapshot the current control-plane decision into the job request.
       // Missing/unavailable bootstrap remains fail-closed.
       translation_enabled: appState.translationEnabled === true,

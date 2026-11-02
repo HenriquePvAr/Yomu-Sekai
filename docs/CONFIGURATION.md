@@ -2,7 +2,7 @@
 
 Esta referência descreve as opções reais do `.env.example` e as poucas variáveis adicionais consumidas diretamente pelo código atual.
 
-> **Base verificada:** `1af9385` (branch `main`) · **Revisado em:** 2026-10-25
+> **Base verificada:** `1af9385` (branch `main`); `TRADUTOR_OCR_MODELS_DIR` e `YOMU_NAME_GLOSSARY` verificadas sobre `7e58e76` (feat/LANG-01) e `22f595d` (feat/GLOSSARY-01) — aguardam merge em `main` · **Revisado em:** 2026-11-02
 >
 > [Voltar ao README](../README.md)
 
@@ -89,6 +89,12 @@ segredo do servidor (Edge Function).
 
 O seletor de provider da UI (`#translationProviderField`) está oculto; o único fluxo de produto é o backend autenticado com DeepL. Os modos Google/NLLB/NVIDIA permanecem como compatibilidade legada, sem o contrato de validação end-to-end auditado.
 
+**Glossário de nomes — feat/GLOSSARY-01 (aguarda merge):** a variável abaixo é definida pelo runner a partir do glossário informado pelo usuário na UI; não deve ser definida manualmente no `.env`.
+
+| Variável | Default | Finalidade |
+| --- | --- | --- |
+| `YOMU_NAME_GLOSSARY` | vazio | JSON array de pares `[["Src","Tgt"],…]` serializado pelo `job_runner.py` a partir do campo `name_glossary` do job config. O pipeline (`benchmark_pipeline.py`) lê e chama `translator.set_name_overrides()`. Máximo de 50 pares; fonte e destino não podem ser vazios. |
+
 ## OCR e classificação
 
 | Variável | Default | Finalidade |
@@ -118,6 +124,16 @@ O seletor de provider da UI (`#translationProviderField`) está oculto; o único
 | `PRIORITIZE_ENCLOSED_TEXT` | `True` | Dá prioridade a evidências de texto em containers |
 
 O fallback não substitui palavras por regras fixas. Ele pede novas leituras e compara candidatos. Ajustar thresholds pode aumentar custo, falsos positivos ou risco visual; mantenha os defaults até ter uma regressão reproduzível.
+
+**Modelos OCR por idioma — feat/LANG-01 (aguarda merge):** quando o suporte a múltiplos idiomas de origem for integrado, a variável abaixo passa a ser relevante:
+
+| Variável | Default | Finalidade |
+| --- | --- | --- |
+| `TRADUTOR_OCR_MODELS_DIR` | `~/.yomu/ocr_models` | Diretório de cache dos modelos PaddleOCR de reconhecimento para idiomas não-ingleses (japonês, coreano, chinês simplificado, cirílico, latino). Gerenciado por `yomu/ocr/ocr_models.py`. |
+
+O modelo inglês é embutido no `rapidocr_onnxruntime` e não requer download. Modelos
+adicionais são baixados automaticamente na primeira execução com o idioma correspondente e
+verificados por SHA-256 (fail-closed em caso de hash incorreto).
 
 ## Downloader e Selenium
 

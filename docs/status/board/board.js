@@ -1,68 +1,258 @@
-(() => {
-  const snapshot = {
-    branch: "main",
-    publishedBase: "ec9ca9e4",
-    integratedThrough: "candidate includes progress.v1, pinned Requests transport, remote readiness, PSD compatibility, strict auth-envelope validation, owner-scoped source-analysis traces, Comix child heartbeat/hash/sanitized diagnostics and local Clean certificate-to-artifact persistence; paired visual-recovery client/server remains deferred",
-    asOf: "2026-10-16",
-    latestVerification: "2026-10-16: origin/main is published at ec9ca9e4acd0849020eb13a089817c1c11aeab7a; the authorized CI push is complete. Hermetic Tests run 38830606731 succeeded in 30m59s: Python 6013 passed, 141 skipped, 2 xfailed, 736 subtests in 26m13s; Node syntax, Better Auth (4 tests), Python compile and JUnit upload passed. JUnit artifact uploaded (6892 cases including subtests; 0 failures/errors). The 60m job/50m pytest timeout plus verbose/JUnit diagnostics resolved the previous timeout; no runtime/security gates were weakened. Three earlier local documentation commits were preserved; this cleanup adds three local documentation commits (six ahead of origin/main), with no push. Beta/release remain unpublished; physical UI/license, frozen child, provider/VPS, event-specific Discord and Clean gates remain pending.",
-    objectives: {
-      "ARCH-01": "Maintain one canonical runtime and reconcile proven implementations without duplicating pipelines.",
-      "JOB-01": "Keep persisted job state authoritative and progress accurate across worker and UI.",
-      "SRC-01": "Fetch supported chapter sources safely and reuse materialized source manifests.",
-      "SRC-02": "Scope source-analysis progress and cancellation to the authenticated owner and task.",
-      "SRC-03": "Supervise Comix child work with verifiable results and durable sanitized diagnostics.",
-      "CLN-01": "Apply Clean only through fail-closed ownership, certificate, and artifact-verification gates.",
-      "CLN-HARMONIC-03D": "Keep harmonic boundary acceptance deferred until real labeled evidence can distinguish texture and glyph contamination.",
-      "AUTH-01": "Use Supabase as the fail-closed authority for session, license, and device state.",
-      "GEM-01": "Dispatch supported SAFE CLEAN requests only when remote readiness and contracts pass.",
-      "GEM-02": "Keep visual recovery deferred until compatible client/server contracts are independently proven.",
-      "DIS-01": "Correlate observability events and distinguish accepted, delivered, and acknowledged states.",
-      "PKG-01": "Start the frozen desktop with its public runtime config and required assets, without admin secrets.",
-      "NET-01": "Pin outbound requests to validated destinations while preserving host and TLS identity.",
-      "PSD-01": "Export dimensionally valid PSDs with supported layer APIs and preserved names.",
-      "EXP-01": "Keep research and multi-slot experiments isolated from default production behavior.",
-      "REL-01": "Keep beta/release blocked until reconciliation, package, and external acceptance gates pass.",
-      "ROOT-01": "Keep the repository root intentionally small while preserving required entrypoints and documenting safe organization."
+// Dados do quadro de avanço. Só leitura: Claude atualiza a pedido ("atualiza o quadro").
+// Regra: cada card cita a evidência (SHA, data) que sustenta a coluna. Git vence memória.
+// `risk` separa medido de suposto com MEDIDO / NÃO MEDIDO / SEM FONTE / SUPOSIÇÃO.
+window.BOARD = {
+  title: 'YomuSekai · Quadro',
+  subtitle: 'HenriquePvAr/Yomu-Sekai',
+  updatedAt: '2026-11-02',
+  repoUrl: 'https://github.com/HenriquePvAr/Yomu-Sekai',
+  defaultBranch: 'main',
+  columns: [
+    { id: 'design', label: 'Na fila',           hint: 'Planejado, sem código. O agente pega daqui na ordem da fila.' },
+    { id: 'dev',    label: 'Em andamento',       hint: 'Código em branch claude/…, incompleto ou aguardando integração.' },
+    { id: 'qas',    label: 'Pronto p/ revisar',  hint: 'Branch claude/… com testes passando, aguardando merge.' },
+    { id: 'prod',   label: 'Na main',            hint: 'Mergeado na branch principal.' },
+    { id: 'blocked',label: 'Precisa de você',    hint: 'Conta, acesso, teste real, aprovação ou decisão.' },
+  ],
+  domains: [
+    { id: 'pipeline', label: 'OCR · Tradução · Clean' },
+    { id: 'ui',       label: 'Interface' },
+    { id: 'infra',    label: 'Worker · Runtime · Infra' },
+    { id: 'release',  label: 'Pacote · Beta · Release' },
+  ],
+  envs: {
+    main:   'main do Yomu-Sekai',
+    branch: 'branch claude/… no GitHub',
+    none:   'sem código',
+  },
+  cards: [
+
+    // ───────────────────────── PROD ─────────────────────────
+
+    {
+      id: 'RENDER-GPU',
+      title: 'Reconstrução visual + GPU DirectML',
+      domain: 'pipeline', column: 'prod', env: 'main',
+      updated: '2026-10-26',
+      summary: 'Preenchimento de gradiente, máscara de resíduo de contorno, letreiamento fiel à fonte original, sem inglês residual. RapidOCR e LaMa na GPU via DirectML com fallback CPU.',
+      delivered: [
+        'Gradient fill + outline residue mask + menos revisões (e15b22b3, 25/10)',
+        'Letreiamento fiel à fonte; vote de variante; retry em inglês residual (4a2d084a, 25/10)',
+        'Clean evidence-based; balloon-shaped typesetting (7a5d1abc, 24/10)',
+        'RapidOCR + LaMa no DirectML; lock por GPU; fallback CPU (4defde25, 25/10)',
+        'Lock restrito ao run DirectML; OCR paralelo por página (5139fb0b, 26/10)',
+        'Crop de reconstrução; LaMa por worker; batches maiores (052c0d51, 25/10)',
+        'Pré-aquecimento LaMa movido para depois do OCR (0d3c1a6c, 26/10)',
+      ],
+      links: [
+        { label: 'ocr_balloon.py',        path: 'yomu/ocr/ocr_balloon.py' },
+        { label: 'benchmark_pipeline.py', path: 'yomu/pipeline/benchmark_pipeline.py' },
+        { label: 'ocr_engine.py',         path: 'yomu/ocr/ocr_engine.py' },
+      ],
     },
-    cards: [
-      {id:"ARCH-01", domain:"Runtime architecture", status:"INTEGRATED", priority:"P1", paths:"yomu/; root compatibility entrypoints", contract:"One canonical runtime implementation; no duplicate providers/pipelines.", tests:"Published code snapshot 9e8bdfa: Python 6011 passed, 141 skipped, 2 xfailed, 736 subtests; Node 48/48. Windows CI 38830606731 passed: Python 6013 passed, 141 skipped, 2 xfailed, 736 subtests; Node syntax, Better Auth (4), Python compile and JUnit upload passed. See current product-state closeout.", evidence:"origin/main is verified at ec9ca9e4acd0849020eb13a089817c1c11aeab7a. Local main remains six documentation-only commits ahead after this status synchronization; the three prior commits are preserved and all three root-cleanup commits remain local/unpushed. CI diagnostics/timeout follow-up is published and verified. Physical product acceptance is separate and still pending.", dependencies:"Physical acceptance remains tracked separately.", nextAction:"Continue with the separately tracked physical UI/license, frozen child, provider/VPS, Discord delivery and Clean acceptance gates.", origin:"Gemini SAFE CLEAN integration ancestry; reconciliation and CI follow-ups.", docs:"docs/architecture/REPOSITORY_STRUCTURE.md; docs/architecture/ROOT_STRUCTURE_AUDIT.md; docs/architecture/ROOT_DEPENDENCY_MAP.md; docs/README.md; docs/consolidation/YOMU_CURRENT_PRODUCT_STATE.md; docs/consolidation/YOMU_SOURCE_RECONCILIATION_MATRIX.md", blocker:"Physical UI/license, frozen child, provider/VPS, Discord delivery and Clean remain Beta gates."},
-      {id:"JOB-01", domain:"JobStore and progress", status:"INTEGRATED", priority:"P1", paths:"yomu/runtime/; yomu/ui/; worker_service.py", contract:"Persisted JobStore state is progress/terminal authority; progress.v1 is bound and monotonic from subprocess through UI bridge.", tests:"Progress-v1 snapshot: Python 6002 passed, 141 skipped, 2 xfailed, 736 subtests; focused 220 passed + 40 subtests; Node 47/47 + wallet 1/1. Latest code snapshot: Python 6011 passed, 141 skipped, 2 xfailed, 736 subtests; Node 48/48.", evidence:"Local tests plus isolated frozen HTTP/UI/bridge bootstrap; hidden selftest did not prove terminal window close and auth remained unauthenticated.", dependencies:"Owner-visible frozen lifecycle/auth smoke remains external.", nextAction:"Repeat lifecycle closure in a visible, isolated smoke; keep auth/product acceptance separate.", origin:"Local main plus integrated product history and candidate progress.v1 follow-up.", docs:"docs/WORKER_QUEUE.md; docs/consolidation/YOMU_CURRENT_PRODUCT_STATE.md", blocker:"Full physical UI lifecycle/auth acceptance remains unproven."},
-      {id:"SRC-01", domain:"Comix source and materialization", status:"INTEGRATED", priority:"P1", paths:"yomu/download/; tests/test_comix_*", contract:"Materializable manifest reuse; headless automation; owner-visible challenge path preserved.", tests:"100 focused clearance/challenge tests are recorded historically; latest Python regression 6011 passed, 141 skipped, 2 xfailed, 736 subtests; Node 48/48. No fresh physical discovery.", evidence:"Hermetic source contracts pass; latest reconciliation build was archive-inspected but not exercised for Comix child protocol.", dependencies:"Browser runtime; source adapters", nextAction:"Run source-only frozen child/materialization fixture when needed.", origin:"Comix commits already present in integration; current CF auto-capture code equivalent.", docs:"docs/SOURCE_ADAPTERS.md; docs/operations/comix_source_challenge.md", blocker:"No new physical discovery performed."},
-      {id:"SRC-02", domain:"Source-analysis owner-scoped progress", status:"INTEGRATED", priority:"P1", paths:"yomu/review/source_analysis_progress.py; yomu/ui/app.py; tests/test_source_analysis_progress.py", contract:"Trace state and cancellation are keyed by authenticated owner plus trace; immutable task generations prevent cross-owner callbacks and stale completion.", tests:"Candidate progress/entrypoint 13 passed; overlay route/ownership replay 6 passed; final Python regression 6011 passed, 141 skipped, 2 xfailed, 736 subtests.", evidence:"Auth is checked before registry reservation; unknown/cross-owner cancel returns known=false; registry remains bounded and only completed traces are evicted.", dependencies:"Authenticated owner_id from UI principal", nextAction:"Keep source overlays preserved and retain owner-scoped callbacks.", origin:"SAFE CLEAN integration source overlay, selectively reconciled into candidate.", docs:"docs/consolidation/YOMU_CURRENT_PRODUCT_STATE.md; docs/consolidation/YOMU_SOURCE_RECONCILIATION_MATRIX.md", blocker:"No additional source-overlay behavior is promoted without contract-compatible replay."},
-      {id:"SRC-03", domain:"Comix child handoff and diagnostics", status:"INTEGRATED", priority:"P1", paths:"yomu/download/readers/scrapling_reader_resolver.py; yomu/download/readers/dynamic_resolver_process.py; tests/test_dynamic_resolver_child_handoff.py", contract:"Source/frozen child launch has progress heartbeat, separate stall/deadline/cancel states, atomic status/result, size+SHA-256 validation and sanitized diagnostics that survive temp cleanup.", tests:"Focused child/Comix suites 69 passed; overlay handoff replay 8/8; full Python regression 6011 passed, 141 skipped, 2 xfailed, 736 subtests. Production onedir SHA 90DB867E5A5E90BA3CF6AF03165997B0D1F0CB4B2EC5D63A3C7FE6AA13281438 built and archive inspected.", evidence:"Isolated subprocess fixtures and archive/selftest only; no live Comix discovery or frozen child protocol smoke.", dependencies:"Frozen child smoke and external Comix acceptance", nextAction:"Run an owner-authorized source-only child smoke in the packaged build when execution policy permits.", origin:"SAFE CLEAN validated-integration dirty source overlay, selectively integrated.", docs:"docs/consolidation/YOMU_CURRENT_PRODUCT_STATE.md; docs/consolidation/YOMU_SOURCE_RECONCILIATION_MATRIX.md", blocker:"No real Comix discovery or packaged child protocol execution; overall reconciliation remains PARTIAL."},
-      {id:"CLN-HARMONIC-03D", domain:"Harmonic boundary classification", status:"DEFERRED", priority:"P0", paths:"yomu/clean/inpainting/harmonic_fill.py; tests/test_harmonic_fill.py", contract:"Automatic outliers and nearby Canny edges remain diagnostic/review signals; solver stays isolated and CLEAN_HARMONIC_FILL remains off by default.", tests:"Page 01 known-visible transfer: 89 polarity outliers are dark texture; five Canny pixels occur only after black-hole ablation. Smooth-gradient control accepted; connected fringe, crossing line art, screentone and unknown context reviewed; nearby column/parallel edges false-review. Full Python: 6059 passed, 141 skipped, 1 xfailed, 753 subtests.", evidence:"Boundary overlays and coordinate/distance evidence are stored in Sprint 03D Codex visualization artifacts. V5 has no globally frozen independent holdout; page 03 hidden pixels have no ground truth. No unsafe acceptances in labeled synthetic positives.", dependencies:"Independent real labels for natural texture, out-of-mask glyph fringes, and structures that continue under lettering.", nextAction:"Keep review behavior until a topology classifier is evaluated on separately labeled real pages; do not promote harmonic output to LOCAL_SAFE.", origin:"YOMU_CLEAN_HARMONIC_BOUNDARY_FALSE_REVIEW_SPRINT_03D.", docs:"docs/architecture/clean_strategy.md", blocker:"Current any-suspect/any-edge rules over-review some known-safe cases, but available labels cannot justify a safe general relaxation."},
-      {id:"CLN-01", domain:"OCR, ownership and Safe Final", status:"INTEGRATED", priority:"P0", paths:"yomu/pipeline/benchmark_pipeline.py; yomu/clean/; yomu/ocr/; yomu/export/output_manifest.py", contract:"Serial and parallel pages share one fail-closed Clean boundary; verification requires a source/output/target/QC-bound certificate and canonical artifact revalidation.", tests:"Focused boundary/persistence groups: 401 passed, 392 subtests; full Python regression 6011 passed, 141 skipped, 2 xfailed, 736 subtests; frontend 48/48.", evidence:"Offline fixtures exercise workers 1/2, canonical SHA binding, missing/stale/tampered certificate rejection. Fresh production-profile onedir build SHA 90DB867E5A5E90BA3CF6AF03165997B0D1F0CB4B2EC5D63A3C7FE6AA13281438; packaged module archive and RapidOCR selftest verified. No physical chapter output or real provider generation.", dependencies:"Physical clean/provider acceptance and outstanding branch/overlay reconciliation", nextAction:"Keep physical/provider gates separate; finish review of preserved refs and dirty overlays before main update.", origin:"Candidate integration follow-up 2026-10-15.", docs:"docs/QUALITY_AND_VALIDATION.md; docs/consolidation/YOMU_CURRENT_PRODUCT_STATE.md", blocker:"No real Gemini or chapter artifact; full repository reconciliation remains partial."},
-      {id:"AUTH-01", domain:"Supabase auth/license/device", status:"INTEGRATED", priority:"P1", paths:"yomu/auth/; supabase/functions/", contract:"Supabase authority; fail closed; no admin secret in client.", tests:"Deno device-verify regression 1/1; Deno check passed.", evidence:"Revoked/unknown device and revoked/expired/malformed license reject before challenge consumption; no Edge Function deployment or real licensed session.", dependencies:"Supabase public client config and server-side auth", nextAction:"Keep production deployment and licensed-session verification as external gates.", origin:"Supabase integration plus `63e8bcf`.", docs:"docs/SUPABASE_AUTH.md; docs/SUPABASE_SOCIAL_SCHEMA.md; docs/consolidation/YOMU_SOURCE_RECONCILIATION_MATRIX.md", blocker:"Real licensed session and deployed function were not exercised."},
-      {id:"GEM-01", domain:"Gemini/VPS", status:"INTEGRATED", priority:"P0", paths:"yomu/clean/gemini_fallback/; yomu/runtime/remote_readiness.py", contract:"SAFE request/certificate validation; read-only readiness separates API, queue, worker and schemas; UI availability is not provider-auth proof.", tests:"Final Python regression 6011 passed, 141 skipped, 2 xfailed, 736 subtests; readiness/transport tests are offline only.", evidence:"The last recorded loopback probe found no listener on 127.0.0.1:18777; historical job logs are unavailable, so exact failure subtype remains NOT_PROVEN. No physical provider generation or current VPS validation.", dependencies:"SSH tunnel, VPS API/worker, compatible schemas, Gemini session", nextAction:"Use job-correlated artifacts and validate tunnel/API readiness before an owner-authorized sample.", origin:"SAFE CLEAN integration ancestry plus readiness/transport delta.", docs:"docs/consolidation/YOMU_CURRENT_PRODUCT_STATE.md; docs/consolidation/YOMU_SOURCE_RECONCILIATION_MATRIX.md", blocker:"No real Gemini/Safe Final proof; current remote availability is not asserted."},
-      {id:"GEM-02", domain:"Gemini visual recovery", status:"DEFERRED", priority:"P0", paths:"source overlay yomu/pipeline/benchmark_pipeline.py; yomu/clean/gemini_fallback/adapter.py; research/gemini_vps_web_worker/", contract:"REMOTE_VISUAL_RECOVERY must retain confirmed ownership, request identity, response hashes, REMOTE_SAFE certificate and client outside-mask recount; client and worker schema must ship as one compatible contract.", tests:"Source overlay offline suites: 76 passed, 1 warning. Selected replay against candidate: 48 passed, 6 failed, 8 subtests; broader collection stopped on three missing/incompatible APIs. No provider was called.", evidence:"Candidate lacks the source overlay's exact visual-recovery client/server contract. Replay failures concern progress-stage and Clean certificate/cache-reuse expectations; source report lacks deployed VPS provenance and OCR-removal evidence. These are non-interchangeability signals, not candidate test regressions.", dependencies:"Versioned paired server schema, candidate integration tests, frozen mock-provider replay, separate deployment approval", nextAction:"Keep the client/server pair deferred until the versioned contract and certified fixture pass together; never port client-only.", origin:"Dirty SAFE CLEAN validated-integration overlay and VPS research worker, 2026-10-15 replay.", docs:"docs/consolidation/YOMU_CURRENT_PRODUCT_STATE.md; docs/consolidation/YOMU_SOURCE_RECONCILIATION_MATRIX.md", blocker:"No compatible paired contract or deployment proof."},
-      {id:"DIS-01", domain:"Discord observability", status:"INTEGRATED", priority:"P1", paths:"yomu/observability/; deploy/vps/discord_observability.py", contract:"Accepted, delivered and event-specific receipt remain distinct; local failures retain a sanitized transport class.", tests:"Final Python regression 6011 passed, 141 skipped, 2 xfailed, 736 subtests; delivery tests are offline only.", evidence:"Historical job event receipts/logs are unavailable; no live delivery asserted.", dependencies:"Outbox transport and VPS dispatcher", nextAction:"Reconcile persistent outbox/receipt behavior against the VPS API, then run an explicitly authorized technical event test.", origin:"Discord observability integration ancestry plus transport diagnostics.", docs:"docs/consolidation/YOMU_CURRENT_PRODUCT_STATE.md; docs/consolidation/YOMU_SOURCE_RECONCILIATION_MATRIX.md", blocker:"No event-specific HTTP receipt for the historical job."},
-      {id:"PKG-01", domain:"Desktop/package bootstrap", status:"INTEGRATED", priority:"P0", paths:"yomu/desktop/app.py; packaging/; static/assets/; yomu/runtime/remote_readiness.py", contract:"Reject stale backend; bundle public runtime config/assets; no service-role key.", tests:"Desktop launcher tests 17 passed; final Python regression 6011 passed, 141 skipped, 2 xfailed, 736 subtests.", evidence:"Production-profile onedir SHA 90DB867E5A5E90BA3CF6AF03165997B0D1F0CB4B2EC5D63A3C7FE6AA13281438; package archive contains public config/assets and internal RapidOCR selftest passed. UI boot, authenticated login and terminal lifecycle remain NOT_PROVEN.", dependencies:"Real Supabase identity remains external.", nextAction:"Repeat visible isolated lifecycle smoke; validate licensed session only with owner present.", origin:"Reviewed package/login artwork and stale-backend guard.", docs:"docs/INSTALLATION.md; docs/UPDATE_AND_SIGNING.md; docs/consolidation/YOMU_CURRENT_PRODUCT_STATE.md", blocker:"Frozen login, entitlement and full UI lifecycle are not physically validated."},
-      {id:"NET-01", domain:"Pinned Requests transport", status:"INTEGRATED", priority:"P1", paths:"yomu/download/pinned_requests.py; yomu/download/download_transport.py; yomu/download/sources/canonical_source_identity.py", contract:"Each HTTP request uses a freshly validated public destination while preserving hostname HTTP/TLS identity; unsupported sessions/proxy paths fail closed.", tests:"Focused transport: 76 passed + 4 subtests; final Python regression: 6011 passed, 141 skipped, 2 xfailed, 736 subtests; frozen archive inspection passed.", evidence:"Exact isolated onedir build contains pinned transport code; this validation made no external host/provider request.", dependencies:"Owner-authorized real source/transport acceptance remains separate.", nextAction:"Keep the guard at the existing Requests boundary and retain exact-host regression coverage.", origin:"SAFE CLEAN source overlay pinned-request defense, selectively integrated in candidate.", docs:"docs/consolidation/YOMU_SOURCE_RECONCILIATION_MATRIX.md; docs/consolidation/YOMU_CURRENT_PRODUCT_STATE.md", blocker:"Physical/external source acceptance not performed."},
-      {id:"PSD-01", domain:"PSD API compatibility and dimensions", status:"INTEGRATED", priority:"P1", paths:"yomu/export/psd_tools_compat.py; yomu/export/editable_psd_writer.py; yomu/export/professional_psd.py", contract:"Preserve layer names across supported PixelLayer.frompil APIs; reject image/canvas dimension mismatch instead of silently resizing.", tests:"Focused PSD suites 50 passed; final Python regression 6011 passed, 141 skipped, 2 xfailed, 736 subtests; frozen archive contains compatibility module.", evidence:"Production build retains psd-tools==1.10.9; source overlay's 1.17.4 dependency increase was not adopted.", dependencies:"Photoshop physical interoperability is not newly asserted.", nextAction:"Keep the dependency pin unless an independently tested upgrade is approved.", origin:"Selective integration from dirty SAFE CLEAN source overlay.", docs:"docs/consolidation/YOMU_SOURCE_RECONCILIATION_MATRIX.md; docs/consolidation/YOMU_CURRENT_PRODUCT_STATE.md", blocker:"No new physical Photoshop acceptance in this delta."},
-      {id:"EXP-01", domain:"Research and multi-slot experiments", status:"DEFERRED", priority:"P2", paths:"experiments/; research/; deploy/vps/two_slot_*", contract:"Presence in source does not enable production behavior.", tests:"Not part of product acceptance.", evidence:"Classified non-default; no production configuration promotion.", dependencies:"Separate approval and independent evidence", nextAction:"Keep gated; review independently only if requested.", origin:"Research/validation worktrees and integrated experimental folders.", docs:"reports/README.md; docs/research/", blocker:"Separate product/security approval required."},
-      {id:"ROOT-01", domain:"Repository organization", status:"LOCAL_COMPLETE", priority:"P2", paths:"docs/architecture/ROOT_STRUCTURE_AUDIT.md; docs/architecture/ROOT_DEPENDENCY_MAP.md; docs/architecture/REPOSITORY_STRUCTURE.md", contract:"Classify every root item; move only low-risk documentation; preserve compatibility entrypoints and historical paths.", tests:"Focused Python: 40 passed; Node board syntax and ID checks pass; root policy PASS; documentation relative links 0 broken; full regression NOT RUN (documentation-only); PyInstaller/frozen smoke NOT RUN (runtime entrypoints untouched).", evidence:"Three canonical docs moved with root compatibility pointers. Eight Python shims, pytest startup hooks, dependency manifests, Windows launcher, and all local generated/context files preserved. Three earlier local documentation commits were preserved; this cleanup adds three local documentation commits (six ahead of origin/main), with no push.", dependencies:"Beta acceptance remains separate.", nextAction:"Keep local commits unpushed pending explicit owner authorization; preserve physical-validation gates separately.", origin:"YOMU_ROOT_STRUCTURE_FINAL_CLEANUP_V1.", docs:"docs/architecture/ROOT_STRUCTURE_AUDIT.md; docs/architecture/ROOT_DEPENDENCY_MAP.md; docs/architecture/REPOSITORY_STRUCTURE.md"},
-      {id:"REL-01", domain:"Beta/release readiness", status:"BLOCKED", priority:"P0", paths:"docs/RELEASE*; packaging/", contract:"Main update is separate from beta/release acceptance; no release without its own package and external gates.", tests:"Published Windows CI run 38830606731: Python 6013 passed, 141 skipped, 2 xfailed, 736 subtests; Node syntax, Better Auth typecheck/tests (4)/build, compileall and JUnit upload all passed. Previous timeout run 38818945913 was cancelled; no failure from that run is being treated as a code regression.", evidence:"origin/main is ec9ca9e4acd0849020eb13a089817c1c11aeab7a and the CI diagnostics/timeout fix is published. Local main remains six documentation-only commits ahead after this status synchronization; the three earlier local docs commits and three cleanup commits remain unpushed. Beta is not published; physical UI/license, frozen child protocol, provider/VPS and physical clean remain NOT_PROVEN.", dependencies:"Independent physical/provider acceptance and beta packaging gates", nextAction:"Keep beta/release blocked until physical license/UI, frozen worker, provider/VPS, event-specific Discord, Clean and package acceptance are proven.", origin:"This consolidation task.", docs:"docs/RELEASE_CHECKLIST.md; docs/consolidation/YOMU_CURRENT_PRODUCT_STATE.md", blocker:"No real Supabase entitlement, provider generation, event-specific delivery or packaged end-to-end clean has been proven."}
-    ]
-  };
-  const root = document.getElementById("board");
-  const meta = document.getElementById("snapshot");
-  if (!root || !meta) return;
-  meta.textContent = `${snapshot.branch} · publicado ${snapshot.publishedBase} · ${snapshot.integratedThrough} · ${snapshot.asOf} · Beta/release não publicada`;
-  for (const card of snapshot.cards) {
-    const article = document.createElement("article");
-    article.className = "card";
-    const heading = document.createElement("h2");
-    heading.textContent = `${card.id} — ${card.domain}`;
-    const badge = document.createElement("span");
-    badge.className = `status status-${card.status.toLowerCase()}`;
-    badge.textContent = card.status;
-    const dl = document.createElement("dl");
-    for (const [label, value] of [["Feature",card.domain],["Objective",snapshot.objectives[card.id] || "Reconcile this feature against the canonical runtime."],["Status / priority",`${card.status} / ${card.priority}`],["Domain",card.domain],["Paths",card.paths],["Contract",card.contract],["Tests",card.tests],["Evidence",card.evidence],["Dependencies",card.dependencies],["Origin",card.origin],["Documentation",card.docs],["Next action",card.nextAction],["Pending",card.blocker]]) {
-      const dt = document.createElement("dt"); dt.textContent = label;
-      const dd = document.createElement("dd"); dd.textContent = value;
-      dl.append(dt, dd);
-    }
-    article.append(heading, badge, dl);
-    root.append(article);
-  }
-})();
+
+    {
+      id: 'OCR-TRANS',
+      title: 'Qualidade OCR + tradução (inglês)',
+      domain: 'pipeline', column: 'prod', env: 'main',
+      updated: '2026-10-26',
+      summary: 'Sem leituras invertidas (use_cls=False). Palavras frequentes não tratadas como dano OCR. Palavras coladas separadas por frequência. SFX grandes fora dos grupos de diálogo. Ep. 33 resolvido.',
+      delivered: [
+        'use_cls=False: sem leituras de cabeça para baixo (ae3340c7, 26/10)',
+        'SFX grandes fora de grupos; quantidades OCR intactas (7b3ef443, 25/10)',
+        'Palavras coladas separadas por frequência; nomes com honorífico mantidos (c4b265b4, 26/10)',
+        'Regiões remanescentes do ep. 33 resolvidas (482c7ea6, 25/10)',
+        'Sem inglês na arte; nomes mantidos; sem flood no console (933ace7a, 26/10)',
+        'Piso de fonte segue letras pequenas da página (c456537c, 26/10)',
+      ],
+      links: [
+        { label: 'ocr_engine.py',    path: 'yomu/ocr/ocr_engine.py' },
+        { label: 'ocr_balloon.py',   path: 'yomu/ocr/ocr_balloon.py' },
+        { label: 'sfx_glossary.py',  path: 'yomu/translation/sfx_glossary.py' },
+      ],
+    },
+
+    {
+      id: 'WORKER-UX',
+      title: 'Worker confiável + fila + UX (modais, source request, feedback)',
+      domain: 'infra', column: 'prod', env: 'main',
+      updated: '2026-10-26',
+      summary: 'Jobs não falham mais por design. Fila traduz como o formulário principal. Modais de confirmação (sem alert/confirm nativo). Botão "Solicitar Fonte" e feedback chegam por e-mail.',
+      delivered: [
+        'Capítulos não falham por design; legendas quando arte não pode ser reconstruída (37820c91, 26/10)',
+        'Fila traduz como formulário principal; Webtoon mais rápido (fc625378, 26/10)',
+        'Worker jobs terminam em vez de falhar; modais de confirmação; source request; feedback (ae3340c7, 26/10)',
+      ],
+      links: [
+        { label: 'worker_service.py', path: 'yomu/runtime/worker_service.py' },
+        { label: 'tradutor_ui.js',    path: 'static/tradutor_ui.js' },
+        { label: 'ui_shell.html',     path: 'ui/ui_shell.html' },
+      ],
+    },
+
+    {
+      id: 'COMIX-OPT',
+      title: 'Comix: uma abertura por job, sem smart split em mangá',
+      domain: 'infra', column: 'prod', env: 'main',
+      updated: '2026-10-26',
+      summary: 'Comix abre o browser uma só vez por job. Smart split desativado para páginas de mangá (proporção alta). LaMa pré-aquecido depois do OCR, não durante o download.',
+      delivered: [
+        'open_comix_once + sem smart split em páginas de mangá + LaMa pós-OCR (0d3c1a6c, 26/10)',
+      ],
+      links: [
+        { label: 'chapter_source.py', path: 'yomu/download/sources/chapter_source.py' },
+      ],
+    },
+
+    {
+      id: 'UI-LOGIN',
+      title: 'Login redesenhado + tema Lua Rubra',
+      domain: 'ui', column: 'prod', env: 'main',
+      updated: '2026-10-30',
+      summary: 'Novo visual de login com tema Lua Rubra. Capturas de tela e GIF de demonstração atualizados no README.',
+      delivered: [
+        'Login redesenhado + tema Lua Rubra (c5766173, 27/10)',
+        'Capturas de tela atualizadas + GIF do login (89185e3a, 30/10)',
+      ],
+      links: [
+        { label: 'auth_ui.js',            path: 'static/auth_ui.js' },
+        { label: 'login-lua-rubra.gif',   path: 'docs/assets/videos/login-lua-rubra.gif' },
+      ],
+    },
+
+    // ───────────────────────── DEV ─────────────────────────
+
+    {
+      id: 'LANG-01',
+      title: 'Múltiplos idiomas de origem (ja, ko, zh, ru, es…)',
+      domain: 'pipeline', column: 'qas', env: 'branch',
+      fila: 1,
+      updated: '2026-11-01',
+      branch: 'feat/LANG-01',
+      commit: '7e58e76',
+      summary: 'Implementado em feat/LANG-01. Cadeia completa: UI (langSelect habilitado) → payload (source_lang) → ui_bridge → build_run_command(--ocr-lang) → run_webtoon → benchmark_pipeline (ocr_lang override) → OCREngine (PADDLE_LANG_BY_CHOICE). Gates: score_group_ocr_quality não penaliza CJK/Cirílico; split_glued_source_words early-return para não-Latin; weak_label_semantic_promotion_allowed bypassa léxico inglês para texto logográfico/cirílico. 22 testes novos passando. Aguarda merge + teste físico.',
+      pending: [
+        'Merge em dev e verificação física com capítulo real (ja/ko/zh/ru)',
+        'SHA-256 reais para modelos RapidOCR (substituir placeholder vazio em ocr_models.py)',
+        'Teste de reading_order CJK (vertical) e _promote_glossary_sounds em script não-latino',
+      ],
+      links: [
+        { label: 'ocr_models.py',         path: 'yomu/ocr/ocr_models.py' },
+        { label: 'ocr_engine.py',         path: 'yomu/ocr/ocr_engine.py' },
+        { label: 'ocr_balloon.py',        path: 'yomu/ocr/ocr_balloon.py' },
+        { label: 'ui_shell.html',         path: 'ui/ui_shell.html' },
+        { label: 'benchmark_pipeline.py', path: 'yomu/pipeline/benchmark_pipeline.py' },
+      ],
+    },
+
+    {
+      id: 'GLOSSARY-01',
+      title: 'Glossário de nomes por série',
+      domain: 'ui', column: 'dev', env: 'branch',
+      fila: 2,
+      updated: '2026-11-01',
+      summary: 'Fila do agente: 2º. Campo #nameGlossaryInput (localStorage por série, ex.: "Sunless = Sunny") existe no branch de trabalho do Tradutor.Ia. Precisa ser integrado ao Yomu-Sekai: UI, payload, backend (name_glossary no job config → YOMU_NAME_GLOSSARY env).',
+      pending: [
+        'Adicionar #nameGlossaryField + #nameGlossaryInput à ui_shell.html',
+        'Integrar nameGlossaryPairs(), rememberNameGlossary(), loadNameGlossary() no tradutor_ui.js',
+        'Integrar _name_glossary() e _source_language() no ui_bridge.py (validação, limite 50 pares)',
+        'Propagar YOMU_NAME_GLOSSARY → job_runner.py e benchmark_pipeline.py',
+        'Integrar set_name_overrides() no translator_deepl.py e yomu_backend_provider.py',
+      ],
+      links: [
+        { label: 'ui_shell.html',         path: 'ui/ui_shell.html' },
+        { label: 'ui_bridge.py',          path: 'yomu/ui/ui_bridge.py' },
+        { label: 'honorific_names.py',    path: 'yomu/translation/honorific_names.py' },
+        { label: 'translator_deepl.py',   path: 'yomu/translation/providers/translator_deepl.py' },
+      ],
+    },
+
+    {
+      id: 'DOCS-01',
+      title: 'Documentação técnica + guia do usuário atualizados',
+      domain: 'infra', column: 'qas', env: 'branch',
+      updated: '2026-11-02',
+      branch: 'feat/DOCS-01',
+      commit: '5460cae',
+      summary: 'Documentação técnica (§14, §15), CONFIGURATION.md e Guia do Usuário atualizados para cobrir multi-idioma OCR (feat/LANG-01) e glossário de nomes (feat/GLOSSARY-01). Features marcadas como PARCIAL com ref de commit. Base verificada atualizada em todos os arquivos tocados.',
+      delivered: [
+        'DOCUMENTACAO_TECNICA.md §14: OCR multi-idioma — tabela idioma→motor, ocr_models.py, gates CJK/Cirílico, fluxo ponta a ponta (5460cae, 02/11)',
+        'DOCUMENTACAO_TECNICA.md §15: glossário de nomes — set_name_overrides, _apply_name_overrides, YOMU_NAME_GLOSSARY, limites (5460cae, 02/11)',
+        'CONFIGURATION.md: TRADUTOR_OCR_MODELS_DIR (OCR) e YOMU_NAME_GLOSSARY (Tradução) documentados (5460cae, 02/11)',
+        'GUIA_DO_USUARIO.md §9: idioma original com opções e nota de disponibilidade; glossário de nomes com exemplos (5460cae, 02/11)',
+        'Base verificada atualizada em todos os documentos tocados (5460cae, 02/11)',
+      ],
+      links: [
+        { label: 'DOCUMENTACAO_TECNICA.md', path: 'docs/technical/DOCUMENTACAO_TECNICA.md' },
+        { label: 'GUIA_DO_USUARIO.md',      path: 'docs/user/GUIA_DO_USUARIO.md' },
+        { label: 'CONFIGURATION.md',        path: 'docs/CONFIGURATION.md' },
+      ],
+    },
+
+    // ───────────────────────── BLOCKED ─────────────────────────
+
+    {
+      id: 'GEMINI-01',
+      title: 'Gemini/VPS clean — integração real',
+      domain: 'release', column: 'blocked', env: 'none',
+      updated: '2026-10-26',
+      summary: 'Código integrado e testes offline passando. Sem prova física: nenhum capítulo gerado real, VPS não verificado.',
+      blockedBy: 'Precisa de: túnel SSH ativo, VPS com API/worker compatíveis, sessão Gemini autorizada e aprovação explícita para run com custo real.',
+      delivered: [
+        'Readiness check, request/certificate validation, transport integrados na main',
+      ],
+      pending: [
+        'Smoke test físico com capítulo autorizado e VPS disponível',
+        'Validação de esquema par cliente/servidor antes de promover visual recovery',
+      ],
+      links: [
+        { label: 'remote_readiness.py', path: 'yomu/runtime/remote_readiness.py' },
+      ],
+    },
+
+    {
+      id: 'HARMONIC-01',
+      title: 'Classificação de borda harmônica',
+      domain: 'pipeline', column: 'blocked', env: 'none',
+      updated: '2026-10-24',
+      summary: 'Sinais de revisão automática funcionam. Relaxação segura exige labels reais de textura natural, franja de glifo fora da máscara e estruturas sob lettering.',
+      blockedBy: 'Precisa de: conjunto de labels reais independentes (positivos de textura natural e negativos de glifo). Sem eles, qualquer relaxação das regras atuais é SUPOSIÇÃO.',
+      delivered: [
+        'Overlays de borda e evidência de distância/coordenada (CLN-HARMONIC-03D)',
+        'CLEAN_HARMONIC_FILL permanece off por padrão',
+      ],
+      pending: [
+        'Labels reais → avaliação de classificador de topologia → promoção para LOCAL_SAFE',
+      ],
+      links: [
+        { label: 'harmonic_fill.py', path: 'yomu/clean/inpainting/harmonic_fill.py' },
+      ],
+    },
+
+    {
+      id: 'RELEASE-01',
+      title: 'Beta release + instalador Windows',
+      domain: 'release', column: 'blocked', env: 'none',
+      updated: '2026-10-30',
+      summary: 'CI passa. Beta não publicado. Nenhum gate físico foi provado: UI/licença, frozen worker, VPS/provider, Discord por evento, Clean. Instalador Windows (Setup.exe) não tem spec nem builder.',
+      blockedBy: 'Precisa de: (1) smoke de UI + login + licença Supabase real; (2) smoke do frozen worker com owner presente; (3) aprovação para run com custo real (Gemini/VPS); (4) entrega Discord por evento; (5) spec + builder do Setup.exe.',
+      delivered: [
+        'CI Windows passou: 6013 Python, 141 skipped, 2 xfailed (run 38830606731)',
+        'Updater implementado (update_manifest.py, update_transport.py, update_installer.py)',
+        'Beta license gate implementado (beta_license.py, aplicado em UiBridge.start/resume)',
+      ],
+      pending: [
+        'Smoke físico de UI + login + licença Supabase real',
+        'Protocolo frozen worker com owner presente',
+        'Instalador Windows (Setup.exe) — spec e builder inexistentes',
+        'Superfície de UI do updater (botão/indicador na UI)',
+      ],
+      links: [
+        { label: 'RELEASE_CHECKLIST.md', path: 'docs/RELEASE_CHECKLIST.md' },
+        { label: 'INSTALLATION.md',      path: 'docs/INSTALLATION.md' },
+        { label: 'update_manifest.py',   path: 'yomu/runtime/update_manifest.py' },
+      ],
+    },
+
+  ],
+};
