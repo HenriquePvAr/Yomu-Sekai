@@ -6,7 +6,9 @@
 > `yomu/pipeline/benchmark_pipeline.py` e `yomu/clean/ownership/font_fidelity.py`. O restante do
 > documento foi verificado sobre `5f482ce1` (2026-10-24); §16 e §25 antes sobre `c994426f`.
 > Seções marcadas como *snapshot histórico* (§28.1, §29, parte da §30) não foram revalidadas.
-> **Última revisão:** 2026-10-25
+> Seções sobre multi-idioma OCR (§14) e glossário de nomes (§15) verificadas sobre `7e58e76`
+> (feat/LANG-01) e `22f595d` (feat/GLOSSARY-01) respectivamente — ainda não em `main`.
+> **Última revisão:** 2026-11-02
 > **Público:** desenvolvedores, mantenedores, suporte técnico e agentes automatizados.
 
 Documentos irmãos: [Guia do Usuário](../user/GUIA_DO_USUARIO.md) ·
@@ -980,6 +982,67 @@ container de fala, recuperação de região do RapidOCR, fallbacks seletivos, fa
 página inteira). Sem isso, um grupo que perdesse silenciosamente parte de uma linha de
 origem não poderia ser reconstruído depois. O módulo **apenas observa**.
 
+### Suporte a múltiplos idiomas de origem — PARCIAL (feat/LANG-01, aguarda merge)
+
+> **Estado em `7e58e76` (feat/LANG-01):** implementado e testado; não está em `main`.
+
+O OCR agora aceita o argumento `--source-lang` na CLI e o campo `source_lang` do payload da
+UI (seletor `#langSelect` em `ui/ui_shell.html`). Os idiomas suportados são: **en** (inglês),
+**ja** (japonês), **ko** (coreano), **zh** (chinês simplificado), **ru** (russo) e **es**
+(espanhol).
+
+**Mapa de idioma → motor de reconhecimento** (`yomu/ocr/ocr_engine.py`,
+`PADDLE_LANG_BY_CHOICE`):
+
+| Código de entrada | Motor de reconhecimento |
+| --- | --- |
+| `en`, `eng` | RapidOCR — modelo inglês (embutido) |
+| `ja`, `jpn`, `japan` | PaddleOCR — modelo japonês |
+| `ko`, `kor`, `korean` | PaddleOCR — modelo coreano |
+| `zh`, `zhs`, `chi_sim` | PaddleOCR — modelo chinês simplificado |
+| `ru`, `rus` | PaddleOCR — modelo cirílico |
+| `es`, `spa` | PaddleOCR — modelo latino |
+
+**`yomu/ocr/ocr_models.py`** (novo em feat/LANG-01): gerenciador de modelos de
+reconhecimento RapidOCR/PaddleOCR por idioma. Funções principais:
+
+- `rec_model_for(lang)` — devolve a chave do modelo para um código de idioma.
+- `models_dir()` — lê `TRADUTOR_OCR_MODELS_DIR` (padrão: `~/.yomu/ocr_models`).
+- `ensure_model(model_key)` — baixa o arquivo `.tar` se ausente, verifica SHA-256; levanta
+  `RuntimeError` em caso de hash incorreto (fail-closed). O modelo inglês (`"en"`) é
+  embutido no `rapidocr_onnxruntime` e não precisa de download.
+
+> **SHA-256 dos modelos não-ingleses** estão marcados como `placeholder_*` no commit
+> `7e58e76` e precisam ser substituídos pelos hashes reais antes de promover para produção
+> (item pendente listado no card LANG-01).
+
+**Gates adaptados para idiomas não-latinos:**
+
+- `score_group_ocr_quality()` (`yomu/ocr/ocr_balloon.py`): texto CJK e cirílico recebem
+  score fixo `0.9` — a penalidade `non_ascii_ocr_artifact` não se aplica a scripts que
+  intrinsecamente não são ASCII.
+- `weak_label_semantic_promotion_allowed()` (`yomu/review/region_taxonomy.py`): texto CJK
+  (≥ 2 ideogramas) e cirílico (≥ 2 palavras) são promovidos sem exigir léxico inglês.
+- `split_glued_source_words()` (`yomu/ocr/ocr_balloon.py`): retorna sem processamento para
+  idiomas com escrita logográfica ou cirílica — separação por frequência de palavras é um
+  conceito latino.
+
+**Leitura vertical CJK:** o argumento `use_cls=False` (definido no engine desde o commit
+`ae3340c7`) evita que o PaddleOCR classifique texto rodado — necessário para leitura
+vertical de mangá japonês; o seletor de idioma fonte não altera esse comportamento.
+
+**Fluxo de ponta a ponta:**
+
+```
+UI (langSelect) → payload.source_lang
+  → UiBridge._source_language()  (normalização e validação)
+  → build_run_command(--source-lang)
+  → run_webtoon.py  (--source-lang → benchmark_args)
+  → _resolve_translation_runtime(source_lang)
+  → _SOURCE_LANG_TO_OCR_LANG[source_lang] → ocr_lang
+  → OCREngine(lang_choice=ocr_lang) → ocr_models.ensure_model()
+```
+
 ## 15. Tradução: abstração de provider
 
 ### Resolução do provider
@@ -1057,6 +1120,41 @@ Com contexto habilitado, `session_context.py` mantém informações do capítulo
 `session_context.json` para manter nomes e termos consistentes entre balões. `--no-context`
 desativa; `--delete-context-after` remove o arquivo somente após a geração bem-sucedida do
 PDF.
+
+### Glossário de nomes por série — PARCIAL (feat/GLOSSARY-01, aguarda merge)
+
+> **Estado em `22f595d` (feat/GLOSSARY-01):** implementado e testado; não está em `main`.
+
+Permite ao usuário definir substituições de nomes por série, por exemplo `Sunless = Sunny`,
+persistidas no `localStorage` do browser por URL de série e enviadas ao pipeline via variável
+de ambiente `YOMU_NAME_GLOSSARY`.
+
+**Fluxo de ponta a ponta:**
+
+```
+UI textarea (#nameGlossaryInput)
+  → nameGlossaryPairs() — divide por linha, valida "SRC = TGT"
+  → payload.name_glossary (array de pares)
+  → UiBridge._name_glossary() — valida, limita a 50 pares, rejeita src/tgt vazios
+  → job_config["name_glossary"]
+  → job_runner.py — serializa como JSON em YOMU_NAME_GLOSSARY
+  → benchmark_pipeline._resolve_translation_runtime()
+  → translator.set_name_overrides(pairs)
+```
+
+**`set_name_overrides(pairs)`** existe em `translator_deepl.py` e
+`yomu_backend_provider.py`. Além de armazenar os pares, registra as fontes com
+comprimento ≥ 3 como nomes protegidos (`_protected_names`), forçando a DeepL a mantê-las
+literais na saída — tornando a substituição determinística.
+
+**`_apply_name_overrides(text)`** aplica substituição caso-insensível por palavra inteira
+(regex `(?<![A-Za-z0-9_-])src(?![A-Za-z0-9_-])`) como pós-processamento em `translate_many()`.
+
+**Limites:** máximo de 50 pares; fonte e destino devem ter pelo menos 1 caractere após
+trim. Fonte ou destino vazios são descartados silenciosamente pela validação em `UiBridge`.
+
+**Variável de ambiente:** `YOMU_NAME_GLOSSARY` — JSON array de arrays `[["Src","Tgt"],…]`;
+consumida por `benchmark_pipeline._resolve_translation_runtime()` via `os.environ.get`.
 
 ### Proveniência de provider
 
