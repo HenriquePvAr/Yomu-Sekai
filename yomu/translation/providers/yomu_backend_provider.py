@@ -6,6 +6,7 @@ future Edge Function deployment can adopt the same contract without DeepL locall
 """
 from __future__ import annotations
 
+import re
 import threading
 import uuid
 import hashlib
@@ -637,6 +638,26 @@ class YomuBackendTranslationProvider:
         self._locks_guard = threading.Lock()
         self.provider_name = "yomu_backend"
         self.stats: dict[str, Any] = {"provider_name": self.provider_name}
+        self._name_overrides: list[tuple[str, str]] = []
+
+    def set_name_overrides(self, pairs):
+        """Store user-defined name substitutions applied after translation."""
+        validated: list[tuple[str, str]] = []
+        for pair in pairs or []:
+            if not isinstance(pair, (list, tuple)) or len(pair) < 2:
+                continue
+            src = str(pair[0] or "").strip()
+            tgt = str(pair[1] or "").strip()
+            if src and tgt:
+                validated.append((src, tgt))
+        self._name_overrides = validated
+
+    def _apply_name_overrides(self, text: str) -> str:
+        """Replace source-language names with user-preferred target forms."""
+        for src, tgt in self._name_overrides:
+            pattern = r'(?<![A-Za-z0-9_-])' + re.escape(src) + r'(?![A-Za-z0-9_-])'
+            text = re.sub(pattern, tgt, text, flags=re.IGNORECASE)
+        return text
 
     def _lock_for(self, key):
         with self._locks_guard:
@@ -815,7 +836,10 @@ class YomuBackendTranslationProvider:
                 )
             except Exception as exc:  # noqa: BLE001 - never bill without durable local recovery data
                 raise BackendTranslationError("translation_result_persist_failed") from exc
-        return [by_id[item.item_id] for item in items]
+        results = [by_id[item.item_id] for item in items]
+        if self._name_overrides:
+            results = [self._apply_name_overrides(t) for t in results]
+        return results
 
     def commit_translation_success(self) -> dict[str, Any]:
         """Consume once after all provider/retry results are durable, before rendering."""

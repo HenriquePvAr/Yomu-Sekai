@@ -3344,6 +3344,18 @@ def run_benchmark(args):
     )
     if hasattr(translator, "set_detected_names"):
         translator.set_detected_names(detected_names)
+    _raw_glossary = os.getenv("YOMU_NAME_GLOSSARY", "").strip()
+    if _raw_glossary and hasattr(translator, "set_name_overrides"):
+        try:
+            import json as _json
+            _glossary_pairs = _json.loads(_raw_glossary)
+            if isinstance(_glossary_pairs, list):
+                translator.set_name_overrides(
+                    [(str(p[0]), str(p[1])) for p in _glossary_pairs
+                     if isinstance(p, (list, tuple)) and len(p) >= 2]
+                )
+        except Exception:  # noqa: BLE001 - malformed env never breaks translation
+            pass
     # Reuse the page-local result objects after chapter-level name repair.  The
     # contained group references are the same production objects, so repairs
     # remain visible while the global list is rebuilt deterministically.
