@@ -987,6 +987,10 @@ def run_job(job_id: str, db_path: str, worker_id: str, log_path: str) -> int:
         env["TRANSLATION_ENABLED"] = (
             "1" if configuration.get("translation_enabled") is True else "0"
         )
+        _name_glossary = configuration.get("name_glossary")
+        if isinstance(_name_glossary, list) and _name_glossary:
+            import json as _json
+            env["YOMU_NAME_GLOSSARY"] = _json.dumps(_name_glossary)
         # The wallet RPC expects the verified license_devices row UUID, never
         # the commercial install identifier.  It is read from the persisted
         # authorization snapshot at this process boundary.

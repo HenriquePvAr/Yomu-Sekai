@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import html
 import json
+import re
 import time
 from urllib.parse import urlparse
 
@@ -228,6 +229,7 @@ class DeepLTranslator:
         # Attached to strict retries only - see ``translate_strict``.
         self.session_context_text = ""
         self._protected_names: list[str] = []
+        self._name_overrides: list[tuple[str, str]] = []
         self.stats = {
             "provider_name": PROVIDER_NAME,
             "provider_family": PROVIDER_FAMILY,
@@ -317,6 +319,8 @@ class DeepLTranslator:
                 translations[original_index] = candidate
                 if candidate.strip():
                     self._bump("translation_results_associated")
+        if self._name_overrides:
+            translations = [self._apply_name_overrides(t) for t in translations]
         return translations
 
     def translate_strict(
@@ -495,6 +499,38 @@ class DeepLTranslator:
              and not is_english_word(name) and word_zipf(name) < 3.0},
             key=len, reverse=True)
         self.stats["detected_name_count"] = len(names)
+
+    def set_name_overrides(self, pairs):
+        """Store user-defined name substitutions applied after translation.
+
+        Also registers the source names as protected so DeepL leaves them
+        verbatim in the translation, making the substitution deterministic.
+        """
+        validated: list[tuple[str, str]] = []
+        extra_protected: list[str] = []
+        for pair in pairs or []:
+            if not isinstance(pair, (list, tuple)) or len(pair) < 2:
+                continue
+            src = str(pair[0] or "").strip()
+            tgt = str(pair[1] or "").strip()
+            if src and tgt:
+                validated.append((src, tgt))
+                if len(src) >= 3 and src.replace("-", "").isalpha():
+                    extra_protected.append(src)
+        self._name_overrides = validated
+        if extra_protected:
+            existing = set(self._protected_names)
+            for name in extra_protected:
+                if name not in existing:
+                    self._protected_names.append(name)
+                    existing.add(name)
+
+    def _apply_name_overrides(self, text: str) -> str:
+        """Replace source-language names with user-preferred target forms."""
+        for src, tgt in self._name_overrides:
+            pattern = r'(?<![A-Za-z0-9_-])' + re.escape(src) + r'(?![A-Za-z0-9_-])'
+            text = re.sub(pattern, tgt, text, flags=re.IGNORECASE)
+        return text
 
 
 def usage(api_key=None, base_url=None, transport=None) -> dict:

@@ -7829,6 +7829,7 @@ class UiBridge:
             "output_format": output_format,
             "output_profile": output_profile,
             "source_lang": source_lang,
+            "name_glossary": self._name_glossary(payload),
             # Output-plan provenance: what the user asked to produce vs what will run.
             # Present for every job (inferred for legacy payloads) so the manifest and
             # finish screen can filter truthfully by requested operations.
@@ -7866,6 +7867,26 @@ class UiBridge:
             "requested_operations": sorted(plan.requested_operations),
             "effective_operations": sorted(plan.operations),
         }
+
+    @staticmethod
+    def _name_glossary(payload: dict[str, Any]) -> list[list[str]]:
+        """Parse and validate user-defined name overrides from the UI payload.
+
+        Accepts a list of [source, target] pairs (from the JS nameGlossaryPairs()
+        function).  Returns up to 50 validated pairs; malformed entries are dropped.
+        """
+        raw = payload.get("name_glossary")
+        if not isinstance(raw, list):
+            return []
+        pairs: list[list[str]] = []
+        for item in raw:
+            if not isinstance(item, (list, tuple)) or len(item) < 2:
+                continue
+            src = str(item[0] or "").strip()
+            tgt = str(item[1] or "").strip()
+            if src and tgt and len(pairs) < 50:
+                pairs.append([src, tgt])
+        return pairs
 
     @staticmethod
     def _normalize_translation_provider(payload: dict[str, Any]) -> str:
