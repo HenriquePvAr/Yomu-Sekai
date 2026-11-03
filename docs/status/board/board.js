@@ -120,21 +120,17 @@ window.BOARD = {
       ],
     },
 
-    // ───────────────────────── DEV ─────────────────────────
+    // ───────────────────────── PROD (recém-mergeados) ──────
 
     {
       id: 'LANG-01',
       title: 'Múltiplos idiomas de origem (ja, ko, zh, ru, es…)',
-      domain: 'pipeline', column: 'qas', env: 'branch',
-      fila: 1,
-      updated: '2026-11-02',
-      branch: 'dev',
-      commit: '7ed2e01',
-      summary: 'Integrado em dev (7ed2e01). Cadeia completa: UI (langSelect habilitado) → payload (source_lang) → ui_bridge → build_run_command(--ocr-lang) → run_webtoon → benchmark_pipeline (ocr_lang override) → OCREngine (PADDLE_LANG_BY_CHOICE). Gates: score_group_ocr_quality não penaliza CJK/Cirílico; split_glued_source_words early-return para não-Latin; weak_label_semantic_promotion_allowed bypassa léxico inglês para texto logográfico/cirílico. 22 testes novos passando. Aguarda merge em main + teste físico.',
-      pending: [
-        'Merge em dev e verificação física com capítulo real (ja/ko/zh/ru)',
-        'SHA-256 reais para modelos RapidOCR (substituir placeholder vazio em ocr_models.py)',
-        'Teste de reading_order CJK (vertical) e _promote_glossary_sounds em script não-latino',
+      domain: 'pipeline', column: 'prod', env: 'main',
+      updated: '2026-11-03',
+      summary: 'Cadeia completa: UI (langSelect habilitado) → payload (source_lang) → ui_bridge → build_run_command(--ocr-lang) → run_webtoon → benchmark_pipeline (ocr_lang override) → OCREngine (PADDLE_LANG_BY_CHOICE). Gates: score_group_ocr_quality não penaliza CJK/Cirílico; split_glued_source_words early-return para não-Latin; weak_label_semantic_promotion_allowed bypassa léxico inglês para texto logográfico/cirílico. 22 testes passando.',
+      delivered: [
+        'feat(lang): suporte a múltiplos idiomas de origem (7ed2e01, 01/11)',
+        'Mergeado na main (1c52366, 03/11)',
       ],
       links: [
         { label: 'ocr_models.py',         path: 'yomu/ocr/ocr_models.py' },
@@ -148,10 +144,8 @@ window.BOARD = {
     {
       id: 'GLOSSARY-01',
       title: 'Glossário de nomes por série',
-      domain: 'ui', column: 'qas', env: 'branch',
-      updated: '2026-11-02',
-      branch: 'dev',
-      commit: 'a4a28dd',
+      domain: 'ui', column: 'prod', env: 'main',
+      updated: '2026-11-03',
       summary: 'Glossário de nomes por série integrado ao Yomu-Sekai: UI (textarea + localStorage por série), payload (ui_bridge._name_glossary), backend (YOMU_NAME_GLOSSARY via job_runner, benchmark_pipeline), e set_name_overrides/_apply_name_overrides nos dois provedores. 32 testes passando.',
       delivered: [
         'ui_shell.html: #nameGlossaryField + #nameGlossaryInput adicionados (a4a28dd, 02/11)',
@@ -162,6 +156,7 @@ window.BOARD = {
         'yomu/translation/providers/translator_deepl.py: set_name_overrides/_apply_name_overrides integrados (a4a28dd, 02/11)',
         'yomu/translation/providers/yomu_backend_provider.py: idem (a4a28dd, 02/11)',
         'tests/test_name_glossary.py: 32 testes hermético (a4a28dd, 02/11)',
+        'Mergeado na main (1c52366, 03/11)',
       ],
       links: [
         { label: 'ui_shell.html',         path: 'ui/ui_shell.html' },
@@ -174,10 +169,8 @@ window.BOARD = {
     {
       id: 'DOCS-01',
       title: 'Documentação técnica + guia do usuário atualizados',
-      domain: 'infra', column: 'qas', env: 'branch',
-      updated: '2026-11-02',
-      branch: 'dev',
-      commit: 'a465995',
+      domain: 'infra', column: 'prod', env: 'main',
+      updated: '2026-11-03',
       summary: 'Documentação técnica (§14, §15), CONFIGURATION.md e Guia do Usuário atualizados para cobrir multi-idioma OCR (feat/LANG-01) e glossário de nomes (feat/GLOSSARY-01). Features marcadas como PARCIAL com ref de commit. Base verificada atualizada em todos os arquivos tocados.',
       delivered: [
         'DOCUMENTACAO_TECNICA.md §14: OCR multi-idioma — tabela idioma→motor, ocr_models.py, gates CJK/Cirílico, fluxo ponta a ponta (5460cae, 02/11)',
@@ -185,6 +178,7 @@ window.BOARD = {
         'CONFIGURATION.md: TRADUTOR_OCR_MODELS_DIR (OCR) e YOMU_NAME_GLOSSARY (Tradução) documentados (5460cae, 02/11)',
         'GUIA_DO_USUARIO.md §9: idioma original com opções e nota de disponibilidade; glossário de nomes com exemplos (5460cae, 02/11)',
         'Base verificada atualizada em todos os documentos tocados (5460cae, 02/11)',
+        'Mergeado na main (1c52366, 03/11)',
       ],
       links: [
         { label: 'DOCUMENTACAO_TECNICA.md', path: 'docs/technical/DOCUMENTACAO_TECNICA.md' },
