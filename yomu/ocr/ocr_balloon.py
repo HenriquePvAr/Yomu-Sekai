@@ -5190,12 +5190,22 @@ def _assign_region_metadata(groups):
         group.mixed_ocr_provenance = len(group.ocr_provenance_engines) > 1
 
 
+_NON_LATIN_SCRIPT = re.compile("[\\u3040-\\u30ff\\u3400-\\u9fff\\uac00-\\ud7af\\u0400-\\u04ff\\u0600-\\u06ff]")
+
+
 def score_group_ocr_quality(group):
     text = clean_ocr_text(group.text)
     reasons = []
     score = 1.0
     if not text:
         return 0.0, ["empty_text"]
+
+    # The heuristics below are English-only; on CJK/Hangul/Cyrillic/Arabic every letter
+    # would read as an OCR artifact and the region would be retried, then blocked.
+    letters = [char for char in text if char.isalpha()]
+    if (letters and _NON_LATIN_SCRIPT.search(text)
+            and sum(not ("A" <= char.upper() <= "Z") for char in letters) * 2 >= len(letters)):
+        return (0.8 if group.cleanup_lines else 0.9), ["non_latin_script"]
 
     if group.cleanup_lines:
         reasons.append("ignored_line_inside_text_region")

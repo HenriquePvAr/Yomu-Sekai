@@ -153,3 +153,33 @@ class TestWeakLabelNonEnglishGate(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestNonLatinOcrQuality(unittest.TestCase):
+    """English-only OCR heuristics must not flag every CJK/Hangul/Cyrillic letter as damage."""
+
+    def _scored(self, text):
+        import numpy as np
+        from yomu.ocr.ocr_balloon import TextGroup, rapidocr_region_decision, score_group_ocr_quality
+        from yomu.ocr.ocr_engine import OCRLine
+
+        line = OCRLine(text=text, confidence=0.95,
+                       polygon=np.array([[10, 10], [210, 10], [210, 45], [10, 45]], dtype=np.int32),
+                       box=(10, 10, 200, 35), raw_text=text, engine="rapidocr", page=1)
+        group = TextGroup(group_id="T001", lines=[line], text=text, classification="speech",
+                          inside_balloon_like_region=True, source_engine="rapidocr")
+        group.quality_score, group.quality_reasons = score_group_ocr_quality(group)
+        return group, rapidocr_region_decision(group)
+
+    def test_non_latin_speech_is_not_an_ocr_artifact(self):
+        for text in ("どうして来たの？", "你为什么来这里？", "왜 여기 왔어?", "Почему ты здесь?"):
+            with self.subTest(text=text):
+                group, decision = self._scored(text)
+                self.assertEqual(group.quality_reasons, ["non_latin_script"])
+                self.assertEqual(decision, "accept")
+
+    def test_english_scoring_is_unchanged(self):
+        group, _ = self._scored("DO YOU KNOW WHY THEY'RE TRYING TO COME HERE?")
+        self.assertNotIn("non_latin_script", group.quality_reasons)
+        group, _ = self._scored("CAFÉ AU LAIT")
+        self.assertNotIn("non_latin_script", group.quality_reasons)
