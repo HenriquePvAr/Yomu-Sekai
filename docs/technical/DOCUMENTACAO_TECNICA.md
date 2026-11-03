@@ -8,7 +8,8 @@
 > Seções marcadas como *snapshot histórico* (§28.1, §29, parte da §30) não foram revalidadas.
 > Seções sobre multi-idioma OCR (§14) e glossário de nomes (§15) verificadas sobre `7e58e76`
 > (feat/LANG-01) e `22f595d` (feat/GLOSSARY-01) respectivamente — ainda não em `main`.
-> **Última revisão:** 2026-11-02
+> §17, "Auditoria linguística e taxonomia semântica", item 5 (retry pelo backend) verificado sobre `885a237` (branch `dev`) em 2026-11-03.
+> **Última revisão:** 2026-11-03
 > **Público:** desenvolvedores, mantenedores, suporte técnico e agentes automatizados.
 
 Documentos irmãos: [Guia do Usuário](../user/GUIA_DO_USUARIO.md) ·
@@ -2156,6 +2157,16 @@ primeiro deles nunca chegou ao validador semântico:
    rejeitado é contado em `strict_retry_duplicate_candidates` e reoferecido a ninguém — o
    validador o rejeita de novo. O orçamento continua de **uma** chamada extra por região,
    tanto em `ocr_balloon` quanto em `provider_execution`.
+5. **O retry pelo backend quebrava em silêncio (corrigido em 2026-11-03).** No caminho de
+   produção o tradutor efetivo é `YomuBackendTranslationProvider`, cujo `translate_strict`
+   aceitava só `previous_translation`/`validation_reason`/`force`. Os três retries de
+   `ocr_balloon.py` (terminologia, palavra-alvo desconhecida e retry de qualidade/isolado)
+   passam também `allow_proper_names`, `proper_names`, `retry_origin`, `retry_attempt` e
+   `source_context`; o `TypeError` resultante era capturado pelo `except Exception` do
+   chamador e virava candidato vazio (`strict_retry_error:TypeError`), deixando a região sem
+   tradução. A assinatura agora é a mesma do `DeepLTranslator.translate_strict`; o backend
+   ainda reenvia só o texto (os metadados não viajam no contrato de `translation-execute`).
+   Medido em 12 jobs reais: ~78 regiões terminavam sem tradução por esse caminho.
 
 O retry informado em si já existia e não foi enfraquecido: `translate_strict` recebe
 `validation_reason`, e `semantic_fidelity.retry_constraint()` traduz o código de motivo em

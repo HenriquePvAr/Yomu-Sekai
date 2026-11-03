@@ -916,11 +916,23 @@ class YomuBackendTranslationProvider:
     def finalize_reservation(self, context: dict) -> dict[str, Any]:
         raise BackendTranslationError("settlement_action_required")
 
-    def translate_strict(self, text, *, previous_translation="", validation_reason="", force=False):
+    def translate_strict(
+        self,
+        text,
+        *,
+        previous_translation="",
+        validation_reason="",
+        force=False,
+        allow_proper_names=True,
+        proper_names=None,
+        retry_origin="quality_retry",
+        retry_attempt=1,
+        source_context=(),
+    ):
+        # Mirrors DeepL's signature: OCR retry callers pass these and swallow a TypeError.
         # Strict retries are independent logical requests, but use the same
         # job-scoped auth and backend contract.  The base translation adapter
         # remains the source of truth for item mapping and idempotency.
-        previous = str(previous_translation or "").strip()
         value = str(text or "").strip()
         if not value:
             return ""
