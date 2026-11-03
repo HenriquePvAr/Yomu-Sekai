@@ -491,3 +491,20 @@ def test_request_shape_is_persisted_before_http_failure(tmp_path: Path, monkeypa
     lines = (tmp_path / "diagnostics" / "translation_execute_request_shape.jsonl").read_text().splitlines()
     assert len(lines) == 1 and "device_id_uuid_valid" in lines[0]
     assert '"items"' not in lines[0] and "Hello" not in lines[0]
+
+
+def test_translate_strict_accepts_the_ocr_retry_arguments(tmp_path: Path, monkeypatch):
+    provider = YomuBackendTranslationProvider(runtime_root=tmp_path, backend=MockBackendClient())
+    monkeypatch.setattr(provider, "translate_many", lambda texts, force=False: [f"pt:{texts[0]}"])
+    candidate = provider.translate_strict(
+        "BLOODBANE POISON CAN NEVER KILL ME.",
+        previous_translation="x",
+        validation_reason="terminology_conflict",
+        force=False,
+        allow_proper_names=False,
+        proper_names=["BLOODBANE"],
+        retry_origin="terminology_retry",
+        retry_attempt=2,
+        source_context=("prev line",),
+    )
+    assert candidate == "pt:BLOODBANE POISON CAN NEVER KILL ME."

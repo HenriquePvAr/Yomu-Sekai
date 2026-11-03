@@ -6,9 +6,10 @@
 > `yomu/pipeline/benchmark_pipeline.py` e `yomu/clean/ownership/font_fidelity.py`. O restante do
 > documento foi verificado sobre `5f482ce1` (2026-10-24); §16 e §25 antes sobre `c994426f`.
 > Seções marcadas como *snapshot histórico* (§28.1, §29, parte da §30) não foram revalidadas.
-> Seções sobre multi-idioma OCR (§14) e glossário de nomes (§15) verificadas sobre `7e58e76`
-> (feat/LANG-01) e `22f595d` (feat/GLOSSARY-01) respectivamente — ainda não em `main`.
-> **Última revisão:** 2026-11-02
+> Multi-idioma OCR (§14) reverificado sobre `dev` em 2026-11-03; glossário de nomes (§15)
+> verificado sobre `22f595d` (feat/GLOSSARY-01), integrado em `dev`/`main`.
+> §17, "Auditoria linguística e taxonomia semântica", item 5 (retry pelo backend) verificado sobre `885a237` (branch `dev`) em 2026-11-03.
+> **Última revisão:** 2026-11-03
 > **Público:** desenvolvedores, mantenedores, suporte técnico e agentes automatizados.
 
 Documentos irmãos: [Guia do Usuário](../user/GUIA_DO_USUARIO.md) ·
@@ -982,66 +983,43 @@ container de fala, recuperação de região do RapidOCR, fallbacks seletivos, fa
 página inteira). Sem isso, um grupo que perdesse silenciosamente parte de uma linha de
 origem não poderia ser reconstruído depois. O módulo **apenas observa**.
 
-### Suporte a múltiplos idiomas de origem — PARCIAL (feat/LANG-01, aguarda merge)
+### Suporte a múltiplos idiomas de origem — PARCIAL
 
-> **Estado em `7e58e76` (feat/LANG-01):** implementado e testado; não está em `main`.
+> **Estado verificado em `dev` (`885a237` + correções de 2026-11-03), já em `main`.** O idioma
+> escolhido chega ao tradutor e aos portões de classificação/qualidade; o **modelo de
+> reconhecimento do OCR ainda não muda por idioma**.
 
-O OCR agora aceita o argumento `--source-lang` na CLI e o campo `source_lang` do payload da
-UI (seletor `#langSelect` em `ui/ui_shell.html`). Os idiomas suportados são: **en** (inglês),
-**ja** (japonês), **ko** (coreano), **zh** (chinês simplificado), **ru** (russo) e **es**
-(espanhol).
+**Entrada.** Seletor `#langSelect` em `ui/ui_shell.html` (valores `3` Inglês, `1` Japonês,
+`2` Coreano, `zh` Chinês simplificado, `ru` Russo/Cirílico, `es` Espanhol/Latino) → campo
+`source_lang` do payload → `UiBridge` valida contra `_VALID_SOURCE_LANGS` (`yomu/ui/ui_bridge.py`,
+padrão `3`) → `--source-lang` da CLI (`yomu/commands/run_webtoon.py`, padrão `3`) →
+`_resolve_translation_runtime(source_lang=…)` em `yomu/pipeline/benchmark_pipeline.py`, que
+deriva o código de OCR por `ocr_code_for_choice()` (`translator_nllb.py`) e passa o idioma ao
+tradutor.
 
-**Mapa de idioma → motor de reconhecimento** (`yomu/ocr/ocr_engine.py`,
-`PADDLE_LANG_BY_CHOICE`):
+**O que funciona (IMPLEMENTADO):**
 
-| Código de entrada | Motor de reconhecimento |
-| --- | --- |
-| `en`, `eng` | RapidOCR — modelo inglês (embutido) |
-| `ja`, `jpn`, `japan` | PaddleOCR — modelo japonês |
-| `ko`, `kor`, `korean` | PaddleOCR — modelo coreano |
-| `zh`, `zhs`, `chi_sim` | PaddleOCR — modelo chinês simplificado |
-| `ru`, `rus` | PaddleOCR — modelo cirílico |
-| `es`, `spa` | PaddleOCR — modelo latino |
+- `score_group_ocr_quality()` (`yomu/ocr/ocr_balloon.py`): texto majoritariamente CJK, Hangul,
+  cirílico ou árabe recebe score neutro (`0.9`, `0.8` com linha ignorada dentro da região) e o
+  motivo `non_latin_script`. Antes de 2026-11-03 cada letra caía em `non_ascii_ocr_artifact`
+  (motivo de "corrupção"), a região era relida e bloqueada — nenhum texto não latino chegava
+  à tradução.
+- `weak_label_semantic_promotion_allowed(…, source_lang=…)` (`yomu/review/region_taxonomy.py`):
+  para idioma não inglês, qualquer texto com 4+ caracteres conta como conteúdo semântico.
+- `use_cls=False` no RapidOCR (`yomu/ocr/ocr_engine.py`) evita classificar texto rodado,
+  necessário para a leitura vertical; o seletor de idioma não altera isso.
+- `split_glued_source_words()` não precisa de exceção: só reescreve tokens `[A-Za-z]`
+  (`re.sub` final da função), então texto CJK, Hangul e cirílico passa intacto.
 
-**`yomu/ocr/ocr_models.py`** (novo em feat/LANG-01): gerenciador de modelos de
-reconhecimento RapidOCR/PaddleOCR por idioma. Funções principais:
+**O que falta (PLANEJADO):**
 
-- `rec_model_for(lang)` — devolve a chave do modelo para um código de idioma.
-- `models_dir()` — lê `TRADUTOR_OCR_MODELS_DIR` (padrão: `~/.yomu/ocr_models`).
-- `ensure_model(model_key)` — baixa o arquivo `.tar` se ausente, verifica SHA-256; levanta
-  `RuntimeError` em caso de hash incorreto (fail-closed). O modelo inglês (`"en"`) é
-  embutido no `rapidocr_onnxruntime` e não precisa de download.
-
-> **SHA-256 dos modelos não-ingleses** estão marcados como `placeholder_*` no commit
-> `7e58e76` e precisam ser substituídos pelos hashes reais antes de promover para produção
-> (item pendente listado no card LANG-01).
-
-**Gates adaptados para idiomas não-latinos:**
-
-- `score_group_ocr_quality()` (`yomu/ocr/ocr_balloon.py`): texto CJK e cirílico recebem
-  score fixo `0.9` — a penalidade `non_ascii_ocr_artifact` não se aplica a scripts que
-  intrinsecamente não são ASCII.
-- `weak_label_semantic_promotion_allowed()` (`yomu/review/region_taxonomy.py`): texto CJK
-  (≥ 2 ideogramas) e cirílico (≥ 2 palavras) são promovidos sem exigir léxico inglês.
-- `split_glued_source_words()` (`yomu/ocr/ocr_balloon.py`): retorna sem processamento para
-  idiomas com escrita logográfica ou cirílica — separação por frequência de palavras é um
-  conceito latino.
-
-**Leitura vertical CJK:** o argumento `use_cls=False` (definido no engine desde o commit
-`ae3340c7`) evita que o PaddleOCR classifique texto rodado — necessário para leitura
-vertical de mangá japonês; o seletor de idioma fonte não altera esse comportamento.
-
-**Fluxo de ponta a ponta:**
-
-```
-UI (langSelect) → payload.source_lang
-  → UiBridge._source_language()  (normalização e validação)
-  → build_run_command(--source-lang)
-  → run_webtoon.py  (--source-lang → benchmark_args)
-  → _resolve_translation_runtime(source_lang)
-  → _SOURCE_LANG_TO_OCR_LANG[source_lang] → ocr_lang
-  → OCREngine(lang_choice=ocr_lang) → ocr_models.ensure_model()
-```
+- `yomu/ocr/ocr_models.py` tem o catálogo por idioma (`rec_model_for`, `model_path`,
+  `ensure_model`; diretório em `TRADUTOR_OCR_MODELS_DIR`, padrão `%APPDATA%/yomu_ocr_models`),
+  mas **nenhum código de produção chama `ensure_model`**, e o `OCREngine` inicializa o RapidOCR
+  sempre com o modelo padrão (`RapidOCR()`), sem `rec_model_path`. A qualidade de leitura de
+  japonês, coreano e cirílico com o modelo padrão **não foi medida**.
+- Todos os `sha256` do catálogo estão vazios, o que desliga a verificação pós-download; precisam
+  dos hashes reais antes de o download ser ligado.
 
 ## 15. Tradução: abstração de provider
 
@@ -2156,6 +2134,16 @@ primeiro deles nunca chegou ao validador semântico:
    rejeitado é contado em `strict_retry_duplicate_candidates` e reoferecido a ninguém — o
    validador o rejeita de novo. O orçamento continua de **uma** chamada extra por região,
    tanto em `ocr_balloon` quanto em `provider_execution`.
+5. **O retry pelo backend quebrava em silêncio (corrigido em 2026-11-03).** No caminho de
+   produção o tradutor efetivo é `YomuBackendTranslationProvider`, cujo `translate_strict`
+   aceitava só `previous_translation`/`validation_reason`/`force`. Os três retries de
+   `ocr_balloon.py` (terminologia, palavra-alvo desconhecida e retry de qualidade/isolado)
+   passam também `allow_proper_names`, `proper_names`, `retry_origin`, `retry_attempt` e
+   `source_context`; o `TypeError` resultante era capturado pelo `except Exception` do
+   chamador e virava candidato vazio (`strict_retry_error:TypeError`), deixando a região sem
+   tradução. A assinatura agora é a mesma do `DeepLTranslator.translate_strict`; o backend
+   ainda reenvia só o texto (os metadados não viajam no contrato de `translation-execute`).
+   Medido em 12 jobs reais: ~78 regiões terminavam sem tradução por esse caminho.
 
 O retry informado em si já existia e não foi enfraquecido: `translate_strict` recebe
 `validation_reason`, e `semantic_fidelity.retry_constraint()` traduz o código de motivo em

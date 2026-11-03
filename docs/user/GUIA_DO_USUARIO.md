@@ -1,6 +1,6 @@
 # Yomu Sekai — Guia do Usuário
 
-> **Base verificada:** `b990cc8` · **Revisado em:** 2026-11-02 · Seções sobre idioma original e glossário de nomes verificadas sobre `7e58e76` (feat/LANG-01) e `22f595d` (feat/GLOSSARY-01) — aguardam merge em `main`
+> **Base verificada:** `b990cc8` · **Revisado em:** 2026-11-03 · Idioma original reverificado sobre `dev` (`885a237`) em 2026-11-03; glossário de nomes verificado sobre `22f595d` (feat/GLOSSARY-01), integrado em `main`
 > **Para quem é:** Scans, tradutores, editores e testadores da Beta. Nenhum conhecimento
 > técnico é necessário.
 
@@ -260,15 +260,14 @@ capítulo.
 Uma lista suspensa, logo abaixo de **Idioma original**. O padrão é **Qualidade**. Abaixo
 dela, uma linha curta descreve o modo selecionado.
 
-**Idioma original** — seleciona em qual idioma o texto do capítulo está escrito. A versão
-atual aceita: **Inglês** (padrão), **Japonês**, **Coreano**, **Chinês**, **Russo** e
-**Espanhol**. O programa lê e traduz o texto no idioma escolhido; se o idioma estiver errado
-o OCR vai ler mal. Na primeira vez que você usar um idioma diferente do inglês, o programa
-pode demorar alguns minutos a mais para baixar o modelo de reconhecimento correspondente —
-isso acontece uma única vez por idioma.
+**Idioma original** — diz em qual idioma o texto do capítulo está escrito. Opções:
+**Inglês** (padrão), **Japonês**, **Coreano**, **Chinês simplificado**, **Russo / Cirílico** e
+**Espanhol / Latino**. O tradutor recebe o idioma escolhido; escolha sempre o idioma real do
+capítulo.
 
-> **Disponibilidade:** idiomas além do inglês estão em revisão final (feat/LANG-01) e chegam
-> num próximo update. Na versão atual da main, o campo aparece fixo em **Inglês**.
+> **Atenção:** só o **Inglês** está pronto. Nos outros idiomas o programa ainda lê o texto com o
+> modelo de reconhecimento padrão, então balões podem sair mal lidos, sem tradução ou ir para a
+> revisão. O reconhecimento específico por idioma chega num próximo update.
 
 | Modo | Quando usar |
 | --- | --- |

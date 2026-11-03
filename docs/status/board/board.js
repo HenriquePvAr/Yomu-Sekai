@@ -4,7 +4,7 @@
 window.BOARD = {
   title: 'YomuSekai · Quadro',
   subtitle: 'HenriquePvAr/Yomu-Sekai',
-  updatedAt: '2026-11-02',
+  updatedAt: '2026-11-03',
   repoUrl: 'https://github.com/HenriquePvAr/Yomu-Sekai',
   defaultBranch: 'main',
   columns: [
@@ -120,21 +120,17 @@ window.BOARD = {
       ],
     },
 
-    // ───────────────────────── DEV ─────────────────────────
+    // ───────────────────────── PROD (recém-mergeados) ──────
 
     {
       id: 'LANG-01',
       title: 'Múltiplos idiomas de origem (ja, ko, zh, ru, es…)',
-      domain: 'pipeline', column: 'qas', env: 'branch',
-      fila: 1,
-      updated: '2026-11-01',
-      branch: 'feat/LANG-01',
-      commit: '7e58e76',
-      summary: 'Implementado em feat/LANG-01. Cadeia completa: UI (langSelect habilitado) → payload (source_lang) → ui_bridge → build_run_command(--ocr-lang) → run_webtoon → benchmark_pipeline (ocr_lang override) → OCREngine (PADDLE_LANG_BY_CHOICE). Gates: score_group_ocr_quality não penaliza CJK/Cirílico; split_glued_source_words early-return para não-Latin; weak_label_semantic_promotion_allowed bypassa léxico inglês para texto logográfico/cirílico. 22 testes novos passando. Aguarda merge + teste físico.',
-      pending: [
-        'Merge em dev e verificação física com capítulo real (ja/ko/zh/ru)',
-        'SHA-256 reais para modelos RapidOCR (substituir placeholder vazio em ocr_models.py)',
-        'Teste de reading_order CJK (vertical) e _promote_glossary_sounds em script não-latino',
+      domain: 'pipeline', column: 'prod', env: 'main',
+      updated: '2026-11-03',
+      summary: 'Cadeia completa: UI (langSelect habilitado) → payload (source_lang) → ui_bridge → build_run_command(--ocr-lang) → run_webtoon → benchmark_pipeline (ocr_lang override) → OCREngine (PADDLE_LANG_BY_CHOICE). Gates: score_group_ocr_quality não penaliza CJK/Cirílico; split_glued_source_words early-return para não-Latin; weak_label_semantic_promotion_allowed bypassa léxico inglês para texto logográfico/cirílico. 22 testes passando.',
+      delivered: [
+        'feat(lang): suporte a múltiplos idiomas de origem (7ed2e01, 01/11)',
+        'Mergeado na main (1c52366, 03/11)',
       ],
       links: [
         { label: 'ocr_models.py',         path: 'yomu/ocr/ocr_models.py' },
@@ -148,16 +144,19 @@ window.BOARD = {
     {
       id: 'GLOSSARY-01',
       title: 'Glossário de nomes por série',
-      domain: 'ui', column: 'dev', env: 'branch',
-      fila: 2,
-      updated: '2026-11-01',
-      summary: 'Fila do agente: 2º. Campo #nameGlossaryInput (localStorage por série, ex.: "Sunless = Sunny") existe no branch de trabalho do Tradutor.Ia. Precisa ser integrado ao Yomu-Sekai: UI, payload, backend (name_glossary no job config → YOMU_NAME_GLOSSARY env).',
-      pending: [
-        'Adicionar #nameGlossaryField + #nameGlossaryInput à ui_shell.html',
-        'Integrar nameGlossaryPairs(), rememberNameGlossary(), loadNameGlossary() no tradutor_ui.js',
-        'Integrar _name_glossary() e _source_language() no ui_bridge.py (validação, limite 50 pares)',
-        'Propagar YOMU_NAME_GLOSSARY → job_runner.py e benchmark_pipeline.py',
-        'Integrar set_name_overrides() no translator_deepl.py e yomu_backend_provider.py',
+      domain: 'ui', column: 'prod', env: 'main',
+      updated: '2026-11-03',
+      summary: 'Glossário de nomes por série integrado ao Yomu-Sekai: UI (textarea + localStorage por série), payload (ui_bridge._name_glossary), backend (YOMU_NAME_GLOSSARY via job_runner, benchmark_pipeline), e set_name_overrides/_apply_name_overrides nos dois provedores. 32 testes passando.',
+      delivered: [
+        'ui_shell.html: #nameGlossaryField + #nameGlossaryInput adicionados (a4a28dd, 02/11)',
+        'static/tradutor_ui.js: nameGlossaryPairs(), rememberNameGlossary(), loadNameGlossary(), formPayload integrado (a4a28dd, 02/11)',
+        'yomu/ui/ui_bridge.py: _name_glossary(), _source_language() integrados (a4a28dd, 02/11)',
+        'yomu/runtime/job_runner.py: YOMU_NAME_GLOSSARY propagado para subprocess (a4a28dd, 02/11)',
+        'yomu/pipeline/benchmark_pipeline.py: set_name_overrides() chamado após set_detected_names (a4a28dd, 02/11)',
+        'yomu/translation/providers/translator_deepl.py: set_name_overrides/_apply_name_overrides integrados (a4a28dd, 02/11)',
+        'yomu/translation/providers/yomu_backend_provider.py: idem (a4a28dd, 02/11)',
+        'tests/test_name_glossary.py: 32 testes hermético (a4a28dd, 02/11)',
+        'Mergeado na main (1c52366, 03/11)',
       ],
       links: [
         { label: 'ui_shell.html',         path: 'ui/ui_shell.html' },
@@ -170,10 +169,8 @@ window.BOARD = {
     {
       id: 'DOCS-01',
       title: 'Documentação técnica + guia do usuário atualizados',
-      domain: 'infra', column: 'qas', env: 'branch',
-      updated: '2026-11-02',
-      branch: 'feat/DOCS-01',
-      commit: '5460cae',
+      domain: 'infra', column: 'prod', env: 'main',
+      updated: '2026-11-03',
       summary: 'Documentação técnica (§14, §15), CONFIGURATION.md e Guia do Usuário atualizados para cobrir multi-idioma OCR (feat/LANG-01) e glossário de nomes (feat/GLOSSARY-01). Features marcadas como PARCIAL com ref de commit. Base verificada atualizada em todos os arquivos tocados.',
       delivered: [
         'DOCUMENTACAO_TECNICA.md §14: OCR multi-idioma — tabela idioma→motor, ocr_models.py, gates CJK/Cirílico, fluxo ponta a ponta (5460cae, 02/11)',
@@ -181,11 +178,46 @@ window.BOARD = {
         'CONFIGURATION.md: TRADUTOR_OCR_MODELS_DIR (OCR) e YOMU_NAME_GLOSSARY (Tradução) documentados (5460cae, 02/11)',
         'GUIA_DO_USUARIO.md §9: idioma original com opções e nota de disponibilidade; glossário de nomes com exemplos (5460cae, 02/11)',
         'Base verificada atualizada em todos os documentos tocados (5460cae, 02/11)',
+        'Mergeado na main (1c52366, 03/11)',
       ],
       links: [
         { label: 'DOCUMENTACAO_TECNICA.md', path: 'docs/technical/DOCUMENTACAO_TECNICA.md' },
         { label: 'GUIA_DO_USUARIO.md',      path: 'docs/user/GUIA_DO_USUARIO.md' },
         { label: 'CONFIGURATION.md',        path: 'docs/CONFIGURATION.md' },
+      ],
+    },
+
+    // ───────────────────────── QAS ─────────────────────────
+
+    {
+      id: 'BUGFIX-TRANS-01',
+      title: 'Fix: translate_strict aceita kwargs de retry do OCR',
+      domain: 'pipeline', column: 'qas', env: 'branch',
+      updated: '2026-11-03',
+      summary: '~78 regiões terminavam sem tradução: translate_strict do YomuBackendTranslationProvider não aceitava os kwargs extra que ocr_balloon.py passa nos 3 caminhos de retry (allow_proper_names, proper_names, retry_origin, retry_attempt, source_context). TypeError era capturado em silêncio e produzia candidato vazio. Assinatura alinhada com DeepLTranslator.translate_strict.',
+      delivered: [
+        'Assinatura de translate_strict corrigida; 1 novo teste hermético (4cdcc8f, 03/11)',
+        'Documentação §17 atualizada com descrição do bug e da correção (4cdcc8f, 03/11)',
+      ],
+      links: [
+        { label: 'yomu_backend_provider.py', path: 'yomu/translation/providers/yomu_backend_provider.py' },
+        { label: 'test_yomu_backend_provider.py', path: 'tests/test_yomu_backend_provider.py' },
+      ],
+    },
+
+    {
+      id: 'BUGFIX-UI-01',
+      title: 'Fix: testes de form payload e langSelect após LANG/GLOSSARY',
+      domain: 'ui', column: 'qas', env: 'branch',
+      updated: '2026-11-03',
+      summary: 'formPayload chama nameGlossaryPairs (ausente nos harneses de teste em dois arquivos); langSelect lido com $ helper como os campos vizinhos. Dois testes corrigidos.',
+      delivered: [
+        'nameGlossaryPairs adicionada nos harneses de teste; langSelect com $ helper (85f8416, 03/11)',
+      ],
+      links: [
+        { label: 'tradutor_ui.js', path: 'static/tradutor_ui.js' },
+        { label: 'test_new_translation_source_policy_state.py', path: 'tests/test_new_translation_source_policy_state.py' },
+        { label: 'test_ui_translation_provider_selection.py', path: 'tests/test_ui_translation_provider_selection.py' },
       ],
     },
 
