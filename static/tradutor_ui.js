@@ -2009,7 +2009,7 @@
         // Mirrors ui_helpers.DEFAULT_TRANSLATION_PROVIDER; the backend re-resolves
         // an omitted provider anyway, so the two can never silently disagree.
         || 'deepl',
-      source_lang: document.getElementById('langSelect')?.value || '3',
+      source_lang: $('#langSelect')?.value || '3',
       // Snapshot the current control-plane decision into the job request.
       // Missing/unavailable bootstrap remains fail-closed.
       translation_enabled: appState.translationEnabled === true,

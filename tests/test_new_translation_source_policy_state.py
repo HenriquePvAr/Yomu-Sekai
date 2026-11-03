@@ -66,6 +66,7 @@ const names = [
   'applyProcessingMode',
   'applyStoredExecutionDraft',
   'rehydrateSourceValidationFromReadyRecord',
+  'nameGlossaryPairs',
   'formPayload',
   'renderSourceAnalysisReady',
 ];

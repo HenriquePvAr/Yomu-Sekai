@@ -55,7 +55,7 @@ function extract(name) {
   throw new Error(`unterminated symbol in tradutor_ui.js: ${name}`);
 }
 
-const SYMBOLS = ['normalizeTranslationProvider', 'syncSourceFormState', 'formPayload'];
+const SYMBOLS = ['normalizeTranslationProvider', 'syncSourceFormState', 'nameGlossaryPairs', 'formPayload'];
 
 const body = `
   const appState = scenario.appState;
