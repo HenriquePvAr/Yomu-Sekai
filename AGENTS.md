@@ -17,6 +17,14 @@
 - Report evidence levels distinctly: `IMPLEMENTED`, `INTEGRATED`, `TESTED_OFFLINE`, `TESTED_FROZEN`, `PHYSICALLY_VERIFIED`, `EXTERNAL_GATE`, `DEFERRED`.
 - Do not call a feature validated from its code, a historical report, HTTP health, mock-provider success or unrelated test totals alone.
 
+## Reference chapter for end-to-end tests (standing rule)
+
+- Always use this chapter to measure bottlenecks (time, cleaning, translation, reconstruction, PDF): `https://www.webtoons.com/en/action/hero-killer/episode-285/viewer?title_no=2745&episode_no=285`. HenriquePvAr authorized a full run with paid translation on this chapter only; any other chapter still needs explicit authorization (see Safety above).
+- Start the app with `python start_tradutor.py` and open `http://127.0.0.1:8080`, never `http://localhost:8080`: the backend functions' CORS only allows the `127.0.0.1` origin, and on `localhost` starting a job fails with "Não foi possível confirmar a política de tradução".
+- The user signs in; never type a password. Use mode Qualidade, output "Tradução pronta", force on, cache off.
+- Stage timings: `timing_report.txt` / `quality_report.json` (`stage_seconds`). `run_webtoon.py` alone cannot translate (`job_id_required`); use `TRANSLATION_ENABLED=false` only for clean-only checks.
+- Full details: `CLAUDE.md`, section "Capítulo de referência para teste ponta a ponta".
+
 ## Database and release
 
 - Supabase is authoritative for persistent data; schema changes require versioned migrations, tests and documentation. Do not mutate production without authorization.

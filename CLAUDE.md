@@ -42,6 +42,29 @@ python -m pytest -q                 # suíte hermética
 python run_webtoon.py --help        # flags reais da CLI
 ```
 
+### Capítulo de referência para teste ponta a ponta (regra permanente)
+
+Para medir gargalos (tempo, limpeza, tradução, reconstrução, PDF) use **sempre** este capítulo,
+salvo pedido em contrário de HenriquePvAr. Ele autorizou rodar o capítulo completo com tradução
+paga **neste** capítulo; qualquer outro capítulo continua exigindo autorização explícita.
+
+```text
+https://www.webtoons.com/en/action/hero-killer/episode-285/viewer?title_no=2745&episode_no=285
+```
+
+- Suba o app com `python start_tradutor.py` e abra **`http://127.0.0.1:8080`**, nunca
+  `http://localhost:8080`: o CORS das funções do backend (`beta-bootstrap`, `wallet-summary`) só
+  aceita a origem `127.0.0.1`; em `localhost` o início falha com "Não foi possível confirmar a
+  política de tradução".
+- O login (Supabase) é feito pelo próprio usuário no navegador; o agente não digita senha.
+  Se a sessão não estiver ativa, peça o login a HenriquePvAr.
+- Formulário: URL pública, modo **Qualidade**, saída **Tradução pronta**, "forçar" ligado e cache
+  desligado (medição sem reaproveitar nada).
+- Tempos por etapa: `timing_report.txt` e `quality_report.json` (`stage_seconds`) na pasta de saída;
+  andamento do job em `runtime/jobs.sqlite3` (somente leitura).
+- `run_webtoon.py` sozinho **não traduz** (`job_id_required`: só o worker fornece o job); para
+  checar apenas limpeza fora do app use `TRANSLATION_ENABLED=false`.
+
 ### Regras de segurança do repositório
 
 - **Nunca** leia `.env` ou `.env.local` por inteiro (`cat`, `type`, `Get-Content`). Se
