@@ -187,6 +187,40 @@ window.BOARD = {
       ],
     },
 
+    // ───────────────────────── QAS ─────────────────────────
+
+    {
+      id: 'BUGFIX-TRANS-01',
+      title: 'Fix: translate_strict aceita kwargs de retry do OCR',
+      domain: 'pipeline', column: 'qas', env: 'branch',
+      updated: '2026-11-03',
+      summary: '~78 regiões terminavam sem tradução: translate_strict do YomuBackendTranslationProvider não aceitava os kwargs extra que ocr_balloon.py passa nos 3 caminhos de retry (allow_proper_names, proper_names, retry_origin, retry_attempt, source_context). TypeError era capturado em silêncio e produzia candidato vazio. Assinatura alinhada com DeepLTranslator.translate_strict.',
+      delivered: [
+        'Assinatura de translate_strict corrigida; 1 novo teste hermético (4cdcc8f, 03/11)',
+        'Documentação §17 atualizada com descrição do bug e da correção (4cdcc8f, 03/11)',
+      ],
+      links: [
+        { label: 'yomu_backend_provider.py', path: 'yomu/translation/providers/yomu_backend_provider.py' },
+        { label: 'test_yomu_backend_provider.py', path: 'tests/test_yomu_backend_provider.py' },
+      ],
+    },
+
+    {
+      id: 'BUGFIX-UI-01',
+      title: 'Fix: testes de form payload e langSelect após LANG/GLOSSARY',
+      domain: 'ui', column: 'qas', env: 'branch',
+      updated: '2026-11-03',
+      summary: 'formPayload chama nameGlossaryPairs (ausente nos harneses de teste em dois arquivos); langSelect lido com $ helper como os campos vizinhos. Dois testes corrigidos.',
+      delivered: [
+        'nameGlossaryPairs adicionada nos harneses de teste; langSelect com $ helper (85f8416, 03/11)',
+      ],
+      links: [
+        { label: 'tradutor_ui.js', path: 'static/tradutor_ui.js' },
+        { label: 'test_new_translation_source_policy_state.py', path: 'tests/test_new_translation_source_policy_state.py' },
+        { label: 'test_ui_translation_provider_selection.py', path: 'tests/test_ui_translation_provider_selection.py' },
+      ],
+    },
+
     // ───────────────────────── BLOCKED ─────────────────────────
 
     {
