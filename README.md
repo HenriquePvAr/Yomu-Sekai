@@ -394,6 +394,36 @@ Página inicial da documentação: **[docs/README.md](docs/README.md)**.
 - [Quality Freeze](docs/QUALITY_FREEZE.md) — o que está congelado, a evidência e como sair do freeze.
 - [Instalação](docs/INSTALLATION.md) · [Configuração](docs/CONFIGURATION.md) · [Testes](docs/TESTING.md) · [Adaptador universal](docs/UNIVERSAL_CHAPTER_ADAPTER.md) · [Segurança](docs/SECURITY.md) · [Troubleshooting](docs/TROUBLESHOOTING.md).
 
+## Desempenho medido
+
+Capítulo completo de referência (128 imagens originais que viram 65 páginas lógicas), modo
+**Qualidade**, tradução paga, forçar ligado e cache desligado. Uma execução por coluna, na mesma
+máquina e com o mesmo código; tempos em segundos, do relatório de cada job.
+
+| Etapa | Em paralelo com um jogo pesado | Máquina ociosa |
+| --- | ---: | ---: |
+| Download das 128 imagens | 53,9 | 44,7 |
+| Corte inteligente (128 → 65 páginas) | 37,4 | 25,2 |
+| OCR | 34,1 | 21,4 |
+| OCR seletivo | 60,7 | 68,4 |
+| Classificação e agrupamento | 112,8 | 139,6 |
+| Pré-tradução | 62,4 | 38,3 |
+| Tradução | 152,7 | 51,9 |
+| Salvar imagens | 32,4 | 3,3 |
+| PDF | 3,2 | 2,0 |
+| **Total do job** | **428** | **219** |
+
+- Com o jogo aberto a CPU média foi de 70% (pico 93%) e a memória média de 82%; ociosa, 33% (pico
+  78%) e 50%.
+- O corte inteligente, o OCR e principalmente salvar imagens sentem a disputa por CPU e disco.
+  Download, pré-tradução e tradução dependem da rede do site e do serviço de tradução, então
+  variam por motivos que não são processamento local; leia-os à parte.
+- A classificação variou entre execuções (93 s, 113 s e 140 s) sem relação com a carga e é a maior
+  etapa isolada. Com a CPU em média a 33%, ela é o próximo alvo de otimização.
+- O download usa conexões simultâneas (`DOWNLOAD_WORKERS`, padrão 4). Antes, com o navegador
+  configurado só como reserva, as 128 imagens baixavam uma por vez (259 s no mesmo capítulo).
+- São medições de um único capítulo e de uma única máquina, não uma garantia.
+
 ## Testes
 
 Os testes padrão são offline. Smokes que acessam rede ficam em `scripts/`, exigem opt-in

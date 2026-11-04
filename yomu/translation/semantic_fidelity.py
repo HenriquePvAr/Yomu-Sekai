@@ -361,6 +361,25 @@ _TARGET_APPROXIMATORS = {
 _NUMBER_CONNECTORS = frozenset({"and", "e"})
 
 
+_ONE_PRONOUN_AFTER = frozenset({
+    "no", "that", "this", "which", "the", "these", "those", "every", "each", "any", "another",
+})
+_ONE_PRONOUN_BEFORE = frozenset({"who", "whom", "whose", "which", "that"})
+
+
+def _one_is_pronoun(tokens, index):
+    """'one' as a pronoun ("that one", "the only one who...", "no one"), not the number 1.
+
+    Counting it as a quantity rejected correct translations: PT-BR has no digit to match in
+    "aquele" / "o único que" / "ninguém".
+    """
+    previous = tokens[index - 1] if index > 0 else ""
+    following = tokens[index + 1] if index + 1 < len(tokens) else ""
+    if previous in _ONE_PRONOUN_AFTER or following in _ONE_PRONOUN_BEFORE:
+        return True
+    return previous == "only" and index > 1 and tokens[index - 2] == "the"
+
+
 def _written_quantity_signatures(text, cardinal_words, magnitudes, approximators):
     """Extract conservative, composed quantity signatures from number phrases."""
     tokens = _words(text)
@@ -370,7 +389,7 @@ def _written_quantity_signatures(text, cardinal_words, magnitudes, approximators
         token = tokens[index]
         # In "no one / no-one" the token is a pronoun, not a count. Counting it
         # as one would reject the natural PT-BR equivalent "ninguém".
-        if token == "one" and index > 0 and tokens[index - 1] == "no":
+        if token == "one" and _one_is_pronoun(tokens, index):
             index += 1
             continue
         if token in approximators:

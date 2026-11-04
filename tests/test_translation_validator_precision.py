@@ -197,12 +197,82 @@ class UnreadableSourceTaxonomyTests(unittest.TestCase):
             OCR_UNINTELLIGIBLE_SOURCE_REASON,
         )
 
+    def test_case_noise_on_a_real_word_is_still_readable(self):
+        # c/C and k/K are indistinguishable in all-caps lettering: the letters were read.
+        from yomu.ocr.ocr_balloon import _ocr_unintelligible_source_text
+        self.assertFalse(_ocr_unintelligible_source_text("RocK?"))
+        self.assertFalse(_ocr_unintelligible_source_text("HeLLo"))
+
+    def test_case_noise_on_garbage_is_still_unreadable(self):
+        from yomu.ocr.ocr_balloon import _ocr_unintelligible_source_text
+        for token in ("FluCK", "THUNe", "CRAdKVE", "RiMBCE"):
+            with self.subTest(token=token):
+                self.assertTrue(_ocr_unintelligible_source_text(token))
+
     def test_title_cased_name_is_not_reported_as_unreadable(self):
         group = _terminal([("Hyeon", "Hyeon")])[0]
         self.assertNotEqual(
             group.translation_final_reason,
             OCR_UNINTELLIGIBLE_SOURCE_REASON,
         )
+
+
+def _group_for(text):
+    poly = np.array([[10, 10], [210, 10], [210, 45], [10, 45]], dtype=np.int32)
+    line = OCRLine(text=text, confidence=0.95, polygon=poly, box=(10, 10, 200, 35),
+                   raw_text=text, engine="rapidocr", page=1)
+    return TextGroup(group_id="T", lines=[line], text=text, classification="speech",
+                     inside_balloon_like_region=True, source_engine="rapidocr")
+
+
+class DictionaryWordAfterTitleTests(unittest.TestCase):
+    """A title followed by a dictionary word is not a protected name."""
+
+    SOURCE = "MASTER LEGATE, THE PAGANS ARE COMING."
+    TARGET = "MESTRE LEGADO, OS PAGÃOS ESTÃO CHEGANDO."
+
+    def _spans(self):
+        from yomu.ocr.ocr_balloon import detect_proper_name_spans
+        return detect_proper_name_spans(self.SOURCE, known_names=())
+
+    def test_dictionary_word_after_a_title_may_be_translated(self):
+        valid, reason = validate_translation_text(self.SOURCE, self.TARGET, "speech", [], self._spans())
+        self.assertTrue(valid, reason)
+
+    def test_a_name_the_chapter_knows_is_still_protected(self):
+        valid, reason = validate_translation_text(
+            self.SOURCE, self.TARGET, "speech", ["LEGATE"], self._spans())
+        self.assertFalse(valid)
+        self.assertTrue(reason.startswith("proper_name_altered"))
+
+    def test_group_derived_names_do_not_prove_a_name(self):
+        # The allowed list also holds the spans found from this text's own shape, so only the
+        # chapter-detected names count as evidence (run: Legate rejected a correct sentence).
+        from yomu.ocr.ocr_balloon import _group_validation_allowed_proper_names
+        source = "MASTER LEGATE, WE WERE NOT DECEIVED BY THE HEATHENS!"
+        group = _group_for(source)
+        spans = self._spans_of(group)
+        allowed = _group_validation_allowed_proper_names(group)
+        valid, reason = validate_translation_text(
+            source, "MESTRE LEGADO, NÃO FOMOS ENGANADOS PELOS PAGÃS!", "speech", allowed, spans)
+        self.assertTrue(valid, reason)
+        group.detected_proper_names = ["LEGATE"]
+        allowed = _group_validation_allowed_proper_names(group)
+        valid, _ = validate_translation_text(
+            source, "MESTRE LEGADO, NÃO FOMOS ENGANADOS PELOS PAGÃS!", "speech", allowed, spans)
+        self.assertFalse(valid)
+
+    @staticmethod
+    def _spans_of(group):
+        from yomu.ocr.ocr_balloon import group_proper_name_spans
+        return group_proper_name_spans(group)
+
+    def test_a_non_dictionary_name_is_still_protected(self):
+        source, target = "MASTER KKULBEOL, WAIT.", "MESTRE KUBOL, ESPERE."
+        from yomu.ocr.ocr_balloon import detect_proper_name_spans
+        valid, reason = validate_translation_text(
+            source, target, "speech", [], detect_proper_name_spans(source, known_names=()))
+        self.assertFalse(valid)
 
 
 if __name__ == "__main__":

@@ -2041,6 +2041,10 @@
   }
   function workspacePolicyAllowsProcessing() {
     const policy = appState.settings?.workspace_source_policy || {};
+    // The policy is active by default and the server restores it at every start. A policy that
+    // has not loaded yet (the page's first requests can be rate limited) is not a refusal; only
+    // an explicit status other than active blocks.
+    if (!Object.keys(policy).length) return true;
     return policy.status === 'active' && policy.all_submitted_sources_authorized === true;
   }
   function minimumSourceInputIsValid() {

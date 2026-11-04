@@ -456,7 +456,12 @@ def segment_words(token: str) -> list[str] | None:
             prefix = best[start]
             if prefix is None:
                 continue
-            zipf = _piece_zipf(letters[start:end])
+            piece = letters[start:end]
+            # The article "A" is so frequent that it costs almost nothing, so it won as a
+            # last piece ("THE NEWER A" over "THE NEW ERA"). It never ends a phrase.
+            if piece == "A" and end == len(letters) and start > 0:
+                continue
+            zipf = _piece_zipf(piece)
             if zipf is None:
                 continue
             cost = prefix[0] + (8.0 - zipf)

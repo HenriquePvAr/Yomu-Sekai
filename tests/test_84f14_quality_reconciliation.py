@@ -33,6 +33,7 @@ from test_support.offline_test_guard import install_offline_network_guard
 install_offline_network_guard()
 
 import unittest
+import unittest.mock
 
 import yomu.pipeline.benchmark_pipeline as benchmark_pipeline
 import yomu.translation.semantic_fidelity as semantic_fidelity
@@ -91,6 +92,27 @@ class SfxPhysicalGateAccounting(unittest.TestCase):
         # ...but an onomatopoeia remnant is not an ordinary-story product blocker.
         self.assertTrue(report["physical_gate_passed"])
         self.assertEqual(report["physical_decision"], "pass")
+
+    def test_clean_source_echo_preserve_is_preserved_not_residual(self):
+        # A name-shaped echo is rendered as a clean no-review preserve; counting it as retained
+        # ordinary story made every chapter with a preserved SFX fail the physical gate.
+        echo = _sfx_residual("BALAO_1", "PEW")
+        echo.update({"classification": "sfx", "manual_review_required": False,
+                     "translation": "PEW", "translation_valid": True,
+                     "translation_final_state": "preserved_original",
+                     "translation_final_reason": "source_echo_preserved_original"})
+        with unittest.mock.patch.object(benchmark_pipeline.config, "TRANSLATE_SFX", True):
+            report = benchmark_pipeline._physical_residual_accounting([_page(14, [echo])])
+        self.assertEqual(report["physical_regions_preserved"], 1)
+        self.assertEqual(report["physical_source_residual_count"], 0)
+        self.assertEqual(report["ordinary_story_physical_residual_count"], 0)
+
+    def test_source_echo_that_needs_review_is_still_residual(self):
+        echo = _story_residual("BALAO_1", "THE NIGHTMARE SPELL TOOK EVERYTHING FROM THEM.")
+        echo.update({"translation_final_state": "manual_review",
+                     "translation_final_reason": "source_echo_unresolved_story_text"})
+        report = benchmark_pipeline._physical_residual_accounting([_page(20, [echo])])
+        self.assertEqual(report["ordinary_story_physical_residual_count"], 1)
 
     def test_residual_classes_are_named_not_implied(self):
         report = benchmark_pipeline._physical_residual_accounting(

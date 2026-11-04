@@ -86,3 +86,32 @@ def test_eta_uses_canonical_counter_and_real_progress_timestamp(stale):
                 assert progress["eta_seconds"] == pytest.approx(400)
         finally:
             bridge.store.close()
+
+
+@pytest.mark.parametrize("current,expected", [
+    (10, "Finalizando esta etapa"),
+    (0, "Etapa em andamento há"),
+])
+def test_eta_label_says_what_the_stage_is_doing_when_there_is_no_rate(current, expected):
+    with tempfile.TemporaryDirectory() as folder:
+        bridge = _ProgressBridge(Path(folder) / "jobs.sqlite3")
+        try:
+            job_id = bridge.store.create_job(source_url="synthetic", output_dir="", command=[],
+                configuration={"job_type": "translation"})
+            bridge.store.claim_next_job("worker", 1)
+            bridge.store.transition(job_id, JobStatus.STARTING, expected_worker="worker")
+            bridge.store.transition(job_id, JobStatus.RUNNING, expected_worker="worker")
+            now = time.time()
+            bridge.store.update_fields(job_id, stage="translation", stage_started_at=now-100,
+                progress_version=1,
+                progress_stage_counters_json=json.dumps({"translation": {
+                    "current": current, "total": 10, "updated_at": now}}))
+            with mock.patch.object(bridge, "reconcile_orphans"), \
+                    mock.patch.object(ui_bridge, "_runner_still_alive", return_value=True), \
+                    mock.patch.object(ui_bridge.time, "time", return_value=now):
+                progress = bridge.runtime_state()["progress"]
+            assert progress["eta_seconds"] is None
+            assert expected in progress["eta_label"]
+            assert "Calculando estimativa" not in progress["eta_label"]
+        finally:
+            bridge.store.close()

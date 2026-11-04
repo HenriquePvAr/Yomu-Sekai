@@ -1687,7 +1687,10 @@ def _ocr_unintelligible_source_text(text):
         return False
     raw = re.findall(r"[A-Za-z][A-Za-z']*", clean_ocr_text(text))[0]
     if not (raw.isupper() or raw.islower() or raw.istitle()):
-        return True
+        # Comic lettering is all caps, so an alternating case on a token that spells a real
+        # English word (a c/C or k/K the recogniser could not tell apart) is case noise, not
+        # unread glyphs: the letters were read, and the word is worth translating.
+        return not region_taxonomy.is_english_word(raw)
     if _looks_like_title_name_ocr_compound(tokens[0]):
         return True
     if raw.isupper() and len(tokens[0]) >= 5 and (
@@ -1749,8 +1752,19 @@ def _group_is_proven_entity_echo(group, candidate, entity_tokens):
     return bool(tokens) and all(token in entity_tokens for token in tokens)
 
 
+class _AllowedNames(list):
+    """Allowed names, plus which of them the chapter itself evidences.
+
+    The spans found from the shape of this group's own text (a title followed by a word) are
+    allowed too, so "is allowed" proves nothing about a name; ``chapter_known`` does.
+    """
+
+    chapter_known = frozenset()
+
+
 def _group_validation_allowed_proper_names(group):
-    names = list(group.detected_proper_names or [])
+    names = _AllowedNames(group.detected_proper_names or [])
+    names.chapter_known = frozenset(_normalized_allowed_name_tokens(group.detected_proper_names or []))
     names.extend(group_proper_name_spans(group))
     if _group_has_mixed_case_name_evidence(group):
         names.append(group.text)
@@ -2861,6 +2875,17 @@ def _render_analyzed_image(
                 # A clean, no-review preserve: a flag an earlier stage raised on
                 # the same lone token does not survive it.
                 group.manual_review_required = False
+                if (str(getattr(group, "clean_disposition", "") or "") == "PENDING_LOCAL"
+                        and not getattr(group, "clean_local_attempted", False)):
+                    # The pixels stay on purpose and were never cleaned: record it as the
+                    # final disposition. Left as PENDING_LOCAL it reads as "unresolved" and
+                    # fails the page's clean certificate (every preserved SFX did).
+                    from yomu.clean.disposition import RegionDisposition
+                    group.clean_disposition = (
+                        RegionDisposition.PRESERVE_SFX if group.classification == "sfx"
+                        else RegionDisposition.PRESERVE_ART
+                    ).value
+                    group.clean_disposition_reason = "source_echo_preserved_original"
                 _set_translation_terminal_state(
                     group,
                     "preserved_original",
@@ -9510,6 +9535,8 @@ def validate_translation_text(
     declared_name_authority = {
         _name_token_of(span) for span in _declared_name_tokens(source_text)
     }
+    chapter_known = getattr(allowed_proper_names, "chapter_known", None)
+    known_name_tokens = allowed_names if chapter_known is None else chapter_known
     altered_names = sorted(
         {
             token
@@ -9518,7 +9545,13 @@ def validate_translation_text(
             if token in source_tokens
             and token not in translated_tokens
             and (
-                _required_name_span_is_hard_authority(span)
+                # A word of the full English dictionary ("legate") that merely sits where a name
+                # could be (after a title) is not authority: all-caps lettering has no
+                # capitalisation signal, and rejecting a correct translation of it turned a whole
+                # story sentence into untranslated English. A name the chapter knows (allowed or
+                # declared) keeps its protection.
+                (_required_name_span_is_hard_authority(span)
+                 and (token in known_name_tokens or not region_taxonomy.is_english_word(token)))
                 or token in declared_name_authority
             )
         }
@@ -15171,6 +15204,10 @@ def _apply_cleanup_mask(current_bgr, original_bgr, group, cleanup_mask, strategy
         if isinstance(getattr(group, "background_metrics", None), dict) and chosen == "classic":
             group.background_metrics["cleanup_fill_source"] = group.background_metrics.get(
                 "cleanup_fill_source_classic", group.background_metrics.get("cleanup_fill_source"))
+    # Whichever candidate won (the learned fill often does: it scores better on texture), glow
+    # residue on a flat near-black backdrop goes back to black, inside the authorised mask only.
+    result = _flatten_dark_backdrop_residue(
+        result.copy(), original_bgr, cleanup_mask, getattr(group, "background_metrics", None))
     return _draw_structure_continuations(result, group, cleanup_mask)
 
 
@@ -15570,6 +15607,64 @@ def _grown_fill_mask(group, cleanup_mask):
     return grown
 
 
+def _mask_with_lettering_residue(group, original_bgr, cleanup_mask):
+    """``cleanup_mask`` plus the soft halo just outside it, as a uint8 mask.
+
+    Glowing or outlined lettering fades into the backdrop over a few pixels and the mask
+    stops before that fade; a fill that only covers the mask then interpolates from (or
+    leaves behind) the halo, which shows as faint ghost bars where the lines were. The
+    halo is the one ``_outline_residue_mask`` already measures; it never grows into
+    protected structure or out of a known balloon, like ``_grown_fill_mask``.
+    """
+    mask_u8 = (np.asarray(cleanup_mask) > 0).astype(np.uint8)
+    if group is None or original_bgr is None:
+        return mask_u8
+    group._fill_source_bgr = original_bgr
+    residue = _outline_residue_mask(group, mask_u8)
+    if residue is None or not np.any(residue):
+        return mask_u8
+    grown = mask_u8.copy()
+    grown[residue] = 1
+    protect = getattr(group, "structure_protect_mask", None)
+    if isinstance(protect, np.ndarray) and protect.shape == grown.shape:
+        grown[(protect > 0) & (mask_u8 == 0)] = 0
+    enclosure = getattr(group, "light_enclosure_interior", None)
+    if isinstance(enclosure, np.ndarray) and enclosure.shape == grown.shape:
+        grown[~enclosure.astype(bool) & (mask_u8 == 0)] = 0
+    return grown
+
+
+def _flatten_dark_backdrop_residue(result, original_bgr, fill_mask, profile):
+    """Inside the fill mask only: glow residue on a near-black backdrop goes back to black.
+
+    Light lettering with a glow on a flat near-black backdrop is filled by interpolation, and
+    the fill can keep faint intermediate values (measured: up to 44/255 where the surround is
+    0) that show as ghost bars where the lines were. A pixel of the fill that is still above
+    the backdrop but under a quarter of the lettering's own contrast is that residue, never
+    content. Only the authorised mask is touched, so the outside-mask evidence is unaffected.
+    """
+    median = profile.get("local_background_median_bgr") if isinstance(profile, dict) else None
+    if str(profile.get("local_background_polarity") if isinstance(profile, dict) else "") != "light_text_on_dark_bg":
+        return result
+    if not (isinstance(median, (list, tuple)) and len(median) == 3):
+        return result
+    backdrop = np.asarray(median, dtype=np.float32)
+    backdrop_luma = float(backdrop @ np.array([0.114, 0.587, 0.299], dtype=np.float32))
+    if backdrop_luma > 16.0 or float(profile.get("local_background_luminance_std") or 99.0) > 10.0:
+        return result
+    inside = np.asarray(fill_mask) > 0
+    if not inside.any():
+        return result
+    original_luma = cv2.cvtColor(original_bgr, cv2.COLOR_BGR2GRAY).astype(np.float32)
+    contrast = float(np.percentile(original_luma[inside], 95)) - backdrop_luma
+    if contrast < 80.0:
+        return result
+    result_luma = cv2.cvtColor(result, cv2.COLOR_BGR2GRAY).astype(np.float32)
+    residue = inside & (result_luma <= backdrop_luma + 0.25 * contrast)
+    result[residue] = np.clip(backdrop, 0, 255).astype(np.uint8)
+    return result
+
+
 def _learned_inpaint(current_bgr, group, cleanup_mask):
     """The verified local model's reconstruction of ``cleanup_mask``, or ``None``.
 
@@ -15808,15 +15903,20 @@ def _apply_cleanup_mask_fill(current_bgr, original_bgr, group, cleanup_mask, str
         and constant_fill_class
         and spatial_class in {"SMOOTH_NONUNIFORM", "STRUCTURED_OR_TEXTURED"}
     )
+    fill_mask = (
+        _mask_with_lettering_residue(group, original_bgr, cleanup_mask)
+        if strategy != "caption_overlay" else (np.asarray(cleanup_mask) > 0).astype(np.uint8)
+    )
     if spatial_gate_denies_constant and strategy != "caption_overlay":
         harmonic = _try_harmonic_boundary_fill(
-            original_bgr, cleanup_mask, local_profile, spatial_class, group,
+            original_bgr, fill_mask, local_profile, spatial_class, group,
         )
         if harmonic is not None:
             # A constant fill would paint letter silhouettes onto a smooth but
             # non-uniform backdrop; the accepted harmonic candidate is the
             # boundary-continuous reconstruction for exactly this class.
-            result[cleanup_mask > 0] = harmonic[cleanup_mask > 0]
+            result[fill_mask > 0] = harmonic[fill_mask > 0]
+            result = _flatten_dark_backdrop_residue(result, original_bgr, fill_mask, local_profile)
             group.background_metrics["cleanup_fill_source"] = "harmonic_boundary_fill"
             return result
     if spatial_gate_denies_constant:
@@ -15845,7 +15945,7 @@ def _apply_cleanup_mask_fill(current_bgr, original_bgr, group, cleanup_mask, str
         # The colour is sampled from the immediate, non-glyph ring.  This is
         # the generic path for grey/coloured/neon enclosures; it never uses a
         # product/page colour or an absolute black/white fallback.
-        result[cleanup_mask > 0] = np.clip(
+        result[fill_mask > 0] = np.clip(
             np.asarray(local_color, dtype=np.float32), 0, 255
         ).astype(np.uint8)
         group.background_metrics["cleanup_fill_source"] = "local_ring_median"
@@ -16496,6 +16596,24 @@ def _draw_group_translation(img_bgr, group, font_path, strategy="primary", sourc
         font_role = "shout"
     else:
         font_role = "regular"
+
+    # The starting size follows the source's real letter height, not a fixed share of the OCR
+    # line box (which carries padding): measured on the reference chapter, 0.78 x box left the
+    # translated lettering ~14 % smaller than the original. The fit loop below still shrinks the
+    # size until the text fits, so a larger start can only reach a size the old start could not.
+    if not display_lettering and not is_sfx:
+        source_cap = _source_ink_cap_height(typography_source, group)
+        if source_cap:
+            probe = get_font(preview_font_path or font_path, 100, role=font_role,
+                             prefer_role=bool(preview_font_role and not preview_font_path), text=text)
+            cap_ratio = _font_cap_ratio(probe)
+            if cap_ratio:
+                matched = int(round(source_cap / cap_ratio))
+                if matched > font_size:
+                    font_size = min(font_cap, matched)
+                    typography_profile["font_size_from_source_ink"] = {
+                        "source_cap_px": round(float(source_cap), 1), "font_cap_ratio": round(cap_ratio, 3),
+                        "size": int(font_size)}
 
     lines = []
     spacing = 2
@@ -18419,6 +18537,37 @@ GLYPH_STYLE_FAMILY_CLASSES = (
     "sans", "serif", "comic", "handwritten", "condensed", "display", "dramatic",
     "mechanical", "decorative", "unknown",
 )
+
+
+def _font_cap_ratio(font):
+    """Height of a capital 'H' as a share of the font size, or 0.0 when it cannot be measured."""
+    try:
+        left, top, right, bottom = font.getbbox("H")
+        size = float(getattr(font, "size", 0) or 0)
+    except Exception:  # noqa: BLE001 - a bitmap/default font has no usable metrics
+        return 0.0
+    return float(bottom - top) / size if size > 0 and bottom > top else 0.0
+
+
+def _source_ink_cap_height(img_bgr, group):
+    """Median ink height of the source's text lines in pixels, or 0 when it is not trustworthy.
+
+    Comic lettering is all caps, so a line's ink height is its cap height. A line whose ink is
+    taller than its own box (a balloon outline swept in by the margin) is ignored.
+    """
+    heights = []
+    for line in getattr(group, "lines", None) or []:
+        box_height = float(line.box[3])
+        mask, _ = _glyph_ink_mask(img_bgr, line.box)
+        if mask is None or box_height <= 0:
+            continue
+        rows = np.where(mask.any(axis=1))[0]
+        if not rows.size:
+            continue
+        ink = float(rows.max() - rows.min() + 1)
+        if 6.0 <= ink <= box_height * 1.15:
+            heights.append(ink)
+    return float(np.median(heights)) if heights else 0.0
 
 
 def _glyph_ink_mask(img_bgr, box):

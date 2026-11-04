@@ -336,7 +336,11 @@ class QualityModeOcrPolicyTests(unittest.TestCase):
 
         self.assertEqual(lines, [])
         self.assertFalse(engine.last_run_metadata.get("engine_unavailable"))
-        self.assertEqual(engine.last_run_metadata.get("ocr_sufficiency"), ocr_engine.OCR_REVIEW)
+        # Many text-like regions but no story region and no plausible text evidence: art. It is
+        # sufficient, not a review (which would fail the page's clean certificate), and never an
+        # engine failure. Evidence of text with zero lines still fails closed, see the next test.
+        self.assertEqual(engine.last_run_metadata.get("ocr_sufficiency"), ocr_engine.OCR_SUFFICIENT)
+        self.assertEqual(engine.last_run_metadata.get("fallback_reason"), "zero_lines_on_art_only_page")
 
     def test_zero_line_story_box_still_fails_closed_after_regional_retry_fails(self):
         import yomu.ocr.ocr_parallel as ocr_parallel

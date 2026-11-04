@@ -282,7 +282,7 @@ ENABLE_TRANSLATION_CACHE = _env_bool("ENABLE_TRANSLATION_CACHE", True)
 ENABLE_IMAGE_PROCESS_CACHE = _env_bool("ENABLE_IMAGE_PROCESS_CACHE", True)
 ENABLE_DOWNLOAD_CACHE = _env_bool("ENABLE_DOWNLOAD_CACHE", True)
 # Bounded HTTP image-download concurrency. Browser/Selenium transports remain serial.
-DOWNLOAD_WORKERS = min(4, max(1, _env_int("DOWNLOAD_WORKERS", 2)))
+DOWNLOAD_WORKERS = min(8, max(1, _env_int("DOWNLOAD_WORKERS", 4)))
 CACHE_ROOT = str(cache_root())
 # Mission 6 opt-in.  The legacy barrier remains the production default until the
 # streaming path has passed quality, cancellation and memory gates.

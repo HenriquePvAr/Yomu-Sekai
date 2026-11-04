@@ -112,6 +112,24 @@ class TerminalReasonPrecedenceTests(unittest.TestCase):
         self.assertFalse(grp.redrawn)
         self.assertTrue(grp.visual_validation.get("render_preserved_source_echo"))
 
+    def test_preserved_sfx_echo_gets_a_final_clean_disposition(self):
+        # A preserved, never-cleaned SFX stayed PENDING_LOCAL, which the clean certificate
+        # reads as unresolved: every page with a preserved SFX failed certification.
+        for cls, expected in (("sfx", "PRESERVE_SFX"), ("speech", "PRESERVE_ART")):
+            with self.subTest(classification=cls):
+                image = np.full((900, 400, 3), 255, dtype=np.uint8)
+                grp = _group("PEW", cls=cls, box=(40, 400, 160, 40))
+                grp.translation = "PEW"
+                grp.translation_candidate = "PEW"
+                grp.translation_valid = True
+                grp.sent_to_translation = True
+                grp.clean_disposition = "PENDING_LOCAL"
+                with patch.object(config, "TRANSLATE_SFX", True):
+                    render_analyzed_image(image, [], [], [grp], page_index=1)
+                self.assertTrue(grp.preserved_original)
+                self.assertEqual(grp.clean_disposition, expected)
+                self.assertEqual(grp.clean_disposition_reason, "source_echo_preserved_original")
+
 
 class CandidateBearingTerminalTests(unittest.TestCase):
     """TDD #41: a valid ordinary candidate reaches a render or an explicit review.

@@ -128,6 +128,7 @@ def download_images(
         "adapter": "",
         "adapter_name": "",
         "adapter_version": "",
+        "page_layout": "",
         # Only the configured transport names are retained.  Cookie-bearing sessions,
         # request URLs and headers remain in memory and are never report metadata.
         "transport_metadata": {"configured": [], "count": 0},
@@ -171,6 +172,7 @@ def download_images(
         # Keep the legacy report key for existing consumers and the explicit provenance key
         # consumed by the output manifest. Both are safe adapter identifiers only.
         report["adapter_name"] = report["adapter"]
+        report["page_layout"] = _safe_report_metadata(getattr(adapter, "page_layout", ""), "")
         report["adapter_version"] = _safe_report_metadata(
             getattr(adapter, "adapter_version", ""), "unknown")
         collection_started = time.perf_counter()
@@ -2617,12 +2619,18 @@ def _download_candidates(
         viewer_total = min(viewer_total, int(max_images))
     total = viewer_total or len(candidates)
 
-    # HTTP transports are thread-safe; browser-backed transports are not. Fetch
-    # bytes in a bounded pool only when every configured transport is plain HTTP,
-    # then process/save strictly in candidate order below.
+    # HTTP transports are thread-safe; browser-backed transports are not. Bytes are fetched in a
+    # bounded pool over the HTTP transports, then processed/saved strictly in candidate order
+    # below. A browser transport configured only as a *fallback* must not put every image on one
+    # connection (all 128 Webtoons images used to download one at a time, 220 s): only an image
+    # that failed over HTTP is retried serially with the full transport list.
     parallel_payloads = {}
-    transport_names = {type(t).__name__ for t in (transports or [])}
-    http_only = bool(transports) and not (transport_names & {"BrowserSessionTransport", "SeleniumTransport"})
+    http_transports = [
+        t for t in (transports or [])
+        if type(t).__name__ not in {"BrowserSessionTransport", "SeleniumTransport"}
+    ]
+    http_only = bool(http_transports)
+    fallback_needed = len(http_transports) != len(transports or [])
     has_existing_slots = (not preserve_original) and any(
         os.path.isfile(os.path.join(target_folder, f"{slot:03}.png"))
         for slot in range(1, min(len(candidates), int(max_images or len(candidates))) + 1)
@@ -2644,7 +2652,7 @@ def _download_candidates(
             url = candidate["url"]
             started = time.perf_counter()
             try:
-                data = _download_url(url, referer, max_retries, transports=transports)
+                data = _download_url(url, referer, max_retries, transports=http_transports)
                 error = ""
             except Exception as exc:  # worker faults are item-scoped, not pipeline-wide
                 data = None
@@ -2731,6 +2739,12 @@ def _download_candidates(
         else:
             if parallel_payloads:
                 data, used_transport = parallel_payloads.get(idx - 1, (b"", ""))
+                if not data and fallback_needed:
+                    try:
+                        data = _download_url(url, referer, max_retries, transports=transports)
+                    except Exception:
+                        data = None
+                    used_transport = getattr(_download_url, "last_transport_name", "")
             else:
                 serial_started = time.perf_counter()
                 try:

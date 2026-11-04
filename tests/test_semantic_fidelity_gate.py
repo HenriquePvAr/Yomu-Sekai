@@ -166,6 +166,19 @@ class LocalInvariantTests(unittest.TestCase):
         )
         self.assertTrue(finding.faithful)
 
+    def test_one_as_a_pronoun_is_not_a_quantity(self):
+        for source, target in (
+            ("BUT THAT ONE ISN'T.", "MAS AQUELE NÃO É."),
+            ("YOU'RE NOT THE ONLY ONE WHO CAN LEARN.", "VOCÊ NÃO É O ÚNICO QUE PODE APRENDER."),
+            ("NO ONE KNOWS.", "NINGUÉM SABE."),
+        ):
+            with self.subTest(source=source):
+                self.assertTrue(semantic_fidelity.evaluate_local_fidelity(source, target).faithful)
+
+    def test_one_as_a_number_is_still_a_quantity(self):
+        finding = semantic_fidelity.evaluate_local_fidelity("I HAVE ONE APPLE.", "EU TENHO DUAS MAÇÃS.")
+        self.assertEqual(finding.primary_reason, semantic_fidelity.QUANTITY_CHANGED)
+
     def test_composed_hundreds_are_compared_by_value(self):
         finding = semantic_fidelity.evaluate_local_fidelity(
             "FIVE HUNDRED SOLDIERS ARRIVED.",
