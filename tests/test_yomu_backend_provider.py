@@ -508,3 +508,15 @@ def test_translate_strict_accepts_the_ocr_retry_arguments(tmp_path: Path, monkey
         source_context=("prev line",),
     )
     assert candidate == "pt:BLOODBANE POISON CAN NEVER KILL ME."
+
+
+def test_provider_stats_count_sent_texts_and_cache_hits(tmp_path: Path):
+    AuthEnvelopeStore(tmp_path).seal("job-1", tok())
+    backend = MockBackendClient()
+    provider = YomuBackendTranslationProvider(runtime_root=tmp_path, backend=backend)
+    provider.translate_batch(request())
+    # A repeated identical request is served from the result store, not the API.
+    provider.translate_batch(request())
+    assert provider.stats["api_requests"] == 1
+    assert provider.stats["api_texts"] == 2
+    assert provider.stats["cache_hits"] == 2

@@ -7332,10 +7332,15 @@ class UiBridge:
         if not path.exists():
             raise ValueError("Arquivo ou pasta não encontrado.")
         if os.name == "nt":
-            if select and path.is_file():
-                subprocess.Popen(["explorer.exe", "/select,", str(path)])
-            else:
-                os.startfile(path)  # type: ignore[attr-defined]
+            try:
+                if select and path.is_file():
+                    subprocess.Popen(["explorer.exe", "/select,", str(path)])
+                else:
+                    os.startfile(path)  # type: ignore[attr-defined]
+            except OSError as exc:
+                # Surface a readable code to the UI instead of a bare 500; the
+                # route logs the exception type for diagnosis.
+                raise ValueError("open_failed") from exc
         else:
             import webbrowser
 

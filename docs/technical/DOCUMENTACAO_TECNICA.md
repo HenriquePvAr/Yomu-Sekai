@@ -3643,7 +3643,11 @@ e seu endpoint existente; abrir qualquer resultado não inicia provider, job ou 
 owner-scoped, deriva subpastas canônicas e `_open_artifact_path` valida existência e
 confinamento em `output_root` antes de abrir. A UI nunca envia caminho do filesystem. Jobs
 legados sem Manifest V2 toleram ausência de perfil/manifest e preservam a ação PDF quando o
-arquivo registrado ainda existe.
+arquivo registrado ainda existe. Desde o ciclo do ep. 285 a rota é instrumentada
+(`OPEN_ARTIFACT_ROUTE_ENTER/RESULT/EXCEPTION` em `runtime/diagnostics/routes_current.jsonl`)
+e falhas de `os.startfile`/`explorer` no Windows viram `ValueError("open_failed")`, de modo
+que a UI exibe um código legível em vez de um 500 genérico — um clique que "não abre nada"
+agora deixa rastro no diagnostic log.
 
 ## 27. Ambiente de desenvolvimento e comandos
 

@@ -805,8 +805,8 @@ def get_cleanable_translatable_groups(groups):
             )
             continue
         if group.classification == "sfx":
-            from yomu.translation.sfx_glossary import translate_sfx
-            sfx_target = translate_sfx(group.text) if config.TRANSLATE_SFX else None
+            from yomu.translation.sfx_glossary import translate_sfx_fuzzy
+            sfx_target = translate_sfx_fuzzy(group.text) if config.TRANSLATE_SFX else None
             if not config.TRANSLATE_SFX or (
                 not getattr(group, "sent_to_translation", False)
                 and (not sfx_target or sfx_target.strip().casefold() == str(group.text or "").strip().casefold())
@@ -1922,6 +1922,15 @@ def apply_group_translations(groups, translations):
             group.classification,
             required_name_spans=group_proper_name_spans(group),
         )
+        # Lore terms are repaired after the provider and before validation, so a
+        # corrupted name ("GEENOM" for "GEHENNA") is fixed once for the initial
+        # pass and for every retry (they all converge through this funnel).
+        from yomu.translation.terms_glossary import enforce_protected_terms
+        translated, term_repairs = enforce_protected_terms(group.text, translated)
+        if term_repairs:
+            evidence = dict(getattr(group, "quality_evidence", {}) or {})
+            evidence["protected_term_repairs"] = list(term_repairs)
+            group.quality_evidence = evidence
         group.translation_candidate = _match_source_case(group.text, translated)
         group.translation = group.translation_candidate
         valid, reason = validate_translation_text(
@@ -2249,9 +2258,9 @@ def _last_resort_allowed(group):
         # sound with a known rendering (glossary or a real English word).
         if not config.TRANSLATE_SFX:
             return False
-        from yomu.translation.sfx_glossary import translate_sfx
+        from yomu.translation.sfx_glossary import translate_sfx_fuzzy
         words = re.findall(r"[A-Za-z]+", text)
-        return bool(words) and (translate_sfx(text) is not None
+        return bool(words) and (translate_sfx_fuzzy(text) is not None
                                 or all(region_taxonomy.is_english_word(w) for w in words))
     # "unknown" is the weak label of prose set on art without a balloon ("I WAS
     # REINCARNATED AS A SWORD."); the story authority below still has to promote it.
@@ -2593,10 +2602,10 @@ def _is_sound_lettering(group):
     """A sound effect, or a lone sound/action label lettered as art ("GRIN")."""
     if group.classification == "sfx":
         return True
-    from yomu.translation.sfx_glossary import translate_sfx
+    from yomu.translation.sfx_glossary import translate_sfx_fuzzy
 
     words = re.findall(r"[A-Za-z]+", str(group.text or ""))
-    return 0 < len(words) <= 2 and translate_sfx(group.text) is not None
+    return 0 < len(words) <= 2 and translate_sfx_fuzzy(group.text) is not None
 
 
 def _finalize_translation_failure(
@@ -3888,8 +3897,12 @@ def _filter_groups(groups, image_shape):
             group.ignored = True
             group.ignore_reason = "group_too_small"
         elif w > w_img * 0.96 and h > h_img * 0.25:
-            group.ignored = True
-            group.ignore_reason = "group_too_large"
+            # A full-width splash SFX ("RUMBLE" across a page) is legitimately
+            # large; only non-sounds are dropped by the size rule.
+            from yomu.translation.sfx_glossary import translate_sfx_fuzzy
+            if translate_sfx_fuzzy(text) is None:
+                group.ignored = True
+                group.ignore_reason = "group_too_large"
         elif _looks_like_noise(text):
             group.ignored = True
             group.ignore_reason = "noise_like_group"
@@ -5002,6 +5015,18 @@ def _apply_classification_policy(group):
         group.ignored = True
         group.ignore_reason = "sfx_translation_disabled"
         return
+    # A sound the glossary knows keeps its region alive even when the visual
+    # evidence is weak ("unknown"/"decorative" with a plain or ambiguous
+    # background): the fuzzy glossary hit is the strongest signal of what the
+    # lettering says. Without this, a real effect ("BLAZE" over a washed panel)
+    # was dropped as weak_unknown_text and stayed English without a trace.
+    known_sound = False
+    if config.TRANSLATE_SFX:
+        from yomu.translation.sfx_glossary import translate_sfx_fuzzy
+        _rendered = translate_sfx_fuzzy(group.text)
+        known_sound = bool(_rendered) and _rendered.strip().casefold() != str(
+            group.text or ""
+        ).strip().casefold()
     policy = region_taxonomy.resolve_region_policy(
         original_classification=group.classification,
         source_text=group.text,
@@ -5040,10 +5065,14 @@ def _apply_classification_policy(group):
         weak_promotion_allowed = False
 
     if region_taxonomy.is_preservable(policy["normalized_classification"]):
-        group.ignored = True
-        group.ignore_reason = policy["semantic_role"]
+        if known_sound:
+            group.ignored = False
+            group.ignore_reason = ""
+        else:
+            group.ignored = True
+            group.ignore_reason = policy["semantic_role"]
     elif region_taxonomy.is_translatable(policy["normalized_classification"]):
-        if weak_promotion_allowed:
+        if weak_promotion_allowed or known_sound:
             group.ignored = False
             group.ignore_reason = ""
         elif group.classification == "decorative":
@@ -5082,9 +5111,34 @@ def _apply_classification_policy(group):
             )
         else:
             strong_unknown = group.confidence >= 0.65 and abs(group.angle_degrees) < 12
-        if not strong_unknown:
+        if not strong_unknown and not known_sound:
             group.ignored = True
             group.ignore_reason = "weak_unknown_text"
+
+
+def known_sound_translation_target(group):
+    """pt-BR rendering when a region carries a known sound on an SFX background.
+
+    Splash lettering is often classified "decorative" and filtered out for its
+    size, but a sound the glossary knows is story content. ``None`` when the
+    group is not a known sound (or SFX translation is off, or the rendering
+    would equal the source).
+    """
+
+    if not config.TRANSLATE_SFX:
+        return None
+    if getattr(group, "background_type", "") not in {
+        "textured_art",
+        "speed_lines",
+        "sfx_area",
+    }:
+        return None
+    from yomu.translation.sfx_glossary import translate_sfx_fuzzy
+
+    rendered = translate_sfx_fuzzy(group.text)
+    if not rendered or rendered.strip().casefold() == str(group.text or "").strip().casefold():
+        return None
+    return rendered
 
 
 def _should_translate_group(group):
@@ -5102,6 +5156,15 @@ def _should_translate_group(group):
         return False
     if group.classification == "sfx" and not config.TRANSLATE_SFX:
         return False
+    # A sound the glossary knows (exact or OCR-tolerant) on an SFX-typical
+    # background is story content even when the visual classifier called the
+    # region "decorative" and even when OCR heuristics flag the garbled token
+    # as unintelligible: a fuzzy glossary hit is stronger evidence of what the
+    # lettering says than the recogniser's confidence in reading it. The
+    # glossary guards (real-word refusal, length tiers) keep this from
+    # promoting ordinary words.
+    if known_sound_translation_target(group) is not None:
+        return True
     # OCR corruption is an OCR problem. A region the recogniser could not read
     # twice is held back for review instead of being handed to the translator,
     # which has no way to recover the characters that were never read.

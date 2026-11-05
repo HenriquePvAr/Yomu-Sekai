@@ -50,6 +50,7 @@ from yomu.ocr.ocr_balloon import (
     apply_selective_ocr_fallbacks,
     apply_speech_container_reocr,
     apply_group_translations,
+    known_sound_translation_target,
     enforce_rapidocr_quality_gate,
     get_translatable_groups,
     normalize_recurring_compact_names,
@@ -2356,6 +2357,7 @@ def process_pre_translation_page(
                 flush=True,
             )
             grouping_fallback_reason = ""
+    fallback_elapsed = 0.0
     if grouping_fallback_reason:
         fallback_started = time.perf_counter()
         with profile_step(
@@ -2468,7 +2470,17 @@ def process_pre_translation_page(
         items=len(groups),
     ):
         state["group_text_repairs"] = _group_text_repairs(groups)
-    classify_elapsed = time.perf_counter() - classify_started
+    # ``classify_started`` also covers the OCR passes above (speech re-OCR,
+    # selective fallback, full-page fallback); those report under their own
+    # timers/keys, so subtract them here to keep ``classification_grouping``
+    # honest instead of double-counted as the slowest stage.
+    classify_elapsed = (
+        time.perf_counter()
+        - classify_started
+        - reocr_elapsed
+        - selective_elapsed
+        - fallback_elapsed
+    )
     classification_profiler.record_step(
         "classification_grouping.page_total",
         classify_elapsed,
@@ -3467,9 +3479,12 @@ def run_benchmark(args):
         # glossary. A sound it does not know keeps its source text (an echo, so the
         # original lettering stays): a provider read "PRESS" as a noun
         # ("IMPRENSA") and a misread "BOOM" ("hoog") as Dutch ("alto").
-        from yomu.translation.sfx_glossary import translate_sfx
-        local = [(translate_sfx(group.text) or group.text) if group.classification == "sfx" else None
-                 for group in translation_targets]
+        from yomu.translation.sfx_glossary import translate_sfx_fuzzy
+        local = [(
+            (translate_sfx_fuzzy(group.text) or group.text)
+            if group.classification == "sfx"
+            else known_sound_translation_target(group)
+        ) for group in translation_targets]
         remote_index = [i for i, value in enumerate(local) if value is None]
         # OCR-damaged tokens are repaired before the provider sees them: glued words
         # ("WEPLANTO", read as a name), a chapter name glued to a token ("ILJEON")
@@ -3495,7 +3510,7 @@ def run_benchmark(args):
             # A bare action label lettered outside a balloon ("NOD", "GRIN") is
             # classified as speech, and the provider hands it back untouched.
             if config.TRANSLATE_SFX and str(value or "").strip().upper() == str(source or "").strip().upper():
-                value = translate_sfx(source) or value
+                value = translate_sfx_fuzzy(source) or value
             translations[i] = value
         translator_stats_sfx_glossary = len(translation_targets) - len(remote_index)
     stage_seconds["translation"] = time.perf_counter() - translation_started

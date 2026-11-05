@@ -348,7 +348,23 @@ a leitura correta.
 SFX são traduzidos por padrão (`TRANSLATE_SFX=True`): `yomu/translation/sfx_glossary.py` aplica o
 glossário local `assets/lexicon/sfx_en_pt.json` ("BANG" → "BAM"); um som que o glossário não conhece
 mantém o texto de origem e não é enviado ao provider. `TRANSLATE_SFX=0` preserva todos os SFX
-(a suíte de testes usa `0` no `conftest.py` raiz). Elementos decorativos e grupos ignorados não entram automaticamente na tradução. A classificação também informa a estratégia de máscara e redraw.
+(a suíte de testes usa `0` no `conftest.py` raiz).
+
+Desde o ciclo do ep. 285 (2026-11), o lookup tem uma segunda passada tolerante a
+OCR (`translate_sfx_fuzzy`): o lettering estilizado dos SFX é exatamente onde o
+reconhecedor erra ("CLAMTER" por "CLATTER", "RMBLE" por "RUMBLE"), e a passada
+fuzzy — com guardas fail-closed (palavras reais do léxico inglês nunca entram,
+tokens curtos só aceitam substituição de mesmo comprimento ou omissão de vogal)
+— recupera esses casos sem custo de runtime mensurável e sem depender de uma
+segunda engine OCR. Um som grande em splash de página inteira (classificado
+`decorative`/`group_too_large`) mas reconhecido pelo glossário é promovido à
+tradução via `known_sound_translation_target` (`yomu/ocr/ocr_balloon.py`).
+Termos do enredo são protegidos por `yomu/translation/terms_glossary.py`
+(`assets/lexicon/terms_en_pt.json`): nomes como GEHENNA/EST/TU'UMLIM são
+reparados pós-provider ("GEENOM" → "GEHENNA") no funil `apply_group_translations`,
+com guarda de ambiguidade (dois candidatos na mesma distância = sem toque).
+`TRANSLATE_SFX=0` preserva todos os SFX. A classificação também informa a
+estratégia de máscara e redraw.
 
 ## Tradução e contexto
 

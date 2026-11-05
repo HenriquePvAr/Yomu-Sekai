@@ -637,7 +637,12 @@ class YomuBackendTranslationProvider:
         self._locks: dict[tuple[str, str], threading.Lock] = {}
         self._locks_guard = threading.Lock()
         self.provider_name = "yomu_backend"
-        self.stats: dict[str, Any] = {"provider_name": self.provider_name}
+        self.stats: dict[str, Any] = {
+            "provider_name": self.provider_name,
+            "api_requests": 0,
+            "api_texts": 0,
+            "cache_hits": 0,
+        }
         self._name_overrides: list[tuple[str, str]] = []
 
     def set_name_overrides(self, pairs):
@@ -668,10 +673,12 @@ class YomuBackendTranslationProvider:
         self.results.configure_job_root(request.job_id, output_dir)
         existing = self.results.get(request.job_id, request.request_id, request)
         if existing:
+            self.stats["cache_hits"] = int(self.stats.get("cache_hits", 0)) + len(request.items)
             return existing
         with self._lock_for((request.job_id, request.request_id)):
             existing = self.results.get(request.job_id, request.request_id, request)
             if existing:
+                self.stats["cache_hits"] = int(self.stats.get("cache_hits", 0)) + len(request.items)
                 return existing
             try:
                 auth_job_id = str(os.getenv("TRADUTOR_AUTH_CONTEXT_ID") or request.job_id).strip()
@@ -697,6 +704,8 @@ class YomuBackendTranslationProvider:
             actual = [item.item_id for item in response.items]
             if response.request_id != request.request_id or set(actual) != expected or len(actual) != len(set(actual)):
                 raise BackendTranslationError("TRANSLATION_RESULT_MISMATCH")
+            self.stats["api_requests"] = int(self.stats.get("api_requests", 0)) + 1
+            self.stats["api_texts"] = int(self.stats.get("api_texts", 0)) + len(request.items)
             self.results.persist_for_job(request.job_id, response, request)
             return response
 
@@ -864,10 +873,12 @@ class YomuBackendTranslationProvider:
         self.results.configure_job_root(request.job_id, self._reservation_output_dir(request.job_id))
         existing = self.results.get(request.job_id, request.request_id, request)
         if existing:
+            self.stats["cache_hits"] = int(self.stats.get("cache_hits", 0)) + len(request.items)
             return existing
         with self._lock_for((request.job_id, request.request_id)):
             existing = self.results.get(request.job_id, request.request_id, request)
             if existing:
+                self.stats["cache_hits"] = int(self.stats.get("cache_hits", 0)) + len(request.items)
                 return existing
             response = self.backend.translate_batch(
                 request, reservation_id=reservation_id, auth_token=auth_token,
@@ -877,6 +888,8 @@ class YomuBackendTranslationProvider:
             if (response.request_id != request.request_id or set(actual) != expected
                     or len(actual) != len(set(actual))):
                 raise BackendTranslationError("TRANSLATION_RESULT_MISMATCH")
+            self.stats["api_requests"] = int(self.stats.get("api_requests", 0)) + 1
+            self.stats["api_texts"] = int(self.stats.get("api_texts", 0)) + len(request.items)
             self.results.persist_for_job(request.job_id, response, request)
             return response
 

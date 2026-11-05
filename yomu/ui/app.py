@@ -3310,12 +3310,38 @@ def api_open(
     request: Request, payload: dict[str, Any] = Body(default={})
 ) -> dict[str, Any]:
     principal = _ui_principal(request, mutate=True)
-    _api_call(
-        BRIDGE.open_artifact_for_owner,
-        principal.owner_id,
-        str(payload.get("job_id") or ""),
-        str(payload.get("artifact") or ""),
+    # Instrumented like the source/run routes: an open that silently no-ops is
+    # indistinguishable from one that never fired without this trail.
+    _append_diagnostic_log(
+        "routes_current.jsonl",
+        "OPEN_ARTIFACT_ROUTE_ENTER",
+        route="/api/ui/open",
+        artifact=str(payload.get("artifact") or "")[:40],
         select=bool(payload.get("select", False)),
+    )
+    try:
+        _api_call(
+            BRIDGE.open_artifact_for_owner,
+            principal.owner_id,
+            str(payload.get("job_id") or ""),
+            str(payload.get("artifact") or ""),
+            select=bool(payload.get("select", False)),
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:  # noqa: BLE001 - logged, then re-raised verbatim
+        _append_diagnostic_log(
+            "routes_current.jsonl",
+            "OPEN_ARTIFACT_ROUTE_EXCEPTION",
+            route="/api/ui/open",
+            exception_type=type(exc).__name__,
+        )
+        raise
+    _append_diagnostic_log(
+        "routes_current.jsonl",
+        "OPEN_ARTIFACT_ROUTE_RESULT",
+        route="/api/ui/open",
+        status="opened",
     )
     return {"ok": True}
 
