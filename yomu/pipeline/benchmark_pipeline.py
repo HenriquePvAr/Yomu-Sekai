@@ -341,6 +341,15 @@ def _images_are_page_shaped(paths, *, min_share=0.8):
     return bool(shapes) and sum(shapes) / len(shapes) >= min_share
 
 
+def _source_needs_smart_split(download_report, image_paths):
+    """Smart split is needed for a strip, never for pages; an unknown source is judged by shape."""
+    if str((download_report or {}).get("page_layout") or "") == "strip":
+        return True
+    if _images_are_page_shaped(image_paths):
+        return False
+    return bool((download_report or {}).get("requires_smart_split", True))
+
+
 def _prewarm_learned_inpainter():
     """Build the LaMa DirectML session in the background, after page OCR.
 
@@ -585,6 +594,12 @@ def _clean_target_snapshot(state: dict) -> list[dict]:
     return sorted(targets, key=lambda item: (item["group_id"], item["region_id"]))
 
 
+def _is_ignored_noise_line(item) -> bool:
+    """A stray OCR line dropped before grouping (a lone letter): nothing was there to clean."""
+    return bool(isinstance(item, dict) and item.get("ignored")
+                and str(item.get("classification_reason") or "") == "line_ignored_before_grouping")
+
+
 def _make_clean_certificate(state: dict, job_id: str) -> dict:
     """Bind verified Clean pixels to source, target ownership, and current QC revision."""
     source_path = Path(str(state.get("image_path") or ""))
@@ -623,17 +638,26 @@ def _make_clean_certificate(state: dict, job_id: str) -> dict:
         for item in remote_targets
     )
     certified_targets = [item for item in targets if item["disposition"] in {"REMOTE_SAFE", "LOCAL_SAFE"}]
-    targets_complete = bool(certified_targets) and targets_complete and all(
+    # A page with no source-text target (pure art) has nothing to certify and may pass; what
+    # must never pass is a target with no final disposition. ``bool(certified_targets)`` used to
+    # do that job but also failed every page without text.
+    final_dispositions = {"REMOTE_SAFE", "LOCAL_SAFE", "PRESERVE_SFX", "PRESERVE_ART"}
+    final_target_dispositions = final_dispositions
+    targets_complete = all(item["disposition"] in final_dispositions for item in targets) and targets_complete and all(
         item["group_id"] and item["region_id"] and item["geometry"] and item["source_text_sha256"]
         and (item["disposition"] != "LOCAL_SAFE"
-             or (item["local_attempted"] and item["local_validation_passed"] and not item["review_required"]))
+             or (item["local_attempted"] and item["local_validation_passed"]))
         for item in certified_targets
     )
     strategy = state.get("clean_result") if isinstance(state.get("clean_result"), dict) else {}
     outside = strategy.get("outside_mask_changed_pixels")
     outside_ok = isinstance(outside, int) and not isinstance(outside, bool) and outside == 0
+    # ``review_required`` carries the *translation* review flag of the region. A region whose
+    # source removal is already proven (final disposition + validation) keeps that flag for the
+    # translation review queue; it is not an unresolved Clean target.
     unresolved = any(
-        item["review_required"] or item["disposition"] in {
+        (item["review_required"] and item["disposition"] not in final_target_dispositions)
+        or item["disposition"] in {
             "PENDING_LOCAL",
             "LOCAL_HARD", "REVIEW_UNOWNED", "REVIEW_OCR", "REVIEW_SEMANTIC",
             "REVIEW_REQUIRED", "REMOTE_REJECTED",
@@ -1048,8 +1072,10 @@ def _persist_canonical_artifacts(output_root, completed_states, total_pages, pro
                 {
                     "group_id": item.get("id"),
                     "region_id": item.get("region_id"),
-                    "disposition": item.get("clean_disposition") or "REVIEW_UNOWNED",
-                    "reason": item.get("clean_disposition_reason") or "disposition_not_persisted",
+                    "disposition": item.get("clean_disposition") or (
+                        "PRESERVE_ART" if _is_ignored_noise_line(item) else "REVIEW_UNOWNED"),
+                    "reason": item.get("clean_disposition_reason") or (
+                        "ignored_noise_line" if _is_ignored_noise_line(item) else "disposition_not_persisted"),
                     "local_attempted": bool(item.get("clean_local_attempted")),
                     "local_validation": item.get("clean_artifact_validation") or {},
                     "remote_attempted": bool(item.get("clean_remote_attempted")),
@@ -1531,16 +1557,31 @@ def _hidden_subprocess_options():
 
 BASELINE_SECONDS = 2129.41
 OUTPUT_FOLDER = Path("output/full_chapter")
-PIPELINE_FILES = (
-    "ocr_balloon.py",
-    "ocr_engine.py",
-    "translator_nvidia.py",
-    "pdf.py",
-)
+def _pipeline_source_files():
+    """Every source file whose change can alter a page's output.
+
+    The names this tuple used to hold ("ocr_balloon.py", ...) were bare file names resolved
+    against the working directory, where none exists since the code moved under ``yomu/``:
+    the fingerprint was the hash of an empty list, so a page cached by older code was reused
+    after an update and the new rendering never ran.
+    """
+    root = Path(__file__).resolve().parents[1]
+    files = []
+    for package in ("ocr", "clean", "review", "translation", "pipeline", "export", "core"):
+        files.extend(sorted((root / package).rglob("*.py")))
+    return tuple(files)
+
+
+PIPELINE_FILES = _pipeline_source_files()
 
 _PROGRESS_WRITE_LOCK = threading.RLock()
 _PROGRESS_FINGERPRINTS = {}
 PIPELINE_MANIFEST_VERSION = "benchmark-pipeline-v1"
+
+
+# The code a run executes is the code the process loaded at start, so the manifest records the
+# commit seen then; re-reading HEAD at the end made any commit/pull during a long job fail it.
+_GIT_AT_RUN_START = None
 
 
 def _git_metadata():
@@ -1949,7 +1990,7 @@ def _group_count_trace(page_states):
 
 def _output_run_manifest(output_folder, report, translator):
     created_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
-    git = _git_metadata()
+    git = _GIT_AT_RUN_START or _git_metadata()
     run_id = str(report.get("job_run_id") or "").strip()
     if not run_id:
         run_id = stable_hash(
@@ -2476,7 +2517,9 @@ def process_pre_translation_page(
 def run_benchmark(args):
     started = time.perf_counter()
     monotonic_origin_ns = time.perf_counter_ns()
-    global _PERF_JOB_ORIGIN_NS, _PERF_EVENTS, _PIPELINE_TELEMETRY
+    global _PERF_JOB_ORIGIN_NS, _PERF_EVENTS, _PIPELINE_TELEMETRY, _GIT_AT_RUN_START
+    _GIT_AT_RUN_START = _git_metadata()
+    region_taxonomy.set_series_identity(series_slug_from_url(str(getattr(args, "url", "") or "")))
     # Direct benchmark callers (including the streaming audit harness) may not
     # pass through run_webtoon._configure_mode. Resolve the supported Beta
     # engine here as well, so a stale local OCR_ENGINE=paddle cannot select the
@@ -2649,11 +2692,13 @@ def run_benchmark(args):
             + ", ".join(download_gate.get("reasons") or ["motivo desconhecido"])
         )
     resource_monitor.set_stage("validation")
-    if _images_are_page_shaped(all_image_paths):
-        # Smart split rebuilds pages from a long webtoon strip. Manga/comic pages are
-        # already pages; a reader that exposed a few <img> tags (Comix) used to have
-        # its 22 pages re-cut and merged into 13.
-        download_report["requires_smart_split"] = False
+    # Smart split rebuilds pages from a long webtoon strip. Manga/comic pages are already
+    # pages; a reader that exposed a few <img> tags (Comix) used to have its 22 pages re-cut
+    # and merged into 13. A source that knows its layout says so; only an unknown one is
+    # judged by image shape, which cannot tell a 800x1280 strip chunk from a manga page
+    # (Webtoons chunks were left uncut, so balloons crossing a chunk edge stayed half-cleaned).
+    download_report["requires_smart_split"] = _source_needs_smart_split(
+        download_report, all_image_paths)
     source_selection = [] if (
         config.SMART_WEBTOON_PDF_SPLIT
         and bool(download_report.get("requires_smart_split", True))
@@ -5442,6 +5487,10 @@ def _incomplete_speech_region_coverage(states):
             for other in residual:
                 if other is line:
                     continue
+                # The work's own title plate, drawn next to the credits it heads, is a logo kept
+                # on purpose, not source text left behind in the credits' block.
+                if region_taxonomy.looks_like_series_title(_item_source_text(other)):
+                    continue
                 if _boxes_form_one_speech_block(
                     line["bounding_box"],
                     other["bounding_box"],
@@ -6001,7 +6050,13 @@ def _physical_residual_accounting(states, *, translation_applicable=True):
             if final_state == "translated" and translated and valid and redrawn:
                 result["physical_regions_translated"] += 1
                 continue
-            if final_reason == PROPER_NAME_ONLY_REASON:
+            # A name-shaped echo (a lone token the provider handed back: a name, branding or a
+            # stylised vocalisation) is rendered as a clean, no-review preserve, so counting it
+            # as retained English story was the gate contradicting the render decision. An echo
+            # that still needs review (ordinary story text) is not preserved and stays residual.
+            if final_reason == PROPER_NAME_ONLY_REASON or (
+                final_reason == "source_echo_preserved_original" and preserved and not review
+            ):
                 result["physical_regions_preserved"] += 1
                 continue
             # The final rendered state is authoritative for *physical* retention:
@@ -6589,6 +6644,11 @@ def _quality_item_summary(item):
         "translation_final_reason": item.get("translation_final_reason"),
         "translation_quality_impact": item.get("translation_quality_impact"),
         "preserved_original": item.get("preserved_original"),
+        "render_font_size": item.get("render_font_size"),
+        "render_font_class": item.get("render_font_class"),
+        "render_alignment": item.get("render_alignment"),
+        "font_size_from_source_ink": item.get("font_size_from_source_ink"),
+        "source_line_height_px": item.get("source_line_height_px"),
         "text_overflow_ratio": item.get("text_overflow_ratio"),
         "visual_validation": item.get("visual_validation"),
         "visual_attempts": item.get("visual_attempts"),

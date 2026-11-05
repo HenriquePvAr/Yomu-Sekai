@@ -282,7 +282,10 @@ técnico/compatibilidade.
 Os cartões se adaptam à largura da tela. A seleção fica destacada e o resultado entregue
 aparece no rodapé de cada cartão. O painel Pipeline acompanha o job sem limpar o progresso
 ao voltar à aba. O tempo restante é uma estimativa **da etapa atual**, calculada após haver
-progresso suficiente; se os eventos pararem, o painel informa que aguarda atualização.
+progresso suficiente; se os eventos pararem, o painel informa que aguarda atualização. Quando
+ainda não há ritmo para estimar, o painel diz o que a etapa está fazendo: **"Finalizando esta
+etapa…"** quando o contador já chegou ao fim, e **"Etapa em andamento há …"** quando a etapa só
+avança depois que o primeiro lote termina (a tradução, por exemplo).
 
 Em **Fontes**, as miniaturas são capturas novas dos sites públicos, atualizadas a cada minuto
 enquanto a aba está aberta e visível. Em caso de falha, a última prévia continua na tela até a

@@ -63,3 +63,33 @@ class DownloadParallelContractTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td, mock.patch.object(down,"_download_url",side_effect=fetch):
             down._download_candidates(None,self._candidates(),None,1,4,None,self._report(4),"http://local",td,[BrowserSessionTransport()])
         self.assertEqual(maximum,1)
+
+    def test_http_stays_parallel_when_a_browser_fallback_is_only_configured(self):
+        # A configured-but-unused browser fallback forced every image onto one connection.
+        active=0; maximum=0; lock=threading.Lock(); seen=[]
+        def fetch(url, referer, max_retries, transports):
+            nonlocal active, maximum
+            seen.append([type(t).__name__ for t in transports])
+            with lock: active+=1; maximum=max(maximum,active)
+            time.sleep(.05)
+            with lock: active-=1
+            i=int(url.split("page")[1].split(".")[0]); return _png(i)
+        fetch.last_transport_name="requests"
+        diagnostics={}
+        with tempfile.TemporaryDirectory() as td, mock.patch.object(down,"_download_url",side_effect=fetch), mock.patch.object(down,"DOWNLOAD_WORKERS",3):
+            down._download_candidates(None,self._candidates(6),None,1,6,None,self._report(6),"http://local",td,[RequestsTransport(),BrowserSessionTransport()],parallel_diagnostics=diagnostics)
+        self.assertGreater(maximum,1); self.assertEqual(diagnostics["workers_effective"],3)
+        self.assertTrue(all("BrowserSessionTransport" not in names for names in seen))
+
+    def test_item_that_fails_over_http_falls_back_to_the_browser_serially(self):
+        calls=[]
+        def fetch(url, referer, max_retries, transports):
+            names=[type(t).__name__ for t in transports]; i=int(url.split("page")[1].split(".")[0])
+            calls.append((i,names))
+            if i==2 and "BrowserSessionTransport" not in names: raise RuntimeError("blocked over http")
+            return _png(i)
+        fetch.last_transport_name="requests"
+        with tempfile.TemporaryDirectory() as td, mock.patch.object(down,"_download_url",side_effect=fetch), mock.patch.object(down,"DOWNLOAD_WORKERS",3):
+            paths=down._download_candidates(None,self._candidates(4),None,1,4,None,self._report(4),"http://local",td,[RequestsTransport(),BrowserSessionTransport()],parallel_diagnostics={})
+        self.assertEqual(len(paths),4)
+        self.assertIn((2,["RequestsTransport","BrowserSessionTransport"]),calls)

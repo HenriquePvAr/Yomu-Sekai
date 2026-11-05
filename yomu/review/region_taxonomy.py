@@ -183,10 +183,25 @@ def looks_like_credit(text: str) -> bool:
     ) or comma_credit_roll
 
 
+_SERIES_COMPACT = ""
+
+
+def set_series_identity(slug: str) -> None:
+    """Remember the work being processed (its URL slug), so its own title lettering is a logo."""
+    global _SERIES_COMPACT
+    _SERIES_COMPACT = re.sub(r"[^a-z0-9]", "", str(slug or "").lower())
+
+
+def looks_like_series_title(text: str) -> bool:
+    """The page's text is the work's own title ("HERO KILLER" on the cover plate)."""
+    compact = re.sub(r"[^a-z0-9]", "", str(text or "").lower())
+    return bool(len(_SERIES_COMPACT) >= 5 and compact == _SERIES_COMPACT)
+
+
 def looks_like_strong_credit(text: str) -> bool:
     """Credit evidence that ordinary dialogue cannot produce by itself."""
     body = str(text or "")
-    if _staff_roll(body):
+    if _staff_roll(body) or looks_like_series_title(body):
         return True
     compact = _compact_alnum(body)
     words = _words(body)
@@ -456,7 +471,12 @@ def segment_words(token: str) -> list[str] | None:
             prefix = best[start]
             if prefix is None:
                 continue
-            zipf = _piece_zipf(letters[start:end])
+            piece = letters[start:end]
+            # The article "A" is so frequent that it costs almost nothing, so it won as a
+            # last piece ("THE NEWER A" over "THE NEW ERA"). It never ends a phrase.
+            if piece == "A" and end == len(letters) and start > 0:
+                continue
+            zipf = _piece_zipf(piece)
             if zipf is None:
                 continue
             cost = prefix[0] + (8.0 - zipf)

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from enum import StrEnum
 import re
+from yomu.review import region_taxonomy
 
 
 class RegionDisposition(StrEnum):
@@ -36,7 +37,8 @@ def classify_group_disposition(group) -> tuple[RegionDisposition, str]:
         reason = str(getattr(group, "ignore_reason", "") or "")
         text = str(getattr(group, "text", "") or "").upper()
         if (re.search(r"(?:HTTPS?://|WWW\.|\b(?:ART|STORY|SCRIPT|LETTERING)\s+BY\b|DISCORD\.GG)", text)
-                or reason in {"url_or_watermark", "production_credit", "logo_or_branding"}):
+                or reason in {"url_or_watermark", "production_credit", "logo_or_branding"}
+                or region_taxonomy.looks_like_series_title(text)):
             return RegionDisposition.PRESERVE_ART, reason or "promo_credit_preserve"
         if classification in {"decorative", "unknown"} and reason in {"decorative_text", "weak_unknown_text"}:
             return RegionDisposition.REVIEW_SEMANTIC, reason or "semantic_ownership_uncertain"

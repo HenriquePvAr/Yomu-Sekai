@@ -321,6 +321,22 @@ class QualityModeOcrPolicyTests(unittest.TestCase):
         self.assertEqual(engine.last_run_metadata.get("final_engine"), "rapidocr")
         self.assertEqual(engine.last_run_metadata.get("ocr_sufficiency"), ocr_engine.OCR_REVIEW)
 
+    def test_sfx_burst_page_with_no_story_region_is_sufficient(self):
+        engine = ocr_engine.OCREngine("en", engine="rapidocr", fallback_engine="paddle")
+        sfx_line = _ocr_line("BLAZE", (10, 8, 90, 24))
+        with (
+            patch.object(ocr_engine.config, "RAPIDOCR_ENABLED", True),
+            patch.object(ocr_engine.config, "RAPIDOCR_PAGE_FALLBACK", True),
+            patch.object(ocr_engine, "_estimate_text_regions", return_value=13),
+            patch.object(ocr_engine, "_detect_story_text_region_boxes", return_value=[]),
+            patch.object(ocr_engine.OCREngine, "_detect_with_rapidocr", return_value=[sfx_line]),
+            patch.object(ocr_engine.OCREngine, "_get_paddle",
+                         side_effect=AssertionError("Paddle must not be required")),
+        ):
+            engine.detect_lines(_blank_image(), page=5)
+        self.assertEqual(engine.last_run_metadata.get("ocr_sufficiency"), ocr_engine.OCR_SUFFICIENT)
+        self.assertEqual(engine.last_run_metadata.get("fallback_reason"), "text_like_regions_are_art")
+
     def test_zero_line_decorative_page_does_not_become_engine_failure(self):
         engine = ocr_engine.OCREngine("en", engine="rapidocr", fallback_engine="paddle")
         with (
@@ -336,7 +352,11 @@ class QualityModeOcrPolicyTests(unittest.TestCase):
 
         self.assertEqual(lines, [])
         self.assertFalse(engine.last_run_metadata.get("engine_unavailable"))
-        self.assertEqual(engine.last_run_metadata.get("ocr_sufficiency"), ocr_engine.OCR_REVIEW)
+        # Many text-like regions but no story region and no plausible text evidence: art. It is
+        # sufficient, not a review (which would fail the page's clean certificate), and never an
+        # engine failure. Evidence of text with zero lines still fails closed, see the next test.
+        self.assertEqual(engine.last_run_metadata.get("ocr_sufficiency"), ocr_engine.OCR_SUFFICIENT)
+        self.assertEqual(engine.last_run_metadata.get("fallback_reason"), "zero_lines_on_art_only_page")
 
     def test_zero_line_story_box_still_fails_closed_after_regional_retry_fails(self):
         import yomu.ocr.ocr_parallel as ocr_parallel

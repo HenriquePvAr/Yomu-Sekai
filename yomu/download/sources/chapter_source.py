@@ -347,6 +347,14 @@ class BaseAdapter:
     # cross-origin network noise into the candidate set and produced warnings about
     # collectors the adapter never needed.
     collection_strategy: str = "generic_multisource"
+    # What the images of this reader are, when the reader itself knows.
+    #   "strip" — one continuous vertical strip served in fixed-height chunks (Webtoons).
+    #             A chunk 1280 px tall is not a page: balloons cross its edges, so smart
+    #             split must rebuild pages from the strip.
+    #   ""      — unknown: the pipeline falls back to judging the image shapes.
+    # Declared by the source instead of inferred from the aspect ratio, which cannot tell
+    # a 800x1280 strip chunk from a manga page.
+    page_layout: str = ""
 
     @property
     def capabilities(self) -> SourceAdapterCapabilities:
@@ -688,6 +696,7 @@ class WebtoonsAdapter(BaseAdapter):
             chapter_path_markers=("/viewer", "/episode"),
             coverage_strategy="reader_container",
             collection_strategy="adapter_specific",
+            page_layout="strip",
             container_selector="#_imageList, .viewer_img, .viewer_lst",
             image_selector="#_imageList img, .viewer_img img._images",
         )

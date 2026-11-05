@@ -108,6 +108,20 @@ class Mission2ValidationFixTests(unittest.TestCase):
         self.assertEqual(engine.last_run_metadata["ocr_sufficiency"], ocr_engine.OCR_SUFFICIENT)
         self.assertEqual(engine.last_run_metadata["fallback_reason"], "zero_lines_on_art_only_page")
 
+    def test_zero_lines_without_story_regions_or_text_evidence_is_sufficient(self):
+        # Art that only looks text-like (story_regions == 0) used to fall into OCR_REVIEW,
+        # which fails the page's clean certificate with source_completeness_unproven.
+        image = np.zeros((200, 300, 3), dtype=np.uint8)
+        engine = ocr_engine.OCREngine("en", engine="rapidocr", fallback_engine="")
+        with patch.object(ocr_engine, "_estimate_text_regions", return_value=3), \
+             patch.object(ocr_engine, "_estimate_story_text_regions", return_value=0), \
+             patch.object(ocr_engine, "_has_plausible_story_text_evidence", return_value=False), \
+             patch.object(engine, "_rapidocr_story_region_retry", return_value=([], [])):
+            suspicion = ocr_engine._rapidocr_suspicion(image, [])
+            engine._handle_rapidocr_suspicion(image, 1, [], suspicion, [])
+        self.assertEqual(engine.last_run_metadata["ocr_sufficiency"], ocr_engine.OCR_SUFFICIENT)
+        self.assertEqual(engine.last_run_metadata["fallback_reason"], "zero_lines_on_art_only_page")
+
     def test_ambiguous_empty_retry_contract_remains_review(self):
         group = self._group()
         group.translation = ""

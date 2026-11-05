@@ -509,7 +509,10 @@ class UiBridge:
         readiness = SourceReadinessStore(db_path)
         try:
             workspace_id = default_workspace_id(db_path)
-            if readiness.workspace_policy_history(owner="local", workspace_id=workspace_id):
+            # The workspace policy is active by default and has no visible control: every start
+            # makes sure an active one exists, also after a revocation made through the API
+            # (history alone used to keep it off for good, which blocked every URL job).
+            if readiness.active_workspace_policy(owner="local", workspace_id=workspace_id):
                 return
             readiness.activate_workspace_policy(
                 owner="local", workspace_id=workspace_id, created_by="system_default",
@@ -4873,6 +4876,15 @@ class UiBridge:
                 and stage_elapsed is not None and stage_elapsed >= 2
                 and 0 < current < total):
             eta_seconds = (total - current) * stage_elapsed / current
+        elif live and not stale_updates and eta_label is None and total > 0 and stage_elapsed is not None:
+            # No rate to extrapolate from: say what the stage is doing instead of repeating
+            # "Calculando estimativa" through a full counter (finishing) or a stalled one
+            # (a single provider call or a long step that only ticks when it ends).
+            if current >= total:
+                eta_label = "Finalizando esta etapa…"
+            elif current <= 0 and stage_elapsed >= 5:
+                eta_label = (f"Etapa em andamento há {_format_seconds(stage_elapsed)}; "
+                             "o contador avança quando o primeiro lote termina")
         if stale_updates:
             eta_label = "Aguardando atualização do processamento"
         # A historical review never belongs to an active/staging operation. Returning it

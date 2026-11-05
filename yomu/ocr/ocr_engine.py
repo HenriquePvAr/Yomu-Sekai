@@ -413,9 +413,17 @@ class OCREngine:
         if not lines and story_regions > 0 and has_text_evidence and recovered_regions == 0:
             sufficiency = OCR_INSUFFICIENT
             fallback_reason = "zero_lines_on_story_like_page"
-        elif not lines and story_regions > 0 and not has_text_evidence:
+        elif not lines and not has_text_evidence:
+            # Zero lines and no plausible text anywhere: art only. This also covers a page
+            # whose "text-like" regions were all art (story_regions == 0); requiring a story
+            # region here sent every such page to OCR_REVIEW and failed its clean certificate.
             sufficiency = OCR_SUFFICIENT
             fallback_reason = "zero_lines_on_art_only_page"
+        elif lines and set(reasons) == {"too_few_lines_for_text_regions"} and unresolved_story_regions == 0:
+            # Many text-like blobs but every story-like region is covered by a line: the blobs
+            # are lettering baked into the art (an SFX burst), which the lines already carry.
+            sufficiency = OCR_SUFFICIENT
+            fallback_reason = "text_like_regions_are_art"
         else:
             sufficiency = OCR_REVIEW
             fallback_reason = ";".join(reasons)

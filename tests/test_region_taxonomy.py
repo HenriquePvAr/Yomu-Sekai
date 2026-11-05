@@ -97,5 +97,16 @@ class LegacyCompatibility(unittest.TestCase):
         self.assertEqual(tax.TRANSLATE & tax.UNCERTAIN, frozenset())
 
 
+class WordSegmentationTests(unittest.TestCase):
+    def test_article_a_never_ends_a_run_of_glued_words(self):
+        # "THE NEWER A" cost less than "THE NEW ERA" because "A" is nearly free.
+        self.assertEqual(tax.segment_words("THENEWERA"), ["THE", "NEW", "ERA"])
+
+    def test_article_a_is_still_split_when_it_is_inside_the_run(self):
+        self.assertEqual(tax.segment_words("ITSAHOLE"), ["ITS", "A", "HOLE"])
+        self.assertEqual(tax.segment_words("ATIMEAGO"), ["A", "TIME", "AGO"])
+        self.assertEqual(tax.segment_words("WEPLANTO"), ["WE", "PLAN", "TO"])
+
+
 if __name__ == "__main__":
     unittest.main()
