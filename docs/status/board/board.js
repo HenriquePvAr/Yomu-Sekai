@@ -4,7 +4,7 @@
 window.BOARD = {
   title: 'YomuSekai · Quadro',
   subtitle: 'HenriquePvAr/Yomu-Sekai',
-  updatedAt: '2026-11-03',
+  updatedAt: '2026-11-04',
   repoUrl: 'https://github.com/HenriquePvAr/Yomu-Sekai',
   defaultBranch: 'main',
   columns: [
@@ -192,12 +192,13 @@ window.BOARD = {
     {
       id: 'BUGFIX-TRANS-01',
       title: 'Fix: translate_strict aceita kwargs de retry do OCR',
-      domain: 'pipeline', column: 'qas', env: 'branch',
-      updated: '2026-11-03',
+      domain: 'pipeline', column: 'prod', env: 'main',
+      updated: '2026-11-04',
       summary: '~78 regiões terminavam sem tradução: translate_strict do YomuBackendTranslationProvider não aceitava os kwargs extra que ocr_balloon.py passa nos 3 caminhos de retry (allow_proper_names, proper_names, retry_origin, retry_attempt, source_context). TypeError era capturado em silêncio e produzia candidato vazio. Assinatura alinhada com DeepLTranslator.translate_strict.',
       delivered: [
         'Assinatura de translate_strict corrigida; 1 novo teste hermético (4cdcc8f, 03/11)',
         'Documentação §17 atualizada com descrição do bug e da correção (4cdcc8f, 03/11)',
+        'Mergeado na main (b64f34f, 04/11)',
       ],
       links: [
         { label: 'yomu_backend_provider.py', path: 'yomu/translation/providers/yomu_backend_provider.py' },
@@ -208,16 +209,37 @@ window.BOARD = {
     {
       id: 'BUGFIX-UI-01',
       title: 'Fix: testes de form payload e langSelect após LANG/GLOSSARY',
-      domain: 'ui', column: 'qas', env: 'branch',
-      updated: '2026-11-03',
+      domain: 'ui', column: 'prod', env: 'main',
+      updated: '2026-11-04',
       summary: 'formPayload chama nameGlossaryPairs (ausente nos harneses de teste em dois arquivos); langSelect lido com $ helper como os campos vizinhos. Dois testes corrigidos.',
       delivered: [
         'nameGlossaryPairs adicionada nos harneses de teste; langSelect com $ helper (85f8416, 03/11)',
+        'Mergeado na main (b64f34f, 04/11)',
       ],
       links: [
         { label: 'tradutor_ui.js', path: 'static/tradutor_ui.js' },
         { label: 'test_new_translation_source_policy_state.py', path: 'tests/test_new_translation_source_policy_state.py' },
         { label: 'test_ui_translation_provider_selection.py', path: 'tests/test_ui_translation_provider_selection.py' },
+      ],
+    },
+
+    // ───────────────────────── QAS ─────────────────────────
+
+    {
+      id: 'PIPELINE-REF-01',
+      title: 'Pipeline: correções pós-medição no capítulo de referência (ep. 285)',
+      domain: 'pipeline', column: 'qas', env: 'branch',
+      updated: '2026-11-04',
+      summary: 'Pacote de correções medidas no ep. 285 (Hero Killer). Download: pool HTTP paralelo com fallback serial; "strip" do Webtoons dispara smart split. OCR: página só de arte vira OCR_SUFFICIENT; pontuação neutra para scripts não-latinos. Validação: nomes próprios só por detecção do capítulo; frases em inglês não ficam sem traduzir. Limpeza: máscara estendida ao halo do lettering; achatamento de resíduo em fundo escuro. Tipografia: tamanho inicial derivado da altura de tinta da fonte (não SFX/display). Certificado: páginas sem alvo passam; SFX/arte preservados não contam como resíduo. Manifest: commit registrado no início do run. UI: rótulos de ETA e política de fonte sempre ativa.',
+      delivered: [
+        'download, OCR, limpeza, tipografia, certificado, manifest, UI (56e5b85, 04/11)',
+        '20 novos testes herméticos adicionados no mesmo commit',
+        'Documentação técnica e guia do usuário atualizados',
+      ],
+      links: [
+        { label: 'benchmark_pipeline.py', path: 'yomu/pipeline/benchmark_pipeline.py' },
+        { label: 'ocr_balloon.py',        path: 'yomu/ocr/ocr_balloon.py' },
+        { label: 'down.py',               path: 'yomu/download/down.py' },
       ],
     },
 
