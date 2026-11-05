@@ -7324,6 +7324,67 @@ class UiBridge:
             raise ValueError("Configure o arquivo .env e a NVIDIA_API_KEY antes de processar.")
         return {"ok": True}
 
+    @staticmethod
+    def _focus_explorer_window(folder_name: str, timeout: float = 2.5) -> None:
+        """Best-effort: raise the Explorer window for ``folder_name`` to the front.
+
+        Windows opens folder windows behind the foreground app when a
+        background process starts them, so a click could succeed server-side
+        while the user sees nothing. The foreground lock denies
+        ``SetForegroundWindow`` to background processes; tapping ALT first is
+        the documented workaround. Failure here never breaks the open itself.
+        """
+
+        try:
+            import ctypes
+            import time
+
+            user32 = ctypes.windll.user32
+            matches: list[int] = []
+
+            def enum_proc(hwnd: int, _lparam: int) -> bool:
+                if not user32.IsWindowVisible(hwnd):
+                    return True
+                length = user32.GetWindowTextLengthW(hwnd)
+                if length <= 0:
+                    return True
+                buffer = ctypes.create_unicode_buffer(length + 1)
+                user32.GetWindowTextW(hwnd, buffer, length + 1)
+                if folder_name.lower() in buffer.value.lower():
+                    matches.append(int(hwnd))
+                return True
+
+            callback_type = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)
+            deadline = time.monotonic() + timeout
+            target = None
+            while time.monotonic() < deadline and target is None:
+                matches.clear()
+                user32.EnumWindows(callback_type(enum_proc), None)
+                if matches:
+                    target = matches[0]
+                else:
+                    time.sleep(0.2)
+            if target is None:
+                return
+            kernel32 = ctypes.windll.kernel32
+            foreground = user32.GetForegroundWindow()
+            foreground_thread = user32.GetWindowThreadProcessId(foreground, None)
+            current_thread = kernel32.GetCurrentThreadId()
+            # Attaching to the foreground thread's input queue is the reliable
+            # way for a background process to activate a window: it bypasses
+            # the foreground lock that makes a bare SetForegroundWindow only
+            # flash the taskbar icon.
+            attached = bool(user32.AttachThreadInput(current_thread, foreground_thread, True))
+            try:
+                user32.BringWindowToTop(target)
+                user32.SetForegroundWindow(target)
+                user32.SetActiveWindow(target)
+            finally:
+                if attached:
+                    user32.AttachThreadInput(current_thread, foreground_thread, False)
+        except Exception:
+            pass
+
     def _open_artifact_path(self, path_value: str, *, select: bool = False) -> None:
         path = Path(str(path_value or "")).expanduser().resolve()
         output_root = getattr(self, "output_root", OUTPUT_ROOT).resolve()
@@ -7333,10 +7394,16 @@ class UiBridge:
             raise ValueError("Arquivo ou pasta não encontrado.")
         if os.name == "nt":
             try:
-                if select and path.is_file():
+                if path.is_dir():
+                    subprocess.Popen(["explorer.exe", str(path)])
+                    self._focus_explorer_window(path.name)
+                elif select and path.is_file():
                     subprocess.Popen(["explorer.exe", "/select,", str(path)])
                 else:
-                    os.startfile(path)  # type: ignore[attr-defined]
+                    try:
+                        os.startfile(path)  # type: ignore[attr-defined]
+                    except OSError:
+                        subprocess.Popen(["explorer.exe", "/select,", str(path)])
             except OSError as exc:
                 # Surface a readable code to the UI instead of a bare 500; the
                 # route logs the exception type for diagnosis.
