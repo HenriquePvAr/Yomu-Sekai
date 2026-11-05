@@ -746,11 +746,12 @@ def _find_safe_horizontal_split(
         uniform_gutter = texture <= 4.5 and horizontal_edges <= 2.5
         gutter = white_gutter or dark_gutter or uniform_gutter
         dominant_uniform_ratio = max(white_ratio, dark_ratio)
+        uniform_bonus = dominant_uniform_ratio * 5.0 if dominant_uniform_ratio >= 0.85 else 0.0
         score = (
-            dominant_uniform_ratio * 5.0
+            uniform_bonus
             + (2.0 if uniform_gutter else 0.0)
-            - min(texture / 45.0, 2.0)
-            - min(horizontal_edges / 18.0, 2.0)
+            - min(texture / 25.0, 4.0)
+            - min(horizontal_edges / 4.0, 6.0)
             - distance * 0.65
         )
         band_type = (

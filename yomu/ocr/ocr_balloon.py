@@ -2354,7 +2354,12 @@ def _render_on_clean_rescue(before_group, clean_before, clean_after, original_bg
     """
     mask = np.asarray(clean_mask) > 0
     canvas = before_group.copy()
-    canvas[mask] = clean_after[mask]
+    if clean_before is not None and clean_before.shape == before_group.shape:
+        prior_rendered = np.any(before_group != clean_before, axis=2)
+        transfer_mask = mask & ~prior_rendered
+    else:
+        transfer_mask = mask
+    canvas[transfer_mask] = clean_after[transfer_mask]
     candidate = str(group.translation_candidate or group.translation or "")
     previous_translation, previous_valid = group.translation, group.translation_valid
     group.translation = candidate
@@ -2366,7 +2371,8 @@ def _render_on_clean_rescue(before_group, clean_before, clean_after, original_bg
     allowed = _draw_allowed_group_mask(original_bgr.shape, group, cleanup_mask=clean_mask)
     rendered, summary = _enforce_visual_bounds(before_group, rendered, allowed, group=group,
                                                mask_metrics={"strategy": "clean_rescue"})
-    legibility = _legible_source_residual(rendered, group)
+    bounded_clean = np.where(allowed[..., None] > 0, canvas, before_group)
+    legibility = _legible_source_residual(bounded_clean, group)
     summary["residual_ocr_check"] = legibility
     group.visual_attempts = list(getattr(group, "visual_attempts", []) or []) + [summary]
     if not summary.get("visual_validation_passed") or legibility.get("status") == "legible":
@@ -12251,7 +12257,8 @@ def _legible_source_residual(cleaned_bgr, group):
         return {"status": "unavailable", "reason": "engine_failed", "engine_errors": errors}
     present = source_completeness._represented_token_forms(
         source_completeness.fold_tokens(getattr(group, "text", "") or ""), [read_stream])
-    legible = sorted(token for token in source_tokens if token in present)
+    target_tokens = set(source_completeness.fold_tokens(getattr(group, "translation", "") or ""))
+    legible = sorted(token for token in source_tokens if token in present and token not in target_tokens)
     return {"status": "legible" if legible else "not_legible",
             "legible_source_tokens": legible, "read_token_count": len(read_stream)}
 
