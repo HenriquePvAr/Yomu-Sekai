@@ -59,3 +59,33 @@ def unknown_target_words(translation: str, source: str = "") -> list[str]:
         if key not in unknown:
             unknown.append(key)
     return unknown
+
+
+MIN_RESTORE_SIMILARITY = 0.55
+
+
+def restore_corrupted_source_words(translation: str, source: str, unknown: list[str]) -> str:
+    """Put back the source word a provider turned into a non-word ("GEHENNA" -> "GEENOM").
+
+    A translation word Portuguese does not have, that resembles a source word the translation
+    dropped, is that source word mangled: the source spelling is the only safe repair. Words
+    with no close source counterpart (a real invented word) are left for review, untouched.
+    """
+    import difflib
+
+    present = {_fold(w) for w in _WORD.findall(str(translation or ""))}
+    candidates = [w for w in _WORD.findall(str(source or ""))
+                  if len(w) >= MIN_WORD_LENGTH and _fold(w) not in present]
+    repaired = str(translation or "")
+    for bad in unknown:
+        best, best_ratio = "", MIN_RESTORE_SIMILARITY
+        for word in candidates:
+            if _fold(word)[:1] != _fold(bad)[:1]:
+                continue
+            ratio = difflib.SequenceMatcher(None, _fold(word), _fold(bad)).ratio()
+            if ratio >= best_ratio:
+                best, best_ratio = word, ratio
+        if best:
+            repaired = re.sub(rf"\b{re.escape(bad)}\b", best.upper(), repaired, flags=re.IGNORECASE)
+            candidates.remove(best)
+    return repaired
