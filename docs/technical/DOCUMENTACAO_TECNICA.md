@@ -2426,7 +2426,16 @@ o arquivo onde vive; nenhum depende de texto ou página específica.
 | Token curto com caixa alternada que forma palavra do dicionário (`RocK?`) não é "ilegível" | `ocr_balloon.py` (`_ocr_unintelligible_source_text`) | Ele deixa de ser retido como lixo de OCR e é traduzido. Lixo real (`FluCK`, `THUNe`) continua retido. |
 | Preenchimento harmônico e de cor constante passam a cobrir o halo macio ao redor da máscara (`_mask_with_lettering_residue`, reaproveita `_outline_residue_mask`) | `ocr_balloon.py` (`_apply_cleanup_mask_fill`) | As duas ramificações usavam a máscara crua e ignoravam o halo que o mecanismo de contorno já media. Não cresce sobre estrutura protegida nem fora do balão. |
 | Em fundo quase preto e plano (luminância ≤ 16, desvio ≤ 10) com letreiro claro de contraste ≥ 80, pixels **dentro da máscara** abaixo de 25% do contraste voltam à cor do fundo (`_flatten_dark_backdrop_residue`) | `ocr_balloon.py` | Faixas fantasmas atrás de texto com brilho: faixa da p34 de média 2,63 / máx. 44 / 8.492 px acima de 6 para 0,06 / 12 / 147 (validado offline sobre a limpeza real; 0 px fora da máscara). |
-| Corpo da fonte inicial derivado da altura real das maiúsculas do original (`_source_ink_cap_height`, `_font_cap_ratio`), só para fala e narração comuns (não para SFX nem lettering de exibição) | `ocr_balloon.py` (render) | Antes o corpo era `0,78 × altura da caixa OCR` (a caixa tem folga) e o texto saía ~14% menor que o original. O laço de ajuste continua reduzindo o corpo se o texto não couber. **Não verificado de ponta a ponta no capítulo real.** |
+| Corpo da fonte inicial derivado da altura real das maiúsculas do original (`_source_ink_cap_height`, `_font_cap_ratio`), só para fala e narração comuns (não para SFX nem lettering de exibição); diagnósticos de renderização publicados no relatório (`render_font_size`, `render_font_class`, `render_alignment`, `font_size_from_source_ink`, `source_line_height_px`) | `ocr_balloon.py`, `benchmark_pipeline.py` | Antes o corpo era `0,78 × altura da caixa OCR` (a caixa tem folga) e o texto saía ~14% menor que o original. O laço de ajuste continua reduzindo o corpo se o texto não couber. |
+| Alinhamento horizontal do bloco derivado das linhas originais (`_source_text_alignment`: `'left'`, `'right'` ou `'center'`, aplicado à medição e ao desenho com brilho, sombra e preenchimento) | `ocr_balloon.py` (`_draw_group_translation`) | Créditos alinhados à direita na origem passam a renderizar com `render_alignment="right"` em vez de centralizados; linhas de largura igual ou linha única permanecem em `'center'`. |
+| Cor de tinta original em fundo escuro com brilho colorido (`extract_original_lettering_profile`): família `"black"` exige fundo claro (`bg_gray > 90`) e o centro de cluster só substitui a mediana de `"white"`/`"black"` quando concorda com ela (diferença ≤ 45) | `ocr_balloon.py` | Letreiros brancos com brilho roxo intenso em fundo escuro passam a medir `color_family="white"` e `dominant_bgr=(255, 245, 255)` em vez de ler o brilho ou a sombra como tinta escura/lilás (validado por teste com recorte sintético e sobre a imagem original da p34). |
+| Restauração de palavra da origem corrompida pelo provedor (`restore_corrupted_source_words`, similaridade ≥ 0,55 e mesma inicial quando o termo original sumiu da tradução e gerou palavra desconhecida em português) | `portuguese_words.py`, `ocr_balloon.py` (`_retry_unknown_target_words`) | Termos próprios corrompidos após retry (`"GEHENNA"` → `"GEENOM"`) voltam à grafia da origem (`unknown_target_word_restored_from_source`); palavras sem correspondente próximo na origem continuam intactas para revisão. |
+| Promoção de legenda tipográfica sobre arte colorida (`_decorative_short_display_story_promotion_allowed`: confiança ≥ 0,95, 2–5 palavras distintas com vocabulário real em contexto saturado) | `ocr_balloon.py` | Nomes de golpe/título compostos em maiúsculas sobre arte brilhante (`"DAEMON LASERBLAST"`) são promovidos para tradução; efeitos de uma palavra ou repetições (`"BOOM BOOM"`) continuam preservados. |
+| Identidade do título da própria obra (`set_series_identity`, `looks_like_series_title`) tratada como crédito/logo forte (`PRESERVE_ART`) e excluída de cobertura incompleta de fala | `region_taxonomy.py`, `disposition.py`, `benchmark_pipeline.py` | O título da série na capa ao lado dos créditos deixa de contar como resíduo de história comum (`ordinary_story_physical_residual_count`: 1 → 0; `physical_gate_passed: True`). |
+| Extensão autorizada da máscara de preenchimento (`_record_fill_extension` em `_grown_fill_mask` e `_mask_with_lettering_residue`, somada a `authorized_cleanup_mask`) | `ocr_balloon.py` (`_render_analyzed_image`) | O anel de 2 px / halo onde o preenchimento é autorizado a atuar passa a integrar a máscara autorizada da página (`outside_mask_changed_pixels = 0` em todas as páginas limpas; +8 páginas certificadas). |
+| Certificado de limpeza desacoplado da flag de revisão linguística (`_make_clean_certificate`) e linha isolada ignorada antes do agrupamento (`_is_ignored_noise_line` → `PRESERVE_ART`) | `benchmark_pipeline.py` | Alvos com remoção local validada (`LOCAL_SAFE`) não perdem o certificado por terem revisão de tradução pendente; páginas certificadas no capítulo de referência: 25 → 34 (+ 10 `pages_no_text_proven`, restando 21 em revisão). |
+| Página de explosão de SFX sem região de história pendente é `OCR_SUFFICIENT` (`text_like_regions_are_art`) | `ocr_engine.py` | Páginas cujos contornos parecidos com texto são apenas lettering de SFX na arte deixam de cair em `OCR_REVIEW` quando todas as regiões de história estão cobertas. |
+| Fingerprint do cache do pipeline calculado sobre os arquivos reais de `yomu/` (`_pipeline_source_files`) | `benchmark_pipeline.py` (`PIPELINE_FILES`) | A tupla antiga apontava para nomes soltos na raiz que não existiam mais (`fingerprint` vazio), reutilizando páginas em cache após mudanças de código. |
 | Divisão de palavras coladas não termina em "A" isolado | `region_taxonomy.py` (`segment_words`) | Evita "NOVA ERA A". |
 | Pronome "one" ("that one", "the only one who") não é quantidade | `semantic_fidelity.py` (`_one_is_pronoun`) | Evita rejeição por `quantity_changed`. |
 | Estimativa de tempo: contador cheio mostra "Finalizando esta etapa…"; contador parado em 0 mostra "Etapa em andamento há X…" | `ui_bridge.py` | A tela repetia "Calculando estimativa…" até o fim do job. |
@@ -2434,21 +2443,16 @@ o arquivo onde vive; nenhum depende de texto ou página específica.
 
 **Pendente (PLANEJADO, medido, não corrigido):**
 
-- **Tipografia.** O campo `alignment` do perfil de tipografia (`ocr_balloon.py`, perfil base) **não é lido
-  por nenhum código de desenho**: o texto é sempre centralizado (`draw_x`), então derivar o alinhamento do
-  original exige mexer nos três caminhos de posicionamento (bloco, plano por linha e layout no formato do
-  balão). **Fonte:** com a mesma altura de letra e o estimador do próprio app (`weight_ratio`), o original
+- **Fonte tipográfica.** Com a mesma altura de letra e o estimador do próprio app (`weight_ratio`), o original
   da p26 mede 0,1107 e a Comic Relief Bold atual 0,1019, a Regular 0,0926; dez fontes OFL (Itim, Comic Neue,
   Patrick Hand, Bubblegum Sans, Londrina Solid, Short Stack, Pangolin, Sniglet, Kalam) foram avaliadas e
   nenhuma foi adotada, porque a atual já é das mais próximas em peso e o desenho do letreiramento original
   (mais largo e arredondado) não é reproduzível com fontes livres. Medir peso com estimadores diferentes (ou
   em escalas diferentes) dá resultados opostos; compare sempre na mesma altura de letra.
-- **Cor.** Duas narrações (p34) saíram lilás em vez de quase branco e um SFX (p60) em preto em vez de cinza;
-  o amostrador provavelmente leu contorno ou brilho no lugar do preenchimento.
-- **Traduções.** Nome próprio corrompido pelo provedor e aceito após o retry (`unknown_target_word_kept`);
-  política de SFX entre traduzir e preservar.
-- **Qualidade do capítulo.** 13 páginas ainda com `source_completeness_unproven` e 10 com
-  `target_or_ownership_incomplete`.
+- **Qualidade do capítulo.** 21 páginas ainda sem certificado `PASS` no capítulo de referência: 13 com
+  `source_completeness_unproven` (`OCR_REVIEW`), 4 com `target_or_ownership_incomplete` e 4 com
+  `clean_validation_not_passed` (regiões com `manual_review_required` que ainda retêm `clean_verified=False`
+  em `_complete_page_clean`).
 
 ## 18. PDF e histórico
 
