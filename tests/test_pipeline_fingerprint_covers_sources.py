@@ -6,7 +6,7 @@ install_offline_network_guard()
 import unittest
 
 import yomu.pipeline.benchmark_pipeline as bp
-from yomu.pipeline.pipeline_cache import fingerprint_files
+from yomu.pipeline.pipeline_cache import fingerprint_files, ocr_runtime_fingerprint
 
 
 class PipelineFingerprintTests(unittest.TestCase):
@@ -25,6 +25,10 @@ class PipelineFingerprintTests(unittest.TestCase):
             before = fingerprint_files([f])
             f.write_text("x = 2")
             self.assertNotEqual(before, fingerprint_files([f]))
+
+    def test_ocr_runtime_fingerprint_includes_ocr_engine_hash(self):
+        fp = ocr_runtime_fingerprint()
+        self.assertTrue(fp.get("ocr_engine_sha256"))
 
 
 if __name__ == "__main__":

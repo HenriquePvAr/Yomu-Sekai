@@ -41,7 +41,9 @@ def classify_group_disposition(group) -> tuple[RegionDisposition, str]:
                 or region_taxonomy.looks_like_series_title(text)):
             return RegionDisposition.PRESERVE_ART, reason or "promo_credit_preserve"
         if classification in {"decorative", "unknown"} and reason in {"decorative_text", "weak_unknown_text"}:
-            return RegionDisposition.REVIEW_SEMANTIC, reason or "semantic_ownership_uncertain"
+            if getattr(group, "manual_review_required", False):
+                return RegionDisposition.REVIEW_SEMANTIC, reason or "semantic_ownership_uncertain"
+            return RegionDisposition.PRESERVE_ART, reason or "policy_preserve"
         return RegionDisposition.PRESERVE_ART, reason or "policy_preserve"
     return RegionDisposition.REVIEW_UNOWNED, "story_ownership_not_established"
 

@@ -28,6 +28,20 @@ class TypesetCaptionPromotionTests(unittest.TestCase):
     def test_uncertain_reading_is_not_promoted(self):
         self.assertFalse(ob._decorative_short_display_story_promotion_allowed(_group("DAEMON LASERBLAST", 0.88)))
 
+    def test_glued_single_line_named_move_is_promoted_and_allows_last_resort(self):
+        g = _group("GLACIALWINGS", 0.995)
+        g.main_text_score = 0.24
+        g.detected_proper_names = []
+        g.background_type = "textured_art"
+        g.ignored = False
+        g.preserve_as_name = False
+        g.ocr_quality_blocked = False
+        self.assertTrue(ob._decorative_short_display_story_promotion_allowed(g))
+        ob._apply_classification_policy(g)
+        self.assertEqual(g.classification, "unknown")
+        self.assertFalse(g.ignored)
+        self.assertTrue(ob._last_resort_allowed(g))
+
 
 if __name__ == "__main__":
     unittest.main()

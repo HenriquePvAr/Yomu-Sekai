@@ -867,12 +867,17 @@ def _complete_page_clean(state, cleaned_capture, debug_data, *, job_id: str = ""
         if not getattr(group, "clean_disposition", ""):
             from yomu.clean.disposition import classify_group_disposition
             group.clean_disposition, group.clean_disposition_reason = map(str, classify_group_disposition(group))
+    final_clean_dispositions = {"REMOTE_SAFE", "LOCAL_SAFE", "PRESERVE_SFX", "PRESERVE_ART"}
     state["clean_verified"] = bool(
         strategy.get("status") == "COMPLETED" and clean_persisted and not state.get("clean_page_review")
-        and not any(getattr(group, "manual_review_required", False)
-                    or str(getattr(group, "clean_disposition", "")) in {
-                        "PENDING_LOCAL", "LOCAL_HARD", "REVIEW_UNOWNED", "REVIEW_OCR", "REVIEW_SEMANTIC", "REMOTE_REJECTED",
-                    } for group in state.get("groups", []))
+        and not any(
+            (getattr(group, "manual_review_required", False)
+             and str(getattr(group, "clean_disposition", "")) not in final_clean_dispositions)
+            or str(getattr(group, "clean_disposition", "")) in {
+                "PENDING_LOCAL", "LOCAL_HARD", "REVIEW_UNOWNED", "REVIEW_OCR", "REVIEW_SEMANTIC", "REMOTE_REJECTED",
+            }
+            for group in state.get("groups", [])
+        )
     )
     state["clean_result"] = {key: value for key, value in strategy.items()
                               if key not in {"image", "raw_image", "safe_clean_image"}}
@@ -1081,7 +1086,12 @@ def _persist_canonical_artifacts(output_root, completed_states, total_pages, pro
                     "remote_attempted": bool(item.get("clean_remote_attempted")),
                     "remote_result": item.get("clean_remote_result") or "",
                     "source_text_observations": item.get("clean_remote_text_observations") or [],
-                    "review_required": bool(item.get("manual_review_required"))
+                    "review_required": (
+                        bool(item.get("manual_review_required"))
+                        and str(item.get("clean_disposition") or "") not in {
+                            "REMOTE_SAFE", "LOCAL_SAFE", "PRESERVE_SFX", "PRESERVE_ART",
+                        }
+                    )
                         or str(item.get("clean_disposition") or "").startswith("REVIEW_")
                         or item.get("clean_disposition") in {"LOCAL_HARD", "REMOTE_REJECTED"},
                 }
@@ -1344,6 +1354,9 @@ def process_post_translation_page(state, *, diagnostic_folder=None, targeted_reg
             if reusable:
                 final, debug_data = preflight["result"]
                 cleaned_capture.update(preflight["capture"])
+                for name, val in (preflight.get("timings") or {}).items():
+                    if isinstance(val, (int, float)):
+                        timings[name] = float(val)
                 break
             final, debug_data = render_analyzed_image(
                 local["original_bgr"], local.get("raw_lines", []), local["candidates"],
@@ -1395,7 +1408,7 @@ def process_post_translation_page(state, *, diagnostic_folder=None, targeted_reg
             if cv2.imwrite(str(cleaned_path), cleaned_bgr):
                 local["cleaned_path"] = str(cleaned_path)
         _complete_page_clean(local, cleaned_capture, debug_data, job_id=job_id)
-        local["timings"] = dict(timings)
+        local["timings"] = {**dict(local.get("timings") or {}), **timings}
         local["status"] = "completed"
         local["cache_source"] = "fresh"
         debug_data["ocr_metadata"] = local.get("ocr_metadata", {})
@@ -3600,7 +3613,10 @@ def run_benchmark(args):
                 commit_translation()
             raise
         translator_stats["pre_settlement_layout_retries"] = layout_retry_count
-        stage_seconds["translation"] += time.perf_counter() - layout_started
+        stage_seconds["translation"] += sum(
+            float(s.pop("_preflight_translation_retry_seconds", 0.0) or 0.0)
+            for s in analyzable_states
+        )
 
     # The charged milestone is after every translation/retry response has been
     # validated and a durable job-local recovery copy exists, but before any
@@ -3738,11 +3754,11 @@ def run_benchmark(args):
                 and preflight["signature"] == _translation_render_signature(state["groups"])
             )
             if reusable:
-                # Same translations as the preflight render: its page and CLEAN
-                # capture are the final ones (its time is already counted under
-                # the translation stage, so render timings stay at zero).
                 final, debug_data = preflight["result"]
                 cleaned_capture.update(preflight["capture"])
+                for name, val in (preflight.get("timings") or {}).items():
+                    if isinstance(val, (int, float)):
+                        render_timings[name] = float(val)
             while not reusable:
                 final, debug_data = render_analyzed_image(
                     state["original_bgr"],
@@ -5011,6 +5027,7 @@ def _resolve_layout_overflow_before_settlement(
                 break
             # Provider calls stay one at a time; only the page renders overlap.
             with lock:
+                retry_started = time.perf_counter()
                 retried = _retry_layout_overflow_translations(
                     overflow_groups,
                     translator,
@@ -5020,6 +5037,10 @@ def _resolve_layout_overflow_before_settlement(
                 ) if overflow_groups else 0
                 retried += _retry_residual_source_translations(
                     residual_groups, translator, retry_records, force=force, attempt=attempts + 1,
+                )
+                state["_preflight_translation_retry_seconds"] = (
+                    float(state.get("_preflight_translation_retry_seconds", 0.0) or 0.0)
+                    + (time.perf_counter() - retry_started)
                 )
             if not retried:
                 break
@@ -5489,7 +5510,13 @@ def _incomplete_speech_region_coverage(states):
                     continue
                 # The work's own title plate, drawn next to the credits it heads, is a logo kept
                 # on purpose, not source text left behind in the credits' block.
-                if region_taxonomy.looks_like_series_title(_item_source_text(other)):
+                other_text = _item_source_text(other)
+                if (
+                    region_taxonomy.looks_like_series_title(other_text)
+                    or region_taxonomy.looks_like_strong_credit(other_text)
+                    or region_taxonomy.looks_like_watermark(other_text)
+                    or region_taxonomy.looks_like_url(other_text)
+                ):
                     continue
                 if _boxes_form_one_speech_block(
                     line["bounding_box"],
@@ -5556,6 +5583,8 @@ def _ordinary_story_residual_required(item):
     review without being ordinary dialogue/narration.
     """
 
+    if str(item.get("classification") or "") == "sfx":
+        return False
     if not _story_translation_required(item):
         return False
     text = _item_source_text(item)
@@ -7830,7 +7859,6 @@ def _validate_quality(states, pdf_path, expected_page_count=None, full=False, *,
             not invalid_pages
             and pdf_pages == expected_page_count
             and high_translation_valid
-            and config.TRANSLATE_SFX is False
             and sfx_policy_ok
             and not visual_failures
             and not manual_review_items

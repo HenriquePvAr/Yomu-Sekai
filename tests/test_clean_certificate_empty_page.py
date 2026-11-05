@@ -49,6 +49,24 @@ class CleanCertificateTargetsTests(unittest.TestCase):
             certificate = bp._make_clean_certificate(_state(folder, [_group("PRESERVE_SFX")]), "job")
         self.assertEqual(certificate["status"], "PASS")
 
+    def test_non_review_ignored_decorative_and_untranslated_sfx_preserve_cleanly(self):
+        from yomu.clean.disposition import RegionDisposition, classify_group_disposition
+        import yomu.ocr.ocr_balloon as ob
+        dec = SimpleNamespace(
+            classification="decorative", ignored=True, ignore_reason="decorative_text",
+            preserve_as_name=False, ocr_quality_blocked=False, text="BLAZE",
+            manual_review_required=False,
+        )
+        disp, _ = classify_group_disposition(dec)
+        self.assertEqual(disp, RegionDisposition.PRESERVE_ART)
+        sfx = SimpleNamespace(
+            classification="sfx", ignored=False, preserve_as_name=False,
+            ocr_quality_blocked=False, text="THUNe", manual_review_required=True,
+        )
+        self.assertEqual(ob.get_cleanable_translatable_groups([sfx]), [])
+        self.assertEqual(sfx.clean_disposition, RegionDisposition.PRESERVE_SFX.value)
+        self.assertFalse(sfx.manual_review_required)
+
     def test_target_without_a_final_disposition_still_blocks(self):
         for disposition in ("", "PENDING_LOCAL", "NOT_A_DISPOSITION"):
             with self.subTest(disposition=disposition), tempfile.TemporaryDirectory() as folder:

@@ -358,7 +358,11 @@ class OCREngine:
 
         lines, repairs = _repair_ocr_lines(lines)
         suspicion = _rapidocr_suspicion(img_bgr, lines)
-        if suspicion["reasons"] and config.RAPIDOCR_PAGE_FALLBACK:
+        if (
+            suspicion["reasons"]
+            and config.RAPIDOCR_PAGE_FALLBACK
+            and not getattr(self, "_skip_suspicion_retry", False)
+        ):
             return self._handle_rapidocr_suspicion(
                 img_bgr,
                 page,
@@ -419,9 +423,24 @@ class OCREngine:
             # region here sent every such page to OCR_REVIEW and failed its clean certificate.
             sufficiency = OCR_SUFFICIENT
             fallback_reason = "zero_lines_on_art_only_page"
-        elif lines and set(reasons) == {"too_few_lines_for_text_regions"} and unresolved_story_regions == 0:
-            # Many text-like blobs but every story-like region is covered by a line: the blobs
-            # are lettering baked into the art (an SFX burst), which the lines already carry.
+        elif (
+            lines
+            and (
+                (
+                    set(reasons) == {"too_few_lines_for_text_regions"}
+                    and (unresolved_story_regions == 0 or not has_text_evidence)
+                )
+                or (
+                    story_regions == 0
+                    and not has_text_evidence
+                    and unresolved_story_regions == 0
+                    and set(reasons) <= {"too_few_lines_for_text_regions", "low_average_confidence"}
+                )
+            )
+        ):
+            # Many text-like blobs but every story-like region is covered by a line (or no
+            # story-text evidence exists in the image): the blobs are lettering/highlights
+            # baked into the art (an SFX burst), which the lines already carry.
             sufficiency = OCR_SUFFICIENT
             fallback_reason = "text_like_regions_are_art"
         else:

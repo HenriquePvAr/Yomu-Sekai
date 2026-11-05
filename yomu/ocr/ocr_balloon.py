@@ -762,7 +762,8 @@ def _analyze_image_array(original_bgr, raw_lines, page_index=None):
             _classify_groups(groups, original, page_index=page_index)
         finally:
             for group, raw_text in zip(groups, raw_texts):
-                group.text = raw_text
+                if not getattr(group, "story_display_promoted", False):
+                    group.text = raw_text
         _promote_glossary_sounds(groups)
     with profile_step(
         "analyze.score_group_quality",
@@ -803,11 +804,18 @@ def get_cleanable_translatable_groups(groups):
                 str, classify_group_disposition(group)
             )
             continue
-        if group.classification == "sfx" and not config.TRANSLATE_SFX:
-            from yomu.clean.disposition import RegionDisposition
-            group.clean_disposition = RegionDisposition.PRESERVE_SFX.value
-            group.clean_disposition_reason = "sfx_policy_preserve"
-            continue
+        if group.classification == "sfx":
+            from yomu.translation.sfx_glossary import translate_sfx
+            sfx_target = translate_sfx(group.text) if config.TRANSLATE_SFX else None
+            if not config.TRANSLATE_SFX or (
+                not getattr(group, "sent_to_translation", False)
+                and (not sfx_target or sfx_target.strip().casefold() == str(group.text or "").strip().casefold())
+            ):
+                from yomu.clean.disposition import RegionDisposition
+                group.clean_disposition = RegionDisposition.PRESERVE_SFX.value
+                group.clean_disposition_reason = "sfx_policy_preserve"
+                group.manual_review_required = False
+                continue
         if group.ocr_quality_blocked or _ocr_unintelligible_source_text(group.text):
             from yomu.clean.disposition import RegionDisposition
             group.clean_disposition = RegionDisposition.REVIEW_OCR.value
@@ -2258,7 +2266,11 @@ def _last_resort_allowed(group):
     real = [w for w in words if region_taxonomy.is_english_word(w)
             or w.upper() in region_taxonomy._STORY_CLAUSE_MARKERS]
     sentence = len(real) >= 2 and (
-        re.search(r"[.!?,…]", text) or any(w.upper() in region_taxonomy._STORY_CLAUSE_MARKERS for w in words))
+        re.search(r"[.!?,…]", text)
+        or any(w.upper() in region_taxonomy._STORY_CLAUSE_MARKERS for w in words)
+        or _decorative_textured_story_promotion_allowed(group)
+        or _decorative_short_display_story_promotion_allowed(group)
+    )
     return bool(_group_has_story_translation_authority(group) and sentence)
 
 
@@ -4294,7 +4306,7 @@ def _classify_groups(groups, image_bgr, page_index=None):
         )
         diagonal = abs(group.angle_degrees) >= 12
         strongly_styled = diagonal or group.near_image_edge
-        region_area_ratio = (w * h) / max(1, w_img * h_img)
+        region_area_ratio = (w * h) / max(1, w_img * min(h_img, w_img * 2))
         oversized_short_graphic = (
             len(words) <= 2
             and len(normalized) <= 8
@@ -4897,6 +4909,10 @@ def _decorative_short_display_story_promotion_allowed(group):
     body = str(getattr(group, "text", "") or "")
     if not body.strip():
         return False
+    body = split_glued_source_words(
+        body,
+        protected=getattr(group, "detected_proper_names", None),
+    )
     policy = region_taxonomy.resolve_region_policy(
         original_classification=getattr(group, "classification", ""),
         source_text=body,
@@ -4924,7 +4940,7 @@ def _decorative_short_display_story_promotion_allowed(group):
         main_score = float(getattr(group, "main_text_score", 0.0) or 0.0)
     except (TypeError, ValueError):
         main_score = 0.0
-    if main_score < 0.35:
+    if main_score < (0.20 if confidence >= 0.95 else 0.35):
         return False
     folded_words = [
         re.sub(r"[^A-Z']", "", _ascii_fold(word).upper())
@@ -7835,6 +7851,8 @@ def _recovered_text_is_acceptable(text, confidence):
 # variants.  Cross-engine retries made the Beta runtime probe Paddle even when
 # RapidOCR was healthy.
 _REOCR_ENGINES = ("rapidocr",)
+_CANONICAL_OCR_ENGINE = OCREngine
+_REOCR_ENGINE_CACHE: dict[tuple[str, str], OCREngine] = {}
 
 
 def _reocr_engines_for(ocr_lang, errors=None):
@@ -7846,9 +7864,18 @@ def _reocr_engines_for(ocr_lang, errors=None):
     other.
     """
     engines = []
+    use_cache = OCREngine is _CANONICAL_OCR_ENGINE
     for name in _REOCR_ENGINES:
+        cache_key = (str(ocr_lang or ""), name)
+        if use_cache and cache_key in _REOCR_ENGINE_CACHE:
+            engines.append(_REOCR_ENGINE_CACHE[cache_key])
+            continue
         try:
-            engines.append(OCREngine(ocr_lang, engine=name, fallback_engine=name))
+            eng = OCREngine(ocr_lang, engine=name, fallback_engine=name)
+            eng._skip_suspicion_retry = True
+            if use_cache:
+                _REOCR_ENGINE_CACHE[cache_key] = eng
+            engines.append(eng)
         except Exception as exc:  # noqa: BLE001 - a missing recogniser is not fatal.
             # Not fatal, but never silent: the report must say why no re-read ran.
             if errors is not None:
@@ -18458,7 +18485,7 @@ def extract_original_lettering_profile(img_bgr, group, box):
         pop = [int(np.sum(labels == k)) for k in (0, 1)]
         total = labels.shape[0]
         cluster_dist = float(np.max(np.abs(centers[0] - centers[1])))
-        if min(pop) >= 0.15 * total and cluster_dist >= 60:
+        if min(pop) >= 0.08 * total and cluster_dist >= 60:
             # Which cluster sits on the outer boundary? Map boundary pixels to labels.
             full = np.full(glyph_mask.shape, -1, dtype=np.int16)
             full[glyph_mask] = labels

@@ -74,6 +74,9 @@ def ocr_runtime_fingerprint():
         "rapidocr_page_fallback": bool(config.RAPIDOCR_PAGE_FALLBACK),
         "ocr_text_repair": bool(config.OCR_TEXT_REPAIR),
         "ocr_text_repair_mode": config.OCR_TEXT_REPAIR_MODE,
+        "ocr_engine_sha256": file_sha256(
+            Path(__file__).resolve().parents[1] / "ocr" / "ocr_engine.py"
+        ),
         "packages": packages,
     }
 

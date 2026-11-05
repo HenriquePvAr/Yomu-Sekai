@@ -3,6 +3,7 @@ import numpy as np
 import pytest
 
 torch = pytest.importorskip("torch")
+pytest.importorskip("onnx")
 ort = pytest.importorskip("onnxruntime")
 
 from yomu.clean.inpainting import lama_onnx  # noqa: E402
