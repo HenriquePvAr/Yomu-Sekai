@@ -3200,56 +3200,87 @@ def _render_analyzed_image(
             if advanced_attempt.get("advanced_fallback_status") == "success":
                 redraw_started = time.perf_counter()
                 advanced_cleaned = advanced_attempt.pop("_advanced_cleaned_bgr")
-                rendered = _draw_group_translation(
-                    advanced_cleaned,
-                    group,
-                    font_path,
-                    strategy="source_scoped",
-                    source_bgr=original,
+                # The inpainter contract is "composited only inside mask".
+                # Verify it against the actual composite base: run 2054d996
+                # showed an accepted-then-far-rejected attempt whose outside
+                # changes sat ~700 px from the mask, i.e. the composite (not
+                # the typography) leaked. A leaking composite is rejected
+                # here, before any draw happens (fail-closed).
+                _leak_px = _lama_composite_leak_px(
+                    inpainted, advanced_cleaned, advanced_fallback_mask,
                 )
-                translated_occupancy = timed_substage("translated_text_occupancy", _translated_text_occupancy_metrics,
-                    advanced_cleaned,
-                    rendered,
-                    group,
-                )
-                redraw_elapsed = time.perf_counter() - redraw_started
-                typography_seconds += redraw_elapsed
-                redraw_seconds += redraw_elapsed
-                group_allowed = _draw_allowed_group_mask(
-                    original.shape,
-                    group,
-                    cleanup_mask=advanced_fallback_mask,
-                )
-                rendered, visual_summary = timed_substage("enforce_visual_bounds", _enforce_visual_bounds,
-                    before_group,
-                    rendered,
-                    group_allowed,
-                    group=group,
-                    mask_metrics={
-                        **{
-                            key: value
-                            for key, value in advanced_attempt.items()
-                            if not key.startswith("_")
-                        },
-                        "strategy": "source_scoped",
-                        "advanced_inpaint_used": True,
-                    },
-                )
-                visual_summary.update(translated_occupancy)
-                # The advanced inpaint attempt carries its own pre-render
-                # telemetry, including the status/reason for the cleanup probe.
-                # Once the translated target is drawn, the shipping decision
-                # belongs to ``_enforce_visual_bounds`` plus source-removal
-                # evidence.  Do not let stale probe verdict fields overwrite the
-                # post-render visual verdict.
-                visual_summary.update({
-                    key: value
-                    for key, value in advanced_attempt.items()
-                    if (
-                        not key.startswith("_")
-                        and key not in {"visual_validation_passed", "reason"}
+                advanced_attempt["lama_composite_outside_mask_px"] = _leak_px
+                if _leak_px > _LAMA_COMPOSITE_LEAK_BUDGET_PX:
+                    advanced_attempt["advanced_fallback_status"] = "rejected"
+                    advanced_attempt["advanced_fallback_reason"] = (
+                        f"lama_composite_outside_mask:{_leak_px}"
                     )
-                })
+                    _rendered = None
+                else:
+                    _rendered = _draw_group_translation(
+                        advanced_cleaned,
+                        group,
+                        font_path,
+                        strategy="source_scoped",
+                        source_bgr=original,
+                    )
+                if _rendered is None:
+                    rendered = None
+                else:
+                    rendered = _rendered
+                if rendered is not None:
+                    translated_occupancy = timed_substage("translated_text_occupancy", _translated_text_occupancy_metrics,
+                        advanced_cleaned,
+                        rendered,
+                        group,
+                    )
+                    redraw_elapsed = time.perf_counter() - redraw_started
+                    typography_seconds += redraw_elapsed
+                    redraw_seconds += redraw_elapsed
+                    group_allowed = _draw_allowed_group_mask(
+                        original.shape,
+                        group,
+                        cleanup_mask=advanced_fallback_mask,
+                    )
+                    # Validate the DRAW against the composite baseline (not
+                    # before_group): LaMA's own pixels are intentional, only
+                    # the typography must stay inside the allowed region.
+                    rendered, visual_summary = timed_substage("enforce_visual_bounds", _enforce_visual_bounds,
+                        advanced_cleaned,
+                        rendered,
+                        group_allowed,
+                        group=group,
+                        mask_metrics={
+                            **{
+                                key: value
+                                for key, value in advanced_attempt.items()
+                                if not key.startswith("_")
+                            },
+                            "strategy": "source_scoped",
+                            "advanced_inpaint_used": True,
+                        },
+                    )
+                    visual_summary.update(translated_occupancy)
+                    # The advanced inpaint attempt carries its own pre-render
+                    # telemetry, including the status/reason for the cleanup probe.
+                    # Once the translated target is drawn, the shipping decision
+                    # belongs to ``_enforce_visual_bounds`` plus source-removal
+                    # evidence.  Do not let stale probe verdict fields overwrite the
+                    # post-render visual verdict.
+                    visual_summary.update({
+                        key: value
+                        for key, value in advanced_attempt.items()
+                        if (
+                            not key.startswith("_")
+                            and key not in {"visual_validation_passed", "reason"}
+                        )
+                    })
+                else:
+                    visual_summary = {
+                        "strategy": "lama_large",
+                        "visual_validation_passed": False,
+                        "reason": advanced_attempt.get("advanced_fallback_reason") or "lama_composite_rejected",
+                    }
                 if visual_summary.get("visual_validation_passed"):
                     removal = _uncovered_source_text_evidence(
                         original,
@@ -11533,6 +11564,27 @@ def _advanced_art_fallback_eligible(group, mask_metrics=None):
     ):
         return False
     return True
+
+
+_LAMA_COMPOSITE_LEAK_BUDGET_PX = 64
+
+
+def _lama_composite_leak_px(base_bgr, composite_bgr, mask) -> int:
+    """Pixels the LaMA composite changed OUTSIDE its mask (inpainter contract).
+
+    The inpainter promises "composited only inside mask". A composite that
+    touches pixels beyond the mask is model misbehaviour; counting the leak
+    lets the caller reject it before any typography is drawn on top.
+    """
+
+    base = np.asarray(base_bgr)
+    composite = np.asarray(composite_bgr)
+    if base.shape != composite.shape:
+        return 10**9
+    mask_bool = np.asarray(mask) > 0
+    outside = ~mask_bool
+    changed = np.any(base != composite, axis=2) & outside
+    return int(np.count_nonzero(changed))
 
 
 def _try_advanced_art_fallback(current_bgr, original_bgr, group, cleanup_mask, mask_metrics, stage_timings=None):
