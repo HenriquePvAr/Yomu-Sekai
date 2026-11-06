@@ -3140,9 +3140,9 @@ def _render_analyzed_image(
                 )
                 print(trace_line, flush=True)
                 try:
-                    _trace_path = Path(str(os.environ.get("TRADUTOR_JOB_OUTPUT_DIR") or "")) / "advanced_fallback_traces.jsonl"
-                    if str(_trace_path.parent):
-                        with _trace_path.open("a", encoding="utf-8") as _handle:
+                    _trace_dir = str(os.environ.get("TRADUTOR_JOB_OUTPUT_DIR") or "").strip()
+                    if _trace_dir:
+                        with open(os.path.join(_trace_dir, "advanced_fallback_traces.jsonl"), "a", encoding="utf-8") as _handle:
                             _handle.write(trace_line + "\n")
                 except OSError:
                     pass
