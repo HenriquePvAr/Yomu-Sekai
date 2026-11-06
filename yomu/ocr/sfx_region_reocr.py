@@ -25,6 +25,12 @@ _SFX_REOCR_MAX_LETTERS = 10
 _SFX_REOCR_MAX_WORDS = 2
 _SFX_REOCR_MAX_GROUPS_PER_PAGE = 8
 _SFX_REOCR_SUSPECT_BACKGROUNDS = {"textured_art", "speed_lines", "sfx_area"}
+# Tight on purpose: the lettering bbox is the signal. The generic fallback crop
+# pads a lot (34+ px, up to 130 for quality reasons) and the surrounding art /
+# speed lines measurably corrupt the re-read — on ep. 285 p15 Paddle read the
+# exact "CLANK" from a tight crop but repeated the garbled "ULANE" from the
+# padded one.
+_SFX_REOCR_PAD = 12
 
 _engine_lock = threading.Lock()
 _rapid_engine = None
@@ -117,21 +123,21 @@ def repair_sfx_region_reads(groups, original_bgr, page_index=None) -> list[dict]
         return []
     from yomu.translation.sfx_glossary import translate_sfx_fuzzy
 
-    try:
-        from yomu.ocr.ocr_balloon import _fallback_crop_box
-    except ImportError:  # defensive: circular import during partial loads
-        return []
-
     repairs: list[dict] = []
     candidates = [group for group in groups if _is_candidate(group)][
         : _SFX_REOCR_MAX_GROUPS_PER_PAGE
     ]
+    image_height, image_width = original_bgr.shape[:2]
     for group in candidates:
-        try:
-            x, y, w, h = _fallback_crop_box(group, original_bgr.shape)
-        except Exception:  # noqa: BLE001
+        box = getattr(group, "box", None)
+        if not box:
             continue
-        crop = original_bgr[y : y + h, x : x + w]
+        x, y, w, h = (int(value) for value in box[:4])
+        x1 = max(0, x - _SFX_REOCR_PAD)
+        y1 = max(0, y - _SFX_REOCR_PAD)
+        x2 = min(image_width, x + w + _SFX_REOCR_PAD)
+        y2 = min(image_height, y + h + _SFX_REOCR_PAD)
+        crop = original_bgr[y1:y2, x1:x2]
         if crop.size == 0:
             continue
         engines = [("rapidocr", _rapid_crop_reads)]
@@ -143,7 +149,11 @@ def repair_sfx_region_reads(groups, original_bgr, page_index=None) -> list[dict]
             for read in reader(crop):
                 read = str(read or "").strip()
                 rendered = translate_sfx_fuzzy(read)
-                if rendered and rendered.strip().casefold() != read.strip().casefold():
+                # The repair is real when the new READ differs from the garbled
+                # original — even if the glossary renders it unchanged ("CLANG"
+                # reads as "CLANG": Paddle reads the stylised lettering as the
+                # pt-BR onomatopoeia itself, which is still a fix for "ULANE").
+                if rendered and read.strip().casefold() != str(group.text or "").strip().casefold():
                     adopted, adopted_engine = read, engine_name
                     break
             if adopted:
