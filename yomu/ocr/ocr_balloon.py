@@ -2967,7 +2967,11 @@ def _render_analyzed_image(
             cleanup_seconds += cleanup_elapsed
             inpaint_seconds += cleanup_elapsed
             group.mask_metrics = mask_metrics
-            if mask_metrics.get("mask_valid", False):
+            if cleanup_mask is not None and int(np.count_nonzero(cleanup_mask)) > 0:
+                # Complex-art detection is independent of whether this strategy's
+                # mask was usable: SFX masks over art are often mask_valid=False,
+                # and those are exactly the regions that must reach the LaMA
+                # fallback instead of the learned rescue.
                 fidelity = _edge_continuity_fidelity_findings(cleaned, cleanup_mask, group)
                 mask_metrics["edge_continuity"] = fidelity["edge_continuity"]
                 if fidelity["art_fidelity_uncertain"]:
