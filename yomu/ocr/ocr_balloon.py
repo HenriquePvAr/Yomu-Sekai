@@ -3112,14 +3112,21 @@ def _render_analyzed_image(
                 and int(np.count_nonzero(advanced_fallback_mask)) > 0
             )
             if not would_run:
-                print(
+                trace_line = (
                     "ADVANCED_FALLBACK_BLOCKED "
                     + json.dumps({k: v for k, v in fallback_trace.items() if k != "flags"}, ensure_ascii=False)
                     + f" flags={fallback_trace['flags']}"
                     + f" mask_none={advanced_fallback_mask is None}"
-                    + (f" mask_px={int(np.count_nonzero(advanced_fallback_mask))}" if advanced_fallback_mask is not None else ""),
-                    flush=True,
+                    + (f" mask_px={int(np.count_nonzero(advanced_fallback_mask))}" if advanced_fallback_mask is not None else "")
                 )
+                print(trace_line, flush=True)
+                try:
+                    _trace_path = Path(str(os.environ.get("TRADUTOR_JOB_OUTPUT_DIR") or "")) / "advanced_fallback_traces.jsonl"
+                    if str(_trace_path.parent):
+                        with _trace_path.open("a", encoding="utf-8") as _handle:
+                            _handle.write(trace_line + "\n")
+                except OSError:
+                    pass
         if (
             not accepted
             and _advanced_art_fallback_eligible(group, advanced_fallback_metrics)
