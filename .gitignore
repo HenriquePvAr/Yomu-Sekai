@@ -99,6 +99,10 @@ out/
 e2e_test_runtime/
 large_strip_e2e_runtime/
 test_fixtures/quality_regression_diagnostics/real/**/source_crop.png
+# Real SFX lettering crops from the physically validated ep. 285 runs, used by
+# tests/test_sfx_region_reocr.py (page-level OCR garbles that the crop re-read
+# recovers; synthetic stand-ins would not exercise the same failure).
+!test_fixtures/sfx_region_reocr/*.png
 
 # Required login artwork: force-tracked despite *.png/*.jpg catch-all (clean builds need it)
 !static/assets/auth-background.jpg

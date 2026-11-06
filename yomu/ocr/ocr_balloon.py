@@ -777,6 +777,16 @@ def _analyze_image_array(original_bgr, raw_lines, page_index=None):
         items=len(groups),
     ):
         _assign_region_metadata(groups)
+    with profile_step(
+        "analyze.sfx_region_reocr",
+        page_index=page_index,
+        items=len(groups),
+    ):
+        from yomu.ocr.sfx_region_reocr import repair_sfx_region_reads
+
+        repairs = repair_sfx_region_reads(groups, original_bgr, page_index=page_index)
+        if repairs:
+            record_count("sfx_region_reocr.repairs", len(repairs), page_index=page_index)
     for group in groups:
         ocr_line_provenance.record_group(group)
     return candidates, groups

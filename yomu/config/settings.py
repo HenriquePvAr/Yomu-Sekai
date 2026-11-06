@@ -98,6 +98,11 @@ OCR_HYBRID_FALLBACK = _env_bool("OCR_HYBRID_FALLBACK", False)
 # default is RapidOCR primary plus bounded RapidOCR recovery, then fail-closed
 # review if evidence is still unusable.
 OCR_LEGACY_PADDLE_FALLBACK = _env_bool("OCR_LEGACY_PADDLE_FALLBACK", False)
+# Last-chance SFX read: a tight crop of a garbled short sound region is re-read
+# natively (RapidOCR) before the region is abandoned; PaddleOCR escalation is
+# opt-in because it loads ~0.7 GB of models per process (~12 s, prewarmable).
+OCR_SFX_REGION_REOCR = _env_bool("OCR_SFX_REGION_REOCR", True)
+OCR_SFX_PADDLE_ESCALATION = _env_bool("OCR_SFX_PADDLE_ESCALATION", False)
 RAPIDOCR_ENABLED = _env_bool("RAPIDOCR_ENABLED", True)
 RAPIDOCR_MIN_CONFIDENCE = _env_float("RAPIDOCR_MIN_CONFIDENCE", 0.55)
 RAPIDOCR_SUSPICIOUS_TEXT_FALLBACK = _env_bool(

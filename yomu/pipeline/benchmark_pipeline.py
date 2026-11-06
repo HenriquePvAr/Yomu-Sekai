@@ -379,6 +379,17 @@ def _prewarm_learned_inpainter():
 
     thread = threading.Thread(target=load, name="lama-prewarm", daemon=True)
     thread.start()
+
+    def load_sfx_paddle() -> None:
+        try:
+            from yomu.ocr.sfx_region_reocr import prewarm_sfx_paddle
+
+            prewarm_sfx_paddle()
+        except Exception:  # noqa: BLE001 - optional engine, never blocks a job
+            pass
+
+    paddle_thread = threading.Thread(target=load_sfx_paddle, name="sfx-paddle-prewarm", daemon=True)
+    paddle_thread.start()
     return thread
 
 
