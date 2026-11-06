@@ -38,7 +38,7 @@ def test_dense_ring_over_large_mask_fires():
     page = _page_with_texture("grid")
     mask = np.zeros(page.shape[:2], np.uint8)
     mask[150:450, 150:450] = 255  # filled interior (flat -> smear)
-    finding = _edge_continuity_fidelity_findings(page, mask, _group())
+    finding = _edge_continuity_fidelity_findings(page, page, mask, _group())
     assert finding["art_fidelity_uncertain"] is True
     assert finding["edge_continuity"]["ring_edge_density"] > 0.02
 
@@ -47,7 +47,7 @@ def test_flat_background_stays_quiet():
     page = _page_with_texture("flat")
     mask = np.zeros(page.shape[:2], np.uint8)
     mask[150:450, 150:450] = 255
-    finding = _edge_continuity_fidelity_findings(page, mask, _group())
+    finding = _edge_continuity_fidelity_findings(page, page, mask, _group())
     assert finding["art_fidelity_uncertain"] is False
 
 
@@ -55,7 +55,7 @@ def test_balloon_background_never_considered():
     page = _page_with_texture("grid")
     mask = np.zeros(page.shape[:2], np.uint8)
     mask[150:450, 150:450] = 255
-    finding = _edge_continuity_fidelity_findings(page, mask, _group(background_type="white_balloon"))
+    finding = _edge_continuity_fidelity_findings(page, page, mask, _group(background_type="white_balloon"))
     assert finding["art_fidelity_uncertain"] is False
 
 
@@ -63,7 +63,7 @@ def test_small_mask_never_fires():
     page = _page_with_texture("grid")
     mask = np.zeros(page.shape[:2], np.uint8)
     mask[250:270, 250:270] = 255  # 400 px, below the mask floor
-    finding = _edge_continuity_fidelity_findings(page, mask, _group())
+    finding = _edge_continuity_fidelity_findings(page, page, mask, _group())
     assert finding["art_fidelity_uncertain"] is False
 
 

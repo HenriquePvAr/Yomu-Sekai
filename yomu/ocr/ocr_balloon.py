@@ -2978,7 +2978,7 @@ def _render_analyzed_image(
                 # the REGION, not one strategy's mask: OR it across attempts so
                 # the source_scoped fallback metrics carry it even when that
                 # last-resort mask alone is too narrow to fire.
-                fidelity = _edge_continuity_fidelity_findings(cleaned, cleanup_mask, group)
+                fidelity = _edge_continuity_fidelity_findings(cleaned, original, cleanup_mask, group)
                 mask_metrics["edge_continuity"] = fidelity["edge_continuity"]
                 if fidelity["art_fidelity_uncertain"]:
                     # A fill that erased line continuity under the mask must not
@@ -11353,17 +11353,16 @@ def _letters(text):
     return [char for char in str(text or "") if char.isalpha()]
 
 
-def _edge_continuity_fidelity_findings(cleaned_bgr, cleanup_mask, group) -> dict:
+def _edge_continuity_fidelity_findings(cleaned_bgr, original_bgr, cleanup_mask, group) -> dict:
     """Detect large SFX removals over complex line art — route those to LaMA.
 
     The existing flat-patch gate measures luminance spread, so a smooth
     gradient fill over clothing/screentone passes while the artwork's lines
     are gone (observed on ep. 285 p9: "CRACKLE" removed over the character's
-    arm left a featureless smear). Gradient smears still produce Canny edges
-    from tonal transitions, so "interior is edgeless" does not discriminate.
-    What does: an edge-dense ring around a LARGE mask means the region sits on
-    real line art, which is exactly where analytic fills are weakest and the
-    LaMA-large reconstruction is strongest (measured: 0.5 s/region on GPU).
+    arm left a featureless smear). The question "is this region on complex
+    art?" is about the ORIGINAL artwork, so the ring is measured on
+    ``original_bgr`` — strategy fills can blur or flatten the area right
+    around the mask and would underestimate the surrounding line density.
 
     Fires only for art-typical SFX backdrops, on size + ring-density evidence.
     A fired flag blocks accepting the analytic fill and routes the region to
@@ -11384,10 +11383,13 @@ def _edge_continuity_fidelity_findings(cleaned_bgr, cleanup_mask, group) -> dict
     ring_px = int(np.count_nonzero(ring))
     if ring_px < 2000:
         return {"art_fidelity_uncertain": False, "edge_continuity": {"ring_px": ring_px}}
-    gray = cv2.cvtColor(np.asarray(cleaned_bgr), cv2.COLOR_BGR2GRAY)
-    edges = cv2.Canny(gray, 60, 160) > 0
-    ring_density = float(np.count_nonzero(edges & ring)) / ring_px
-    inner_density = float(np.count_nonzero(edges & mask)) / mask_px
+    ring_source = np.asarray(original_bgr) if original_bgr is not None else np.asarray(cleaned_bgr)
+    gray_ring = cv2.cvtColor(ring_source, cv2.COLOR_BGR2GRAY)
+    edges_ring = cv2.Canny(gray_ring, 60, 160) > 0
+    gray_inner = cv2.cvtColor(np.asarray(cleaned_bgr), cv2.COLOR_BGR2GRAY)
+    edges_inner = cv2.Canny(gray_inner, 60, 160) > 0
+    ring_density = float(np.count_nonzero(edges_ring & ring)) / ring_px
+    inner_density = float(np.count_nonzero(edges_inner & mask)) / mask_px
     fired = bool(ring_density >= 0.02)
     return {
         "art_fidelity_uncertain": fired,
