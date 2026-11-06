@@ -19935,11 +19935,99 @@ def _caption_overlay_text_style(img_bgr, box):
     )
 
 
+# pt-BR function words that must not be orphaned at a line edge: breaking so
+# that "DO / DA / QUE / COM ..." starts or ends a line reads like a translation
+# artifact. Penalised by the semantic wrapper (idea from the manga-translator
+# UI ecosystem's semantic line breaking, reimplemented clean for Portuguese).
+_PT_BREAK_ORPHAN_WORDS = frozenset({
+    "DE", "DA", "DO", "DAS", "DOS", "EM", "NO", "NA", "NOS", "NAS", "NUMA",
+    "NUM", "UM", "UMA", "UNS", "UMAS", "E", "OU", "QUE", "SE", "POR", "PRA",
+    "PARA", "COM", "SEM", "AO", "AOS", "À", "ÀS", "O", "A", "OS", "AS",
+    "MEU", "MINHA", "SEU", "SUA", "TEU", "TUA", "ISSO", "ISTO", "ELE", "ELA",
+    "ELES", "ELAS", "NÓS", "VOCE", "VOCÊ", "LHE", "LHES", "JÁ", "TAMBÉM",
+})
+
+
+def _semantic_wrap_lines(words, measure, max_width):
+    """DP line wrapping that avoids orphaning pt-BR function words.
+
+    ``measure`` returns the pixel width of a string. Same contract as the
+    greedy wrap (lines of joined words, none exceeding ``max_width`` unless a
+    single word does), but breaks are chosen to: keep function words attached
+    to their neighbour (+2.5 penalty when one is orphaned at a line edge),
+    and prefer clause boundaries (a small discount after , ; :). Falls back
+    to the greedy result when the DP cannot help (no orphan in the greedy
+    output) so behaviour only changes where it visibly improves.
+    """
+    n = len(words)
+    if n < 3 or n > 80:
+        return None
+    try:
+        widths = [float(measure(word)) for word in words]
+        space_w = float(measure(" "))
+    except Exception:  # noqa: BLE001 - measurement failure: keep greedy
+        return None
+    prefix = [0.0]
+    for width in widths:
+        prefix.append(prefix[-1] + width)
+    line_width = lambda i, j: (prefix[j] - prefix[i]) + space_w * max(0, j - i - 1)
+
+    INF = float("inf")
+    dp = [INF] * (n + 1)
+    nxt = [-1] * n
+    dp[n] = 0.0
+    for i in range(n - 1, -1, -1):
+        for j in range(i + 1, n + 1):
+            if line_width(i, j) > max_width and j > i + 1:
+                break
+            cost = 1.0
+            if j < n:
+                last = words[j - 1].strip(",.;:!?").upper()
+                first_next = words[j].strip(",.;:!?").upper()
+                if last in _PT_BREAK_ORPHAN_WORDS or first_next in _PT_BREAK_ORPHAN_WORDS:
+                    cost += 2.5
+                if words[j - 1].endswith((",", ";", ":")):
+                    cost -= 0.4
+            total = cost + dp[j]
+            if total < dp[i]:
+                dp[i] = total
+                nxt[i] = j
+    if nxt[0] < 0:
+        return None
+    lines = []
+    i = 0
+    while i < n:
+        j = nxt[i]
+        if j <= i:
+            return None
+        lines.append(" ".join(words[i:j]))
+        i = j
+    return lines
+
+
 def _wrap_text(draw, text, font, max_width, split_long_words=True):
     words = str(text).split()
     if not words:
         return []
 
+    semantic = _semantic_wrap_lines(words, lambda value: _text_width(draw, value, font), max_width)
+    if semantic is not None:
+        # Only adopt the DP result when it actually removes orphans the greedy
+        # wrap would produce; otherwise keep the historical lineation.
+        greedy = _greedy_wrap_lines(draw, words, font, max_width, split_long_words)
+        orphan = lambda lines: sum(
+            1 for k, line in enumerate(lines)
+            for edge in (line.split()[0], line.split()[-1])
+            if edge.strip(",.;:!?").upper() in _PT_BREAK_ORPHAN_WORDS
+            and not (k == len(lines) - 1 and edge == line.split()[-1] and len(line.split()) > 2)
+        )
+        if orphan(semantic) < orphan(greedy):
+            return semantic
+        return greedy
+    return _greedy_wrap_lines(draw, words, font, max_width, split_long_words)
+
+
+def _greedy_wrap_lines(draw, words, font, max_width, split_long_words=True):
     lines = []
     current = ""
 
