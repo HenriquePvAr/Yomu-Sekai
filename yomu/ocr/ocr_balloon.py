@@ -2944,6 +2944,8 @@ def _render_analyzed_image(
                 )
             continue
 
+        region_fidelity_uncertain = False
+        fallback_mask_candidate = None
         for strategy in (
             "primary",
             "conservative",
@@ -2968,10 +2970,14 @@ def _render_analyzed_image(
             inpaint_seconds += cleanup_elapsed
             group.mask_metrics = mask_metrics
             if cleanup_mask is not None and int(np.count_nonzero(cleanup_mask)) > 0:
+                fallback_mask_candidate = cleanup_mask
                 # Complex-art detection is independent of whether this strategy's
                 # mask was usable: SFX masks over art are often mask_valid=False,
                 # and those are exactly the regions that must reach the LaMA
-                # fallback instead of the learned rescue.
+                # fallback instead of the learned rescue. The finding describes
+                # the REGION, not one strategy's mask: OR it across attempts so
+                # the source_scoped fallback metrics carry it even when that
+                # last-resort mask alone is too narrow to fire.
                 fidelity = _edge_continuity_fidelity_findings(cleaned, cleanup_mask, group)
                 mask_metrics["edge_continuity"] = fidelity["edge_continuity"]
                 if fidelity["art_fidelity_uncertain"]:
@@ -2979,9 +2985,19 @@ def _render_analyzed_image(
                     # ship silently: flag it so this attempt cannot be accepted
                     # and the region routes to the LaMA-large fallback (or review).
                     mask_metrics["art_fidelity_uncertain"] = True
+                    region_fidelity_uncertain = True
             if strategy == "source_scoped":
                 advanced_fallback_mask = cleanup_mask
                 advanced_fallback_metrics = dict(mask_metrics or {})
+                if region_fidelity_uncertain:
+                    advanced_fallback_metrics["art_fidelity_uncertain"] = True
+                if (
+                    advanced_fallback_mask is None
+                    or int(np.count_nonzero(advanced_fallback_mask)) == 0
+                ) and fallback_mask_candidate is not None:
+                    # The last-resort mask can be empty where a broader strategy
+                    # had a usable one; LaMA still needs pixels to reconstruct.
+                    advanced_fallback_mask = fallback_mask_candidate
 
             if not mask_metrics.get("mask_valid", False):
                 attempt = {
@@ -3103,7 +3119,10 @@ def _render_analyzed_image(
                 break
 
         fallback_trace = None
-        if not accepted and (advanced_fallback_metrics or {}).get("art_fidelity_uncertain"):
+        if not accepted and (
+            (advanced_fallback_metrics or {}).get("art_fidelity_uncertain")
+            or str(getattr(group, "classification", "") or "").lower() == "sfx"
+        ):
             fallback_trace = _advanced_art_fallback_eligibility_trace(group, advanced_fallback_metrics)
             group.advanced_fallback_eligibility_trace = fallback_trace
             would_run = (
