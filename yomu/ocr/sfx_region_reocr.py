@@ -34,8 +34,6 @@ _SFX_REOCR_PAD = 12
 
 _engine_lock = threading.Lock()
 _rapid_engine = None
-_paddle_engine = None
-_paddle_unavailable = False
 
 
 def _rapid_crop_reads(crop_bgr: np.ndarray) -> list[str]:
@@ -52,41 +50,23 @@ def _rapid_crop_reads(crop_bgr: np.ndarray) -> list[str]:
     return [str(item[1]) for item in (result or [])]
 
 
-def _paddle_crop_reads(crop_bgr: np.ndarray) -> list[str]:
-    global _paddle_engine, _paddle_unavailable
-    if _paddle_unavailable:
-        return []
-    with _engine_lock:
-        if _paddle_engine is None:
-            try:
-                from paddleocr import PaddleOCR
-
-                _paddle_engine = PaddleOCR(
-                    use_doc_orientation_classify=False,
-                    use_doc_unwarping=False,
-                    use_textline_orientation=False,
-                    lang="en",
-                )
-            except Exception:  # noqa: BLE001 - optional engine, fail-closed
-                _paddle_unavailable = True
-                return []
-    try:
-        results = _paddle_engine.predict(crop_bgr)
-    except Exception:  # noqa: BLE001
-        return []
-    reads: list[str] = []
-    for result in results:
-        data = result if isinstance(result, dict) else getattr(result, "json", {})
-        if isinstance(data, dict):
-            reads.extend(str(text) for text in (data.get("rec_texts") or []))
-    return reads
-
-
 def prewarm_sfx_paddle() -> None:
-    """Load Paddle models in the background so the first escalation has no latency."""
+    """Spawn the isolated Paddle worker early so its model load overlaps the
+    download stage instead of blocking the first escalation."""
     if not getattr(config, "OCR_SFX_PADDLE_ESCALATION", False):
         return
-    _paddle_crop_reads(np.zeros((32, 64, 3), dtype=np.uint8))
+    import numpy as _np
+    _paddle_crop_reads(_np.zeros((32, 64, 3), dtype=_np.uint8))
+
+
+def _paddle_crop_reads(crop_bgr: np.ndarray) -> list[str]:
+    """Paddle via an isolated subprocess: a native engine crash (oneDNN) can
+    no longer kill the pipeline - the gateway restarts once, then reports the
+    engine unavailable and the caller stays fail-closed."""
+    from yomu.ocr.subprocess_ocr import subprocess_paddle_reads
+
+    reads = subprocess_paddle_reads(crop_bgr)
+    return reads if reads is not None else []
 
 
 def _is_candidate(group) -> bool:
