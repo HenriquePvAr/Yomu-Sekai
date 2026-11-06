@@ -82,3 +82,24 @@ def test_sfx_eligibility_requires_fidelity_evidence():
         assert _advanced_art_fallback_eligible(
             logo, {"art_fidelity_uncertain": True, "background_type": "sfx_area"}
         ) is False
+
+
+def test_fidelity_evidence_relaxes_review_gates_but_not_reject():
+    metrics = {"art_fidelity_uncertain": True, "background_type": "sfx_area"}
+    with mock.patch.object(config, "ADVANCED_ART_INPAINTING", True), \
+            mock.patch.object(config, "ADVANCED_ART_INPAINT_MAX_ATTEMPTS_PER_REGION", 1):
+        # Review translation state / review completeness: the measured art
+        # destruction justifies the attempt; the LaMA output still faces every
+        # downstream validator, and failure lands in review (fail-closed).
+        review_state = _group(translation_final_state="manual_review")
+        assert _advanced_art_fallback_eligible(review_state, metrics) is True
+        review_completeness = _group(source_completeness={"status": "review"})
+        assert _advanced_art_fallback_eligible(review_completeness, metrics) is True
+        # A hard reject or failed completeness stays out either way.
+        rejected = _group(translation_final_state="rejected")
+        assert _advanced_art_fallback_eligible(rejected, metrics) is False
+        failed = _group(source_completeness={"status": "fail"})
+        assert _advanced_art_fallback_eligible(failed, metrics) is False
+        # Without the evidence the old strict gates still apply.
+        plain = _group(translation_final_state="manual_review")
+        assert _advanced_art_fallback_eligible(plain, {}) is False

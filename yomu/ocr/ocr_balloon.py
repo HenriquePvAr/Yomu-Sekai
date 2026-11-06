@@ -11372,10 +11372,17 @@ def _advanced_art_fallback_eligible(group, mask_metrics=None):
         # the blanket exclusion stays for ordinary SFX regions.
         return False
     translation_state, _translation_reason = translation_render_state(group)
-    if translation_state not in {"clean", "translated", "renderable_review"}:
-        return False
     completeness = getattr(group, "source_completeness", {}) or {}
-    if completeness.get("status") != source_completeness.STATUS_PASS:
+    fidelity_evidence = bool(metrics.get("art_fidelity_uncertain"))
+    if translation_state == "reject":
+        return False
+    if not fidelity_evidence and translation_state not in {"clean", "translated", "renderable_review"}:
+        return False
+    if not fidelity_evidence and completeness.get("status") != source_completeness.STATUS_PASS:
+        return False
+    if fidelity_evidence and completeness.get("status") not in {
+        source_completeness.STATUS_PASS, source_completeness.STATUS_REVIEW
+    }:
         return False
     background_type = str(
         metrics.get("background_type")
