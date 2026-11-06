@@ -3136,6 +3136,20 @@ def _render_analyzed_image(
             advanced_fallback_metrics["edge_continuity"] = direct_fidelity["edge_continuity"]
             if direct_fidelity["art_fidelity_uncertain"]:
                 advanced_fallback_metrics["art_fidelity_uncertain"] = True
+            try:
+                _ys, _xs = np.where(np.asarray(advanced_fallback_mask) > 0)
+                _gray_bg = cv2.cvtColor(np.asarray(before_group), cv2.COLOR_BGR2GRAY)
+                _edges_bg = cv2.Canny(_gray_bg, 60, 160) > 0
+                _ring_bg = None
+                if len(_ys):
+                    _k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (31, 31))
+                    _ring_bg = (cv2.dilate((np.asarray(advanced_fallback_mask) > 0).astype(np.uint8), _k) > 0) & ~(np.asarray(advanced_fallback_mask) > 0)
+                    advanced_fallback_metrics["edge_continuity"]["mask_bbox"] = [int(_xs.min()), int(_ys.min()), int(_xs.max()), int(_ys.max())]
+                    advanced_fallback_metrics["edge_continuity"]["ring_density_before_group"] = round(
+                        float(np.count_nonzero(_edges_bg & _ring_bg)) / max(1, int(np.count_nonzero(_ring_bg))), 5)
+                    advanced_fallback_metrics["edge_continuity"]["page_shape"] = list(np.asarray(original).shape[:2])
+            except Exception:  # noqa: BLE001 - diagnostics must never break render
+                pass
         if not accepted and (
             (advanced_fallback_metrics or {}).get("art_fidelity_uncertain")
             or str(getattr(group, "classification", "") or "").lower() == "sfx"
