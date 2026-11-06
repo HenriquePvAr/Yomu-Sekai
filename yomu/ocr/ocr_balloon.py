@@ -2967,6 +2967,14 @@ def _render_analyzed_image(
             cleanup_seconds += cleanup_elapsed
             inpaint_seconds += cleanup_elapsed
             group.mask_metrics = mask_metrics
+            if mask_metrics.get("mask_valid", False):
+                fidelity = _edge_continuity_fidelity_findings(cleaned, cleanup_mask, group)
+                mask_metrics["edge_continuity"] = fidelity["edge_continuity"]
+                if fidelity["art_fidelity_uncertain"]:
+                    # A fill that erased line continuity under the mask must not
+                    # ship silently: flag it so this attempt cannot be accepted
+                    # and the region routes to the LaMA-large fallback (or review).
+                    mask_metrics["art_fidelity_uncertain"] = True
             if strategy == "source_scoped":
                 advanced_fallback_mask = cleanup_mask
                 advanced_fallback_metrics = dict(mask_metrics or {})
@@ -3066,6 +3074,7 @@ def _render_analyzed_image(
             group.visual_attempts.append(visual_summary)
             if (
                 visual_summary.get("visual_validation_passed")
+                and not mask_metrics.get("art_fidelity_uncertain")
                 and group.text_overflow_ratio <= config.MAX_TEXT_OVERFLOW_RATIO
             ):
                 final = rendered
@@ -11296,6 +11305,53 @@ def _letters(text):
     return [char for char in str(text or "") if char.isalpha()]
 
 
+def _edge_continuity_fidelity_findings(cleaned_bgr, cleanup_mask, group) -> dict:
+    """Detect large SFX removals over complex line art — route those to LaMA.
+
+    The existing flat-patch gate measures luminance spread, so a smooth
+    gradient fill over clothing/screentone passes while the artwork's lines
+    are gone (observed on ep. 285 p9: "CRACKLE" removed over the character's
+    arm left a featureless smear). Gradient smears still produce Canny edges
+    from tonal transitions, so "interior is edgeless" does not discriminate.
+    What does: an edge-dense ring around a LARGE mask means the region sits on
+    real line art, which is exactly where analytic fills are weakest and the
+    LaMA-large reconstruction is strongest (measured: 0.5 s/region on GPU).
+
+    Fires only for art-typical SFX backdrops, on size + ring-density evidence.
+    A fired flag blocks accepting the analytic fill and routes the region to
+    the LaMA fallback, or to review if the model output fails the validators
+    (fail-closed either way — a smear never ships silently again).
+    """
+
+    background_type = str(getattr(group, "background_type", "") or "")
+    if background_type not in {"textured_art", "sfx_area"}:
+        return {"art_fidelity_uncertain": False, "edge_continuity": {"background_type": background_type}}
+    mask = (np.asarray(cleanup_mask) > 0)
+    mask_px = int(np.count_nonzero(mask))
+    if mask_px < 1500:
+        return {"art_fidelity_uncertain": False, "edge_continuity": {"mask_px": mask_px}}
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (31, 31))
+    dilated = cv2.dilate(mask.astype(np.uint8), kernel) > 0
+    ring = dilated & ~mask
+    ring_px = int(np.count_nonzero(ring))
+    if ring_px < 2000:
+        return {"art_fidelity_uncertain": False, "edge_continuity": {"ring_px": ring_px}}
+    gray = cv2.cvtColor(np.asarray(cleaned_bgr), cv2.COLOR_BGR2GRAY)
+    edges = cv2.Canny(gray, 60, 160) > 0
+    ring_density = float(np.count_nonzero(edges & ring)) / ring_px
+    inner_density = float(np.count_nonzero(edges & mask)) / mask_px
+    fired = bool(ring_density >= 0.02)
+    return {
+        "art_fidelity_uncertain": fired,
+        "edge_continuity": {
+            "ring_edge_density": round(ring_density, 5),
+            "inner_edge_density": round(inner_density, 5),
+            "mask_px": mask_px,
+            "ring_px": ring_px,
+        },
+    }
+
+
 def _advanced_art_fallback_eligible(group, mask_metrics=None):
     """True only for semantically valid hard-art cleanup failures."""
     if not getattr(config, "ADVANCED_ART_INPAINTING", False):
@@ -11303,7 +11359,13 @@ def _advanced_art_fallback_eligible(group, mask_metrics=None):
     if int(getattr(config, "ADVANCED_ART_INPAINT_MAX_ATTEMPTS_PER_REGION", 1) or 0) <= 0:
         return False
     classification = str(getattr(group, "classification", "") or "").lower()
-    if classification in {"sfx", "logo"}:
+    metrics = mask_metrics or getattr(group, "mask_metrics", {}) or {}
+    if classification == "logo":
+        return False
+    if classification == "sfx" and not metrics.get("art_fidelity_uncertain"):
+        # Sound lettering over art is eligible only on measured evidence that
+        # the analytic fill destroyed line continuity (edge_continuity gate);
+        # the blanket exclusion stays for ordinary SFX regions.
         return False
     translation_state, _translation_reason = translation_render_state(group)
     if translation_state not in {"clean", "translated", "renderable_review"}:
@@ -11311,13 +11373,12 @@ def _advanced_art_fallback_eligible(group, mask_metrics=None):
     completeness = getattr(group, "source_completeness", {}) or {}
     if completeness.get("status") != source_completeness.STATUS_PASS:
         return False
-    metrics = mask_metrics or getattr(group, "mask_metrics", {}) or {}
     background_type = str(
         metrics.get("background_type")
         or getattr(group, "background_type", "")
         or ""
     )
-    if background_type not in {"textured_art", "speed_lines", "unknown"}:
+    if background_type not in {"textured_art", "speed_lines", "sfx_area", "unknown"}:
         return False
     reason = str(metrics.get("reason") or "")
     if reason not in ART_RECONSTRUCTION_REVIEW_REASONS and not any(
