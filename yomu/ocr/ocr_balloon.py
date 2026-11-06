@@ -3119,6 +3119,23 @@ def _render_analyzed_image(
                 break
 
         fallback_trace = None
+        if (
+            not accepted
+            and str(getattr(group, "classification", "") or "").lower() == "sfx"
+            and advanced_fallback_mask is not None
+            and int(np.count_nonzero(advanced_fallback_mask)) > 0
+        ):
+            # Decide at the decision point with direct evidence instead of
+            # relying on per-strategy plumbing: strategies can refuse before
+            # masking (leaving metrics empty), so the region evidence is
+            # computed here on the actual fallback mask against the original.
+            direct_fidelity = _edge_continuity_fidelity_findings(
+                inpainted, original, advanced_fallback_mask, group,
+            )
+            advanced_fallback_metrics = dict(advanced_fallback_metrics or {})
+            advanced_fallback_metrics["edge_continuity"] = direct_fidelity["edge_continuity"]
+            if direct_fidelity["art_fidelity_uncertain"]:
+                advanced_fallback_metrics["art_fidelity_uncertain"] = True
         if not accepted and (
             (advanced_fallback_metrics or {}).get("art_fidelity_uncertain")
             or str(getattr(group, "classification", "") or "").lower() == "sfx"
