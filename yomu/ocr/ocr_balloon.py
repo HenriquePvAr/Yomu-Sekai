@@ -11432,6 +11432,7 @@ def _advanced_art_fallback_eligibility_trace(group, mask_metrics=None) -> dict:
         "max_attempts": int(getattr(config, "ADVANCED_ART_INPAINT_MAX_ATTEMPTS_PER_REGION", 1) or 0),
         "classification": classification,
         "fidelity_evidence": fidelity_evidence,
+        "edge_continuity": metrics.get("edge_continuity"),
         "translation_state": translation_state,
         "translation_reason": translation_reason,
         "completeness_status": completeness_status,
