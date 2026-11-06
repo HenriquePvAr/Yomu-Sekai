@@ -11395,7 +11395,15 @@ def _edge_continuity_fidelity_findings(cleaned_bgr, original_bgr, cleanup_mask, 
     ``original_bgr`` — strategy fills can blur or flatten the area right
     around the mask and would underestimate the surrounding line density.
 
-    Fires only for art-typical SFX backdrops, on size + ring-density evidence.
+    The original ring-density threshold (0.02) was calibrated on diff-based
+    masks and never fired in production: real lettering masks sit on broad
+    tonal areas (measured: ring 0.006-0.013 on the ep. 285 SFX), where any
+    flat fill is visible against the smooth gradient. Route by risk profile
+    instead of trying to detect the smear: a LARGE lettering mask over an
+    art-typical backdrop is exactly where analytic fills are weakest and the
+    LaMA-large reconstruction is strongest (measured 0.5 s/region on GPU).
+    The ring floor (0.004) only spares obviously flat neighbourhoods.
+
     A fired flag blocks accepting the analytic fill and routes the region to
     the LaMA fallback, or to review if the model output fails the validators
     (fail-closed either way — a smear never ships silently again).
@@ -11421,7 +11429,7 @@ def _edge_continuity_fidelity_findings(cleaned_bgr, original_bgr, cleanup_mask, 
     edges_inner = cv2.Canny(gray_inner, 60, 160) > 0
     ring_density = float(np.count_nonzero(edges_ring & ring)) / ring_px
     inner_density = float(np.count_nonzero(edges_inner & mask)) / mask_px
-    fired = bool(ring_density >= 0.02)
+    fired = bool(mask_px >= 10000 and ring_density >= 0.004)
     return {
         "art_fidelity_uncertain": fired,
         "edge_continuity": {
