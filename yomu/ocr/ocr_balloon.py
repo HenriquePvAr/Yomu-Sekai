@@ -3102,6 +3102,24 @@ def _render_analyzed_image(
                 )
                 break
 
+        fallback_trace = None
+        if not accepted and (advanced_fallback_metrics or {}).get("art_fidelity_uncertain"):
+            fallback_trace = _advanced_art_fallback_eligibility_trace(group, advanced_fallback_metrics)
+            group.advanced_fallback_eligibility_trace = fallback_trace
+            would_run = (
+                _advanced_art_fallback_eligible(group, advanced_fallback_metrics)
+                and advanced_fallback_mask is not None
+                and int(np.count_nonzero(advanced_fallback_mask)) > 0
+            )
+            if not would_run:
+                print(
+                    "ADVANCED_FALLBACK_BLOCKED "
+                    + json.dumps({k: v for k, v in fallback_trace.items() if k != "flags"}, ensure_ascii=False)
+                    + f" flags={fallback_trace['flags']}"
+                    + f" mask_none={advanced_fallback_mask is None}"
+                    + (f" mask_px={int(np.count_nonzero(advanced_fallback_mask))}" if advanced_fallback_mask is not None else ""),
+                    flush=True,
+                )
         if (
             not accepted
             and _advanced_art_fallback_eligible(group, advanced_fallback_metrics)
@@ -11354,6 +11372,48 @@ def _edge_continuity_fidelity_findings(cleaned_bgr, cleanup_mask, group) -> dict
             "ring_px": ring_px,
         },
     }
+
+
+def _advanced_art_fallback_eligibility_trace(group, mask_metrics=None) -> dict:
+    """Per-gate verdicts for the LaMA fallback route (diagnostic telemetry)."""
+
+    metrics = mask_metrics or getattr(group, "mask_metrics", {}) or {}
+    classification = str(getattr(group, "classification", "") or "").lower()
+    translation_state, translation_reason = translation_render_state(group)
+    completeness_status = str(
+        (getattr(group, "source_completeness", {}) or {}).get("status") or ""
+    )
+    background_type = str(
+        metrics.get("background_type")
+        or getattr(group, "background_type", "")
+        or ""
+    )
+    reason = str(metrics.get("reason") or "")
+    flags = {
+        flag: bool(metrics.get(flag))
+        for flag in (
+            "white_patch_rejected",
+            "flat_patch_rejected",
+            "seam_suspected",
+            "dark_blotch_rejected",
+            "art_fidelity_uncertain",
+            "residual_source_lettering_detected",
+        )
+    }
+    fidelity_evidence = flags["art_fidelity_uncertain"]
+    trace = {
+        "advanced_art_inpainting": bool(getattr(config, "ADVANCED_ART_INPAINTING", False)),
+        "max_attempts": int(getattr(config, "ADVANCED_ART_INPAINT_MAX_ATTEMPTS_PER_REGION", 1) or 0),
+        "classification": classification,
+        "fidelity_evidence": fidelity_evidence,
+        "translation_state": translation_state,
+        "translation_reason": translation_reason,
+        "completeness_status": completeness_status,
+        "background_type": background_type,
+        "reason": reason,
+        "flags": flags,
+    }
+    return trace
 
 
 def _advanced_art_fallback_eligible(group, mask_metrics=None):
