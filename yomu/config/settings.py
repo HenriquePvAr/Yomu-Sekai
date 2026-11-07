@@ -106,6 +106,12 @@ OCR_SFX_PADDLE_ESCALATION = _env_bool("OCR_SFX_PADDLE_ESCALATION", False)
 # Post-render page sweep with the isolated Paddle worker: reports source text
 # the primary OCR never detected (ghost lettering) on SFX-bearing pages.
 OCR_RESIDUAL_SWEEP = _env_bool("OCR_RESIDUAL_SWEEP", True)
+# Generative inpainting for the hardest art-reconstruction regions via
+# stable-diffusion.cpp (FLUX.2 klein) in a Vulkan subprocess. Opt-in: needs
+# sd-cli.exe + flux-2-klein-4b-Q4_0.gguf + flux2-vae.safetensors +
+# qwen3-4b-q4_k_m.gguf under GENERATIVE_INPAINT_MODEL_DIR.
+GENERATIVE_INPAINT_ENABLED = _env_bool("GENERATIVE_INPAINT_ENABLED", False)
+GENERATIVE_INPAINT_MODEL_DIR = _env_str("GENERATIVE_INPAINT_MODEL_DIR", "")
 RAPIDOCR_ENABLED = _env_bool("RAPIDOCR_ENABLED", True)
 RAPIDOCR_MIN_CONFIDENCE = _env_float("RAPIDOCR_MIN_CONFIDENCE", 0.55)
 RAPIDOCR_SUSPICIOUS_TEXT_FALLBACK = _env_bool(

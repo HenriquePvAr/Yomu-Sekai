@@ -11602,6 +11602,24 @@ def _lama_composite_leak_px(base_bgr, composite_bgr, mask) -> int:
     return int(np.count_nonzero(changed))
 
 
+def _generative_second_chance(current_bgr, cleanup_mask, original_bgr, group, mask_metrics):
+    """FLUX.2 klein edit for regions LaMA could not reconstruct acceptably."""
+    from yomu.clean.inpainting import flux_edit
+
+    if not flux_edit.available():
+        return None
+    try:
+        composited = flux_edit.flux_edit_inpaint(current_bgr, cleanup_mask)
+    except Exception:  # noqa: BLE001 - generative engine is best-effort
+        return None
+    if composited is None:
+        return None
+    metrics = _advanced_art_reconstruction_metrics(
+        original_bgr, composited, group, cleanup_mask, mask_metrics or {},
+    )
+    return composited, metrics
+
+
 def _try_advanced_art_fallback(current_bgr, original_bgr, group, cleanup_mask, mask_metrics, stage_timings=None):
     attempt = {
         "strategy": "lama_large",
@@ -11646,11 +11664,34 @@ def _try_advanced_art_fallback(current_bgr, original_bgr, group, cleanup_mask, m
         )
         attempt.update(advanced_metrics)
         if _advanced_art_metrics_rejected(advanced_metrics):
-            attempt["advanced_fallback_status"] = "rejected"
-            attempt["advanced_fallback_reason"] = advanced_metrics.get(
-                "advanced_art_reason",
-                "advanced_art_rejected",
+            # LaMA could not reconstruct this region acceptably. When the
+            # generative engine is enabled, give it the same mask: FLUX.2
+            # klein conditions on the surrounding art and can rebuild what
+            # convolutional inpainting cannot. Same validators apply.
+            second = _generative_second_chance(
+                current_bgr, cleanup_mask, original_bgr, group, mask_metrics or {},
             )
+            if second is not None:
+                flux_cleaned, flux_metrics = second
+                attempt["generative_attempted"] = True
+                attempt["generative_metrics"] = flux_metrics
+                if not _advanced_art_metrics_rejected(flux_metrics):
+                    attempt["advanced_fallback_status"] = "success"
+                    attempt["advanced_fallback_reason"] = "generative_model_reconstruction"
+                    attempt["generative_engine"] = "flux2_klein"
+                    attempt["_advanced_cleaned_bgr"] = flux_cleaned
+                    return attempt
+                attempt["advanced_fallback_reason"] = (
+                    str(advanced_metrics.get("advanced_art_reason", "advanced_art_rejected"))
+                    + ";generative_rejected:"
+                    + str(flux_metrics.get("advanced_art_reason", ""))[:80]
+                )
+            else:
+                attempt["advanced_fallback_status"] = "rejected"
+                attempt["advanced_fallback_reason"] = advanced_metrics.get(
+                    "advanced_art_reason",
+                    "advanced_art_rejected",
+                )
             return attempt
         attempt["advanced_fallback_status"] = "success"
         attempt["advanced_fallback_reason"] = "model_reconstruction_available"
