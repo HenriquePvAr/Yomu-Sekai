@@ -72,6 +72,19 @@ class SubprocessOcrGateway:
 
     def reads(self, image_bgr) -> list[str] | None:
         """Return the worker's reads, or ``None`` when the engine is unavailable."""
+        response = self._request(image_bgr, kind="reads")
+        if response is None or response.get("error"):
+            return None
+        return [str(read) for read in (response.get("reads") or [])]
+
+    def sweep(self, image_bgr) -> list[dict] | None:
+        """Full-page detections with boxes, or ``None`` when unavailable."""
+        response = self._request(image_bgr, kind="sweep")
+        if response is None or response.get("error"):
+            return None
+        return [dict(item) for item in (response.get("detections") or []) if isinstance(item, dict)]
+
+    def _request(self, image_bgr, *, kind: str) -> dict | None:
         with self._lock:
             ok, encoded = cv2.imencode(".png", image_bgr)
             if not ok:
@@ -87,6 +100,7 @@ class SubprocessOcrGateway:
                 request_id = self._next_id
                 payload = json.dumps({
                     "id": request_id,
+                    "kind": kind,
                     "image_b64": base64.b64encode(encoded.tobytes()).decode("ascii"),
                 })
                 try:
@@ -113,8 +127,8 @@ class SubprocessOcrGateway:
                     continue
                 if response.get("error"):
                     self._restart_or_give_up(str(response.get("engine_error") or response["error"]))
-                    return None
-                return [str(read) for read in (response.get("reads") or [])]
+                    return response
+                return response
             return None
 
     def shutdown(self) -> None:
@@ -126,13 +140,22 @@ _gateway: SubprocessOcrGateway | None = None
 _gateway_lock = threading.Lock()
 
 
-def subprocess_paddle_reads(image_bgr) -> list[str] | None:
-    """Module-level entry used by the SFX re-OCR escalation."""
+def _ensure_gateway() -> "SubprocessOcrGateway | None":
     global _gateway
     with _gateway_lock:
         if _gateway is None:
             _gateway = SubprocessOcrGateway()
-    return _gateway.reads(image_bgr)
+        if _gateway.unavailable_reason:
+            return None
+    return _gateway
+
+
+def subprocess_paddle_reads(image_bgr) -> list[str] | None:
+    """Module-level entry used by the SFX re-OCR escalation."""
+    gateway = _ensure_gateway()
+    if gateway is None:
+        return None
+    return gateway.reads(image_bgr)
 
 
 def shutdown_subprocess_ocr() -> None:

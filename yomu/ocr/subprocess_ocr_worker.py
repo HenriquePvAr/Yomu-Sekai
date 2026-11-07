@@ -37,16 +37,38 @@ def _engine():
 
 
 def _reads(image_bgr: np.ndarray) -> list[str]:
+    return [str(item.get("text") or "") for item in _detections(image_bgr)]
+
+
+def _detections(image_bgr: np.ndarray) -> list[dict]:
     engine = _engine()
     if engine is None:
         return []
     results = engine.predict(image_bgr)
-    reads: list[str] = []
+    detections: list[dict] = []
     for result in results:
         data = result if isinstance(result, dict) else getattr(result, "json", {})
-        if isinstance(data, dict):
-            reads.extend(str(text) for text in (data.get("rec_texts") or []))
-    return reads
+        if not isinstance(data, dict):
+            continue
+        texts = data.get("rec_texts")
+        texts = [str(t) for t in texts] if texts is not None else []
+        scores_raw = data.get("rec_scores")
+        scores = [float(s) for s in scores_raw] if scores_raw is not None else []
+        boxes_raw = data.get("rec_boxes")
+        boxes = list(boxes_raw) if boxes_raw is not None else []
+        for index, text in enumerate(texts):
+            box = []
+            if index < len(boxes):
+                entry = boxes[index]
+                raw = [int(round(float(v))) for v in list(entry)[:4]] if hasattr(entry, "__len__") else []
+                if len(raw) == 4:
+                    box = raw
+            detections.append({
+                "text": text,
+                "confidence": scores[index] if index < len(scores) else 0.0,
+                "box": box,
+            })
+    return detections
 
 
 def main() -> int:
@@ -61,7 +83,10 @@ def main() -> int:
             image = cv2.imdecode(array, cv2.IMREAD_COLOR)
             if image is None:
                 raise ValueError("image_decode_failed")
-            response = {"id": request.get("id"), "reads": _reads(image)}
+            if str(request.get("kind") or "") == "sweep":
+                response = {"id": request.get("id"), "detections": _detections(image)}
+            else:
+                response = {"id": request.get("id"), "reads": _reads(image)}
         except Exception as exc:  # noqa: BLE001 - report, never die silently
             response = {
                 "id": (json.loads(line).get("id") if line.startswith("{") else None),

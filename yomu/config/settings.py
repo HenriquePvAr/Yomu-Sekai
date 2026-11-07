@@ -103,6 +103,9 @@ OCR_LEGACY_PADDLE_FALLBACK = _env_bool("OCR_LEGACY_PADDLE_FALLBACK", False)
 # opt-in because it loads ~0.7 GB of models per process (~12 s, prewarmable).
 OCR_SFX_REGION_REOCR = _env_bool("OCR_SFX_REGION_REOCR", True)
 OCR_SFX_PADDLE_ESCALATION = _env_bool("OCR_SFX_PADDLE_ESCALATION", False)
+# Post-render page sweep with the isolated Paddle worker: reports source text
+# the primary OCR never detected (ghost lettering) on SFX-bearing pages.
+OCR_RESIDUAL_SWEEP = _env_bool("OCR_RESIDUAL_SWEEP", True)
 RAPIDOCR_ENABLED = _env_bool("RAPIDOCR_ENABLED", True)
 RAPIDOCR_MIN_CONFIDENCE = _env_float("RAPIDOCR_MIN_CONFIDENCE", 0.55)
 RAPIDOCR_SUSPICIOUS_TEXT_FALLBACK = _env_bool(
@@ -425,6 +428,10 @@ AUTO_FONT_SHRINK = _env_bool("AUTO_FONT_SHRINK", True)
 # Inside a closed balloon, wrap the translation to the balloon's shape (wide in
 # the middle, narrow at top/bottom) when that lets a larger font fit.
 RENDER_FIT_BALLOON_SHAPE = _env_bool("RENDER_FIT_BALLOON_SHAPE", True)
+# Large SFX splash lettering over art skips the four broad render strategies
+# (they fail one by one and the region reaches the LaMA fallback regardless);
+# small SFX and dialogue keep the full cascade.
+RENDER_SFX_STRAIGHT_TO_LAMA = _env_bool("RENDER_SFX_STRAIGHT_TO_LAMA", True)
 # Lean the drawn translation like the source lettering (measured slant) when the
 # chosen font is upright.
 RENDER_MATCH_SOURCE_SLANT = _env_bool("RENDER_MATCH_SOURCE_SLANT", True)

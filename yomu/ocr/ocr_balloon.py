@@ -2946,6 +2946,19 @@ def _render_analyzed_image(
 
         region_fidelity_uncertain = False
         fallback_mask_candidate = None
+        # Large SFX splash lettering over art: the four broad strategies
+        # measurably fail one after another (each costs a full cleanup+draw+
+        # validation round, multiple seconds per region) and the region then
+        # goes to the LaMA fallback anyway. Skip straight to the last-resort
+        # strategy for this risk profile; small SFX and dialogue keep the
+        # full cascade.
+        straight_to_lama = bool(
+            config.RENDER_SFX_STRAIGHT_TO_LAMA
+            and str(getattr(group, "classification", "") or "").lower() == "sfx"
+            and str(getattr(group, "background_type", "") or "")
+            in {"sfx_area", "textured_art"}
+            and int(group.box[2]) * int(group.box[3]) >= 20000
+        )
         for strategy in (
             "primary",
             "conservative",
@@ -2955,6 +2968,8 @@ def _render_analyzed_image(
             # every broad strategy above already refused the region.
             "source_scoped",
         ):
+            if straight_to_lama and strategy != "source_scoped":
+                continue
             inpaint_started = time.perf_counter()
             cleanup_kwargs = {"strategy": strategy}
             if forensic_capture is not None:

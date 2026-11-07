@@ -26,6 +26,7 @@ from PIL import Image, ImageDraw, ImageFont, ImageOps
 import yomu.config.settings as config
 import yomu.runtime.artifact_contract as ac
 import yomu.export.editable_psd_writer as editable_psd_writer
+from yomu.ocr.residual_sweep import sweep_page_residuals
 import yomu.review.region_taxonomy as region_taxonomy
 from yomu.ocr.classification_profiler import (
     ClassificationProfiler,
@@ -6608,6 +6609,19 @@ def _build_quality_report(report, states, translation_retry_records):
                 "text_overflow_items": [_quality_item_summary(item) for item in overflow],
                 "narrations_translated": [_quality_item_summary(item) for item in narrations],
                 "sfx_preserved": [_quality_item_summary(item) for item in sfx],
+                "residual_sweep": (
+                    sweep_page_residuals(
+                        state.get("original_bgr"),
+                        [tuple(getattr(group, "box", ()) or ()) for group in state.get("groups", []) if getattr(group, "box", None)],
+                        page_index=state["index"],
+                    )
+                    if any(
+                        str(getattr(group, "classification", "") or "") == "sfx"
+                        for group in state.get("groups", [])
+                    )
+                    and state.get("original_bgr") is not None
+                    else []
+                ),
                 "visual_validation_failures": [
                     _quality_item_summary(item) for item in visual_failures
                 ],
