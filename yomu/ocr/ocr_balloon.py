@@ -2980,6 +2980,10 @@ def _render_analyzed_image(
                 group,
                 **cleanup_kwargs,
             )
+            if cleanup_mask is not None and str(
+                getattr(group, "classification", "") or ""
+            ).lower() == "sfx":
+                cleanup_mask = _refine_lettering_mask(cleanup_mask, group, mask_metrics)
             cleanup_elapsed = time.perf_counter() - inpaint_started
             cleanup_seconds += cleanup_elapsed
             inpaint_seconds += cleanup_elapsed
@@ -11602,6 +11606,57 @@ def _lama_composite_leak_px(base_bgr, composite_bgr, mask) -> int:
     return int(np.count_nonzero(changed))
 
 
+def _refine_lettering_mask(cleanup_mask, group, mask_metrics):
+    """Grow an SFX lettering mask to cover stroke + outline, bounded by the box.
+
+    Two failure modes share one root - the mask not matching the lettering:
+    strategies reject with ``uncovered_source_text_evidence`` (mask smaller
+    than the glyphs' outline ring) and LaMA rejects with
+    ``large_white_patch_on_nonwhite_background`` (mask so large it swallows
+    background the model then fills with white). Refine: dilate by ~2x the
+    measured stroke width + close fragments, then intersect with the group
+    box grown 6 % - bigger than the dark cores, never bigger than the
+    lettering cluster.
+    """
+
+    if str(getattr(group, "classification", "") or "").lower() != "sfx":
+        return cleanup_mask
+    mask = (np.asarray(cleanup_mask) > 0).astype(np.uint8)
+    if not np.any(mask):
+        return cleanup_mask
+    stroke = int((mask_metrics or {}).get("lettering_stroke_width") or 0)
+    radius = max(3, min(15, stroke * 2 + 3))
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (radius * 2 + 1, radius * 2 + 1))
+    refined = cv2.dilate(mask, kernel)
+    refined = cv2.morphologyEx(refined, cv2.MORPH_CLOSE, kernel)
+    gx, gy, gw, gh = (int(v) for v in (getattr(group, "box", None) or (0, 0, mask.shape[1], mask.shape[0])))
+    pad_x = max(2, int(gw * 0.06))
+    pad_y = max(2, int(gh * 0.06))
+    bound = np.zeros_like(refined)
+    y1 = max(0, gy - pad_y)
+    y2 = min(refined.shape[0], gy + gh + pad_y)
+    x1 = max(0, gx - pad_x)
+    x2 = min(refined.shape[1], gx + gw + pad_x)
+    bound[y1:y2, x1:x2] = 1
+    refined = refined & bound
+    return (refined * 255).astype(np.uint8)
+
+
+def _eroded_mask_variant(cleanup_mask, radius=5):
+    """Cores-only mask: for the LaMA retry, starving ambiguous background out
+    of the prompt so the model continues the surrounding art instead of
+    hallucinating white patches."""
+
+    mask = (np.asarray(cleanup_mask) > 0).astype(np.uint8)
+    if not np.any(mask):
+        return cleanup_mask
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (radius * 2 + 1, radius * 2 + 1))
+    eroded = cv2.erode(mask, kernel)
+    if not np.any(eroded):
+        return cleanup_mask
+    return (eroded * 255).astype(np.uint8)
+
+
 def _generative_second_chance(current_bgr, cleanup_mask, original_bgr, group, mask_metrics):
     """FLUX.2 klein edit for regions LaMA could not reconstruct acceptably."""
     from yomu.clean.inpainting import flux_edit
@@ -11664,6 +11719,43 @@ def _try_advanced_art_fallback(current_bgr, original_bgr, group, cleanup_mask, m
         )
         attempt.update(advanced_metrics)
         if _advanced_art_metrics_rejected(advanced_metrics):
+            # Retry once with a cores-only mask: when the metrics reject with a
+            # white patch or a boundary seam, the mask carried ambiguous
+            # background into the prompt. Starving it down to the glyph cores
+            # leaves surrounding art as the only context, which is exactly
+            # what the model continues.
+            _retry_reasons = str(advanced_metrics.get("advanced_art_reason") or "")
+            if "white_patch" in _retry_reasons or "seam" in _retry_reasons:
+                _eroded = _eroded_mask_variant(cleanup_mask)
+                if int(np.count_nonzero(_eroded)) > 0 and not np.array_equal(
+                    (_eroded > 0), (np.asarray(cleanup_mask) > 0)
+                ):
+                    try:
+                        _LAMA_INFERENCE_LOCK.acquire()
+                        try:
+                            retry_cleaned, retry_telemetry = inpainter.reconstruct(
+                                current_bgr, _eroded,
+                            )
+                        finally:
+                            _LAMA_INFERENCE_LOCK.release()
+                        attempt["lama_retry"] = {
+                            "telemetry": {
+                                k: v for k, v in (retry_telemetry or {}).items()
+                                if isinstance(v, (str, int, float, bool))
+                            },
+                        }
+                        retry_metrics = _advanced_art_reconstruction_metrics(
+                            original_bgr, retry_cleaned, group, _eroded, mask_metrics or {},
+                        )
+                        attempt["lama_retry"]["metrics"] = retry_metrics
+                        if not _advanced_art_metrics_rejected(retry_metrics):
+                            attempt["advanced_fallback_status"] = "success"
+                            attempt["advanced_fallback_reason"] = "model_reconstruction_available_after_mask_retry"
+                            attempt["_advanced_cleaned_bgr"] = retry_cleaned
+                            return attempt
+                        advanced_metrics = retry_metrics
+                    except Exception as exc:  # noqa: BLE001 - retry is best-effort
+                        attempt["lama_retry"] = {"error": type(exc).__name__}
             # LaMA could not reconstruct this region acceptably. When the
             # generative engine is enabled, give it the same mask: FLUX.2
             # klein conditions on the surrounding art and can rebuild what
