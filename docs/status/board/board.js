@@ -4,7 +4,7 @@
 window.BOARD = {
   title: 'YomuSekai · Quadro',
   subtitle: 'HenriquePvAr/Yomu-Sekai',
-  updatedAt: '2026-11-04',
+  updatedAt: '2026-11-08',
   repoUrl: 'https://github.com/HenriquePvAr/Yomu-Sekai',
   defaultBranch: 'main',
   columns: [
@@ -229,12 +229,14 @@ window.BOARD = {
       id: 'PIPELINE-REF-01',
       title: 'Pipeline: correções pós-medição no capítulo de referência (ep. 285)',
       domain: 'pipeline', column: 'qas', env: 'branch',
-      updated: '2026-11-04',
-      summary: 'Pacote de correções medidas no ep. 285 (Hero Killer). Download: pool HTTP paralelo com fallback serial; "strip" do Webtoons dispara smart split. OCR: página só de arte vira OCR_SUFFICIENT; pontuação neutra para scripts não-latinos. Validação: nomes próprios só por detecção do capítulo; frases em inglês não ficam sem traduzir. Limpeza: máscara estendida ao halo do lettering; achatamento de resíduo em fundo escuro. Tipografia: tamanho inicial derivado da altura de tinta da fonte (não SFX/display). Certificado: páginas sem alvo passam; SFX/arte preservados não contam como resíduo. Manifest: commit registrado no início do run. UI: rótulos de ETA e política de fonte sempre ativa.',
+      updated: '2026-11-05',
+      summary: 'Pacote de correções medidas no ep. 285 (Hero Killer). Download: pool HTTP paralelo com fallback serial; "strip" do Webtoons dispara smart split. OCR: página só de arte vira OCR_SUFFICIENT; pontuação neutra para scripts não-latinos. Validação: nomes próprios só por detecção do capítulo; frases em inglês não ficam sem traduzir. Limpeza: máscara estendida ao halo do lettering; achatamento de resíduo em fundo escuro. Tipografia: tamanho inicial derivado da altura de tinta da fonte (não SFX/display). Certificado: páginas sem alvo passam; SFX/arte preservados não contam como resíduo. Manifest: commit registrado no início do run. UI: rótulos de ETA e política de fonte sempre ativa. Rodada 2: alinhamento horizontal, cor de tinta em fundo escuro, restauração de termos corrompidos, promoção de legenda tipográfica, título da série como PRESERVE_ART, extensão de máscara autorizada, certificado desacoplado de revisão, fingerprint do pipeline sobre módulos reais.',
       delivered: [
         'download, OCR, limpeza, tipografia, certificado, manifest, UI (56e5b85, 04/11)',
         '20 novos testes herméticos adicionados no mesmo commit',
         'Documentação técnica e guia do usuário atualizados',
+        'alinhamento, cor de tinta, restauração de nomes, certificado e cache (d819f0e, 05/11)',
+        '7 novos testes herméticos de regressão; docs §17 atualizados',
       ],
       links: [
         { label: 'benchmark_pipeline.py', path: 'yomu/pipeline/benchmark_pipeline.py' },
