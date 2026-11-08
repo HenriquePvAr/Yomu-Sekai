@@ -228,8 +228,8 @@ window.BOARD = {
     {
       id: 'PIPELINE-REF-01',
       title: 'Pipeline: correções pós-medição no capítulo de referência (ep. 285)',
-      domain: 'pipeline', column: 'qas', env: 'branch',
-      updated: '2026-11-05',
+      domain: 'pipeline', column: 'prod', env: 'main',
+      updated: '2026-11-08',
       summary: 'Pacote de correções medidas no ep. 285 (Hero Killer). Download: pool HTTP paralelo com fallback serial; "strip" do Webtoons dispara smart split. OCR: página só de arte vira OCR_SUFFICIENT; pontuação neutra para scripts não-latinos. Validação: nomes próprios só por detecção do capítulo; frases em inglês não ficam sem traduzir. Limpeza: máscara estendida ao halo do lettering; achatamento de resíduo em fundo escuro. Tipografia: tamanho inicial derivado da altura de tinta da fonte (não SFX/display). Certificado: páginas sem alvo passam; SFX/arte preservados não contam como resíduo. Manifest: commit registrado no início do run. UI: rótulos de ETA e política de fonte sempre ativa. Rodada 2: alinhamento horizontal, cor de tinta em fundo escuro, restauração de termos corrompidos, promoção de legenda tipográfica, título da série como PRESERVE_ART, extensão de máscara autorizada, certificado desacoplado de revisão, fingerprint do pipeline sobre módulos reais.',
       delivered: [
         'download, OCR, limpeza, tipografia, certificado, manifest, UI (56e5b85, 04/11)',
@@ -242,6 +242,91 @@ window.BOARD = {
         { label: 'benchmark_pipeline.py', path: 'yomu/pipeline/benchmark_pipeline.py' },
         { label: 'ocr_balloon.py',        path: 'yomu/ocr/ocr_balloon.py' },
         { label: 'down.py',               path: 'yomu/download/down.py' },
+      ],
+    },
+
+    // ───────────────────────── PROD (HenriquePvAr direto na main, 05-06/11) ─────────────────────────
+
+    {
+      id: 'RENDER-SFX-02',
+      title: 'Roteamento SFX → LaMA por fidelidade de borda + refinamento de máscaras',
+      domain: 'pipeline', column: 'prod', env: 'main',
+      updated: '2026-11-08',
+      summary: 'Gate de continuidade de borda para rotear SFX complexos ao LaMA com evidência medida. Fidelidade por OR entre tentativas; fallback mask persistida; telemetria de rastreamento. SFX grandes de arte-sobre-arte: rota direta ao LaMA. Validação do composite LaMA contra seu contrato. Retry com variante cores-only. Refinamento de máscaras de lettering SFX.',
+      delivered: [
+        'edge-continuity fidelity gate para SFX complexos (864bc7a, 05/11)',
+        'compute gate mesmo com strategy mask inválida (b2a9a36, 05/11)',
+        'review-state SFX roteados ao LaMA por evidência medida (c08ec39, 05/11)',
+        'telemetria quando rota bloqueada; fallback block trace (9688035, f72fbc0, 05/11)',
+        'OR fidelity entre tentativas; fallback mask; trace todos SFX (538f4bc, 05/11)',
+        'NameError Path corrigido no trace de SFX render (b4cf583, 05/11)',
+        'densidades de borda incluídas no trace de fallback (a7f8f7b, 05/11)',
+        'medir edge-continuity ring no artwork original (3a663c0, 05/11)',
+        'decisão LaMA no ponto de evidência direta (2eb0d3d, 05/11)',
+        'bbox de máscara + densidade de anel no trace de fallback (54f90ad, 05/11)',
+        'SFX grandes over-art roteados ao LaMA por risk profile (a3febba, 05/11)',
+        'validar composite LaMA contra seu contrato (850bfd7, 05/11)',
+        'straight-to-LaMA para splash SFX grande; residual sweep de página (65db8b9, 06/11)',
+        'refinamento de máscaras SFX; retry cores-only no LaMA (cda3f90, 06/11)',
+      ],
+      links: [
+        { label: 'benchmark_pipeline.py', path: 'yomu/pipeline/benchmark_pipeline.py' },
+        { label: 'ocr_balloon.py',        path: 'yomu/ocr/ocr_balloon.py' },
+      ],
+    },
+
+    {
+      id: 'RENDER-GEN-01',
+      title: 'Reconstrução generativa de segunda chance (FLUX.2 klein via sd.cpp)',
+      domain: 'pipeline', column: 'prod', env: 'main',
+      updated: '2026-11-08',
+      summary: 'Quando o LaMA-large rejeita o composite por evidência (métricas de arte avançada), o fallback oferece a mesma máscara ao FLUX.2 klein (modelo de instrução/edição que condiciona no artwork vizinho) via sd.cpp Vulkan em subprocess. Output passa pelos mesmos validadores; rejeição vai a revisão com motivos de ambos os motores. Opt-in: GENERATIVE_INPAINT_ENABLED. Modelos (~5 GB): FLUX.2-klein Q4_0 + flux2-vae + Qwen3-4B.',
+      delivered: [
+        'flux_edit.py: gate de disponibilidade, troca de imagem/máscara em temp-dir, composição inside-mask, timeout 240s (0fedd95, 06/11)',
+        'GENERATIVE_INPAINT_ENABLED adicionado a settings.py (0fedd95, 06/11)',
+        'ocr_balloon.py: integração do fallback generativo (0fedd95, 06/11)',
+      ],
+      links: [
+        { label: 'flux_edit.py',          path: 'yomu/clean/inpainting/flux_edit.py' },
+        { label: 'benchmark_pipeline.py', path: 'yomu/pipeline/benchmark_pipeline.py' },
+        { label: 'settings.py',           path: 'yomu/config/settings.py' },
+      ],
+    },
+
+    {
+      id: 'OCR-SFX-01',
+      title: 'Re-OCR de última chance para regiões SFX (RapidOCR + Paddle subprocess)',
+      domain: 'pipeline', column: 'prod', env: 'main',
+      updated: '2026-11-08',
+      summary: 'Re-OCR de última chance para regiões SFX com crop ajustado no RapidOCR. Guard de repair-vs-echo para evitar que a correção repita o erro do OCR original. Escalonamento opcional ao PaddleOCR via subprocess isolado (evita contaminação de memória GPU).',
+      delivered: [
+        'last-chance SFX re-OCR: RapidOCR crop, opt-in Paddle escalation (2ad6c10, 05/11)',
+        'crop ajustado e guard repair-vs-echo (9b78d83, 05/11)',
+        'Paddle escalation em subprocess isolado (3ebbadc, 06/11)',
+      ],
+      links: [
+        { label: 'ocr_balloon.py', path: 'yomu/ocr/ocr_balloon.py' },
+        { label: 'ocr_engine.py',  path: 'yomu/ocr/ocr_engine.py' },
+      ],
+    },
+
+    {
+      id: 'PIPELINE-05-01',
+      title: 'Pipeline 05-06/11: gargalos, glossário SFX, tipografia semântica, UI e PDF',
+      domain: 'pipeline', column: 'prod', env: 'main',
+      updated: '2026-11-08',
+      summary: 'Gargalos de revisão OCR/Clean resolvidos; promoção de legenda display documentada; contabilidade de timing por etapa. Glossário SFX tolerante a erros de OCR; termos de lore protegidos; métricas honestas. Quebra de linha semântica pt-BR (palavras funcionais não ficam sozinhas no fim). Pasta de saída abre em Explorer visível e em foco. Proteção de pixel em clean-rescue; verificação de resíduo com limite; splits de PDF seguros.',
+      delivered: [
+        'gargalos OCR/Clean, promoção de legenda display, timing por etapa (f274feb, 05/11)',
+        'glossário SFX tolerante a OCR, lore terms protegidos, métricas honestas (76c129f, 05/11)',
+        'quebra de linha semântica pt-BR sem palavras funcionais órfãs (d93e813, 06/11)',
+        'abrir pasta de saída em Explorer visível e em foco (d06e0fb, 05/11)',
+        'pixel protection clean-rescue, residual check limitado, PDF splits seguros (03b57ec, 05/11)',
+      ],
+      links: [
+        { label: 'benchmark_pipeline.py', path: 'yomu/pipeline/benchmark_pipeline.py' },
+        { label: 'sfx_glossary.py',       path: 'yomu/translation/sfx_glossary.py' },
+        { label: 'tradutor_ui.js',        path: 'static/tradutor_ui.js' },
       ],
     },
 
