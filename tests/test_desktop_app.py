@@ -97,9 +97,9 @@ def test_desktop_auth_handoff_is_memory_only_and_single_use():
 def test_desktop_callback_completes_server_side_without_external_pkce():
     source = Path("yomu/ui/app.py").read_text(encoding="utf-8")
     assert "desktop = params.get(\"desktop\") == \"1\"" in source
-    assert "Solicitação recebida" in source
-    assert "Você pode voltar ao Komyst" in source
     callback = Path("ui/auth_callback.html").read_text(encoding="utf-8")
+    assert "Solicitação recebida" in callback
+    assert "Você pode voltar ao Komyst" in callback
     assert "desktopHandoff" in callback
 
 
