@@ -34,19 +34,25 @@ window.BOARD = {
       "column": "blocked",
       "env": "local",
       "updated": "2026-11-11",
-      "summary": "F0.1–F0.6 implementados no branch fase-0-jobs-nao-morrem; commits locais 5cd168b, 39f84e5, d753c05, b53c170, 66b78d8 e 4d6faf5. F0.4 manteve ambas as saídas PSD após diagnóstico. Testes focados do timeout/monitor: 14 passaram. Suíte completa: 6482 passaram e 4 falhas antigas de máscara/reconstrução; não está verde.",
-      "risk": "TESTED_OFFLINE. Monitor ligado no .env local e em settings; pico físico, comparação do custo ≤2%, jobs REF-A/REF-B e qualidade ainda não verificados nesta branch.",
-      "blockedBy": "Precisa de: HenriquePvAr entrar no painel local (sem compartilhar senha) para iniciar e acompanhar REF-A/REF-B até a PAUSA 0; medir custo do monitor e conferir métricas/qualidade.",
+      "summary": "F0.1–F0.7 implementadas localmente no branch fase-0-jobs-nao-morrem. Suíte completa: 6486 passaram e permanecem 4 falhas antigas de máscara/reconstrução. REF-A físico em Tradução pronta confirmou OCR e LaMa em DirectML e portão físico aprovado, mas o job terminou review_required por itens de qualidade/tradução.",
+      "risk": "TESTED_OFFLINE e PHYSICALLY_VERIFIED para dispositivos e portão físico deste job. Intervalo do monitor em 5 s; seu custo ≤2% ainda NÃO MEDIDO. Comparação de tempo com f181a17e é histórica, não A/B controlado. Suíte não verde e qualidade geral do job requer revisão.",
+      "blockedBy": "Para fechar a PAUSA 0: medir custo do monitor com controle equivalente, executar REF-B na GPU restaurada e tratar a revisão geral do REF-A. Quatro falhas preexistentes mantêm a suíte vermelha.",
       "delivered": [
         "Portão SFX só reprova itens que foram enviados ao provedor, coberto por testes offline; falhar rápido por disco; retenção protege histórico e publicações",
         "Timeout real do subprocesso Paddle com reinício dentro do limite existente",
         "Diagnóstico F0.4 documenta que psd/ e result_path têm conteúdo próprio e ambos são preservados",
-        "Monitor psutil ligado por padrão; timing_report recebe pico de árvore RSS, RAM do sistema e swap; JSON/CSV padrão, HTML opt-in",
-        "A suíte completa executada: quatro falhas antigas coincidem com reports/falhas_preexistentes_20261111.md"
+        "Monitor psutil ligado por padrão com amostragem a cada 5 s; timing_report registra pico de árvore RSS, RAM do sistema, swap e intervalo; JSON/CSV padrão, HTML opt-in",
+        "Alerta em GPU_INFERENCE=auto sem DirectML; timing_report e job_metrics exibem dispositivos efetivos de OCR e LaMa",
+        "Suíte completa após as alterações: 6486 passed, 4 falhas antigas, 141 skipped, 1 xfailed, 8 warnings e 787 subtests; 942.84 s",
+        "REF-A físico c034a1cf: 65 páginas, 354.78 s pelo medidor, OCR/LaMa DirectML, 56 chamadas LaMa em DirectML; portão físico aprovado com zero resíduos",
+        "Monitor físico: ativo em 5 s, 68 amostras; pico árvore RSS 3020.32 MB e pico de RAM usada pelo sistema 22765.21 MB; VRAM não medida neste job",
+        "Job REF-A encerrou review_required/REVIEW: itens de revisão manual/qualidade e um item de revisão semântica; outputs e PDF produzidos"
       ],
       "pending": [
-        "PHYSICALLY_VERIFIED: iniciar REF-A e REF-B, validar saída/qualidade e usar tools/audit/job_metrics.py para pico de RAM",
-        "Comparar tempo do monitor com execução equivalente sem monitor; manter custo até 2% ou aumentar o intervalo",
+        "Medir custo do monitor comparando execuções equivalentes com e sem monitor; limite de 2% ainda não demonstrado",
+        "Executar REF-B após restauração do DirectML e medir RAM/dispositivos",
+        "Revisar os motivos de quality review_required no REF-A antes de declarar aprovação geral",
+        "Testar Apenas Clean pela interface; a falha de PDF anterior foi em CLI e não foi exercitada por este job",
         "As quatro falhas conhecidas impedem o aceite de suíte completa verde; não foram corrigidas nesta tarefa"
       ],
       "links": [

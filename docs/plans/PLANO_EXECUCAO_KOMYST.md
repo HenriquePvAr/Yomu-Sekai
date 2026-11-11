@@ -285,11 +285,21 @@ Objetivo: nenhum job morre por causa de disco, de uma regra de SFX ou de um subp
 1. Mude o padrão para `True`.
 2. Confirme que `psutil` está em `requirements/*.txt`; se não estiver, acrescente.
 3. Garanta que o resumo (pico de RSS do processo e filhos, pico de RAM do sistema, pico de swap) vai para `timing_report.json` em `resource_monitoring`. Não gere o relatório HTML por padrão (só JSON e CSV); HTML fica opt-in.
-4. Meça o custo: o job não pode ficar mais de 2% mais lento. Se ficar, aumente o intervalo de amostragem.
+4. Meça o custo: o job não pode ficar mais de 2% mais lento. O intervalo inicial é 5 segundos; se o custo exceder 2%, aumente o intervalo e repita a comparação.
 
 **Teste.** Ajuste os testes que assumem o padrão desligado.
 
 **Aceite.** `tools/audit/job_metrics.py` mostra pico de RAM em REF-A e REF-B; custo de tempo medido nos dois jobs físicos da PAUSA 0 e mantido em até 2% (ajustar o intervalo se exceder).
+
+### F0.7 Dispositivo de inferência observável e alerta de perda da GPU
+
+**Problema.** Com `GPU_INFERENCE=auto`, o ONNX Runtime pode perder o DirectML e continuar em CPU sem um aviso destacado no job. Isso torna OCR e reconstrução mais lentos e dificulta distinguir regressão de código de alteração do ambiente.
+
+**Como fazer.** Registrar um aviso claro quando `auto` não encontrar `DmlExecutionProvider`; se as distribuições `onnxruntime` e `onnxruntime-directml` estiverem simultaneamente instaladas, explicar o conflito de arquivos compartilhados e os comandos para reinstalar DirectML. Gravar no `timing_report.json` os dispositivos efetivamente observados para OCR e LaMa, além do modo configurado e dos provedores disponíveis. Exibir essa informação em `tools/audit/job_metrics.py`.
+
+**Teste.** Testes offline cobrem ausência de DirectML com conflito de distribuições, operação normal com DirectML e leitura/exibição das métricas.
+
+**Aceite.** Job com perda silenciosa de DirectML gera aviso acionável e identifica os dispositivos efetivos no relatório; OCR e LaMa observados durante a execução ficam distinguíveis de uma mera detecção de capacidade do ambiente.
 
 ### ⏸ PAUSA 0
 
