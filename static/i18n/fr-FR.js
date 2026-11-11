@@ -105,6 +105,7 @@
     'pipeline.queued': 'En file',
     'pipeline.worker_starting': 'Démarrage du traitement',
     'pipeline.failed': 'Échec du traitement',
+    'errors.insufficient_disk_space': 'Espace disque insuffisant pour générer ce chapitre. Libérez de l’espace puis réessayez.',
     'toast.settings_saved': 'Paramètres enregistrés.'
   };
 }());

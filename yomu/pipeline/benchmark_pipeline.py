@@ -3044,6 +3044,18 @@ def run_benchmark(args):
         )
         image_entries = source_entries
     image_paths = [] if config.PIPELINE_STREAMING else [entry["path"] for entry in image_entries]
+    from yomu.runtime.disk_budget import InsufficientDiskSpace, check as check_disk_budget
+    output_plan_name = os.getenv("YOMU_OUTPUT_PLAN", "default")
+    enough_space, disk_details = check_disk_budget(
+        output_folder, output_plan_name, page_count=len(image_entries) or len(source_entries),
+    )
+    if not enough_space:
+        print(
+            "INSUFFICIENT_DISK_SPACE "
+            f"free_mb={disk_details['free_mb']} required_mb={disk_details['required_mb']}",
+            flush=True,
+        )
+        raise InsufficientDiskSpace(disk_details)
     print(
         "DOWNLOAD_TO_OCR_BUILD_RESULT "
         f"downloaded_records={len(all_image_paths)} physical_files={sum(1 for p in all_image_paths if Path(p).is_file())} "
@@ -4048,6 +4060,10 @@ def run_benchmark(args):
                 flush=True,
             )
         except Exception as exc:
+            if isinstance(exc, OSError) and getattr(exc, "errno", None) == 28:
+                print("INSUFFICIENT_DISK_SPACE errno=28", flush=True)
+                from yomu.runtime.disk_budget import InsufficientDiskSpace
+                raise InsufficientDiskSpace({"errno": 28}) from exc
             # The exception object, not ``str(exc)``: flattening it here is what
             # turned five real #84F9 page failures into the word "str".
             _complete_page_with_error(

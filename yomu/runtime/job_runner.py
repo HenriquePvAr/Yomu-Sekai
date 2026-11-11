@@ -920,6 +920,31 @@ def run_job(job_id: str, db_path: str, worker_id: str, log_path: str) -> int:
                              error_message=reason_code, reason_code=reason_code)
             return 2
 
+        from yomu.runtime.disk_budget import check as check_disk_budget
+        budget_config = job.get("configuration") if isinstance(job.get("configuration"), dict) else {}
+        budget_plan = (budget_config.get("output_plan") or budget_config.get("output_profile")
+                       or budget_config.get("output_format") or "default")
+        budget_pages = (job.get("logical_pages") or job.get("candidate_count")
+                        or job.get("progress_total") or None)
+        enough_space, disk_details = check_disk_budget(
+            output_dir, budget_plan, page_count=budget_pages,
+        )
+        if not enough_space:
+            message = (
+                "Espaço em disco insuficiente para gerar este capítulo. "
+                "Libere espaço e tente de novo."
+            )
+            failed = store.transition(
+                job_id, JobStatus.FAILED, expected_worker=job.get("worker_id"),
+                error_type="runtime", error_message=message,
+                reason_code="insufficient_disk_space",
+            )
+            _write_manifest(
+                output_dir, failed, status=JobStatus.FAILED,
+                reason_code="insufficient_disk_space", disk_budget=disk_details,
+            )
+            return 2
+
         # Ensure the job is STARTING then RUNNING, and write the initial manifest. The
         # worker owns runner_pid/runner_create_time: it records the top of the runner tree
         # (the process it spawned), so the recovery termination catches the whole tree
@@ -1234,6 +1259,12 @@ def _finalize(store, job_id, job, output_dir, return_code, cancelled, log_path,
     failure = download_report.get("failure") if isinstance(download_report, dict) else {}
     source_reason = _safe_reason_code(
         failure.get("code") if isinstance(failure, dict) else "", "pipeline_failed")
+    try:
+        if "INSUFFICIENT_DISK_SPACE" in Path(log_path).read_text(
+                encoding="utf-8", errors="replace"):
+            source_reason = "insufficient_disk_space"
+    except OSError:
+        pass
     if download_only and isinstance(download_gate, dict) and not download_gate.get("passed"):
         # A Download-only run is successful only when its explicit canonical manifest
         # covers the complete logical chapter.  Never publish a partial 97/105 run as
@@ -1290,7 +1321,11 @@ def _finalize(store, job_id, job, output_dir, return_code, cancelled, log_path,
             if source_reason != "pipeline_failed"
             else "pipeline"
         )
-        fields["error_message"] = reason_code
+        fields["error_message"] = (
+            "Espaço em disco insuficiente para gerar este capítulo. "
+            "Libere espaço e tente de novo."
+            if reason_code == "insufficient_disk_space" else reason_code
+        )
     if target == JobStatus.INTERRUPTED:
         fields["interrupted_reason"] = (
             "output_recovery_available" if output_recovery_available

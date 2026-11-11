@@ -105,6 +105,7 @@
     'pipeline.queued': '대기열에 추가됨',
     'pipeline.worker_starting': '처리 시작 중',
     'pipeline.failed': '처리 실패',
+    'errors.insufficient_disk_space': '이 챕터를 생성할 디스크 공간이 부족합니다. 공간을 확보한 뒤 다시 시도하세요.',
     'toast.settings_saved': '설정이 저장되었습니다.'
   };
 }());

@@ -105,6 +105,7 @@
     'pipeline.queued': 'Queued',
     'pipeline.worker_starting': 'Starting processing',
     'pipeline.failed': 'Processing failed',
+    'errors.insufficient_disk_space': 'Not enough disk space to generate this chapter. Free up space and try again.',
     'toast.settings_saved': 'Settings saved.'
   };
 }());

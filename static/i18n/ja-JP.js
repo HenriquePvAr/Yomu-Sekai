@@ -105,6 +105,7 @@
     'pipeline.queued': 'キューに追加済み',
     'pipeline.worker_starting': '処理を開始中',
     'pipeline.failed': '処理に失敗しました',
+    'errors.insufficient_disk_space': 'この章を生成するためのディスク容量が不足しています。空き容量を増やして再試行してください。',
     'toast.settings_saved': '設定を保存しました。'
   };
 }());

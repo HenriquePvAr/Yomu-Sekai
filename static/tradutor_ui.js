@@ -974,6 +974,7 @@
     timeout: 'O site demorou demais para responder.',
     connection_error: 'Nao foi possivel conectar ao site.',
     transport_error: 'Ocorreu um problema ao baixar as imagens.',
+    insufficient_disk_space: 'Espaço em disco insuficiente para gerar este capítulo. Libere espaço e tente de novo.',
     incomplete_download: 'Algumas páginas não puderam ser baixadas.',
     unsupported_source: 'Esta fonte ainda não é compatível com o Komyst.',
     environment_not_configured: 'O ambiente ainda não está pronto para processar esta tradução.',

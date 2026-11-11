@@ -105,6 +105,7 @@
     'pipeline.queued': 'En cola',
     'pipeline.worker_starting': 'Iniciando procesamiento',
     'pipeline.failed': 'Procesamiento fallido',
+    'errors.insufficient_disk_space': 'No hay suficiente espacio en disco para generar este capítulo. Libera espacio e inténtalo de nuevo.',
     'toast.settings_saved': 'Configuración guardada.'
   };
 }());
