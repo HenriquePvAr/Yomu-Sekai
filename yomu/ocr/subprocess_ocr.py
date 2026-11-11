@@ -10,6 +10,7 @@ from __future__ import annotations
 import base64
 import cv2
 import json
+import queue
 import subprocess
 import sys
 import threading
@@ -109,11 +110,29 @@ class SubprocessOcrGateway:
                     # Paddle's native oneDNN layer prints log lines ("ReduceMeanCheckIfOneDNNSupport")
                     # to stdout next to the protocol; skip everything that is not a
                     # JSON frame (bounded, so a chatty child cannot stall us forever).
-                    line = b""
-                    for _ in range(500):
-                        line = self._process.stdout.readline()
-                        if not line or line.lstrip().startswith(b"{"):
-                            break
+                    frame: queue.Queue[tuple[bytes, BaseException | None]] = queue.Queue(maxsize=1)
+                    stdout = self._process.stdout
+
+                    def _read_frame() -> None:
+                        try:
+                            for _ in range(500):
+                                candidate = stdout.readline()
+                                if not candidate or candidate.lstrip().startswith(b"{"):
+                                    frame.put((candidate, None))
+                                    return
+                            frame.put((b"", ValueError("worker_bad_frame")))
+                        except BaseException as exc:  # deliver pipe errors to the caller thread
+                            frame.put((b"", exc))
+
+                    reader = threading.Thread(target=_read_frame, daemon=True)
+                    reader.start()
+                    try:
+                        line, read_error = frame.get(timeout=_REQUEST_TIMEOUT_SECONDS)
+                    except queue.Empty:
+                        self._restart_or_give_up("worker_timeout")
+                        continue
+                    if read_error is not None:
+                        raise read_error
                 except (OSError, ValueError):
                     self._restart_or_give_up("worker_io_dead")
                     continue

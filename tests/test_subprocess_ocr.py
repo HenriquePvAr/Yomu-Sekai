@@ -74,6 +74,28 @@ def test_spawn_failure_is_unavailable(tmp_path):
     assert "spawn_failed" in gateway.unavailable_reason
 
 
+def test_worker_that_never_answers_times_out_and_restarts_within_bound(tmp_path, monkeypatch):
+    from yomu.ocr import subprocess_ocr as so
+
+    worker = tmp_path / "never.py"
+    worker.write_text(
+        "import sys, time\n"
+        "for _line in sys.stdin:\n"
+        "    time.sleep(60)\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(so, "_REQUEST_TIMEOUT_SECONDS", 0.5)
+    gateway = SubprocessOcrGateway(worker_cmd=[sys.executable, str(worker)])
+    started = time.monotonic()
+    try:
+        assert gateway.reads(np.zeros((20, 20, 3), np.uint8)) is None
+        assert time.monotonic() - started < 3
+        assert gateway.unavailable_reason == "worker_timeout"
+        assert gateway._process is None
+    finally:
+        gateway.shutdown()
+
+
 def test_gateway_spawn_is_hidden_and_preserves_protocol_pipes(monkeypatch):
     import os
     observed = {}
