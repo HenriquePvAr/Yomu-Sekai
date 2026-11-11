@@ -33,7 +33,7 @@ class ResourceMonitor:
         output_folder: str | Path,
         *,
         enabled: bool = True,
-        interval_seconds: float = 5.0,
+        interval_seconds: float = 10.0,
         total_pages: int = 0,
         generate_html: bool = False,
     ) -> None:
