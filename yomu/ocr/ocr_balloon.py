@@ -812,8 +812,8 @@ def get_cleanable_translatable_groups(groups):
         # Classification marks disabled SFX ignored for translation. That flag
         # must not veto independently requested CLEAN source removal.
         translation_only_skip = (group.classification == "sfx"
-                                 and (group.ignore_reason == "sfx_translation_disabled"
-                                      or (group.ignore_reason == "weak_unknown_text"
+                                 and (getattr(group, "ignore_reason", "") == "sfx_translation_disabled"
+                                      or (getattr(group, "ignore_reason", "") == "weak_unknown_text"
                                           and group.classification_reason == "glossary_sound_outside_balloon")))
         if (group.ignored and not translation_only_skip) or group.preserve_as_name:
             from yomu.clean.disposition import classify_group_disposition
@@ -4525,7 +4525,7 @@ def _promote_glossary_sounds(groups):
             _set_group_classification(
                 group, "sfx", "glossary_sound_outside_balloon", confidence=0.8,
                 evidence={"previous_classification": group.classification, "tokens": len(words)})
-            if group.ignored and group.ignore_reason == "weak_unknown_text":
+            if group.ignored and getattr(group, "ignore_reason", "") == "weak_unknown_text":
                 # Complete the promotion: a stale weak-label veto must not
                 # suppress CLEAN or an enabled target after sound ownership
                 # has been established by the classifier/glossary.

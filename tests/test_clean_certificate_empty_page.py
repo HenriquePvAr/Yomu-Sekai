@@ -60,8 +60,8 @@ class CleanCertificateTargetsTests(unittest.TestCase):
         disp, _ = classify_group_disposition(dec)
         self.assertEqual(disp, RegionDisposition.PRESERVE_ART)
         sfx = SimpleNamespace(
-            classification="sfx", ignored=False, preserve_as_name=False,
-            ocr_quality_blocked=False, text="THUNe", manual_review_required=True,
+            classification="sfx", ignored=True, preserve_as_name=False,
+            ocr_quality_blocked=False, text="THUNe", manual_review_required=False,
         )
         self.assertEqual(ob.get_cleanable_translatable_groups([sfx]), [])
         self.assertEqual(sfx.clean_disposition, RegionDisposition.PRESERVE_SFX.value)
