@@ -78,7 +78,7 @@ class SupabaseFrontendTests(unittest.TestCase):
         self.assertIn("client.auth.signInWithPassword({email, password})", source)
         callback = _read("ui/auth_callback.html")
         self.assertIn("params.get('email_confirmation') === 'signup'", callback)
-        self.assertIn("E-mail confirmado com sucesso. Volte ao Yomu Sekai", callback)
+        self.assertIn("E-mail confirmado com sucesso. Volte ao Komyst", callback)
         self.assertIn("pkce_code_verifier_missing", callback)
 
     def test_auth_ui_resolves_backend_session_before_visitor_state(self):

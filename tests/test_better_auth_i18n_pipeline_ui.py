@@ -535,7 +535,7 @@ class AuthLoadingVisualContractTests(unittest.TestCase):
         self.assertNotIn('id="authCompare" aria-hidden="true"', illustration)
         self.assertIn('alt="Página original em inglês"', illustration)
         self.assertIn('id="authProductCarousel"', illustration)
-        self.assertIn('aria-label="Áreas reais do Yomu Sekai"', illustration)
+        self.assertIn('aria-label="Áreas reais do Komyst"', illustration)
         self.assertIn('data-preview-sources="view-inicio,view-nova,view-queue,view-hist,view-leitor,view-community"', illustration)
         self.assertEqual(illustration.count("<img"), 1)
         self.assertNotIn('src="http://', illustration)
@@ -543,7 +543,7 @@ class AuthLoadingVisualContractTests(unittest.TestCase):
 
     def test_form_uses_approved_premium_copy_without_unimplemented_links_or_claims(self):
         auth_fragment = self.shell[self.shell.index('id="authSurface"'):]
-        self.assertIn('<strong>YOMU <span>SEKAI</span></strong>', auth_fragment)
+        self.assertIn('alt="Komyst"', auth_fragment)
         self.assertIn("Faça login para continuar traduzindo suas histórias.", auth_fragment)
         self.assertIn("Seus projetos permanecem privados na sua conta.", auth_fragment)
         self.assertIn('id="authRecoveryLink"', auth_fragment)
