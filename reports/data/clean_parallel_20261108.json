@@ -1,0 +1,28 @@
+{
+  "workers_1_seconds": 196.42895729996962,
+  "workers_2_seconds": 133.67344119999325,
+  "workers_1_preflight": 165.29529639997054,
+  "workers_2_preflight": 117.74631590000354,
+  "reduction_percent": 31.9481999816053,
+  "pixel_identical_images": 130,
+  "total_images": 130,
+  "pixel_differences": [],
+  "disposition_differences": [],
+  "errors_1": [],
+  "errors_2": [],
+  "provider_calls": [
+    0,
+    0
+  ],
+  "memory_peak_1": {
+    "rss": 8843034624,
+    "private": 14510166016
+  },
+  "memory_peak_2": {
+    "rss": 9288671232,
+    "private": 14622523392
+  },
+  "minimum_available_1": 2240430080,
+  "minimum_available_2": 1965305856,
+  "scope": "TESTED_FROZEN: same canonical preflight/render/write and frozen OCR/provider targets; no download/OCR/sweep/provider time included"
+}

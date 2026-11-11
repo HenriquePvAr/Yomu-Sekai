@@ -1,0 +1,155 @@
+{
+  "job": {
+    "id": "f3de3bca6a8a479aa388b7a7c4fbff63",
+    "run_id": "0fd7358a-8c5a-469a-9ee7-f7fef965682d",
+    "status": "review_required",
+    "started_at": "2026-11-08T13:04:24.564051-04:00",
+    "finished_at": "2026-11-08T13:13:30.440542-04:00"
+  },
+  "safe_configuration": {
+    "mode": "quality",
+    "translate_sfx": false,
+    "force": true,
+    "output_format": "pdf",
+    "output_profile": "automatic",
+    "translation_provider": "deepl"
+  },
+  "wall_seconds": 545.8764913082123,
+  "pipeline_seconds": 539.543003,
+  "stage_seconds": {
+    "download_collection": 48.020215,
+    "image_validation": 2.448134,
+    "smart_pdf_split": 29.341396,
+    "no_text_precheck": 5.877295,
+    "ocr": 33.57468,
+    "ocr_cpu": 27.907355,
+    "ocr_selective_fallback": 29.209064,
+    "classification_grouping": 17.173795,
+    "translation": 6.282674,
+    "inpainting": 164.464676,
+    "redraw": 16.51403,
+    "cleanup": 163.669377,
+    "typography": 16.51403,
+    "quality": 13.013298,
+    "render": 195.453829,
+    "image_save": 29.434012,
+    "pdf": 2.635377,
+    "cache_load": 0.00016,
+    "pre_translation": 149.281835,
+    "heavy_ocr_release": 0.161038,
+    "residual_sweep": 110.464121
+  },
+  "sampled_statistics": {
+    "rss": {
+      "peak_GiB": 8.403038024902344,
+      "median_sampled_GiB": 3.55352783203125,
+      "p95_sampled_GiB": 4.401500701904297
+    },
+    "private": {
+      "peak_GiB": 13.687511444091797,
+      "median_sampled_GiB": 5.617923736572266,
+      "p95_sampled_GiB": 11.828056335449219
+    },
+    "gpu_dedicated": {
+      "peak_GiB": 4.704677581787109,
+      "median_sampled_GiB": 2.747039794921875,
+      "p95_sampled_GiB": 3.052570343017578
+    },
+    "gpu_shared": {
+      "peak_GiB": 4.4857177734375,
+      "median_sampled_GiB": 0.20719146728515625,
+      "p95_sampled_GiB": 2.084014892578125
+    }
+  },
+  "GPU_engine_peak_by_type_percent": {
+    "3D": 43,
+    "High Priority 3D": 0,
+    "Video JPEG 0": 0,
+    "Video Decode 1": 0,
+    "True Audio 1": 0,
+    "Video Codec 0": 0,
+    "Copy": 5,
+    "Compute 0": 101,
+    "Compute 1": 0,
+    "Timer 0": 0,
+    "Security 1": 0,
+    "True Audio 0": 0,
+    "Compute 3": 0,
+    "High Priority Compute": 0,
+    "Video Encode 0": 0
+  },
+  "GPU_engine_caution": "Engine counters overlap; never sum their percentages as one GPU percentage; engine sampling every third memory sample.",
+  "GPU_query_median_seconds": 0.11000000004423782,
+  "GPU_query_max_seconds": 0.7820000000065193,
+  "GPU_failed_samples": 0,
+  "monitor_coverage_start_offset_seconds": 184.16737914085388,
+  "monitor_samples": 182,
+  "stage_peaks": {
+    "classification": {
+      "samples": 46,
+      "rss": 3073753088,
+      "private": 13208657920,
+      "gpu_dedicated": 1591209984,
+      "gpu_shared": 175964160
+    },
+    "translation": {
+      "samples": 102,
+      "rss": 9022693376,
+      "private": 14696853504,
+      "gpu_dedicated": 5051609088,
+      "gpu_shared": 4816502784
+    },
+    "rendering": {
+      "samples": 34,
+      "rss": 4469624832,
+      "private": 6326591488,
+      "gpu_dedicated": 2970664960,
+      "gpu_shared": 222470144
+    }
+  },
+  "peak_system_RAM_percent": 100.0,
+  "minimum_system_available_GiB": 0.011104583740234375,
+  "minimum_disk_free_GiB": 86.80733108520508,
+  "memory_units": "GiB = 2^30 bytes; private commit is not resident RAM; GPU shared uses system memory and must not be added to RSS as a separate RAM requirement.",
+  "sampled_peak_not_guaranteed_maximum": true,
+  "hardware": {
+    "cpu": "AMD Ryzen 5 5600GT with Radeon Graphics",
+    "physical_cores": 6,
+    "logical_cores": 12,
+    "usable_ram_bytes": 33683644416
+  },
+  "gpu_inventory": [
+    {
+      "name": "AMD Radeon RX 6600",
+      "luid": "luid_0x00000000_0x0000F17C",
+      "dedicated_video_memory": 8542978048,
+      "dedicated_system_memory": 0,
+      "shared_system_memory_limit": 16841822208,
+      "flags": 0
+    },
+    {
+      "name": "AMD Radeon(TM) Graphics",
+      "luid": "luid_0x00000000_0x0001353C",
+      "dedicated_video_memory": 519847936,
+      "dedicated_system_memory": 0,
+      "shared_system_memory_limit": 16841822208,
+      "flags": 0
+    },
+    {
+      "name": "AMD Radeon RX 6600",
+      "luid": "luid_0x00000000_0x0008B8FB",
+      "dedicated_video_memory": 8542978048,
+      "dedicated_system_memory": 0,
+      "shared_system_memory_limit": 16841822208,
+      "flags": 0
+    },
+    {
+      "name": "Microsoft Basic Render Driver",
+      "luid": "luid_0x00000000_0x00013500",
+      "dedicated_video_memory": 0,
+      "dedicated_system_memory": 0,
+      "shared_system_memory_limit": 16841822208,
+      "flags": 2
+    }
+  ]
+}
