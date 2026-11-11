@@ -4,7 +4,7 @@
 window.BOARD = {
   title: 'Komyst · Quadro',
   subtitle: 'Komyst',
-  updatedAt: '2026-11-08',
+  updatedAt: '2026-11-11',
   repoUrl: 'https://github.com/HenriquePvAr/Yomu-Sekai',
   defaultBranch: 'main',
   columns: [
@@ -27,6 +27,35 @@ window.BOARD = {
     none:   'sem código',
   },
   cards: [
+    {
+      "id": "FASE0-JOBS-NAO-MORREM-20261111",
+      "title": "Fase 0 — retenção, timeout OCR, PSDs e monitor de recursos",
+      "domain": "infra",
+      "column": "blocked",
+      "env": "local",
+      "updated": "2026-11-11",
+      "summary": "F0.1–F0.6 implementados no branch fase-0-jobs-nao-morrem; commits locais 5cd168b, 39f84e5, d753c05, b53c170, 66b78d8 e 4d6faf5. F0.4 manteve ambas as saídas PSD após diagnóstico. Testes focados do timeout/monitor: 14 passaram. Suíte completa: 6482 passaram e 4 falhas antigas de máscara/reconstrução; não está verde.",
+      "risk": "TESTED_OFFLINE. Monitor ligado no .env local e em settings; pico físico, comparação do custo ≤2%, jobs REF-A/REF-B e qualidade ainda não verificados nesta branch.",
+      "blockedBy": "Precisa de: HenriquePvAr entrar no painel local (sem compartilhar senha) para iniciar e acompanhar REF-A/REF-B até a PAUSA 0; medir custo do monitor e conferir métricas/qualidade.",
+      "delivered": [
+        "Portão SFX validado por envio real ao provedor; falhar rápido por disco; retenção protege histórico e publicações",
+        "Timeout real do subprocesso Paddle com reinício dentro do limite existente",
+        "Diagnóstico F0.4 documenta que psd/ e result_path têm conteúdo próprio e ambos são preservados",
+        "Monitor psutil ligado por padrão; timing_report recebe pico de árvore RSS, RAM do sistema e swap; JSON/CSV padrão, HTML opt-in",
+        "A suíte completa executada: quatro falhas antigas coincidem com reports/falhas_preexistentes_20261111.md"
+      ],
+      "pending": [
+        "PHYSICALLY_VERIFIED: iniciar REF-A e REF-B, validar saída/qualidade e usar tools/audit/job_metrics.py para pico de RAM",
+        "Comparar tempo do monitor com execução equivalente sem monitor; manter custo até 2% ou aumentar o intervalo",
+        "As quatro falhas conhecidas impedem o aceite de suíte completa verde; não foram corrigidas nesta tarefa"
+      ],
+      "links": [
+        { "label": "Plano Fase 0", "path": "docs/plans/PLANO_EXECUCAO_KOMYST.md" },
+        { "label": "Diagnóstico PSD F0.4", "path": "reports/fase_0_f04_psd_diagnostico.md" },
+        { "label": "Monitor F0.6", "path": "reports/fase_0_f06_monitor_recursos.md" },
+        { "label": "Falhas preexistentes", "path": "reports/falhas_preexistentes_20261111.md" }
+      ]
+    },
     {
       "id": "CLEAN-PARALLEL-20261108",
       "title": "Recuperar SFX omitidos e acelerar reconstrução sem mudar pixels",

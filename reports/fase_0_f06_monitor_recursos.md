@@ -26,8 +26,18 @@ python -c "from yomu.config import settings; print({'resource_monitoring_enabled
 
 O teste valida pico de RSS combinado, uso máximo de RAM e swap, JSON/CSV padrão, ausência do HTML e geração HTML explicitamente solicitada. Isso é `TESTED_OFFLINE`, não comprova consumo/custo em job físico.
 
+A suíte completa foi executada em 2026-11-11:
+
+```text
+4 failed, 6482 passed, 141 skipped, 1 xfailed, 8 warnings,
+787 subtests passed in 949.18s
+```
+
+As quatro falhas foram as antigas de máscara/reconstrução já registradas em `reports/falhas_preexistentes_20261111.md`: pontuação fora do polígono (`GLYPH_ART_BOUNDARY_UNCERTAIN`), linha de arte cruzando glifos, componente unido `MW` classificado como fundo e texto tocando borda do balão. Nenhuma falha ocorreu nos testes de timeout ou monitor de recursos. A suíte não está verde.
+
 ## Pendente para a PAUSA 0
 
 - Medir o pico de RAM em REF-A e REF-B com `tools/audit/job_metrics.py`.
 - Comparar o tempo do monitor contra uma execução comparável sem monitor; o limite de 2% ainda não foi verificado fisicamente.
 - Confirmar que o monitor captura a execução desde o início e não degrada a qualidade nem a conclusão do job.
+- Aguardar HenriquePvAr entrar no painel local; a automação não digita senha. O painel foi aberto em `http://127.0.0.1:8080` e está parado na tela de login.
