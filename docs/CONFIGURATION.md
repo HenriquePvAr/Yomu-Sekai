@@ -257,6 +257,7 @@ O diretório padrão é `%LOCALAPPDATA%\TradutorIA\cache` (`yomu/runtime/runtime
 | `OCR_WORKERS` | `2` | Quantidade inicial de workers, sempre pelo menos 1 |
 | `ADAPTIVE_PARALLELISM` | `False` | Permite ao scheduler ajustar concorrência |
 | `RESOURCE_MONITORING` | `False` | Grava amostras e relatórios de recursos |
+| `OUTPUT_KEEP_RUNS_PER_CHAPTER` | `3` | Mantém as execuções mais recentes por capítulo; `0` desativa a remoção automática |
 | `RESOURCE_MONITOR_INTERVAL_SECONDS` | `1.0` | Intervalo entre amostras |
 | `MIN_OCR_WORKERS` | `1` | Piso do scheduler adaptativo |
 | `MAX_OCR_WORKERS` | `2` | Teto do scheduler adaptativo |

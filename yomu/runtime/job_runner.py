@@ -76,6 +76,46 @@ def _observability_client(configuration: object):
         return None
 
 
+def _prune_successful_chapter_runs(store: JobStore, job: dict, output_dir: Path,
+                                  log_path: str, db_path: str) -> None:
+    """Apply configured retention after terminal success without affecting the job."""
+    latest = store.get_job(str(job.get("id") or ""))
+    if not latest or latest.get("status") not in {JobStatus.FINISHED, JobStatus.REVIEW_REQUIRED}:
+        return
+    run_id = str(latest.get("run_id") or "")
+    if not run_id or output_dir.name.casefold() != run_id.casefold():
+        return  # Do not infer a chapter directory for legacy output layouts.
+    try:
+        from yomu.config import settings
+        from yomu.runtime.output_retention import prune_chapter_runs
+        from yomu.ui.ui_bridge import UiBridge
+        from yomu.ui.ui_history import UIHistoryStore
+
+        output_root = output_dir.parent.parent
+        history_store = UIHistoryStore(
+            path=Path(db_path).resolve().parent / "ui_history.json",
+            output_root=output_root,
+        )
+        result = prune_chapter_runs(
+            output_dir.parent,
+            settings.OUTPUT_KEEP_RUNS_PER_CHAPTER,
+            current_run_id=run_id,
+            jobs=store.list_jobs(limit=None),
+            community_db_path=Path(db_path).resolve().parent / "community.sqlite3",
+            delete_tree=UiBridge._remove_confined_tree,
+            hide_record=history_store.hide_record,
+        )
+        if result.get("removed"):
+            with Path(log_path).open("a", encoding="utf-8") as handle:
+                handle.write(
+                    "OUTPUT_RETENTION removed=" + ",".join(result["removed"]) + "\n"
+                )
+    except Exception as exc:  # noqa: BLE001 - cleanup cannot fail a successful job
+        try:
+            with Path(log_path).open("a", encoding="utf-8") as handle:
+                handle.write(f"OUTPUT_RETENTION failed={type(exc).__name__}\n")
+        except OSError:
+            pass
 def _job_event_fields(job: dict) -> dict:
     config = job.get("configuration") if isinstance(job.get("configuration"), dict) else {}
     source = str(job.get("source_url") or "")
@@ -1146,6 +1186,7 @@ def run_job(job_id: str, db_path: str, worker_id: str, log_path: str) -> int:
 
         result_code = _finalize(store, job_id, job, output_dir, return_code, cancelled,
                                 log_path, interrupted=interrupted)
+        _prune_successful_chapter_runs(store, job, output_dir, log_path, db_path)
         for control_file in (output_dir / ".cancel.requested", output_dir / ".cancel.observed"):
             try:
                 control_file.unlink(missing_ok=True)

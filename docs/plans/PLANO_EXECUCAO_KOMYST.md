@@ -256,7 +256,7 @@ Objetivo: nenhum job morre por causa de disco, de uma regra de SFX ou de um subp
 
 **Teste.** Ajuste os testes de exportação PSD existentes para afirmar que o conjunto de arquivos `.psd` aparece uma vez na árvore de saída.
 
-**Aceite.** REF-A em modo Completo cai de ~37 MB/página para ≤ 26 MB/página.
+**Aceite (ajustado em 2026-11-11).** Medir a redução de MB/página separadamente em REF-A e REF-B depois de eliminar uma gravação redundante de PSD. REF-A parte de 37,4 MB/página e REF-B de 21,6 MB/página; não presumir que o valor de REF-A representa REF-B. Preservar a qualidade e os consumidores de cada formato PSD.
 
 ### F0.5 Timeout real no subprocesso do Paddle
 
