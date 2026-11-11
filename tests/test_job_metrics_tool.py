@@ -13,6 +13,11 @@ def test_collect_metrics_reads_minimal_run_and_excludes_cleaned_pages(tmp_path):
     (tmp_path / "timing_report.json").write_text(json.dumps({
         "total_seconds": 12.5,
         "stage_seconds": {"ocr": 2.0, "render": 3.5},
+        "inference_devices": {
+            "gpu_inference_requested": "auto",
+            "ocr_effective_device": "directml",
+            "lama_effective_device": "cpu",
+        },
     }), encoding="utf-8")
     (tmp_path / "artifact_manifest.json").write_text(json.dumps({
         "provenance": {
@@ -43,6 +48,8 @@ def test_collect_metrics_reads_minimal_run_and_excludes_cleaned_pages(tmp_path):
 
     assert result["total_seconds"] == 12.5
     assert result["stage_seconds"] == {"ocr": 2.0, "render": 3.5}
+    assert result["inference_devices"]["ocr_effective_device"] == "directml"
+    assert result["inference_devices"]["lama_effective_device"] == "cpu"
     assert result["clean_certificate_reason_counts_by_page"] == {"no_text": 1, "verified": 1}
     assert result["translation_accounting"] == {"translated": 3}
     assert result["severity"] == "PASS"
@@ -56,6 +63,7 @@ def test_collect_metrics_reads_minimal_run_and_excludes_cleaned_pages(tmp_path):
     assert result["page_count"] == 2
     assert result["total_bytes"] >= 10
     assert result["resource_monitoring"] is None
+    assert "Dispositivos de inferência" in job_metrics.render_table(result)
 
 
 def test_compare_reports_difference():

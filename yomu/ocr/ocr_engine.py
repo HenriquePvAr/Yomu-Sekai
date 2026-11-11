@@ -804,6 +804,15 @@ class OCREngine:
             "rapidocr_metrics": rapid_metrics or {},
             "text_repairs": repairs or [],
         }
+        if str(original_engine or "").lower() == "rapidocr" or str(final_engine or "").lower() == "rapidocr":
+            try:
+                from yomu.core.gpu import directml_enabled
+
+                metadata["rapidocr_effective_device"] = (
+                    "directml" if directml_enabled() else "cpu"
+                )
+            except Exception:  # noqa: BLE001 - telemetry must not break OCR results.
+                metadata["rapidocr_effective_device"] = "unknown"
         if ocr_sufficiency:
             metadata["ocr_sufficiency"] = ocr_sufficiency
         if ocr_review_reasons is not None:

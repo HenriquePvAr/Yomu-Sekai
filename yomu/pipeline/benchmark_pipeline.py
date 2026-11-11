@@ -25,6 +25,7 @@ import numpy as np
 from PIL import Image, ImageDraw, ImageFont, ImageOps
 
 import yomu.config.settings as config
+from yomu.core.gpu import inference_device_status, log_inference_device_warning
 import yomu.runtime.artifact_contract as ac
 import yomu.export.editable_psd_writer as editable_psd_writer
 from yomu.ocr.residual_sweep import sweep_page_residuals, synthetic_sfx_lines
@@ -2793,6 +2794,11 @@ def run_benchmark(args):
         enabled=config.RESOURCE_MONITORING,
         interval_seconds=config.RESOURCE_MONITOR_INTERVAL_SECONDS,
     )
+    inference_status = inference_device_status()
+    log_inference_device_warning(inference_status)
+    from yomu.clean.inpainting.advanced_art_inpainting import get_default_inpainter
+    lama_inpainter = get_default_inpainter()
+    lama_device_calls_before = dict(lama_inpainter.metrics.get("device_calls") or {})
     classification_profiler = ClassificationProfiler(
         enabled=config.CLASSIFICATION_PROFILING,
     )
@@ -4428,6 +4434,32 @@ def run_benchmark(args):
     slowest_stage = max(comparable_stages, key=comparable_stages.get)
 
     resource_summary = resource_monitor.stop()
+    ocr_devices = sorted({
+        str((state.get("ocr_metadata") or {}).get("rapidocr_effective_device"))
+        for state in completed_states
+        if (state.get("ocr_metadata") or {}).get("rapidocr_effective_device")
+    })
+    lama_device_calls_after = dict(lama_inpainter.metrics.get("device_calls") or {})
+    lama_device_calls = {
+        device: max(0, int(lama_device_calls_after.get(device, 0)) - int(lama_device_calls_before.get(device, 0)))
+        for device in sorted(set(lama_device_calls_after) | set(lama_device_calls_before))
+    }
+    lama_device_calls = {device: count for device, count in lama_device_calls.items() if count}
+    lama_devices_used = sorted(lama_device_calls)
+    inference_devices = {
+        **inference_status,
+        "ocr_effective_device": (
+            ocr_devices[0] if len(ocr_devices) == 1
+            else "mixed" if ocr_devices else "not_recorded"
+        ),
+        "ocr_observed_devices": ocr_devices,
+        "lama_effective_device": (
+            lama_devices_used[0] if len(lama_devices_used) == 1
+            else "mixed" if lama_devices_used else "not_used"
+        ),
+        "lama_device_call_counts": lama_device_calls,
+        "lama_gpu_fallback_reason": str(lama_inpainter.gpu_unavailable_reason or ""),
+    }
     gpu_diagnostics = detect_gpu_basic()
     classification_profile_paths = classification_profiler.write_reports(output_folder)
     classification_profile_summary = (
@@ -4730,6 +4762,7 @@ def run_benchmark(args):
         "ocr_line_provenance": ocr_line_provenance.write_artifact(output_folder),
         "structural_fingerprint": structural_fingerprint,
         "gpu_diagnostics": gpu_diagnostics,
+        "inference_devices": inference_devices,
         "session_context": {
             "enabled": bool(session_context is not None),
             **(session_context.summary() if session_context is not None else {}),

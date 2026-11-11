@@ -91,6 +91,7 @@ class AdvancedArtInpainter:
             "hash_cache_hit_count": 0,
             "hash_cache_miss_count": 0,
             "real_hash_compute_count": 0,
+            "device_calls": {"directml": 0, "cpu": 0},
         }
 
     def available(self) -> bool:
@@ -184,6 +185,10 @@ class AdvancedArtInpainter:
         if image_bgr is None or mask is None or not np.any(mask > 0):
             raise ValueError("invalid_image_or_mask")
         model = self.load()
+        effective_device = "directml" if model is self._gpu_session else str(self.device)
+        self.metrics["device_calls"][effective_device] = (
+            self.metrics["device_calls"].get(effective_device, 0) + 1
+        )
 
         mask_u8 = (mask > 0).astype(np.uint8) * 255
         x, y, w, h, margin = _context_crop(mask_u8, image_bgr.shape)
@@ -226,7 +231,7 @@ class AdvancedArtInpainter:
             "model_version": self.descriptor.model_version,
             "model_sha256": self.verify_integrity(),
             "model_hash_verified": True,
-            "device": "directml" if model is self._gpu_session else self.device,
+            "device": effective_device,
             "backend": "onnx_directml" if model is self._gpu_session else self.descriptor.backend,
             "inference_ms": int(round(inference_seconds * 1000)),
             "hash_count": int(self.metrics["hash_count"]),
