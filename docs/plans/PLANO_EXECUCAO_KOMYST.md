@@ -64,6 +64,10 @@ Tradução paga está autorizada **somente** nesses dois capítulos. Rode pela i
 
 Modo padrão das medições: plano **Tradução pronta**, "traduzir SFX" desligado (é o padrão da tela). Quando a tarefa disser "modo Completo", use o plano **Completo**.
 
+### 1.7 Ordem de execução
+
+A ordem de trabalho é: **Fase 0 → Fase 3 → Fase 1 → Fase 2 → Fases 4, 5 e 6**. A prioridade definida pelo dono é limpeza, reconstrução e tradução. A numeração das fases permanece igual; somente a ordem de execução muda.
+
 ---
 
 ## 2. Linha de base medida (2026-11-10)
@@ -242,13 +246,15 @@ Objetivo: nenhum job morre por causa de disco, de uma regra de SFX ou de um subp
 
 **Aceite.** Rodar REF-A quatro vezes deixa três pastas de execução.
 
-### F0.4 PSD gravado uma única vez
+### F0.4 Diagnóstico das duas saídas PSD
 
 **Objetivo.** Determinar se os dois conjuntos PSD são duplicatas ou saídas distintas antes de qualquer alteração ou remoção.
 
 **Como fazer.** Para uma página de REF-A, registrar em `reports/` tamanho e camadas recursivas dos PSDs em `psd/` e em `result_path`, identificar quais camadas são texto nativo/imagem/grupo, verificar se cada caminho tem conteúdo exclusivo e listar os consumidores em UI, manifesto e testes. Não alterar os arquivos gerados nesta tarefa.
 
 **Resultado inicial (2026-11-11).** `reports/fase_0_f04_psd_diagnostico.md`: as saídas são diferentes, ambas contêm texto nativo editável; `psd/` tem uma camada adicional de texto e `result_path` tem a prévia traduzida. Manter ambas até uma decisão de produto sobre eventual consolidação.
+
+**Conclusão.** A premissa de que o PSD era gravado em duplicidade estava errada. As duas saídas têm funções e conteúdo distintos; a decisão sobre unificá-las permanece em aberto. Nenhum arquivo ou caminho de saída será removido nesta tarefa.
 
 **Teste/aceite.** Diagnóstico verificável com uma página de REF-A e consumidores rastreados. Nenhuma alteração de conteúdo ou comportamento PSD nesta tarefa. Uma futura mudança de gravação precisa de decisão sobre os recursos exclusivos de cada formato e medição separada de MB/página em REF-A e REF-B.
 
@@ -439,7 +445,7 @@ Três correções independentes, um commit cada:
 
 **Como fazer.**
 
-1. Leia `yomu/core/gpu.py` e `flux_edit.py`. O `sd-cli` usa Vulkan, não DirectML. Dê ao FLUX um lock próprio (`FLUX_LOCK`) em vez do `DIRECTML_LOCK`, **se e somente se** a guarda de memória da F1.5 estiver ativa. Se F1.5 não estiver mergeada, PARE.
+1. Leia `yomu/core/gpu.py` e `flux_edit.py`. O `sd-cli` usa Vulkan, não DirectML. Dê ao FLUX um lock próprio (`FLUX_LOCK`) em vez do `DIRECTML_LOCK`. A Fase 1 agora vem antes da Fase 2, então a guarda da F1.5 já deverá estar integrada; confirme-a antes de alterar o lock.
 2. Nova configuração `GENERATIVE_INPAINT_TIMEOUT_SECONDS = 120` (era 240 fixo) e `GENERATIVE_INPAINT_MAX_CALLS_PER_JOB = 12`. Ao atingir o teto, as regiões seguintes seguem a escada sem FLUX e vão para revisão.
 3. Não tente manter o `sd-cli` residente nesta fase (é mudança grande; fica registrado como melhoria futura).
 
@@ -467,6 +473,18 @@ Critérios de aceite:
 ## FASE 3 — Qualidade (traduzir e limpar o que falta)
 
 Objetivo em REF-B: regiões traduzidas ≥ 174/177; páginas certificadas ≥ 78/85; portão físico passa. Em REF-A nada regride.
+
+### F3.0 Zerar as 4 falhas antigas de máscara e reconstrução
+
+As quatro falhas estão listadas em `reports/falhas_preexistentes_20261111.md`.
+
+Para cada teste:
+
+1. Descubra em qual commit a falha começou, fazendo bisect entre `d819f0e` e `cda3f90`.
+2. Classifique a causa como regressão de código ou teste desatualizado.
+3. Corrija a causa, preservando os contratos de máscara, proteção da arte e reconstrução.
+
+**Aceite.** Suíte completa verde, com zero falhas.
 
 ### F3.1 Fala classificada como decorativa
 
@@ -531,7 +549,7 @@ Critérios de aceite:
 
 - [ ] REF-B: ≥ 174/177 traduzidas; ≥ 78/85 páginas certificadas; portão físico passa.
 - [ ] REF-A: nenhuma métrica da seção 2.2 pior.
-- [ ] Tempo dentro dos limites da PAUSA 2B (tolerância +10%).
+- [ ] Tempo total não pior que o medido na PAUSA 0, com tolerância de 10%.
 - [ ] Suíte completa verde.
 
 ---
@@ -665,11 +683,11 @@ Não trocar nada da lista 1.2 item 6.
 |---|---|---|
 | P | Preparação | Como commitar a árvore de trabalho; levar a branch atual para `dev` |
 | 0 | Jobs não morrem mais | Merge da Fase 0 |
+| 3A | Promoção de fala e palavras coladas | Lista do que passou a ser traduzido está correta? |
+| 3B | Qualidade | Merge da Fase 3; decide elegibilidade do FLUX para `LOCAL_HARD` |
 | 1 | Memória | Merge da Fase 1 |
 | 2A | Varredura por evidência | Nenhuma detecção útil perdida? |
 | 2B | Tempo | Merge da Fase 2; autoriza ou não F2.6 e F2.7 |
-| 3A | Promoção de fala e palavras coladas | Lista do que passou a ser traduzido está correta? |
-| 3B | Qualidade | Merge da Fase 3; decide elegibilidade do FLUX para `LOCAL_HARD` |
 | 4 | Entrega enxuta | Merge da Fase 4 |
 | 5 | Perfis e métricas | Merge da Fase 5 |
 | 6 | Nome e docs | Merge final; decide merge em `main` |
