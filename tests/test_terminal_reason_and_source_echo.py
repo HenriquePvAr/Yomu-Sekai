@@ -124,11 +124,29 @@ class TerminalReasonPrecedenceTests(unittest.TestCase):
                 grp.translation_valid = True
                 grp.sent_to_translation = True
                 grp.clean_disposition = "PENDING_LOCAL"
+                if cls == "sfx":
+                    grp.lines[0].metadata = {"ocr_line_id": "SFX-L0"}
                 with patch.object(config, "TRANSLATE_SFX", True):
                     render_analyzed_image(image, [], [], [grp], page_index=1)
                 self.assertTrue(grp.preserved_original)
                 self.assertEqual(grp.clean_disposition, expected)
                 self.assertEqual(grp.clean_disposition_reason, "source_echo_preserved_original")
+
+    def test_preserved_sfx_without_line_provenance_requires_ocr_review(self):
+        image = np.full((900, 400, 3), 255, dtype=np.uint8)
+        grp = _group("PEW", cls="sfx", box=(40, 400, 160, 40))
+        grp.translation = "PEW"
+        grp.translation_candidate = "PEW"
+        grp.translation_valid = True
+        grp.sent_to_translation = True
+        grp.clean_disposition = "PENDING_LOCAL"
+
+        with patch.object(config, "TRANSLATE_SFX", True):
+            render_analyzed_image(image, [], [], [grp], page_index=1)
+
+        self.assertTrue(grp.preserved_original)
+        self.assertEqual(grp.clean_disposition, "REVIEW_OCR")
+        self.assertEqual(grp.clean_disposition_reason, "sfx_cleanup_requires_line_provenance")
 
 
 class CandidateBearingTerminalTests(unittest.TestCase):
