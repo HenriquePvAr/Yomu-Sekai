@@ -333,6 +333,9 @@ class LocalBenchmarkPipelineE2ETests(unittest.TestCase):
         self.assertTrue(pdf.is_file())
         self.assertTrue(pdf.read_bytes().startswith(b"%PDF-"))
         self.assertTrue((self.output / "timing_report.json").is_file())
+        timing = json.loads((self.output / "timing_report.json").read_text(encoding="utf-8"))
+        self.assertEqual(timing["resource_monitor_sample_count"], 0)
+        self.assertEqual(timing["resource_monitor_sampling_seconds"], 0.0)
 
         run_manifest = json.loads((self.output / "run_manifest.json").read_text(encoding="utf-8"))
         self.assertEqual(run_manifest["source_provenance"], report["source_provenance"])

@@ -5,6 +5,7 @@ install_offline_network_guard()
 import tempfile
 import unittest
 import os
+import json
 from pathlib import Path
 from unittest.mock import patch
 
@@ -82,6 +83,18 @@ class ResourceMonitorTests(unittest.TestCase):
             self.assertEqual(summary["resource_report_html"], "")
             self.assertFalse((Path(tmp) / "resource_report.html").exists())
             self.assertTrue(Path(summary["resource_timeline_csv"]).is_file())
+
+    def test_sample_time_is_reported_for_timing_attribution(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            monitor = ResourceMonitor(tmp, enabled=True, interval_seconds=5.0)
+            monitor.start()
+            monitor._sample_once()
+            summary = monitor.stop()
+            self.assertEqual(summary["sample_count"], 2)
+            self.assertGreater(summary["sampling_seconds"], 0.0)
+            report = json.loads(Path(summary["resource_report_json"]).read_text(encoding="utf-8"))
+            self.assertEqual(report["summary"]["sample_count"], 2)
+            self.assertGreater(report["summary"]["sampling_seconds"], 0.0)
 
     def test_html_report_is_opt_in(self):
         with tempfile.TemporaryDirectory() as tmp:

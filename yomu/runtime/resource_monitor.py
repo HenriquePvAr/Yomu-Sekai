@@ -53,6 +53,8 @@ class ResourceMonitor:
         self.samples: list[dict[str, Any]] = []
         self.events: list[dict[str, Any]] = []
         self._started = 0.0
+        self._sampling_seconds = 0.0
+        self._sampling_count = 0
         self._stop_event = threading.Event()
         self._lock = threading.Lock()
         self._thread: threading.Thread | None = None
@@ -83,6 +85,9 @@ class ResourceMonitor:
                 "resource_report_json": "",
                 "resource_report_html": "",
                 "resource_timeline_csv": "",
+                "sample_count": 0,
+                "sampling_seconds": 0.0,
+                "interval_seconds": self.interval_seconds,
             }
         self._stop_event.set()
         if self._thread:
@@ -161,6 +166,7 @@ class ResourceMonitor:
     def _sample_once(self) -> None:
         if not self.enabled or not self._parent:
             return
+        sample_started = time.perf_counter()
         try:
             with self._lock:
                 stage = self.stage
@@ -214,6 +220,11 @@ class ResourceMonitor:
                 self.samples.append(sample)
         except Exception as exc:
             self.record_event("sample_error", {"error": str(exc)})
+        finally:
+            elapsed = max(0.0, time.perf_counter() - sample_started)
+            with self._lock:
+                self._sampling_seconds += elapsed
+                self._sampling_count += 1
 
     def _system_metrics(self) -> dict[str, Any]:
         virtual = psutil.virtual_memory()
@@ -283,7 +294,12 @@ class ResourceMonitor:
     def _summary(self) -> dict[str, Any]:
         samples = list(self.samples)
         if not samples:
-            return {"sample_count": 0}
+            return {
+                "sample_count": 0,
+                "sampling_count": self._sampling_count,
+                "sampling_seconds": round(self._sampling_seconds, 6),
+                "interval_seconds": self.interval_seconds,
+            }
         fields = [
             "total_pipeline_rss_mb",
             "parent_rss_mb",
@@ -294,7 +310,11 @@ class ResourceMonitor:
             "swap_used_mb",
             "cpu_percent",
         ]
-        summary: dict[str, Any] = {"sample_count": len(samples)}
+        summary: dict[str, Any] = {
+            "sample_count": len(samples),
+            "sampling_count": self._sampling_count,
+            "sampling_seconds": round(self._sampling_seconds, 6),
+        }
         summary["interval_seconds"] = self.interval_seconds
         for field in fields:
             values = [float(sample.get(field) or 0.0) for sample in samples]

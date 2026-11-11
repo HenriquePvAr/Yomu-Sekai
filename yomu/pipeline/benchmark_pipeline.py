@@ -4781,6 +4781,8 @@ def run_benchmark(args):
         "quality_report_html": str(quality_html_path),
         "quality_validation": quality,
         "resource_monitoring": resource_summary,
+        "resource_monitor_sample_count": int(resource_summary.get("sampling_count", 0)),
+        "resource_monitor_sampling_seconds": float(resource_summary.get("sampling_seconds", 0.0)),
         "classification_profiling": {
             "enabled": bool(config.CLASSIFICATION_PROFILING),
             **classification_profile_paths,
