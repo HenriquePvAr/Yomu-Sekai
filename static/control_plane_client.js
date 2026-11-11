@@ -159,7 +159,7 @@ function friendly(code) {
     license_not_found: 'Não foi possível validar sua licença.',
     license_revoked: 'Sua licença foi revogada.', license_expired: 'Sua licença expirou.',
     device_limit_reached: 'O limite de dispositivos foi atingido.',
-    device_not_found: 'Este dispositivo ainda não foi autorizado.', insufficient_yk: 'Você não possui Yomu Keys suficientes.',
+    device_not_found: 'Este dispositivo ainda não foi autorizado.', insufficient_yk: 'Você não possui Komyst Keys suficientes.',
     passive_ads_disabled: 'Ative os anúncios passivos para resgatar os créditos diários.',
     already_claimed: 'Os créditos de hoje já foram resgatados.',
     unauthorized: 'Faça login novamente para resgatar os créditos diários.',

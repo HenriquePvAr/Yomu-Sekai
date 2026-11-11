@@ -17,6 +17,6 @@ The reproducible local script `experiments/colab-inpainting/run_big_lama_cpu_smo
 
 - The visible `SYNTHETIC TEST` overlay was removed. The circular line art and surrounding panel geometry are largely continuous in the final composite; minor in-mask pixel differences remain.
 - The exact compositor changed **0** pixels outside the authorized mask. The known text overlay was fully inside the mask.
-- Against the clean ground truth, masked MAE/RMSE/PSNR were 3.57 / 18.49 / 22.79 dB. On the same image/mask, the OpenCV Telea primitive scored 10.48 / 34.94 / 17.26 dB; this primitive comparison is not a full Yomu pipeline benchmark.
+- Against the clean ground truth, masked MAE/RMSE/PSNR were 3.57 / 18.49 / 22.79 dB. On the same image/mask, the OpenCV Telea primitive scored 10.48 / 34.94 / 17.26 dB; this primitive comparison is not a full Komyst pipeline benchmark.
 - This single easy synthetic sample is an individual visual success, not enough to overcome the T4 SFX failure, resolve checkpoint rights, establish a GPU comparison, or declare Big-LaMa a winner.
 - Evidence is kept locally outside the repository at `%TEMP%/yomu-big-lama-cpu-62u349j6/comparison.png`; artifacts include source, mask, ground truth, raw donor, final, and a JSON report.

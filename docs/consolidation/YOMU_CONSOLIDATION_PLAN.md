@@ -1,4 +1,4 @@
-# Yomu consolidation plan
+# Komyst consolidation plan
 
 > **HISTORICAL RECORD — not the current state.** This file records the 2026-10-14/16
 > consolidation and is kept as provenance; its HEADs, test/build counts and recommendations

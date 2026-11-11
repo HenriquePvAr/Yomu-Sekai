@@ -1,6 +1,6 @@
-# Yomu GPU integration proposal (research only)
+# Komyst GPU integration proposal (research only)
 
-No production code or contract is changed by this proposal. The current Yomu route remains authoritative.
+No production code or contract is changed by this proposal. The current Komyst route remains authoritative.
 
 ## Existing pipeline boundary
 
@@ -19,7 +19,7 @@ Relevant implementation:
 1. **Offline benchmark only:** use synthetic/commercially-cleared fixture, explicit mask, fixed seed/model revision, and human review. Keep notebook images in ephemeral runtime storage.
 2. **Choose only on evidence:** compare current LaMa-family adapter (after checkpoint-license review) with a true mask-conditioned candidate. Prompt-edit models are separate candidates and must be evaluated as untrusted RAW donors.
 3. **Local provider abstraction (future, not this task):** if GPU inference wins, inject a provider at the existing reconstruction boundary. Keep current input contract (source, owned target, authorized mask, dimensions, request identity) and return RAW + model/version/hash + timing metadata. Do not widen the mask or relax ownership.
-4. **Safety remains in Yomu:** treat provider output as a proposal; alignment, strict mask composite, outside-mask pixel recount, source-text residual validation, seam/texture checks, SFX/protected-region check, certificate, and final artifact persistence stay client-side and fail closed.
+4. **Safety remains in Komyst:** treat provider output as a proposal; alignment, strict mask composite, outside-mask pixel recount, source-text residual validation, seam/texture checks, SFX/protected-region check, certificate, and final artifact persistence stay client-side and fail closed.
 5. **Durable serving:** Colab is not the production worker. If the benchmark supports GPU operation, deploy to a controlled GPU VM/service with private authenticated API, queue/lease, idempotency, bounded retries, deadline/cancel, health/readiness, model pinning, artifact retention/erasure policy, and observability. Reuse the existing provider boundary rather than introducing another Gemini-like path.
 6. **Fallback:** if GPU service is unavailable, retain local CPU/patch synthesis or route to manual review. Never report a clean success from an unverified original/source fallback.
 

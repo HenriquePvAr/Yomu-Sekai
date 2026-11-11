@@ -85,7 +85,7 @@ segredo do servidor (Edge Function).
 | `NVIDIA_TRANSLATION_BATCH_SIZE` | `20` | Não | Quantidade máxima de grupos por lote |
 | `NVIDIA_MAX_REQUESTS_PER_MINUTE` | `20` | Não | Limite global aplicado pelo cliente |
 | `TRANSLATION_MODE` | `nvidia` | Não | Eixo legado de família de tradução (factory `get_translator`); não seleciona o provider de um job habilitado |
-| `TRANSLATE_SFX` | `True` | Não | Traduz SFX (glossário pt-BR de onomatopeias em `assets/lexicon/sfx_en_pt.json`, depois o provider; sons desconhecidos mantêm o lettering); `False` preserva os grupos classificados como SFX |
+| `TRANSLATE_SFX` | `False` | Não | Controla o lettering do PDF/página traduzida. A preferência “Traduzir SFX” é persistida por usuário e copiada como booleano no job; o runner aplica esse snapshot. Desligada: SFX original no PDF. Ligada: tradução por glossário/provider quando aplicável. A pasta de páginas limpas tenta remover SFX em ambos os casos, sob os gates de OCR, propriedade da máscara e reconstrução. Jobs antigos sem snapshot continuam herdando o ambiente. |
 
 O seletor de provider da UI (`#translationProviderField`) está oculto; o único fluxo de produto é o backend autenticado com DeepL. Os modos Google/NLLB/NVIDIA permanecem como compatibilidade legada, sem o contrato de validação end-to-end auditado.
 
@@ -178,6 +178,13 @@ de degradê suave como candidato da limpeza (ver Documentação Técnica §16).
 `PIPELINE_PAGE_WORKERS` (só no código, default `auto`): quantas páginas são analisadas,
 pré-renderizadas e renderizadas ao mesmo tempo. `auto` usa um terço dos núcleos lógicos e uma
 página por ~3 GB de memória livre, no máximo 4; valores explícitos de `1` a `4` são aceitos.
+
+Nesta instalação, `PIPELINE_PAGE_WORKERS=2` foi aplicado em 08/11/2026 após replay
+de 65 páginas: 31,95% menos tempo em preflight/render/escrita, com as 130 imagens
+idênticas. O default distribuído continua `auto`; não foi homologado usar 4.
+Inferências DirectML mantêm o lock compartilhado e os workers recebem a
+proveniência isolada da própria página. Veja os limites de RAM e escopo no
+[relatório](../reports/clean_parallel_20261108.md).
 
 `FONT_PATH` também é suportada fora do template. Quando vazia, o código usa a resolução de fonte existente; quando definida, deve apontar para um arquivo local válido.
 
@@ -375,12 +382,37 @@ BETA_LICENSE_PROVIDER=supabase
 
 OCR_QUALITY_CONTROL=True
 OCR_REGION_SELECTIVE_FALLBACK=True
-TRANSLATE_SFX=True
+TRANSLATE_SFX=False
 
 ENABLE_OCR_CACHE=True
 ENABLE_TRANSLATION_CACHE=True
 ENABLE_IMAGE_PROCESS_CACHE=True
 ENABLE_DOWNLOAD_CACHE=True
 ```
+
+### Reconstrução local de legendas com brilho
+
+`GENERATIVE_CAPTION_REPAIR_ENABLED=False` habilita, quando `True`, uma tentativa
+FLUX.2 klein somente para legendas grandes cuja tinta, geometria dos glifos,
+brilho cromático e proveniência foram medidos. Não ativa o FLUX geral nem muda
+`TRANSLATE_SFX` ou a máscara cirúrgica SFX v4. A instalação local aprovada em
+08/11 usa `True`; o padrão distribuído permanece `False`.
+
+São necessários `sd-cli.exe`, `flux-2-klein-4b-Q4_0.gguf`,
+`flux2-vae.safetensors` e `qwen3-4b-q4_k_m.gguf` em
+`GENERATIVE_INPAINT_MODEL_DIR` (vazio: `%LOCALAPPDATA%/TradutorIA/models/flux`).
+Não há download automático. Referência limitada a 1.048.576 pixels, quatro
+passos, seed 42, timeout de 240 s, inferência serializada e composição externa
+restrita à máscara. A chamada nativa não combina `-r` e `--mask`.
+O processo Vulkan usa o mesmo `DIRECTML_LOCK` de LaMA/RapidOCR;
+`gpu_queue_seconds` distingue a espera pelo dispositivo. Falhas registram o
+código de saída e uma categoria sanitizada, sem copiar o stderr do processo.
+
+Cor espacial, contornos protegidos, emendas, manchas, remoção do texto e
+mudanças externas continuam sendo verificados. Uma tentativa recusada segue
+os métodos locais existentes. Tempo de fila/cache/modelo aparece em
+`generative_telemetry` das tentativas; `commit_accepted_clean` mede a cópia do
+candidato aceito para CLEAN, sem nova inferência. O recorte real da página 23
+levou aproximadamente 20 s de modelo; isso não estabelece o tempo do capítulo.
 
 Para problemas de inicialização ou recursos, consulte [Troubleshooting](TROUBLESHOOTING.md).

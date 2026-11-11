@@ -1,6 +1,6 @@
 # Privacidade e dados
 
-O cliente Yomu não oferece tela de perfil social nem busca/carregamento de avatar ou
+O cliente Komyst não oferece tela de perfil social nem busca/carregamento de avatar ou
 banner. O runtime local não possui handlers, rotas, cache ou transporte para essas mídias.
 O sistema também processa imagens, OCR,
 traduções e metadados de jobs. Performance artifacts devem conter somente tempos,

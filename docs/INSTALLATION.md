@@ -20,7 +20,7 @@ Este guia prepara o ambiente local do Tradutor.IA no cenário atualmente auditad
 | Node.js | 24 | **Somente desenvolvimento**: suítes de frontend `.mjs` e serviço Better Auth. O pipeline não precisa dele |
 | Memória | 16 GB recomendados | Modelos de OCR e reconstrução podem elevar bastante o uso de RAM e memória virtual |
 | Disco | Espaço para modelos, caches e outputs | Capítulos completos podem gerar muitos arquivos intermediários |
-| Conta Yomu Sekai | login Supabase + licença Beta | Jobs com tradução passam sempre pelo backend autenticado (`yomu_backend`); a chave DeepL é segredo do servidor, não do cliente |
+| Conta Komyst | login Supabase + licença Beta | Jobs com tradução passam sempre pelo backend autenticado (`yomu_backend`); a chave DeepL é segredo do servidor, não do cliente |
 
 O suporte end-to-end de Linux e macOS ainda não foi validado. O launcher possui um caminho POSIX para grupos de processos, mas isso não equivale a suporte integral do pipeline nessas plataformas.
 

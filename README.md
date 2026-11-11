@@ -1,4 +1,4 @@
-# Yomu Sekai
+# Komyst
 
 **Pipeline local para transformar capítulos ilustrados em versões traduzidas para PT-BR, com OCR híbrido, validação de qualidade e geração de PDF.**
 
@@ -8,13 +8,17 @@
 
 > **Base verificada:** `ee846921` (branch `main`) · **Revisado em:** 2026-10-25
 
-Yomu Sekai organiza em um único fluxo a coleta de páginas, o reconhecimento de texto, a classificação semântica, a tradução, a reconstrução visual e a geração do PDF. O projeto preserva evidências de cada etapa e encaminha resultados duvidosos para revisão, em vez de tratá-los silenciosamente como corretos.
+Komyst organiza em um único fluxo a coleta de páginas, o reconhecimento de texto, a classificação semântica, a tradução, a reconstrução visual e a geração do PDF. O projeto preserva evidências de cada etapa e encaminha resultados duvidosos para revisão, em vez de tratá-los silenciosamente como corretos.
 
 O fluxo principal atual é voltado a capítulos web com texto-fonte em inglês e tradução para português brasileiro. Ele pode ser operado por uma interface local ou pela linha de comando.
 
+**Hardware:** há um [perfil medido de RAM, VRAM e tempo](docs/HARDWARE_PROFILE.md)
+em Ryzen 5 5600GT, 32 GB de RAM e RX 6600 de 8 GB. É uma configuração de
+referência testada; os requisitos mínimos de hardware ainda não estão homologados.
+
 ## Demonstração visual
 
-Interface local do Yomu Sekai (`http://127.0.0.1:8080`), versão 0.9.1-beta.18,
+Interface local do Komyst (`http://127.0.0.1:8080`), versão 0.9.1-beta.18,
 com o tema **Lua Rubra**. Capturas e vídeo atualizados em 29/10/2026.
 
 ### Tela de entrada
@@ -101,7 +105,7 @@ O pipeline mantém o texto reconhecido, os candidatos de OCR, as decisões de fa
 
 ## Início rápido
 
-O ambiente auditado usa **Windows 64 bits e Python 3.11**. São necessários Git e uma conta Yomu Sekai (login Supabase com licença Beta) para jobs com tradução: a chave da DeepL fica no backend, não no cliente. Google Chrome é opcional: ele só é usado quando a descoberta HTTP não se aplica à fonte.
+O ambiente auditado usa **Windows 64 bits e Python 3.11**. São necessários Git e uma conta Komyst (login Supabase com licença Beta) para jobs com tradução: a chave da DeepL fica no backend, não no cliente. Google Chrome é opcional: ele só é usado quando a descoberta HTTP não se aplica à fonte.
 
 O passo a passo completo de ambiente, comandos e testes está em
 [Desenvolvimento](docs/DEVELOPMENT.md).
@@ -152,7 +156,7 @@ usar esse fallback.
 
 ## Modos e perfis de saída
 
-Na interface do Yomu há dois modos de processamento: **Qualidade** e **Download-only**.
+Na interface do Komyst há dois modos de processamento: **Qualidade** e **Download-only**.
 `fast` continua aceito pela CLI para execuções técnicas/compatibilidade, mas não é opção da
 interface. Download-only apenas coleta e valida páginas: não executa OCR, provider de tradução
 nem consome YK.
@@ -259,7 +263,7 @@ render forçado.
 O sistema combina verificações em vários níveis:
 
 - score de qualidade do OCR e comparação entre engines para regiões suspeitas;
-- tradução de SFX por padrão (`TRANSLATE_SFX=True`, glossário pt-BR de onomatopeias em `assets/lexicon/sfx_en_pt.json`; sons desconhecidos mantêm o lettering original; `TRANSLATE_SFX=0` preserva todos) e decisão de tradução baseada em classificação;
+- SFX preservados no idioma original por padrão (`TRANSLATE_SFX=False`); ao habilitar a opção, o glossário pt-BR de onomatopeias fica em `assets/lexicon/sfx_en_pt.json` e sons desconhecidos mantêm o lettering original;
 - validação de resíduos em inglês ou espanhol e de fragmentos parcialmente traduzidos;
 - retries controlados, rejeição do candidato inválido e marcação para revisão manual;
 - validação de overflow, bordas, mudanças fora da máscara e páginas inválidas;
@@ -290,10 +294,10 @@ Esses mecanismos reduzem falsos positivos, mas não garantem tradução perfeita
 | Saída QC Profissional | Automático + imagens limpas, PSD editável com Type Layers, Quality Report e Review Manifest. |
 | Review | QC linguístico; `review_required` significa concluído com revisão recomendada, não falha automática. |
 | PSD | `editable_psd_writer.py`; M15 validou edição física no Photoshop 2025 e Photopea. Cross-editor round-trip direto não foi executado. |
-| Auth/backend | Projeto ativo Yomu Sekai: `<projeto-supabase-ativo>`; fluxo signup/confirmar/login e recovery validados fisicamente. |
+| Auth/backend | Projeto ativo Komyst: `<projeto-supabase-ativo>`; fluxo signup/confirmar/login e recovery validados fisicamente. |
 | Profile Media | Removida do produto ativo. |
 | Tradução | **IMPLEMENTADO** — jobs habilitados sempre via `yomu_backend` autenticado (motor remoto DeepL no servidor); seletor de provider oculto na UI. |
-| SFX | **IMPLEMENTADO** — traduzidos por padrão (`TRANSLATE_SFX=True`) com glossário pt-BR; tipografia ajustada ao formato do balão e à inclinação da fonte original (`RENDER_FIT_BALLOON_SHAPE`, `RENDER_MATCH_SOURCE_SLANT`, padrão `True`). |
+| SFX | **IMPLEMENTADO** — preservados no original por padrão (`TRANSLATE_SFX=False`); tradução pelo glossário pt-BR pode ser habilitada; tipografia ajustada ao formato do balão e à inclinação da fonte original (`RENDER_FIT_BALLOON_SHAPE`, `RENDER_MATCH_SOURCE_SLANT`, padrão `True`). |
 | Updater | **IMPLEMENTADO** no código e na UI (aba **Atualizações**, botões **Verificar atualizações** / **Baixar e instalar**); canal assinado publicado é gate externo. Ver [Update e signing](docs/UPDATE_AND_SIGNING.md). |
 | Instalador | **PARCIAL** — script Inno Setup (`packaging/TradutorIA.iss`) e `tools/build_installer.py` existem; nenhum `Setup.exe` versionado; instalação limpa **não provada**. |
 | Licença Beta | **PARCIAL** — gate fail-closed em `yomu/auth/beta_license.py`; nenhum entitlement real de tester validado. |

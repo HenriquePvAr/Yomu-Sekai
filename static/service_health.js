@@ -1,4 +1,4 @@
-// Truthful connection indicator for the local Tradutor.Ia UI server.
+// Truthful connection indicator for the local Komyst UI server.
 //
 // The "serviço conectado" badge used to be written once, at bootstrap, from
 // `settings.nvidia_configured`: a configuration fact presented as a

@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 520 370" role="img" aria-label="Livro aberto do Yomu Sekai">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 520 370" role="img" aria-label="Livro aberto do Komyst">
  <defs><linearGradient id="paper" x2="0" y2="1"><stop stop-color="#fff0d8"/><stop offset="1" stop-color="#e9c9aa"/></linearGradient><linearGradient id="cover" x2="1" y2="1"><stop stop-color="#631c28"/><stop offset="1" stop-color="#171923"/></linearGradient><filter id="shadow" x="-20%" y="-25%" width="150%" height="160%"><feGaussianBlur stdDeviation="9"/></filter></defs>
  <ellipse cx="264" cy="324" rx="204" ry="25" fill="#000" opacity=".55" filter="url(#shadow)"/>
  <g transform="translate(24 13) rotate(-8 236 175)" stroke-linejoin="round">

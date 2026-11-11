@@ -1,4 +1,4 @@
-# Yomu — plano seguro de organização/arquivamento
+# Komyst — plano seguro de organização/arquivamento
 
 > **REGISTRO HISTÓRICO — não é o estado atual.** O SHA "publicado" recomendado abaixo
 > (`ec9ca9e4`) foi superado; o checkout recomendado segue em `main`, hoje `5f482ce1`. Este arquivo registra a consolidação de

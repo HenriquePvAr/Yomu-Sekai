@@ -169,7 +169,7 @@ código. Ela envelhece: confira o código antes de assumir que um valor não mud
 | Estados de job | 15 em `yomu/runtime/job_store.py` `JobStatus.ALL`; terminais `finished`, `review_required`, `failed`, `cancelled` |
 | Supervisão do worker | implementada em `yomu/runtime/worker_supervisor.py`: 2s/5s/15s, 3 tentativas, `degraded`, reset em 120s |
 | Retomada de job interrompido na UI | **implementada** — `#interruptedJobsPanel` + botão `Retomar` em `static/tradutor_ui.js`, exibido só com `can_resume` |
-| SFX e tipografia | `TRANSLATE_SFX=True` por padrão (glossário `assets/lexicon/sfx_en_pt.json`); `RENDER_FIT_BALLOON_SHAPE` e `RENDER_MATCH_SOURCE_SLANT` padrão `True`, só em `yomu/config/settings.py` |
+| SFX e tipografia | `TRANSLATE_SFX=False` por padrão (SFX preservados no original); `RENDER_FIT_BALLOON_SHAPE` e `RENDER_MATCH_SOURCE_SLANT` padrão `True`, só em `yomu/config/settings.py` |
 | Updater | **IMPLEMENTADO** (código + UI): `yomu/runtime/update_manifest.py` (Ed25519 + SHA-256, chave `beta-2026-10`), `update_transport.py`, `update_installer.py`, `installer_update.py`, `update_bootstrap.py` (`DEFAULT_MANIFEST_URL` configurada), aba **Atualizações** e rotas `/api/update/*` em `yomu/ui/app.py`. Manifest publicado no canal: `EXTERNAL_GATE` |
 | Instalador | **PARCIAL** — `packaging/tradutor_ia.spec`, `packaging/TradutorIA.iss`, `tools/build_installer.py`; nenhum `Setup.exe` versionado/validado |
 | Licença de tester Beta | **PARCIAL** — `yomu/auth/beta_license.py`; gate em `UiBridge.start()`/`resume()`; `_build_ui_beta_access_authorizer` (`yomu/ui/ui_bridge.py`): dev → local; empacotado sem provider → `production` → `RemoteBetaLicenseConfigError` (fail-closed); `supabase` → authorizer remoto com fingerprint. Nenhum entitlement real validado |

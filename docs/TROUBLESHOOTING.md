@@ -214,10 +214,10 @@ Antes de retomar, confirme que não existe outro pipeline ativo. Não inicie dua
 ## Confirmação de e-mail abre um endereço local que não responde
 
 O callback atual é `http://127.0.0.1:8080/auth/callback` e só existe enquanto o runtime local
-do Yomu está disponível naquele computador. Abra o link no mesmo computador em que o aplicativo
+do Komyst está disponível naquele computador. Abra o link no mesmo computador em que o aplicativo
 está rodando. Em celular ou outro computador, `127.0.0.1` aponta para o próprio dispositivo;
 por isso a confirmação pode ocorrer sem que a página local abra. Depois de confirmar o cadastro,
-volte ao Yomu e entre com e-mail e senha. A confirmação não cria sessão automaticamente.
+volte ao Komyst e entre com e-mail e senha. A confirmação não cria sessão automaticamente.
 
 ## O PSD avisa que uma fonte está ausente
 

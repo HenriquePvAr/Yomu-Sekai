@@ -345,10 +345,10 @@ a leitura correta.
 - `decorative`;
 - `unknown`, quando a evidência não permite decisão segura.
 
-SFX são traduzidos por padrão (`TRANSLATE_SFX=True`): `yomu/translation/sfx_glossary.py` aplica o
-glossário local `assets/lexicon/sfx_en_pt.json` ("BANG" → "BAM"); um som que o glossário não conhece
-mantém o texto de origem e não é enviado ao provider. `TRANSLATE_SFX=0` preserva todos os SFX
-(a suíte de testes usa `0` no `conftest.py` raiz).
+SFX são preservados no original por padrão (`TRANSLATE_SFX=False`). Quando habilitada,
+`yomu/translation/sfx_glossary.py` aplica o glossário local
+`assets/lexicon/sfx_en_pt.json` ("BANG" → "BAM"); sons desconhecidos podem seguir para o
+provider. `TRANSLATE_SFX=0` mantém todos os SFX originais.
 
 Desde o ciclo do ep. 285 (2026-11), o lookup tem uma segunda passada tolerante a
 OCR (`translate_sfx_fuzzy`): o lettering estilizado dos SFX é exatamente onde o

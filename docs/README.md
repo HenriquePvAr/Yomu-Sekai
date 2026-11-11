@@ -1,4 +1,4 @@
-# Documentação do Tradutor IA
+# Documentação do Komyst
 
 > **Base verificada:** `5f482ce1` (`main`) · **Revisado em:** 2026-10-24
 >
@@ -12,6 +12,8 @@
 > Estados de evidência: `IMPLEMENTED` descreve código; `INTEGRATED` descreve composição no snapshot; `TESTED_OFFLINE` e `TESTED_FROZEN` identificam o tipo exato de validação; `PHYSICALLY_VERIFIED` exige artefato/operação física correlacionada; `EXTERNAL_GATE` depende de serviço, identidade ou autorização externa; `DEFERRED` não está habilitado como produto.
 
 Esta é a página inicial da documentação. Comece pelo documento certo para o seu papel.
+
+O nome do produto e a logo atuais estão descritos em [Marca do Komyst](BRANDING.md).
 
 ```mermaid
 flowchart LR
@@ -38,6 +40,9 @@ flowchart LR
 ---
 
 ## Documentos primários
+
+O [perfil de hardware medido](HARDWARE_PROFILE.md) separa consumo observado de
+RAM/VRAM, tempo do capítulo e limites ainda não homologados de requisitos mínimos.
 
 | Documento | Conteúdo |
 | --- | --- |
@@ -145,8 +150,8 @@ em que foram escritos e **não** substituem os documentos primários:
 | --- | --- |
 | Pipeline ponta a ponta | ✅ implementado; Clean/render reescritos em `5f482ce1` (ver [Quality Freeze](QUALITY_FREEZE.md)) |
 | OCR | ✅ RapidOCR primário; PaddleOCR só como legacy opt-in (`OCR_LEGACY_PADDLE_FALLBACK`) |
-| Tradução | ✅ todo job habilitado usa o backend Yomu (`yomu_backend`), que chama a DeepL no servidor |
-| SFX | ✅ traduzidos por glossário local (`TRANSLATE_SFX=True`); sons desconhecidos mantêm o original |
+| Tradução | ✅ todo job habilitado usa o backend Komyst (`yomu_backend`), que chama a DeepL no servidor |
+| SFX | Preservados no original por padrão (`TRANSLATE_SFX=False`); tradução por glossário local é opcional |
 | Fila persistente, worker e supervisão | ✅ implementados |
 | Retomada de job interrompido pela UI | ✅ botão **Retomar** para jobs `can_resume` |
 | Leitor PDF e Histórico | ✅ implementados |

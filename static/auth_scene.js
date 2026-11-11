@@ -110,6 +110,7 @@ if (renderer) {
     texture.repeat.x = -1;
     texture.offset.x = 1;
     const logo = new Image();
+    const wordmark = new Image();
     function paint() {
       ctx.fillStyle = '#17141c';
       ctx.fillRect(0, 0, 512, 680);
@@ -125,19 +126,17 @@ if (renderer) {
       ctx.lineWidth = 2;
       ctx.strokeRect(39, 39, 434, 602);
       if (logo.complete && logo.naturalWidth) ctx.drawImage(logo, 116, 105, 280, 280);
+      if (wordmark.complete && wordmark.naturalWidth) ctx.drawImage(wordmark, 106, 404, 300, 68);
       ctx.textAlign = 'center';
-      ctx.font = '800 66px Manrope, sans-serif';
-      ctx.fillStyle = '#f5eee4';
-      ctx.fillText('YOMU', 256, 476);
-      ctx.fillStyle = '#d7433b';
-      ctx.fillText('SEKAI', 256, 550);
       ctx.fillStyle = '#a9978b';
       ctx.font = '27px Georgia, serif';
       ctx.fillText('物語を、もっと近くに。', 256, 605);
       texture.needsUpdate = true;
     }
     logo.onload = paint;
-    logo.src = '/static/assets/auth/yomu-logo.png';
+    logo.src = '/static/assets/auth/komyst-logo.png';
+    wordmark.onload = paint;
+    wordmark.src = '/static/assets/branding/komyst-wordmark.png';
     paint();
     return texture;
   }

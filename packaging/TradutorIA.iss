@@ -11,17 +11,17 @@
 #endif
 [Setup]
 AppId={{cff6c710-2b7d-4a09-8f25-e32ea363430f}
-AppName=Yomu Sekai
+AppName=Komyst
 AppVersion={#ProductVersion}
-SetupIconFile={#SourcePath}\..\assets\branding\generated\yomu-sekai.ico
-UninstallDisplayIcon={app}\_internal\assets\branding\generated\yomu-sekai.ico
+SetupIconFile={#SourcePath}\..\assets\branding\generated\komyst.ico
+UninstallDisplayIcon={app}\_internal\assets\branding\generated\komyst.ico
 DefaultDirName={localappdata}\Programs\YomuSekai
-DefaultGroupName=Yomu Sekai
+DefaultGroupName=Komyst
 PrivilegesRequired=lowest
 ArchitecturesAllowed=x64
 ArchitecturesInstallIn64BitMode=x64
 OutputDir={#OutputDir}
-OutputBaseFilename=YomuSekai-{#ProductVersion}-Setup-x64
+OutputBaseFilename=Komyst-{#ProductVersion}-Setup-x64
 Compression=lzma2
 SolidCompression=yes
 CloseApplications=yes
@@ -30,7 +30,7 @@ DisableProgramGroupPage=yes
 Uninstallable=yes
 ChangesEnvironment=no
 CreateUninstallRegKey=yes
-UninstallDisplayName=Yomu Sekai
+UninstallDisplayName=Komyst
 SetupLogging=yes
 UninstallFilesDir={app}
 
@@ -78,8 +78,8 @@ Type: filesandordirs; Name: "{localappdata}\TradutorIA\.cache"
 Filename: "{sys}\taskkill.exe"; Parameters: "/F /T /IM YomuSekai.exe"; Flags: runhidden waituntilterminated skipifdoesntexist; RunOnceId: "YomuSekaiShutdown"
 
 [Icons]
-Name: "{group}\Yomu Sekai"; Filename: "{app}\YomuSekai.exe"; WorkingDir: "{app}"; IconFilename: "{app}\_internal\assets\branding\generated\yomu-sekai.ico"; IconIndex: 0
-Name: "{autodesktop}\Yomu Sekai"; Filename: "{app}\YomuSekai.exe"; WorkingDir: "{app}"; IconFilename: "{app}\_internal\assets\branding\generated\yomu-sekai.ico"; IconIndex: 0; Tasks: desktopicon
+Name: "{group}\Komyst"; Filename: "{app}\YomuSekai.exe"; WorkingDir: "{app}"; IconFilename: "{app}\_internal\assets\branding\generated\komyst.ico"; IconIndex: 0
+Name: "{autodesktop}\Komyst"; Filename: "{app}\YomuSekai.exe"; WorkingDir: "{app}"; IconFilename: "{app}\_internal\assets\branding\generated\komyst.ico"; IconIndex: 0; Tasks: desktopicon
 
 [Run]
-Filename: "{app}\YomuSekai.exe"; Description: "Iniciar o Yomu Sekai"; Flags: postinstall skipifsilent nowait
+Filename: "{app}\YomuSekai.exe"; Description: "Iniciar o Komyst"; Flags: postinstall skipifsilent nowait

@@ -1,17 +1,17 @@
-# Yomu Sekai — Guia do Usuário
+# Komyst — Guia do Usuário
 
 > **Base verificada:** `b990cc8` · **Revisado em:** 2026-11-03 · Idioma original reverificado sobre `dev` (`885a237`) em 2026-11-03; glossário de nomes verificado sobre `22f595d` (feat/GLOSSARY-01), integrado em `main`
 > **Para quem é:** Scans, tradutores, editores e testadores da Beta. Nenhum conhecimento
 > técnico é necessário.
 
-O produto é chamado **Yomu Sekai**; alguns títulos e nomes de arquivos antigos ainda dizem
-“Tradutor IA”.
+O nome exibido pelo aplicativo é **Komyst**. Algumas pastas de dados e interfaces antigas
+mantêm nomes internos para preservar a compatibilidade.
 
 ---
 
 ## Sumário
 
-1. [O que o Tradutor IA faz](#1-o-que-o-tradutor-ia-faz)
+1. [O que o Komyst faz](#1-o-que-o-komyst-faz)
 2. [O que a Beta atual já permite](#2-o-que-a-beta-atual-já-permite)
 3. [O que você precisa no computador](#3-o-que-você-precisa-no-computador)
 4. [Como instalar hoje](#4-como-instalar-hoje)
@@ -39,9 +39,9 @@ O produto é chamado **Yomu Sekai**; alguns títulos e nomes de arquivos antigos
 
 ---
 
-## 1. O que o Tradutor IA faz
+## 1. O que o Komyst faz
 
-Você informa o endereço de um capítulo. O Tradutor IA então:
+Você informa o endereço de um capítulo. O Komyst então:
 
 1. **Analisa o capítulo** e descobre quais são as páginas de verdade;
 2. **Baixa as imagens** e confere se todas chegaram inteiras;
@@ -52,7 +52,7 @@ Você informa o endereço de um capítulo. O Tradutor IA então:
 6. **Monta um PDF** do capítulo traduzido;
 7. **Marca o que merece sua atenção**, em vez de fingir que ficou tudo perfeito.
 
-O Yomu coordena a leitura e salva os outputs no seu computador. A tradução usa o provider
+O Komyst coordena a leitura e salva os outputs no seu computador. A tradução usa o provider
 configurado pela conta; autenticação, autorização e a contabilização da execução também usam o
 backend do produto. Os artefatos locais só são publicados na Comunidade se você escolher essa
 ação explicitamente.
@@ -67,13 +67,13 @@ ação explicitamente.
 | Traduzir um capítulo a partir de um endereço da internet | ✅ Sim |
 | Traduzir imagens que já estão no seu computador (pasta do capítulo ou imagens avulsas) | ✅ Sim, no aplicativo desktop |
 | Fila com vários capítulos em sequência | ✅ Sim |
-| Continuar processando com a janela do Yomu fechada | ✅ Sim, o worker é independente da interface |
+| Continuar processando com a janela do Komyst fechada | ✅ Sim, o worker é independente da interface |
 | Biblioteca com os capítulos já traduzidos | ✅ Sim |
 | PDF do capítulo | ✅ Sim |
 | Escolher o que gerar (Tradução pronta, Apenas Clean, Completo e outras opções) | ✅ Sim |
 | Pacote Completo com imagens limpas, PSD editável, relatório e índice de revisão | ✅ Sim |
 | Tela de revisão de qualidade | ✅ Sim |
-| Efeitos sonoros (SFX) traduzidos para onomatopeias em português | ✅ Sim, por padrão (ver [seção 14](#14-revisão-necessária-o-que-significa)) |
+| Efeitos sonoros (SFX) traduzidos para onomatopeias em português | Não por padrão; o lettering original é preservado (`TRANSLATE_SFX=True` habilita tradução) |
 | Comunidade (descobrir e publicar traduções) | ⚠️ Parcial — a aba mostra **EM DESENVOLVIMENTO** |
 | Scan Studio (ajuste manual de cada etapa) | ⏳ Planejado — a aba **Scans** mostra **EM DESENVOLVIMENTO** |
 | Instalação para usuário final | ⚠️ Parcial — não há instalador público para baixar; use o pacote entregue por quem coordena a Beta ou a instalação pelo repositório |
@@ -81,6 +81,10 @@ ação explicitamente.
 | Conta/licença de tester | ⚠️ Parcial — o programa verifica o acesso Beta ao iniciar uma tradução; a liberação de acesso depende de quem coordena a Beta |
 
 ## 3. O que você precisa no computador
+
+Para RAM, placa de vídeo e tempo, consulte o [perfil de hardware medido](../HARDWARE_PROFILE.md).
+A configuração de referência testada com FLUX usa 32 GB de RAM e uma RX 6600
+de 8 GB; isso não é um mínimo homologado nem uma promessa de tempo por capítulo.
 
 - **Windows 64 bits** (é o único sistema testado de ponta a ponta);
 - **Google Chrome** pode ser necessário para caminhos de descoberta/download que usam fallback de navegador; algumas fontes usam HTTP direto;
@@ -94,7 +98,7 @@ ação explicitamente.
 
 Ainda **não existe um instalador público** (`Setup.exe`) para baixar. Há dois caminhos:
 
-- se quem coordena a Beta te entregou um pacote/atalho do Yomu Sekai já preparado, use-o — você
+- se quem coordena a Beta te entregou um pacote/atalho do Komyst já preparado, use-o — você
   não precisa clonar o repositório nem preparar Python;
 - caso contrário, a instalação é feita a partir do repositório, seguindo o procedimento técnico
   em [Instalação](../INSTALLATION.md).
@@ -117,13 +121,13 @@ da sua conta.
 
 ## 5. Abrindo o programa pela primeira vez
 
-Abra o atalho do Yomu Sekai fornecido com o pacote. Na versão desktop, a interface aparece em
+Abra o atalho do Komyst fornecido com o pacote. Na versão desktop, a interface aparece em
 uma janela nativa do aplicativo.
 
 O que acontece:
 
 1. O runtime local inicia os serviços de interface e processamento;
-2. A janela desktop do Yomu Sekai mostra a interface.
+2. A janela desktop do Komyst mostra a interface.
 
 `http://127.0.0.1:8080` é o endereço local usado pelo runtime, não um substituto para abrir o
 aplicativo desktop. Para uma execução a partir do repositório, consulte o launcher e o ambiente
@@ -132,11 +136,11 @@ descritos na documentação técnica.
 > 💡 O serviço de processamento continua funcionando mesmo se você fechar a janela do
 > aplicativo. Um capítulo que já começou não é perdido apenas por fechar a interface.
 
-> ⚠️ Encerre o Yomu pelo próprio aplicativo quando não houver processamento em andamento.
+> ⚠️ Encerre o Komyst pelo próprio aplicativo quando não houver processamento em andamento.
 
 ## 6. Entrando na sua conta
 
-O Tradutor IA pede **login**. Sem entrar na conta você não consegue criar traduções nem ver
+O Komyst pede **login**. Sem entrar na conta você não consegue criar traduções nem ver
 a biblioteca.
 
 Na tela de acesso você verá:
@@ -148,13 +152,13 @@ Na tela de acesso você verá:
   *sem conexão com o serviço*.
 
 Se você ainda não tem conta, use **Criar conta** e confirme o endereço pelo e-mail. A
-confirmação não faz login automaticamente: depois da mensagem de confirmação, volte ao Yomu
+confirmação não faz login automaticamente: depois da mensagem de confirmação, volte ao Komyst
 e entre com seu e-mail e senha.
 
 O callback de autenticação usado pelo aplicativo é local:
-`http://127.0.0.1:8080/auth/callback`. Abra a mensagem no mesmo computador em que o Yomu está
+`http://127.0.0.1:8080/auth/callback`. Abra a mensagem no mesmo computador em que o Komyst está
 rodando. Em celular ou outro dispositivo, `127.0.0.1` aponta para esse próprio dispositivo,
-não para o computador com o Yomu; a confirmação pode concluir, mas o callback local não estará
+não para o computador com o Komyst; a confirmação pode concluir, mas o callback local não estará
 disponível ali. Recuperação e troca de senha estão disponíveis pelo fluxo do aplicativo; o
 retorno PKCE é usado quando necessário.
 
@@ -170,13 +174,13 @@ Na lateral existe um menu com as áreas do programa:
 | **Fila** | Vários capítulos enfileirados para processar em sequência |
 | **Capítulos traduzidos** | Sua biblioteca local: ler, abrir pasta e ver relatórios |
 | **Leitor** | Lê o capítulo escolhido dentro do próprio programa |
-| **Recompensas** | Acompanha seus Yomu Keys e seu progresso (rank e XP) |
+| **Recompensas** | Acompanha seus Komyst Keys e seu progresso (rank e XP) |
 | **Scans** | Scan Studio — ainda **em desenvolvimento**; a aba só apresenta o que está planejado |
 | **Comunidade** | Ainda **em desenvolvimento**: a aba avisa que "A comunidade ainda não está disponível nesta versão." |
 | **Atualizações** | Mostra sua versão e permite **Verificar atualizações** (ver [seção 19](#19-configurações)) |
 | **Configurações** | Anúncios e envio de feedback para a equipe |
 
-No topo da janela aparecem também seu saldo de **YK** (Yomu Keys), seu rank e, quando houver uma
+No topo da janela aparecem também seu saldo de **YK** (Komyst Keys), seu rank e, quando houver uma
 atualização disponível, o selo **↑ Atualizar**.
 
 > 💡 Atalhos: as teclas numéricas trocam de aba na ordem do menu, e **Enter** inicia a análise
@@ -186,14 +190,14 @@ A aba **Fontes** é só um atalho: ela mostra os sites com atalho integrado — 
 (https://www.webtoons.com/en/), **Comix** (https://comix.to/browse?genres_in=101137) e
 **Vortex Scans** (https://vortexscans.org/). Ao clicar em "Abrir …", o site abre no seu
 **navegador padrão** quando você usa a janela do aplicativo, ou numa **nova aba** quando usa
-o Yomu pelo navegador (o Yomu continua aberto). Lá você encontra o capítulo, **copia a URL**
-e volta ao Yomu para colar na aba **Nova tradução** — o processamento continua no fluxo
+o Komyst pelo navegador (o Komyst continua aberto). Lá você encontra o capítulo, **copia a URL**
+e volta ao Komyst para colar na aba **Nova tradução** — o processamento continua no fluxo
 normal. A aba Fontes não baixa nem processa nada por conta própria e não consulta os sites
 ao ser aberta.
 
 Se o site que você usa não está na lista, clique em **Solicitar fonte** (abaixo dos cartões),
 cole a URL de uma obra ou capítulo desse site e clique em **Enviar pedido**. O pedido chega à
-equipe do Yomu com o seu nome de usuário; enviar não adiciona o site na hora, o suporte é
+equipe do Komyst com o seu nome de usuário; enviar não adiciona o site na hora, o suporte é
 avaliado depois.
 
 ## 8. Traduzindo um capítulo, passo a passo
@@ -202,7 +206,7 @@ O caminho normal é este:
 
 ```mermaid
 flowchart TD
-    A["Abrir o Yomu Sekai e entrar na conta"] --> B["Nova tradução: colar a URL do capítulo"]
+    A["Abrir o Komyst e entrar na conta"] --> B["Nova tradução: colar a URL do capítulo"]
     B --> C["Escolher o que gerar (padrão: Tradução pronta)"]
     C --> D["Iniciar tradução"]
     D --> E{"Análise segura da fonte"}
@@ -225,14 +229,14 @@ Detalhando:
 
 - **URL pública** — você cola o endereço do capítulo no campo **URL do capítulo**;
 - **Pasta do capítulo** — clique em **Selecionar pasta do capítulo** e escolha uma pasta que
-  já contém as imagens. O Yomu carrega as imagens PNG/JPG/JPEG que estão diretamente nessa
+  já contém as imagens. O Komyst carrega as imagens PNG/JPG/JPEG que estão diretamente nessa
   pasta (subpastas não entram);
 - **Imagens** — clique em **Adicionar imagens** e escolha uma ou várias páginas (PNG ou JPG);
   **Limpar** esvazia a seleção.
 
 Nas duas opções locais aparece a lista **Páginas do capítulo**, com prévia e **Ampliar**, para
 conferir a ordem antes de iniciar. O seletor de pasta e de imagens só funciona dentro do
-aplicativo desktop do Yomu. Com origem local, o escopo fica sempre em **completo** e o modo
+aplicativo desktop do Komyst. Com origem local, o escopo fica sempre em **completo** e o modo
 **Download-only** não está disponível.
 
 **3. Confira os campos automáticos.** O **Nome do capítulo** e a **Pasta de saída** são
@@ -246,7 +250,7 @@ criar o processamento. Se o link for inválido, a página não existir, a fonte 
 temporariamente indisponível ou o site ainda não for compatível, nenhum processamento é
 criado e a mensagem explica o motivo.
 
-Quando um site ainda não é compatível, o Tradutor IA pergunta se você quer enviar o link ao
+Quando um site ainda não é compatível, o Komyst pergunta se você quer enviar o link ao
 desenvolvedor. Esse envio exige clique explícito e registra apenas metadados sanitizados
 como URL, domínio, motivo e versão do app; não envia cookies, senhas, tokens ou imagens do
 capítulo.
@@ -421,9 +425,16 @@ anterior e seus arquivos.
 
 ## 13. Se o programa fechar ou travar no meio
 
-O Tradutor IA foi feito esperando que coisas ruins aconteçam.
+Os motores de OCR e reconstrução devem executar em segundo plano, sem abrir
+terminais. Se uma atualização do painel demorar depois de o aplicativo já ter
+aberto, a interface preserva o conteúdo e sinaliza reconexão. Isso não significa
+que o processamento tenha terminado ou sido cancelado. Falta de espaço durante
+a gravação pode interromper o capítulo: libere espaço e use a recuperação que
+o aplicativo disponibilizar; arquivos parciais não equivalem ao PDF final.
 
-**Se você fechar a janela do Yomu:** o worker independente continua o processamento. Abra
+O Komyst foi feito esperando que coisas ruins aconteçam.
+
+**Se você fechar a janela do Komyst:** o worker independente continua o processamento. Abra
 novamente o aplicativo para acompanhar o job; não é necessário abrir o endereço loopback
 manualmente no navegador.
 
@@ -445,7 +456,7 @@ Ao clicar em **Retomar**:
 
 - o programa continua o mesmo capítulo, **sem pedir o endereço de novo** e sem criar uma
   tradução duplicada;
-- o Tradutor IA **reaproveita o progresso válido que estiver salvo** e continua a partir do
+- o Komyst **reaproveita o progresso válido que estiver salvo** e continua a partir do
   ponto seguro de recuperação — não é uma promessa de retomar exatamente no último passo,
   e sim de não jogar fora o que já estava confirmado;
 - o capítulo volta para a **fila normal** e começa quando chegar a vez dele. Se o serviço
@@ -497,7 +508,10 @@ Motivos comuns:
 
 ### Efeitos sonoros (SFX)
 
-Por padrão, efeitos sonoros conhecidos **são traduzidos** para a onomatopeia usada em
+Em **Configurações → Geral → Efeitos sonoros**, a opção **Traduzir SFX** controla os
+próximos jobs e fica desativada por padrão. SFX são sons desenhados na arte, como
+“BOOM” e “CRACK”. Com a opção desligada, o PDF final mantém o efeito original;
+com a opção ligada, efeitos conhecidos podem receber a onomatopeia usada em
 português — por exemplo, "BANG" vira "BAM" e "\*bite\*" vira "\*morde\*". Letras esticadas,
 maiúsculas e asteriscos do original são mantidos. Um som que o programa não conhece
 **mantém o letreiro original**, em vez de receber uma tradução literal.
@@ -510,8 +524,12 @@ branco com contorno — como nas traduções feitas por grupos de scan. Da mesma
 ou narração escrita sobre a arte que não pôde ser apagada com segurança recebe uma **caixa de
 legenda** (clara ou escura, conforme o fundo) por cima do texto original, com a tradução
 dentro; a caixa também é usada quando a tradução não cabe no espaço do texto original, e
-alarga em vez de partir uma palavra no meio. Esse comportamento não tem um botão na tela; se a sua instalação precisar manter todos os
-efeitos sonoros em inglês, peça a quem preparou a instalação.
+alarga em vez de partir uma palavra no meio.
+
+A pasta de **páginas limpas tenta apagar os SFX mesmo com a tradução deles desligada**.
+Isso não apaga o efeito no PDF final quando a opção está desligada. Se uma região não
+puder ser limpa com segurança, ela continua indicada para revisão. A tradução de
+efeitos pode ter menos precisão porque depende do contexto visual da cena.
 
 ### Texto dentro dos balões
 
@@ -614,14 +632,14 @@ A janela de exclusão mostra o capítulo, o número de páginas e se ele foi pub
 confirmar, digite **EXCLUIR** e clique em **Excluir capítulo**; marque a opção de arquivos só se
 quiser apagar também a pasta do capítulo. As outras confirmações do programa (cancelar um
 processamento, descartar uma tentativa interrompida, remover uma publicação) abrem uma janela
-do próprio Yomu com **Cancelar** e o botão da ação.
+do próprio Komyst com **Cancelar** e o botão da ação.
 
 Capítulos traduzidos em versões antigas do programa também aparecem: eles são descobertos
 pela pasta `output/`, mesmo sem registro interno.
 
 ### Lendo um capítulo dentro do programa
 
-Clique em **LER** no capítulo desejado. Ele abre na aba **Leitor**, sem sair do Tradutor IA.
+Clique em **LER** no capítulo desejado. Ele abre na aba **Leitor**, sem sair do Komyst.
 
 Na barra do leitor você tem:
 
@@ -703,7 +721,7 @@ A tela tem só duas partes:
 - **Anúncios** — **Anúncios passivos**: com eles ligados, você pode usar YK diários; YK
   permanentes continuam disponíveis com os anúncios desligados;
 - **Feedback** — escreva um problema ou uma ideia e clique em **Enviar feedback**. A mensagem
-  vai para a equipe do Yomu junto com o seu nome de usuário. Dá para enviar até 5 mensagens por
+  vai para a equipe do Komyst junto com o seu nome de usuário. Dá para enviar até 5 mensagens por
   hora (somando feedback e pedidos de fonte).
 
 A autorização das fontes, que antes ficava aqui, agora é pedida na primeira vez que você clica
@@ -721,7 +739,7 @@ alguns segundos depois de abrir e, se houver novidade, mostra o selo **↑ Atual
   fale com quem coordena a Beta;
 - *Atualização disponível: …* — clique em **Baixar atualização** (ou **Baixar e instalar** na
   aba Atualizações). O download é verificado antes de ser usado; depois clique em **Instalar e
-  reiniciar** (ou **Instalar agora**). O Yomu fecha para concluir a instalação;
+  reiniciar** (ou **Instalar agora**). O Komyst fecha para concluir a instalação;
 - *Não foi possível verificar atualizações.* — confira a internet e tente de novo.
 
 Só aparece uma versão quando existe uma atualização assinada publicada no canal Beta; este
@@ -736,7 +754,7 @@ As mensagens abaixo são as que o programa realmente mostra.
 
 | O que você vê | O que significa | O que fazer |
 | --- | --- | --- |
-| *Servico de processamento indisponivel.* | O serviço que faz o trabalho pesado não está ligado | Feche o Yomu e abra novamente pelo atalho do aplicativo. Se voltar a acontecer, veja a [seção 21](#21-como-reiniciar-com-segurança) |
+| *Servico de processamento indisponivel.* | O serviço que faz o trabalho pesado não está ligado | Feche o Komyst e abra novamente pelo atalho do aplicativo. Se voltar a acontecer, veja a [seção 21](#21-como-reiniciar-com-segurança) |
 | Capítulo parado em **na fila** e nada acontece | Não há serviço de processamento ativo | Mesmo procedimento acima |
 
 ### Problemas com a origem do capítulo
@@ -744,7 +762,7 @@ As mensagens abaixo são as que o programa realmente mostra.
 | O que você vê | O que significa | O que fazer |
 | --- | --- | --- |
 | *Não foi possível analisar a fonte.* | O programa não conseguiu entender aquela página | Confira o endereço; tente o link direto do capítulo |
-| *Esta fonte ainda não é compatível com o Yomu Sekai.* | O site não é reconhecido | Use um site suportado (aba **Fontes**) ou baixe as imagens e use **Pasta do capítulo** / **Imagens** |
+| *Esta fonte ainda não é compatível com o Komyst.* | O site não é reconhecido | Use um site suportado (aba **Fontes**) ou baixe as imagens e use **Pasta do capítulo** / **Imagens** |
 | *A página informada não foi encontrada.* | O endereço não leva a um capítulo | Confira o link |
 | *Fontes externas estão bloqueadas até ativar a política.* | A política de fontes deste workspace não autoriza o download | Fale com quem coordena a Beta |
 | *Essa fonte exige autenticação.* | O capítulo está atrás de login | Não é possível seguir por aqui |
@@ -783,7 +801,7 @@ As mensagens abaixo são as que o programa realmente mostra.
 | *Disco cheio ao gravar as páginas baixadas. Libere espaço e tente novamente.* | Sem espaço | Libere espaço e tente de novo |
 | *O processamento foi cancelado.* | Você cancelou | Nada a fazer |
 | *Tradução concluída. Há pontos que recomendamos revisar.* | Terminou com avisos | Veja a [seção 14](#14-revisão-necessária-o-que-significa) |
-| *Yomu Keys insuficientes para iniciar esta tradução.* | Seu saldo de YK não cobre a tradução | Veja seu saldo no topo da janela ou na aba **Recompensas** |
+| *Komyst Keys insuficientes para iniciar esta tradução.* | Seu saldo de YK não cobre a tradução | Veja seu saldo no topo da janela ou na aba **Recompensas** |
 | *Seu acesso à versão beta ainda não está ativo.* / *...ainda não começou.* | O acesso Beta da sua conta não foi liberado | Fale com quem coordena a Beta |
 | *Seu acesso à versão beta expirou.* / *...foi revogado.* | O acesso Beta terminou | Fale com quem coordena a Beta para renovar |
 | *Seu acesso atual não permite iniciar esta tradução.* | Sua conta não tem permissão para esta ação | Fale com quem coordena a Beta |
@@ -803,7 +821,7 @@ do momento. Regra prática:
 
 ## 21. Como reiniciar com segurança
 
-1. Feche a janela do Yomu;
+1. Feche a janela do Komyst;
 2. Espere alguns segundos;
 3. Abra novamente o atalho do aplicativo.
 
@@ -860,7 +878,7 @@ O que a versão atual **não** promete:
 
 ## 24. Perguntas frequentes
 
-**Posso fechar a janela do Yomu enquanto traduz?**
+**Posso fechar a janela do Komyst enquanto traduz?**
 Pode. O worker continua o processamento. Abra novamente o aplicativo para acompanhar; não use o endereço local como substituto da janela desktop.
 
 **Posso desligar o computador no meio?**
@@ -880,7 +898,7 @@ pronto para uso.
 
 **Posso traduzir imagens que já baixei?**
 Pode. Escolha **Pasta do capítulo** ou **Imagens** na tela de nova tradução. O seletor só
-funciona dentro do aplicativo desktop do Yomu.
+funciona dentro do aplicativo desktop do Komyst.
 
 **Por que um efeito sonoro continuou em inglês?**
 Efeitos sonoros conhecidos viram onomatopeias em português ("BANG" → "BAM"). Quando o

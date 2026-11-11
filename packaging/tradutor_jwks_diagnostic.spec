@@ -15,5 +15,5 @@ hiddenimports = ["rapidocr_onnxruntime", "selenium.webdriver.chrome.webdriver", 
 a = Analysis([str(ROOT / "desktop_app.py")], pathex=[str(ROOT)], datas=datas,
              hiddenimports=hiddenimports, excludes=["paddle", "paddleocr", "paddlex", "torch", "transformers", "test", "pytest"])
 pyz = PYZ(a.pure)
-exe = EXE(pyz, a.scripts, [], [], name="YomuSekai", icon=str(ROOT / "assets" / "branding" / "generated" / "yomu-sekai.ico"), console=True, exclude_binaries=True)
+exe = EXE(pyz, a.scripts, [], [], name="YomuSekai", icon=str(ROOT / "assets" / "branding" / "generated" / "komyst.ico"), console=True, exclude_binaries=True)
 COLLECT(exe, a.binaries, a.datas, name="YomuSekai")

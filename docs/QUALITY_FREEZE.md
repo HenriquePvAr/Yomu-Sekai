@@ -207,5 +207,5 @@ três condições.
 
 ### Packaging / branding
 
-- ICO canônico do Yomu aplicado ao EXE, installer, atalhos e à entrada de desinstalação
+- ICO canônico do Komyst aplicado ao EXE, installer, atalhos e à entrada de desinstalação
   (Programs and Features). Validação física final fica para a missão de empacotamento.

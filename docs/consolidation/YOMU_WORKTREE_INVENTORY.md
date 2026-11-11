@@ -1,4 +1,4 @@
-# Yomu — inventário de worktrees e snapshots
+# Komyst — inventário de worktrees e snapshots
 
 > **REGISTRO HISTÓRICO — não é o estado atual.** Nesta revisão `git worktree list` mostra 110
 > worktrees (o inventário abaixo tinha 109) e `git branch --no-merged HEAD` lista 66 branches. Este arquivo registra a consolidação de

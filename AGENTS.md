@@ -1,4 +1,4 @@
-# YomuSekai agent rules
+# Komyst agent rules
 
 ## Source of truth
 

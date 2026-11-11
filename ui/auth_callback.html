@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Yomu Sekai · Autenticação</title>
+  <title>Komyst · Autenticação</title>
   <style>
     body { font-family: system-ui, sans-serif; background: #14110f; color: #f3ede4;
            display: grid; place-items: center; height: 100vh; margin: 0; }
@@ -124,7 +124,7 @@
         try { localStorage.removeItem(callbackDiagnosticKey); } catch (_) {}
         const spinner = document.getElementById('authCallbackSpinner');
         if (spinner) spinner.hidden = true;
-        msg.textContent = 'E-mail confirmado com sucesso. Volte ao Yomu Sekai e entre normalmente com sua senha.';
+        msg.textContent = 'E-mail confirmado com sucesso. Volte ao Komyst e entre normalmente com sua senha.';
         msg.dataset.state = 'confirmation_success';
         return;
       }
@@ -137,7 +137,7 @@
         }), 'desktop_handoff');
         if (!response.ok) throw new Error('desktop_handoff_rejected');
         history.replaceState(null, '', '/auth/callback');
-        msg.textContent = 'Solicitação recebida. Você pode voltar ao Yomu Sekai para continuar.';
+        msg.textContent = 'Solicitação recebida. Você pode voltar ao Komyst para continuar.';
         return;
       }
       // Mark intent before exchanging the PKCE code so INITIAL_SESSION cannot
@@ -218,7 +218,7 @@
       msg.textContent = err?.code === 'auth_link_expired'
         ? 'Este link expirou ou já foi usado. Solicite uma nova confirmação.'
         : err?.code === 'pkce_code_verifier_missing'
-        ? 'Este link foi aberto em outro contexto. Volte ao Yomu Sekai e entre com sua senha.'
+        ? 'Este link foi aberto em outro contexto. Volte ao Komyst e entre com sua senha.'
         : 'Não foi possível concluir a autenticação. ';
       msg.dataset.state = 'error';
       const back = document.createElement('a');

@@ -182,7 +182,7 @@ O estado da árvore do candidato contém 12 modificações rastreadas e dois tes
 ### Commits locais de reconciliação (2026-10-15)
 
 - `9e8bdfa` — `fix: unify parallel clean and supervise Comix child` (código e regressões; deriva do snapshot testado `b563923`).
-- `d28fde5` — `docs: reconcile current Yomu refs and validation` (estado, matriz, plano, índice e board).
+- `d28fde5` — `docs: reconcile current Komyst refs and validation` (estado, matriz, plano, índice e board).
 - `38328c3` — `docs: record local reconciliation commits` (registro do fechamento e decisões).
 
 São commits locais na branch de integração, sem push/merge. Os testes completos e build correspondem ao conteúdo de código de `9e8bdfa`; os dois commits seguintes alteram somente documentação/board. A cópia `.basinfy/agent-context.json` permanece fora do Git.

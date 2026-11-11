@@ -76,7 +76,7 @@ final e relatórios de qualidade.
 
 Não é um serviço hospedado. Todo o pipeline — download, OCR, tradução, reconstrução
 visual e geração de PDF — roda na máquina do usuário. As saídas de rede em operação normal
-são: o site de origem do capítulo; o backend Yomu no Supabase (autenticação, licença Beta,
+são: o site de origem do capítulo; o backend Komyst no Supabase (autenticação, licença Beta,
 carteira YK e a Edge Function `translation-execute`, que chama a DeepL **do lado do
 servidor** — a chave DeepL não fica no cliente, §15); o manifest/pacote do updater (§23); e,
 quando o usuário publica explicitamente, o armazenamento da comunidade.
@@ -167,6 +167,22 @@ helpers de teste em `test_support/`.
 | Infra de testes | `test_support/hermetic_runtime.py`, `test_support/offline_test_guard.py`, `test_support/_test_bootstrap.py`, `conftest.py`, `sitecustomize.py` |
 
 ## 4. Arquitetura de execução
+
+Consumo de referência: o [perfil de hardware medido](../HARDWARE_PROFILE.md)
+registra o job real f3de3bca (08/11/2026), separando RSS, memória comprometida,
+GPU dedicada/compartilhada, tempo de parede e cobertura da coleta. Não usar
+capacidade da placa ou memória privada como sinônimo de RAM residente, nem
+inferir requisitos mínimos a partir de uma única execução sob carga concorrente.
+
+**Atualização local 08/11/2026:** processos de FLUX, gateway OCR e consultas Git
+da UI usam `runtime/process_options.py` para ocultar consoles Windows mantendo
+logs/pipes/exit codes. Somente no worker OCR dedicado, a política headless cobre
+também filhos criados pelas dependências. Após o join da análise/sweep, o runner
+libera esse worker antes do preflight generativo; leituras tardias o recriam
+sob demanda. A duração é registrada em `heavy_ocr_release`. Uma atualização de
+bootstrap com timeout depois do boot preserva o painel existente e sinaliza
+reconexão, sem voltar a `boot_failed`. Evidências, limites e falha real por
+espaço estão no [relatório do job 457d265b](../../reports/job_457d265b_runtime_20261108.md).
 
 Três processos independentes, mais um subprocesso por job. Em execução por código-fonte o
 launcher é `start_tradutor.py`; no build congelado (`YomuSekai.exe`, entry `desktop_app.py`) os
@@ -972,8 +988,8 @@ concorrência a partir de memória e CPU observadas (opt-in por `.env`).
 
 `ocr_balloon.py` agrupa linhas visualmente relacionadas e classifica o grupo com evidências
 textuais e de container. Classes: `speech`, `narration`, `sfx`, `decorative` e `unknown`
-(evidência insuficiente para decisão segura). SFX são traduzidos por padrão
-desde 2026-10-24 (`TRANSLATE_SFX=True`; `False` preserva). A classificação também informa a estratégia de máscara e redraw.
+(evidência insuficiente para decisão segura). SFX são preservados no original por padrão
+(`TRANSLATE_SFX=False`; `True` habilita tradução). A classificação também informa a estratégia de máscara e redraw.
 
 ### Proveniência e recuperação de OCR
 
@@ -3447,7 +3463,7 @@ legado foi movido para o resolver V2.
 **Perfis de saída.** `AUTOMATIC` = `final_pdf` + `translated_image` (resultado pronto para
 consumo). `PROFESSIONAL_QC` = `final_pdf` + `translated_image` + `clean_image` +
 `editable_psd` + `quality_report` + `review_manifest` (preparado para revisão humana). O
-Yomu não substitui Photoshop/Photopea.
+Komyst não substitui Photoshop/Photopea.
 
 **Capacidades (estado REAL, verificado em 2026-09-28), não aspiração:**
 
@@ -3661,7 +3677,7 @@ Os comandos abaixo foram validados contra `5f482ce1` (CLIs com `--help`; o launc
 - Git
 - Navegador Chromium local (Google Chrome/Edge) para fontes por URL
 - WebView2 (shell desktop) — `pywebview` já está em `requirements.txt`
-- Conta no projeto Supabase de auth com licença Beta ativa (a tradução usa o backend Yomu;
+- Conta no projeto Supabase de auth com licença Beta ativa (a tradução usa o backend Komyst;
   nenhuma chave DeepL local é necessária)
 
 ### Instalação

@@ -1,4 +1,4 @@
-# Yomu inpainting integration proposal
+# Komyst inpainting integration proposal
 
 Status: **research proposal only; no model is approved for product integration**.
 
@@ -20,7 +20,7 @@ Any future candidate should implement the existing adapter boundary rather than 
 ## Evaluation gate before product work
 
 1. Clear exact code, checkpoint, base-model, and dependency terms for the intended use.
-2. Evaluate on synthetic overlays with known clean ground truth, identical masks, calibration/selection/holdout separation, and a frozen Yomu baseline.
+2. Evaluate on synthetic overlays with known clean ground truth, identical masks, calibration/selection/holdout separation, and a frozen Komyst baseline.
 3. Require both pixel-exact outside-mask preservation and visual acceptance of text removal, line art, texture, and protected art.
 4. Repeat across easy, medium, hard, and extreme cases; keep ambiguous ownership as `REVIEW_REQUIRED`.
 5. Compare speed, peak VRAM/RAM, load time, failures, and quality on the same hardware/settings. Do not extrapolate a single T4 result to chapter throughput.
@@ -28,6 +28,6 @@ Any future candidate should implement the existing adapter boundary rather than 
 
 ## Routing hypothesis (not implemented)
 
-Retain existing local strategies for simple regions; consider a specialized mask-conditioned candidate for textured backgrounds only after evidence shows improvement over the current Yomu baseline. Route high ambiguity, text intertwined with characters/line art, or insufficient context to human review. A generative editor without a proven binary-mask contract is a separate experiment, not a drop-in inpainting backend.
+Retain existing local strategies for simple regions; consider a specialized mask-conditioned candidate for textured backgrounds only after evidence shows improvement over the current Komyst baseline. Route high ambiguity, text intertwined with characters/line art, or insufficient context to human review. A generative editor without a proven binary-mask contract is a separate experiment, not a drop-in inpainting backend.
 
 No production code, model weights, private pages, credentials, or Colab runtime state are included in this proposal.

@@ -1,6 +1,6 @@
 # Changelog
 
-All notable changes to Yomu Sekai (Tradutor IA) are recorded here. Dates are ISO-8601.
+All notable changes to Komyst (Tradutor IA) are recorded here. Dates are ISO-8601.
 This file records source-level changes; it is not a release/tag log.
 
 ## [Unreleased] — main — 2026-10-24 (`5f482ce1`)
@@ -62,7 +62,7 @@ the production behavior contract of the freeze is preserved. See
   sanitized breadcrumb on failure while staying fail-open.
 
 ### Packaging
-- Canonical Yomu ICO applied to the EXE, installer, shortcuts and the uninstall entry.
+- Canonical Komyst ICO applied to the EXE, installer, shortcuts and the uninstall entry.
 
 ### Tests
 - Added hermetic regression coverage: output-format propagation, partial-scope download

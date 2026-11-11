@@ -1,4 +1,4 @@
-# Yomu Sekai clean reconstruction benchmark — current state
+# Komyst clean reconstruction benchmark — current state
 
 **Mission:** `YOMU_SEKAI_COLAB_AI_CLEAN_RECONSTRUCTION_BENCHMARK_V1`
 **Result:** `PARTIAL`
@@ -18,13 +18,13 @@ The saved Colab notebook contains one successful model inference on an owner-pro
 | Anime-Manga Big-LaMa | Local CPU smoke; synthetic line-art with known ground truth | CPU; 640×896; load 6.143 s; infer 5.977 s; total wall 12.179 s; RSS after run 701,403,136 bytes (not peak) | Outside-mask changed pixels: 0; masked MAE/RMSE/PSNR 3.57 / 18.49 / 22.79 dB | `PASS_FOR_THIS_SIMPLE_FIXTURE_ONLY`: text gone; circle/lines visually reconstructed with small pixel error | One sample; no GPU comparison; no model winner |
 | Stable Diffusion 1.5 Inpainting | Existing notebook and `docs/research/colab-inpainting/GPU_BENCHMARK_RESULTS.md` | T4; 512×512; 12 steps; load 30.734 s; infer 6.001 s | Outside-mask changed pixels: 0 | `FAIL`: safety checker returned a black donor | Rejected; protections remain enabled |
 
-On the same synthetic source and mask, the Yomu OpenCV Telea primitive (radius 3) scored masked MAE/RMSE/PSNR 10.48 / 34.94 / 17.26 dB. This is not the full Yomu candidate-selection pipeline. A one-fixture improvement is not evidence for replacement or routing.
+On the same synthetic source and mask, the Komyst OpenCV Telea primitive (radius 3) scored masked MAE/RMSE/PSNR 10.48 / 34.94 / 17.26 dB. This is not the full Komyst candidate-selection pipeline. A one-fixture improvement is not evidence for replacement or routing.
 
-For Big-LaMa, the pinned checkpoint is 205,717,870 bytes with SHA-256 `479d3afdcb7ed2fd944ed4ebcc39ca45b33491f0f2e43eb1000bd623cfb41823`; the saved notebook records the matching size/hash before loading. The Yomu descriptor already records the checkpoint's public-redistribution license review as open. A successful hash check establishes byte identity, not rights to distribute or commercially use the weights.
+For Big-LaMa, the pinned checkpoint is 205,717,870 bytes with SHA-256 `479d3afdcb7ed2fd944ed4ebcc39ca45b33491f0f2e43eb1000bd623cfb41823`; the saved notebook records the matching size/hash before loading. The Komyst descriptor already records the checkpoint's public-redistribution license review as open. A successful hash check establishes byte identity, not rights to distribute or commercially use the weights.
 
 `outside_mask_changed_pixels=0` proves the final compositor preserved pixels outside the mask. It does not prove text removal, fidelity, or overall image quality.
 
-## Existing Yomu baseline
+## Existing Komyst baseline
 
 The comparison already documented in `docs/research/colab-inpainting/INPAINTING_MODELS_COMPARISON.md` identifies the current OpenCV patch-synthesis/reconstruction path as the production baseline and the SHA-verified TorchScript LaMa adapter as optional. Both remain unchanged. The adapter fails closed when weights are unavailable or their hash is wrong; an experimental model must not be enabled as production behavior from this benchmark alone.
 
@@ -55,7 +55,7 @@ Before another Colab inference, verify that the existing runtime is still active
 - Deterministic 5-case dataset generator: `experiments/colab-inpainting/build_synthetic_benchmark.py`; the generated archive checksum and split are in [REPRODUCIBILITY.md](REPRODUCIBILITY.md).
 - One-image Colab runner (prepared, not executed): `experiments/colab-inpainting/run_big_lama_colab_smoke.py`; it requires two explicit confirmation flags and refuses batch/holdout execution.
 - Existing experiment notes: `experiments/colab-inpainting/README.md`.
-- Existing Yomu integration proposal: `docs/research/colab-inpainting/YOMU_GPU_INTEGRATION_PROPOSAL.md`.
+- Existing Komyst integration proposal: `docs/research/colab-inpainting/YOMU_GPU_INTEGRATION_PROPOSAL.md`.
 - The private Colab page/output must not be copied into Git; see [VISUAL_REVIEW.md](VISUAL_REVIEW.md) and [REPRODUCIBILITY.md](REPRODUCIBILITY.md) for sanitized evidence.
 - Model ranking remains explicitly provisional: [MODEL_RANKING.md](MODEL_RANKING.md).
 

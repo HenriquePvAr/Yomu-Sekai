@@ -12,7 +12,7 @@ There is not enough comparable evidence to answer which model is best for simple
 | Line-art reconstruction / art preservation | NONE | Protected-art masks, boundary metrics, native-size human review, multiple cases |
 | Speed / VRAM efficiency | NONE | Same GPU, resolution, warm/cold timing protocol, peak allocated/reserved memory |
 | Commercial candidate | NONE APPROVED | Exact code/weights/base/dependency rights and security review; see `MODEL_LICENSE_MATRIX.md` |
-| Yomu integration | NO MODEL APPROVED | Above evidence plus explicit interface, failure/review, provenance, and product gates |
+| Komyst integration | NO MODEL APPROVED | Above evidence plus explicit interface, failure/review, provenance, and product gates |
 
 The next GPU experiment cannot yet be run safely: this Codex host has no Colab execution MCP and the current runtime/resource state is unverified. PowerPaint v2.1's model card labels its model repo Apache-2.0 and advertises inpainting/object removal, but the pinned upstream app disables the safety checker and uses `torch.load` on a `.bin` file. SDXL Inpainting has safetensors and a pinned revision, but the current checkpoint snapshot contains no safety checker. Do not bypass either gap. Do not repeat the private Big-LaMa page or SD 1.5 smoke; if runtime and artifact gates clear, compare the exact saved synthetic fixture across CPU/T4 first.
 

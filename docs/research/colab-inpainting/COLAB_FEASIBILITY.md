@@ -1,4 +1,4 @@
-# Google Colab feasibility for Yomu inpainting
+# Google Colab feasibility for Komyst inpainting
 
 Status: desk research only; no Google login, Colab assignment, GPU runtime, or paid resource was opened in this task.
 
@@ -6,7 +6,7 @@ Status: desk research only; no Google login, Colab assignment, GPU runtime, or p
 
 - A Google AI/Google One “Pro” badge is not enough evidence of a specific Colab entitlement. Eligible paid Google AI plans can include a monthly Colab compute-unit allocation and premium hardware, but the exact benefit depends on the plan, region, and account. Verify it in the signed-in Colab account under **Settings → Subscription**; do not buy or upgrade anything for this research.
 - Colab does not guarantee a GPU type, GPU memory, runtime lifetime, or fixed quotas. Google says availability and limits fluctuate and are not published as fixed guarantees. An 80 GB A100/H100 therefore cannot be promised from the plan name or catalog.
-- Colab is suitable for interactive, bounded experiments. A notebook runtime is ephemeral and may disconnect; it is not a dependable always-on Yomu production worker. Use a durable GPU VM/service for production if a measured need justifies its cost and operations.
+- Colab is suitable for interactive, bounded experiments. A notebook runtime is ephemeral and may disconnect; it is not a dependable always-on Komyst production worker. Use a durable GPU VM/service for production if a measured need justifies its cost and operations.
 - No GPU, time, VRAM, compute units, or pages/minute were measured here. The benchmark report deliberately records `NOT_RUN` rather than extrapolating.
 
 ## Account and accelerator gate
@@ -15,7 +15,7 @@ Status: desk research only; no Google login, Colab assignment, GPU runtime, or p
 
 The notebook records GPU model, total/free VRAM, CUDA/PyTorch versions, host RAM, image dimensions, checkpoint identifier/revision/hash, load/inference wall times, peak allocated/reserved VRAM, and the owner-entered compute-unit delta. If unit consumption cannot be read, stop after one image and request approval before another run. Hard cap: 5 units for any later, explicitly approved experimental sequence; no upgrades or purchases.
 
-An 80 GB card may enable loading a larger model or larger batch without offload. That is a capacity argument, not evidence of higher image quality or faster single-image latency. For Yomu’s localized masks, weight loading, crop size, denoising steps, kernel support, and data transfer may dominate. Compare on the same image/mask and count end-to-end time before any chapter extrapolation.
+An 80 GB card may enable loading a larger model or larger batch without offload. That is a capacity argument, not evidence of higher image quality or faster single-image latency. For Komyst’s localized masks, weight loading, crop size, denoising steps, kernel support, and data transfer may dominate. Compare on the same image/mask and count end-to-end time before any chapter extrapolation.
 
 ## Official Google Colab MCP
 
@@ -28,7 +28,7 @@ An unofficial fork advertises Codex support and OAuth/runtime controls, but it w
 ## Policy and data handling
 
 - Use a notebook as an interactive research session, not a persistent service, remote desktop, SSH proxy, or unattended distributed worker. Follow the live Colab terms for the account and plan.
-- Do not upload Yomu source pages, chapter archives, masks derived from private/customer material, local project files, secrets, cookies, or credentials. This notebook creates a synthetic comic-like fixture in memory and writes only under its runtime-local `/content/yomu_colab_inpainting` folder.
+- Do not upload Komyst source pages, chapter archives, masks derived from private/customer material, local project files, secrets, cookies, or credentials. This notebook creates a synthetic comic-like fixture in memory and writes only under its runtime-local `/content/yomu_colab_inpainting` folder.
 - Do not mount Drive by default. Runtime files are ephemeral; export only explicitly approved experiment outputs after reviewing them.
 - Stop the runtime after a smoke. Colab may terminate/disconnect sessions and does not provide durable worker semantics.
 
@@ -36,7 +36,7 @@ An unofficial fork advertises Codex support and OAuth/runtime controls, but it w
 
 1. Keep the existing local CPU/local GPU and fail-closed review path until a benchmark demonstrates an operational bottleneck.
 2. For sustained production GPU work, evaluate a dedicated VM or managed GPU service with explicit price, region, capacity, queue, data-retention, access-control, and teardown policy. Google specifically points users to GCP Marketplace/Colab Enterprise or their own runtime for more guaranteed resources; the actual bill must be checked before provisioning.
-3. Do not turn an interactive Colab session into the Yomu remote provider. A production adapter needs durable queue semantics, authenticated transport, idempotent requests, bounded retries, cancellation, health/readiness, observability, and deterministic safe compositing.
+3. Do not turn an interactive Colab session into the Komyst remote provider. A production adapter needs durable queue semantics, authenticated transport, idempotent requests, bounded retries, cancellation, health/readiness, observability, and deterministic safe compositing.
 
 ## Sources
 

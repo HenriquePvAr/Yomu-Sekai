@@ -1,5 +1,31 @@
 # Clean strategy
 
+## Contrato de SFX e concorrência (08/11/2026)
+
+`TRANSLATE_SFX` controla apenas a tradução/typesetting do efeito. O snapshot booleano
+`configuration.translate_sfx`, capturado pela UI, prevalece no runner de um novo job.
+A saída CLEAN inclui sons detectados com linhas de origem rastreáveis, mesmo com o
+typesetting de SFX desligado; o PDF mantém o lettering original nessa configuração.
+Os gates de propriedade da máscara, OCR e reconstrução continuam ativos. A função
+de máscara cirúrgica v4 não foi modificada neste follow-up.
+
+O sweep ocorre no executor de pré-tradução por página, com o recorder daquela
+página ativo; o gateway mantém um só subprocesso Paddle e serializa suas chamadas.
+Assim a varredura pode se sobrepor à análise de outras páginas. O refinamento da
+máscara antecede o fill, e o CLEAN reaproveita o candidato já preenchido/verificado.
+`pre_translation_wall_seconds` agora inclui a varredura sobreposta;
+`residual_sweep` continua soma do tempo de trabalho medido por página, inclusive
+espera pelo gateway. `layout_preflight_wall_seconds` mede o preflight de render e
+eventuais retries, enquanto `post_translation_wall_seconds` mede o consumo desses
+resultados e o processamento/salvamento final antes da exportação canônica. Esses
+campos não devem ser somados novamente aos subtotais de render/inpainting.
+
+Fonte serifada e tinta com brilho são medidas pelos núcleos dos glifos e por linha.
+O halo cromático de tinta branca só é inferido com entorno preto e anel cromático
+acoplado à tinta, para não adotar a cor da arte. Fonte exata e reconstrução sob
+lettering continuam dependentes de validação visual. Ver
+[relatório de evidência](../../reports/inpaint_followup_20261108.md).
+
 
 ## Fluxo atual (2026-10-24)
 
@@ -8,7 +34,9 @@ flowchart TD
     A[Página original] --> B[OCR RapidOCR<br/>detect_lines]
     B --> C[Re-OCR seletivo<br/>linhas fracas, continuações,<br/>redescoberta mascarada,<br/>divisão em bordas, glifo cortado]
     C --> D[Agrupamento e classificação<br/>fala / narração / SFX / crédito]
-    D -->|SFX com TRANSLATE_SFX=0,<br/>crédito, nome| P[Preservado]
+    D -->|crédito, nome| P[Preservado]
+    D -->|SFX| SF[Limpar em CLEAN;<br/>TRANSLATE_SFX controla só o lettering traduzido]
+    SF --> E
     D --> E[Máscara do grupo<br/>componentes + franja antialias<br/>+ contorno medido nas 2 polaridades<br/>+ buracos fechados]
     E --> F{Interior de balão?}
     F -->|sim| G[Recorte ao interior<br/>light_enclosure_interior]
@@ -112,6 +140,7 @@ Measured on the 11 `codex_boundary_candidates` pages through local RapidOCR → 
 ### Evidence instead of thresholds (fourth pass, 2026-10-23)
 
 - **Residual confirmed by OCR — IMPLEMENTED (`CLEAN_RESIDUAL_OCR_CHECK`, default on).** When a pixel residual check refuses a cleanup (display-lettering footprint, conservative re-scan, LaMa gates), `_legible_source_residual` re-reads the cleaned crop with RapidOCR (padded crop, confidence ≥ 0.5) and lifts the refusal only when none of the group's meaningful source tokens is legible (token match incl. spacing repair). No engine/failed read → the refusal stands. Recorded as `residual_ocr_check` / `residual_overruled_by_ocr`. On the 269-case benchmark, residual refusals of LaMa results 105 → 1 (plain), 133 → 1 (outlined).
+- **Page residual sweep repair — IMPLEMENTED (`OCR_RESIDUAL_AUTO_FIX`, default on).** The isolated Paddle sweep runs on every analyzable page before translation, comparing reads with both raw OCR-line and group boxes. Only a standalone 2–12 letter uppercase token at confidence ≥0.80 is reintroduced as a synthetic OCR line; it must then pass the ordinary visual group classifier as SFX before joining translation/render. When a broad detection box covers a large part of a page, dark connected components may tighten it only when their count and geometry match the recognized letters; ambiguous evidence leaves the original box for the classifier to reject. A known sound uses the glossary; an unknown sweep-derived SFX can try the configured provider and stays in the source if the provider echoes or validation rejects it. Full sentences, non-SFX reads and weak detections remain report-only. Counters are `residual_sweep_auto_fix_groups`, per-page `residual_sweep_auto_fix`, and `residual_sweep` time. **The ep. 285 physical run used the earlier implementation:** it recovered/rendered two sweep groups, while BLAST on page 52 was rejected because its box covered most of the panel. The new box-tightening path passes offline against that page and now reaches the SFX classifier; provider/render and physical inpaint acceptance require a subsequent run.
 - **English lexicon — IMPLEMENTED.** `assets/lexicon/english_words.txt.gz` (369,351 words, 3–20 letters, from dwyl/english-words `words_alpha.txt`, Unlicense; bundled in `packaging/tradutor_ia.spec`, listed in `THIRD_PARTY_NOTICES.txt`). `region_taxonomy.is_english_word`; `weak_label_semantic_promotion_allowed` promotes a single dictionary word that trails off ("INCREDIBLE...", "HOPELESS,") — the trailing-off punctuation is required because many sounds are dictionary words ("SCREECH", "CRASH!"); romanised sounds ("PAEHYEOK...", "FWASHAA") are not in the lexicon.
 - **Mid-tone polarity — FIXED.** `_line_polarity_level`: with a mid-tone surround (118–138) the polarity is the side the ink departs to (p95 vs p5 against the ring), not the box median; white text on a mauve surround was masked as "dark text" (the background between letters). Ink coverage in the traced case 911 → 1221/1221.
 - **Balloon interior — FIXED (`CLEAN_CLIP_TO_ENCLOSURE`, default on).** Found on the real chapters in `%LOCALAPPDATA%/TradutorIA/output` (49-page sample, 5 series): ordinary white balloons were refused because text set tight reached the balloon border. `_light_enclosure_interior` takes the light connected region holding the lettering (holes = letters filled, eroded 1 px) when it closes within 3 line heights; the cleanup mask is clipped to it (border never masked, so it is no longer "crossing art") and new white inside it is not a "white patch". Used for `white_balloon`/`narration_box` and any group whose ring level is ≥ 200.
@@ -142,6 +171,8 @@ Measured on the problem pages of the real chapter sample (translucent balloons o
   - *Continuation re-read with context.* A proposed row above/below a confident line that reads nothing alone is re-read in a crop that also holds its neighbour row (the detector read "HEY, YOU!" at 0.91 only with "DRIVE THIS" in view); only readings mostly inside the proposed row count, and readings on known lines are dropped as before.
   - *Last resort.* Shares `_learned_inpaint` (margin, tone, cache) with the texture fill; is offered to `unknown` prose that has story authority (on-art narration without a balloon); is also triggered when removal measured incomplete; tries the line boxes padded by ¼ line height first (letters fused with same-colour streaks or drips cannot survive outside an art-respecting mask) and the art-respecting mask second. Always `art_fidelity_uncertain`.
 - **Not solved.** Large masks over complex art (a face behind a dense outlined block) are reconstructed plausibly but not faithfully; they stay reviewable through `art_fidelity_uncertain` when the gates flag them.
+- **FLUX second chance — IMPLEMENTED, opt-in (`GENERATIVE_INPAINT_ENABLED=0` by default).** After LaMA and its mask retry fail their reconstruction gates, the local FLUX.2 klein adapter receives the protected, halo-aware mask and a prompt selected from the region's background class. The prompt asks it to continue surrounding manga artwork and forbids new text or objects; source lettering is never inserted into the prompt. The candidate still has to pass `_advanced_art_metrics_rejected` before acceptance. Runtime/model assets remain optional and local. **Not physically validated on ep. 285:** visual fidelity and the cited ~23 s cost remain external evidence gates.
+- **Proportional inpaint masks and per-page evidence — IMPLEMENTED; first mask tightening was physically exercised on ep. 285, latest effective-mask telemetry/gate was not.** The final fill is rebuilt from the final mask, so pixels removed by mask tightening cannot remain painted by an earlier broad fill. A small halo scales with OCR line height; complex art/reticulation/gradients use a tighter expansion and a 2.0 effective-fill-mask-to-text-area limit, while a plain balloon keeps the existing 3.0 limit. If text remains or reconstruction gates fail, the existing bounded retry/fallback/review routes still run; SFX regions over the complex-mask limit may try LaMA with the tighter candidate. The latest quality report separates base and effective fill-mask size/page ratios, expansion, changed pixels in the base mask and halo, changes outside the effective fill mask, method, attempts, and accepted/review reason; >64 changed pixels outside the effective fill mask reject the local fill. These latest measurements/gates have offline coverage and await a physical run. Job `0a37110880504492b7c75ee97c59c828` recorded two sweep-recovered groups; page 52 BLAST was not one of them because its broad box failed classification. The physical gate remained in review because one story region had incomplete source-completeness evidence; the prior run had zero physical residuals.
 
 ### Five follow-ups (sixth pass, 2026-10-23)
 
@@ -155,12 +186,12 @@ Measured on the problem pages of the real chapter sample (translucent balloons o
 
 - **Review flags from typical texture.** Of 33 regions flagged `art_fidelity_uncertain` on the five chapters, ~25 were clean: the fidelity ratio compared mean |Laplacian| of a ring that started at the mask edge (lettering outline/glow remains) and crossed balloon borders. The ring now starts 3 px out, and the finding uses the *median* texture on both sides (`flat_patch_typical_ratio`, `None` when the surround is typically flat). The rejection gate keeps its mean-based rule. On the flagged pages: 11 → 4 flagged, the 4 with visible defects (white blob under drips, pink ghost, tone shift, a smoother-than-art fill).
 - **Fill choice near art edges.** The tone term of `_fill_consistency_parts` is judged only where the ring around a pixel is uniform (local std ≤ max(8, ring median)); next to an art edge (white sleeve beside a grey coat) the ring average rewarded a fill that smeared the edge over one that continued it.
-- **Sound effects translated — IMPLEMENTED (`TRANSLATE_SFX`, default now `True`; `0` in the root `conftest.py`).** `yomu/translation/sfx_glossary.py` renders known sounds and `*action*` labels from `assets/lexicon/sfx_en_pt.json` ("BANG" → "BAM", "BAAANG" → "BAAAM", "*bite*" → "*morde*"), keeping case, stretch and decoration. A sound the glossary does not know keeps its source text (it is never sent to the provider: DeepL read "PRESS" as a noun, "IMPRENSA", and an OCR misread of "BOOM", "hoog", as Dutch, "alto"); the provider echo rule then preserves the original lettering. `validate_translation_text` accepts a non-empty SFX rendering (onomatopoeia has no lexical overlap). Telemetry: `sfx_glossary_translations`.
+- **Sound effects translation — IMPLEMENTED, disabled by default (`TRANSLATE_SFX=False`).** Disabled mode preserves original SFX lettering and skips cleanup/redraw for those groups. Enabling it makes `yomu/translation/sfx_glossary.py` render known sounds and `*action*` labels from `assets/lexicon/sfx_en_pt.json` ("BANG" → "BAM", "BAAANG" → "BAAAM", "*bite*" → "*morde*"); unknown SFX can be sent to the configured provider. Telemetry: `sfx_glossary_translations`.
 - **Source slant matched — IMPLEMENTED (`RENDER_MATCH_SOURCE_SLANT`, default on).** `_match_source_slant` measures the drawn translation's slant with the same `_text_slant_degrees` used on the source glyphs; when they differ by ≥ 4° the drawn pixels (text, outline, glow) are sheared about their centre to the source slant, only if the result stays inside the safe area (`group.slant_match`).
 
 ### Real chapters with DeepL (eighth pass, 2026-10-24)
 
-Measured on three downloaded chapters (Webtoon ep. 58/59, Vortex ch. 24; 283 logical pages) translated by DeepL through a developer harness (the shipped CLI routes enabled jobs through the authenticated Yomu backend).
+Measured on three downloaded chapters (Webtoon ep. 58/59, Vortex ch. 24; 283 logical pages) translated by DeepL through a developer harness (the shipped CLI routes enabled jobs through the authenticated Komyst backend).
 
 - **Slant only for italic sources.** `_match_source_slant` leans the translation only when the glyph classifier calls the source `italic`, measures the drawn text per line (median; a block of centred lines read −24° on upright text) and extends `translation_box`/`effect_box` to the sheared ink (otherwise the page visual guard saw the sheared pixels as outside the allowed area and rolled back the group).
 - **Echoes that are correct.** A provider echo is a silent preserve for a sound effect, and for short (≤ 3 words) text with no common English word ("A-AH...", "RYU KANG-MIN?"); a longer echo stays a review item.
@@ -168,6 +199,15 @@ Measured on three downloaded chapters (Webtoon ep. 58/59, Vortex ch. 24; 283 log
 - **Sound effects get the learned last resort** when `TRANSLATE_SFX` is on and the sound is known (glossary or dictionary word), and are drawn as display lettering (size from the source, `shout` role before the glyph classifier, which reads brush lettering as serif italic).
 - **Translation set on the CLEAN rescue.** When every render strategy is refused but the CLEAN pass (last resort included) removed the source, `_render_on_clean_rescue` draws the translation on that reconstruction under the same `_enforce_visual_bounds` and OCR legibility check, adds its area to the page's allowed mask, and ships it as `render_with_review` (`rendered_on_learned_clean_rescue`) instead of leaving the English page.
 - **Measured outline width** from the cleanup (`lettering_stroke_width`) raises a thinner sampled outline (cap 15 % of the line height). Known gap: when the accepted path carries no stroke measurement the outline stays as sampled.
+
+### Stroke-coupled SFX masks, LAB boundary blending and masked PaddleOCR sweep (2026-11-08)
+
+- **Stroke-coupled SFX glyph + halo mask (_sfx_glyph_halo_mask) — IMPLEMENTED, TESTED_OFFLINE.** On sfx regions (sfx_area), _remove_text_for_group builds the cleanup mask via _sfx_glyph_halo_mask: dark connected components (gray <= 50) that touch the group ROI boundary (panel frames, hair, sword blades, shadows) are rejected unless they form >=18% of the ROI area, while coupled white outlines (gray >= 210 within 5 px of the dark core and whose connected component has >=35% overlap within 9 px of the core) and enclosed glyph counters are included and dilated by 6 px (5 px when erode_outer=True for removal verification). _refine_lettering_mask preserves this mask unchanged, and _clean_source_for_clean_artifact never uses rectangular _line_box_mask on sfx or sfx_area/	extured_art/speed_lines.
+- **Direct lama_large routing for large SFX (>= 8000 px) — IMPLEMENTED, TESTED_OFFLINE.** Large SFX regions skip classic Telea/harmonic strategy loops and route directly through source_scoped (sfx_straight_to_lama) into _try_advanced_art_fallback (lama_large), avoiding duplicate _apply_cleanup_mask and redundant _clean_source_for_clean_artifact passes.
+- **LAB chroma/luminance boundary matching + inner-edge feathering — IMPLEMENTED, TESTED_OFFLINE.** AdvancedArtInpainter.reconstruct (yomu/clean/inpainting/advanced_art_inpainting.py) applies _match_luminance_and_feather_crop: matches L/A/B median shift against the 2-9 px outer ring (clamped to [-14, +14] on L and [-8, +8] on A/B) and feathers the outer 4 px inside the mask where |pred - orig| <= 28.0, preserving OUTSIDE_MASK_CHANGED_PIXELS = 0.
+- **Known-box pre-masking & PaddleOCR v3 xyxy fix in
+esidual_sweep — IMPLEMENTED, TESTED_OFFLINE.** yomu/ocr/subprocess_ocr_worker.py converts PaddleOCR v3
+ec_boxes ([x1, y1, x2, y2]) to [x1, y1, w, h]. yomu/ocr/residual_sweep.py masks already-detected RapidOCR boxes (_mask_known_boxes, padded by 6 px with local border median) before calling CPU PaddleOCR, reducing DBNet++/CRNN inference time by 35%-52% on multi-balloon pages and recovering lower-half SFX (CLINK on ep. 285 page 4).
 
 ## Harmonic spatial-gate experiment (Sprint 03C) — historical
 
@@ -178,3 +218,46 @@ Measured on three downloaded chapters (Webtoon ep. 58/59, Vortex ch. 24; 283 log
 The page 01 known-visible transfer case has 89 automatic polarity outliers in the immediate two-pixel ring (67 at distance 1 px and 22 at 2 px). The unmodified reference confirms these are dark background texture, not visible lettering; the detector reports outliers, not text labels. They are excluded from Dirichlet donors, but any remaining automatic suspect currently requires review. Five Canny pixels appear only in the diagnostic black-hole ablation; the unmodified page 01 reference has none in the gate band. Therefore that edge signal cannot be treated as proof of nearby art conflict.
 
 The gate was not relaxed: synthetic connected fringe, crossing line art, screentone and unknown-context controls still require review, while the smooth-gradient control is accepted. Nearby parallel/column edges also require review despite known synthetic ground truth, showing that the Canny rule is broad. There is not enough independent real positive/negative labeling to distinguish a true glyph fringe from natural texture or infer whether hidden art continues beneath lettering. Keep the harmonic solver isolated and the feature flag off until that evidence exists. The Sprint 03D timing changes affect test fixtures only; production watchdog and OCR behavior are unchanged.
+# Composição final e efeito de lettering (08/11/2026)
+
+O commit de um candidato já aprovado para CLEAN copia exclusivamente os pixels
+da máscara autorizada. Não executa novamente LaMA, preenchimento clássico ou
+seleção de alternativas: uma nova reconstrução produziria pixels diferentes
+dos que passaram pelos validadores. Fora dessa máscara, preserva o buffer CLEAN
+acumulado, inclusive regiões anteriores, sem copiar as traduções desse candidato.
+
+O passe opcional `caption_effect` usa `yomu/clean/ownership/lettering_effects.py`
+para separar núcleo dos glifos, brilho comprovado, envelope de efeito e linhas
+brancas protegidas. Exige fonte rastreável/completa na página ativa e valida
+novamente essa autoridade antes de reutilizar o cache do grupo. A máscara e o
+hash dos pixels originais vinculam as métricas locais ao candidato; máscaras
+ou fontes alteradas não ganham a validação espacial do efeito anterior.
+
+FLUX edita apenas o recorte de contexto por referência, sem máscara nativa.
+A composição tem transição dentro da máscara e restaura exatamente os pixels
+protegidos. A comparação de cor usa pares locais de borda com suporte mínimo,
+mediana de erro <=12 e percentil 95 <=30. O erro global anterior permanece no
+diagnóstico. O verificador de manchas desconsidera somente o escurecimento de
+pixels cuja origem foi comprovada como brilho cromático, condicionado à cor
+espacial e à integridade das linhas protegidas. Os demais pixels continuam
+sujeitos aos mesmos limites. OCR residual estrito também verifica palavras
+compartilhadas entre fonte e tradução. Não há exceção por página ou texto.
+
+SFX, nomes preservados, logos e créditos não usam esse passe. A função
+`_sfx_glyph_halo_mask` v4 permanece idêntica ao snapshot anterior.
+
+## Recuperação de SFX e concorrência (08/11/2026)
+
+Caixas OCR rejeitadas não ocultam o painel da sweep. A recuperação exige nova
+leitura e os validadores canônicos; sequências de som repetidas só superam o
+filtro de ruído quando a sweep Paddle tem confiança >=0,90 e glifos comprovados
+por tinta/anel branco. O teto geométrico de SFX inclui as caixas das suas linhas
+para não cortar pontas inclinadas, sem substituir a máscara v4 por retângulos.
+Workers copiam a proveniência apenas da página correspondente e mesclam os
+eventos novos. O estado de revisão preserva a promoção decorativa da fonte.
+
+O replay de 65 páginas com 2 workers reduziu preflight/render/escrita de 196,43
+para 133,67 s, com 130 imagens idênticas pixel a pixel; não mede o capítulo inteiro.
+Páginas CLEAN sem alteração continuam na sequência completa e não executam
+inpaint quando não há remoção aprovada. Evidência e limites no
+[relatório](../../reports/clean_parallel_20261108.md).

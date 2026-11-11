@@ -211,7 +211,7 @@
       description = terminal[1] || String(state.message || '');
       tone = terminal[2];
     } else if (mode === MODE_BOOTSTRAP) {
-      title = status === 'finished' ? 'Yomu Sekai pronto' : 'Preparando o Yomu Sekai';
+      title = status === 'finished' ? 'Komyst pronto' : 'Preparando o Komyst';
       description = status === 'finished'
         ? 'Sessão, ambiente e interface preparados.'
         : 'Restaurando sua sessão e preparando o ambiente.';

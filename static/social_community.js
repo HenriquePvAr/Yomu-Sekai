@@ -105,7 +105,7 @@ function developmentState() {
     el('div', { class: 'sc-development-kicker', text: 'COMUNIDADE' }),
     el('span', { class: 'sc-development-badge', text: 'EM DESENVOLVIMENTO' }),
     el('h2', { text: 'Um novo espaço para suas histórias.' }),
-    el('p', { text: 'Estamos preparando um espaço para descobrir, acompanhar e compartilhar histórias com a comunidade Yomu Sekai.' }),
+    el('p', { text: 'Estamos preparando um espaço para descobrir, acompanhar e compartilhar histórias com a comunidade Komyst.' }),
     el('div', { class: 'sc-development-rule' }),
     el('small', { text: 'A comunidade ainda não está disponível nesta versão.' }),
   ]);

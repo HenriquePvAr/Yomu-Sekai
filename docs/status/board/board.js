@@ -3,8 +3,8 @@
 // `risk` separa medido de suposto com MEDIDO / NÃO MEDIDO / SEM FONTE / SUPOSIÇÃO.
 window.BOARD = {
   title: 'YomuSekai · Quadro',
-  subtitle: 'HenriquePvAr/Yomu-Sekai',
-  updatedAt: '2026-11-04',
+  subtitle: 'Komyst',
+  updatedAt: '2026-11-08',
   repoUrl: 'https://github.com/HenriquePvAr/Yomu-Sekai',
   defaultBranch: 'main',
   columns: [
@@ -21,11 +21,116 @@ window.BOARD = {
     { id: 'release',  label: 'Pacote · Beta · Release' },
   ],
   envs: {
-    main:   'main do Yomu-Sekai',
+    local:  'checkout local, sem commit/publicação',
+    main:   'main da Komyst',
     branch: 'branch claude/… no GitHub',
     none:   'sem código',
   },
   cards: [
+    {
+      id: 'CLEAN-PARALLEL-20261108',
+      title: 'Recuperar SFX omitidos e acelerar reconstrução sem mudar pixels',
+      domain: 'pipeline', column: 'dev', env: 'local', updated: '2026-11-08',
+      summary: 'IMPLEMENTED / TESTED_FROZEN: v4 preservada; reparos de seleção, geometria e proveniência. Replay de 65 páginas: 196,43 s com 1 worker e 133,67 s com 2; 130/130 imagens idênticas. Configuração local em 2 workers, sem integração à main.',
+      risk: 'MEDIDO somente preflight/render/escrita, sem download/OCR/sweep/provedor/PDF. RSS 8,24→8,65 GiB; margem de RAM pequena. Sem promessa de 100% dos SFX ou de menos de cinco minutos por capítulo.',
+      delivered: [
+        'Caixas rejeitadas deixam de esconder SFX da sweep; promoção do glossário atualiza política e componentes menores exigem tinta/anel branco comprovados',
+        'Correções verificadas em páginas 3/5/12; releituras reais de 6/10 reaplicadas com validação local, sem chamadas pagas',
+        'Workers recebem fonte isolada da própria página; merge apenas de eventos novos; máscara v4 e gates preservados',
+        'Páginas CLEAN sem alteração mantidas na sequência completa; escrita das 14 páginas iguais somou 4,90 s',
+      ],
+      pending: [
+        'PHYSICALLY_VERIFIED pendente para um novo job completo com configuração atual e inspeção dos artefatos canônicos',
+        'Validar tempo total e consumo desde a partida; sem commit, main, publicação ou homologação de 4 workers',
+      ],
+      links: [
+        { label: 'Relatório e limites', path: 'reports/clean_parallel_20261108.md' },
+        { label: 'Comparação A/B', path: 'reports/data/clean_parallel_20261108.json' },
+      ],
+    },
+    {
+      id: 'HARDWARE-PROFILE-20261108',
+      title: 'Perfil medido de RAM, VRAM e tempo do capítulo 285',
+      domain: 'infra', column: 'dev', env: 'local', updated: '2026-11-08',
+      summary: 'PHYSICALLY_VERIFIED para recursos/tempo do job f3de3bca: 65 páginas, 545,88 s, revisão necessária. Pico amostrado de 8,40 GiB RSS, 13,69 GiB privados, 4,70 GiB GPU dedicada e 4,49 GiB GPU compartilhada. Perfil documentado como referência testada, sem homologar mínimos.',
+      risk: 'Coleta começou em 3min04s e cobriu FLUX/final: 182 amostras, zero falhas de GPU. Outros aplicativos abertos; sistema atingiu 100% de RAM. Pico amostrado não é máximo garantido. Memória compartilhada da GPU não deve ser somada ao RSS para inventar exigência de RAM.',
+      delivered: [
+        'Ryzen 5 5600GT 6c/12t, 32 GB RAM instalada e RX 6600 8 GB; capacidade consultada via DXGI e consumo por PID/adaptador via contadores Windows',
+        'Runner e descendentes monitorados, incluindo Paddle e FLUX; UI/supervisor fora do consumo do job. Arquivos públicos não incluem argumentos de processos ou credenciais',
+        'Job terminou com 65 páginas CLEAN e traduzidas e PDF; 9min06s de parede / 539,54 s de pipeline. Recursos medidos não certificam qualidade visual',
+        'Análise/sweep 149,28 s de parede, preflight 197,16 s, tradução registrada 6,28 s. Paddle efetivamente encerrado antes do FLUX',
+        'Perfil público, resumo JSON e timeline CSV preparados localmente; README, guia de usuário e índice apontam para os limites da medição',
+      ],
+      pending: [
+        'Homologar mínimos de RAM/VRAM e CPU-only com ensaios controlados desde a partida, sem aplicativos pesados concorrentes, separando FLUX ligado/desligado',
+        'Não anunciar 9min06s como promessa por capítulo nem 32 GB/8 GB como mínimo comprovado; sem commit/publicação nesta tarefa',
+      ],
+      links: [
+        { label: 'Perfil de hardware', path: 'docs/HARDWARE_PROFILE.md' },
+        { label: 'Métricas agregadas', path: 'reports/data/job_f3de3bca_resources.json' },
+        { label: 'Timeline CSV', path: 'reports/data/job_f3de3bca_resources.csv' },
+      ],
+    },
+    {
+      id: 'RUNTIME-HEADLESS-MEMORY-20261108',
+      title: 'Consoles invisíveis, memória do job real e limpeza legada',
+      domain: 'infra', column: 'dev', env: 'local', updated: '2026-11-08',
+      summary: 'IMPLEMENTED / TESTED_OFFLINE no checkout. FLUX, gateway OCR e Git da UI ocultam consoles; dependências são protegidas apenas no worker headless. Paddle é encerrado após análise/sweep. Timeout pós-boot preserva o painel. Job 457d265b observado até interrupção por ENOSPC em 51/65; sem PDF completo validado.',
+      risk: 'RAM amostrada da árvore: 10,181 GiB residentes / 22,208 GiB privados; sistema chegou a 99% de RAM. Medição começou depois do início. Redução após liberação antecipada de Paddle ainda não medida em novo job. SFX da p3 foi removido em grande parte, mas deixou restos abaixo do quadro.',
+      delivered: [
+        'Print identificou sd-cli.exe; chamadas usam CREATE_NO_WINDOW e SW_HIDE sem perder logs, pipes ou exit codes; filho controlado Windows confirmou GetConsoleWindow=0',
+        'Gateway Paddle preserva reinício/protocolo e pode reabrir depois da liberação no fim da análise; heavy_ocr_release mede a duração; nenhuma máscara v4 alterada',
+        'Frontend preserva painel após timeout de refresh: reconectando, sem voltar a boot_failed; teste executa a função real para boot inicial e refresh',
+        'Job real 457d265b: análise/sweep ~125 s; tradução exibida ~133 s inclui preflight, enquanto chamadas provider somam 3,607 s; interrupção por No space left on device ao gravar progresso',
+        'Exclusão permanente autorizada de USERPROFILE/YomuExperimental: 452.474 arquivos / 66,29 GiB lógicos; um link não percorrido, projeto atual e Git comum em C:/Projetos/Yomu-Sekai preservados; disco ~93,1 GiB livres ao terminar',
+        '350 + 114 testes passaram, 403 subtestes, 1 ignorado; Node timeout e diff/syntax verificados; serviço recarregado sem job ativo',
+      ],
+      pending: [
+        'PHYSICALLY_VERIFIED: novo job completo para confirmar consoles invisíveis, queda do pico de memória e recuperação da saída autenticada',
+        'Resíduos SFX p3 abaixo do quadro e validação de todas as páginas CLEAN/PDF; job interrompido não gerou a pasta canônica images/clean',
+      ],
+      links: [
+        { label: 'Job, RAM e limpeza autorizada', path: 'reports/job_457d265b_runtime_20261108.md' },
+        { label: 'Política de processos', path: 'yomu/runtime/process_options.py' },
+        { label: 'Testes de subprocessos', path: 'tests/test_subprocess_ocr.py' },
+        { label: 'Regressão de timeout', path: 'tests/test_bootstrap_refresh_timeout.mjs' },
+      ],
+    },
+    {
+      id: 'INPAINT-FOLLOWUP-20261108',
+      title: 'Reparo aprovado de legenda, CLEAN de SFX e gargalos medidos',
+      domain: 'pipeline', column: 'dev', env: 'local', updated: '2026-11-08',
+      summary: 'IMPLEMENTED / TESTED_OFFLINE / TESTED_FROZEN no checkout. Reparo FLUX da legenda aprovado e ativado localmente; p23 sem caixa preta, fonte antiga não legível e zero mudanças fora da máscara. CLEAN também limpa SFX marcados ignored pela opção desligada; PDF mantém o original. Composição final reutiliza pixels aprovados. Máscara v4 preservada; p60 passa com fallback conservador quando a v4 reprova a área.',
+      risk: 'Último job real: 447,28 s na fila / 442,84 s no pipeline. Tempo total deste snapshot e meta de cinco minutos ainda não medidos no app. FLUX local da p23: 19,93 s. CLEAN agora executa trabalho SFX que antes era ignorado; replay não prova economia total. Duas falhas da suíte mais ampla reproduzidas também no snapshot anterior.',
+      delivered: [
+        'Preferência SFX por usuário sem apagar outras preferências; snapshot no job/runner, incluindo fila e origem local',
+        'CLEAN seleciona SFX com linhas rastreáveis independentemente da opção de typesetting; o PDF preserva o original quando desligada',
+        'Sweep executado no executor de análise, com uma instância Paddle serializada e proveniência por página; medidas de parede de layout_preflight e post_translation',
+        'Refinamento antes do preenchimento e reuso do candidato local no CLEAN; _sfx_glyph_halo_mask v4 idêntica ao backup anterior (comparação exata do segmento de fonte da função)',
+        'Tipografia distingue a tinta do brilho e mede glifos por linha; halo roxo de tinta branca sobre fundo preto preservado sem contorno azul do preset',
+        'Ação nativa explore via os.startfile para diretórios; restauração da janela e handles Win32 tipados, mantendo ownership e escopo de output',
+        '08/11: 416 testes + 404 subtestes passaram, 1 ignorado. Replay real do SFX da p9 com opção desligada: saída final idêntica ao original, CLEAN alterou 42.057 pixels; 17,51 s com carga dos modelos. Contadores CLEAN/inpainting agora incluem esse passe.',
+        'P23 TESTED_FROZEN com FLUX real: 16 glifos, 19,933901 s de modelo, 193.747 pixels alterados dentro e zero fora; zero linhas brancas protegidas alteradas. Cor espacial mediana 3,0899 / p95 21,3311; negativos preto/roxo e fonte original remanescente recusados.',
+        'Commit CLEAN reutiliza o candidato já aprovado sem nova inferência. Teste isolado da p23 com FLUX congelado: render 16,655 -> 1,093 s, incluindo remoção de uma carga fria de LaMA; não extrapolado para o capítulo.',
+        'P60: v4 parcial excedia razão máscara/núcleo 3,2476. Fallback conservador existente passa com razão 1,2864, cobertura 100% e OCR residual não legível; final idêntico ao original com SFX desligado. Limites e função v4 não relaxados.',
+        'Snapshot final: 382 testes + 393 subtestes passaram, 1 ignorado. Default distribuído do reparo de legenda False; configuração local True; FLUX geral e tradução SFX False. App recarregado idle, HTTP 200 e worker online.',
+        'Processo Vulkan usa o DIRECTML_LOCK canônico de LaMA/RapidOCR; fila de GPU e categoria sanitizada de falha nativa medidas. Uma repetição anterior sem lock compartilhado falhou em entregar arquivo e ficou corretamente sob revisão.',
+        'Replay final com fonte vinculada: 65 páginas / 84 grupos, 114,945 s na fase local com dois workers. 77 remoções locais passam; CRUSH p19 segue art_fidelity_uncertain. Não inclui download/OCR inicial/sweep/provider/PDF e não demonstra redução do job completo. PNG RLE medido mais lento; codec preservado.',
+      ],
+      pending: [
+        'PHYSICALLY_VERIFIED: novo capítulo de referência com este snapshot, card no Chrome e abertura visível do Explorer; hosts de Computer Use/navegador indisponíveis nesta sessão',
+        'Tempo total menor que cinco minutos e fidelidade perfeita ainda não comprovados; mais paralelismo de GPU requer medição de memória/contenda',
+        'Duas falhas preexistentes em test_art_reconstruction_quality (pontuação e linha cruzando letras); CRUSH p19 com fidelidade incerta, FluCK p10 com OCR inseguro e source echo de RocK? p20; fonte desenhada à mão permanece aproximação por família',
+      ],
+      links: [
+        { label: 'Ativação e medições atuais', path: 'reports/inpaint_activation_20261108.md' },
+        { label: 'Relatório completo', path: 'reports/inpaint_followup_20261108.md' },
+        { label: 'Opções verificadas na p23', path: 'reports/page23_options_20261108.md' },
+        { label: 'Contrato SFX PDF/CLEAN', path: 'tests/test_sfx_output_preference.py' },
+        { label: 'Glow medido', path: 'tests/test_neutral_lettering_glow.py' },
+        { label: 'Propriedade e cor do efeito', path: 'tests/test_lettering_effects.py' },
+      ],
+    },
 
     // ───────────────────────── PROD ─────────────────────────
 
@@ -188,6 +293,43 @@ window.BOARD = {
     },
 
     // ───────────────────────── QAS ─────────────────────────
+
+    {
+      id: 'CLEAN-SWEEP-01',
+      title: 'Reparo conservador de SFX encontrados pela sweep',
+      domain: 'pipeline', column: 'dev', env: 'branch',
+      updated: '2026-11-07',
+      summary: 'Implementação local na branch claude/inpaint-auto-repair-20261107. Tradução de SFX agora fica desligada por padrão e o .env local não a reativa. O job de ep. 285 usou a primeira versão das máscaras e sweep; a recuperação de caixas largas do BLAST e as métricas de máscara efetiva foram acrescentadas depois e ainda aguardam run físico.',
+      delivered: [
+        'Ep. 285, run 2c00c0f4-83dd-4b40-8bf7-04a1530a7543: 65 páginas concluídas, 80/80 traduções, 0 falhas de validação visual, 54 CLEAN certificados e 3 páginas com falha no certificado CLEAN',
+        'A sweep recuperou e renderizou 2 grupos; página 52 BLAST ficou sem grupo automático porque a caixa ampla (800×1753 px) foi recusada. A página 28 ficou em revisão de completude da fonte; isso não prova resíduo visual',
+        'Ajuste offline na imagem real da p. 52 reduziu a caixa BLAST para (0,849,800,734) px e o classificador a reconheceu como SFX; a tentativa de provider/render/inpaint desse novo caminho ainda aguarda run físico',
+        'Máscara final é reconstruída após o estreitamento proporcional; fundo complexo usa limite máscara/texto 2.0 e pode tentar LaMA com o candidato estreito; balões simples mantêm limite 3.0',
+        'Relatório por página/região mede máscara base e efetiva, expansão, mudanças dentro/fora, método, tentativas e motivo da decisão; as métricas efetivas mais recentes ainda não foram exercitadas fisicamente',
+        '27 testes focados passaram (4 subtestes) antes desta mudança de configuração; a edição do default SFX ainda não foi testada pela suíte',
+        'Comparação ep. 285: run de 365,9 s sem etapa de residual_sweep; run de 632,8 s gastou 100,6 s em residual_sweep, 5,7 s em tradução e 94,7 s em inpainting. O download variou de 60,8 s a 89,9 s; tempos de etapas somam trabalho paralelo e não fecham a diferença de parede.',
+        'TRANSLATE_SFX agora é False no default de settings, na configuração local e no fallback de settings da UI; worker reiniciado sem jobs ativos e configuração efetiva confirmada como False',
+        'RapidOCR isolado não leu BLAST na página 52 nem na página completa nem no recorte ampliado 2x; trocar Paddle por RapidOCR sem fallback perderia esse ghost confirmado',
+        'Máscara acoplada ao traço (_sfx_glyph_halo_mask) + proibição de _line_box_mask retangular em SFX + roteamento direto lama_large (>= 8000 px) + LAB boundary feathering em AdvancedArtInpainter: 7/7 páginas de SFX do ep. 285 (p. 03, 04, 08, 09, 13, 18, 49) aprovadas offline em lama_large sem borrões retangulares',
+        'Correção xyxy -> xywh no subprocess_ocr_worker (PaddleOCR v3 rec_boxes) + pré-mascaramento de caixas conhecidas (_mask_known_boxes) na residual_sweep: redução medida de 35%-52% no tempo de CPU do PaddleOCR e recuperação do CLINK na metade inferior da p. 04; 17 testes focados passando',
+      ],
+      pending: [
+        'Reduzir o custo da residual_sweep sem perder a detecção de fantasmas; desligar só a tradução de SFX não elimina os 100,6 s da varredura',
+        'Medir o próximo run com SFX preservado para quantificar a economia no CLEAN/redraw e verificar que os sons originais não gerem manchas',
+        'Avaliar uma varredura híbrida rápida que mantenha Paddle para os casos de lettering artístico não recuperados pelo RapidOCR ampliado',
+        'Novo run físico do ep. 285 na branch atual: validar provider/render e tentativa de inpaint do BLAST com caixa estreita; comparar máscara base/efetiva e inspecionar antes/depois',
+        'Tratar THUNK truncado na página 52: segue report-only até OCR produzir leitura e caixa confiáveis',
+        'Acompanhar a página 28, que ficou em revisão de completude da fonte, apesar da remoção de texto marcada como concluída/verificada',
+        'Bateria art reconstruction quality/fidelity anterior: 64 passaram, 13 ignorados e 2 falharam; baseline não foi comparado',
+      ],
+      links: [
+        { label: 'residual_sweep.py', path: 'yomu/ocr/residual_sweep.py' },
+        { label: 'ocr_balloon.py', path: 'yomu/ocr/ocr_balloon.py' },
+        { label: 'benchmark_pipeline.py', path: 'yomu/pipeline/benchmark_pipeline.py' },
+        { label: 'test_residual_sweep.py', path: 'tests/test_residual_sweep.py' },
+        { label: 'test_inpaint_mask_scope.py', path: 'tests/test_inpaint_mask_scope.py' },
+      ],
+    },
 
     {
       id: 'BUGFIX-TRANS-01',

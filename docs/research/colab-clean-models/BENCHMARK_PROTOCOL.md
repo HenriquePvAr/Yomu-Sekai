@@ -13,7 +13,7 @@ Status: **five-case synthetic set prepared; GPU comparison not executed**. The c
 
 ## Frozen comparison contract
 
-For every evaluated candidate use the same input, mask, resolution, color conversion, and final compositor. Record the exact model revision, weight file and SHA-256, code commit, dependency lock, precision, scheduler/settings, seed, and any prompt/task mode. Run the Yomu current Clean path as the mandatory control. Keep image-editing-only systems in a separate track unless they demonstrably accept and honor the same binary mask.
+For every evaluated candidate use the same input, mask, resolution, color conversion, and final compositor. Record the exact model revision, weight file and SHA-256, code commit, dependency lock, precision, scheduler/settings, seed, and any prompt/task mode. Run the Komyst current Clean path as the mandatory control. Keep image-editing-only systems in a separate track unless they demonstrably accept and honor the same binary mask.
 
 The model may propose pixels, but `FINAL_COMPOSITE` must take candidate pixels only within `AUTHORIZED_MASK` and preserve the source everywhere else. Verify dimensions/channels and count outside-mask changes exactly; any nonzero value rejects the artifact. This gate is independent of visual quality and text-removal success.
 

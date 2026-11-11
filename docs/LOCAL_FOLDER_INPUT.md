@@ -43,7 +43,7 @@ Na tela **Nova tradução** há duas origens locais:
 A lista **Páginas do capítulo** mostra prévia e **Ampliar** antes de iniciar. Com origem local, o
 escopo fica fixo em **completo** e **Download-only** fica indisponível. Os seletores só existem
 dentro do aplicativo desktop; num navegador comum a pasta não pode ser escolhida ("O seletor de
-pasta está disponível somente no aplicativo Yomu.").
+pasta está disponível somente no aplicativo Komyst.").
 
 Na UI, `LOCAL_INPUT_ROOTS` **não** é exigido: o seletor nativo autoriza os arquivos escolhidos, o
 navegador recebe apenas identificadores opacos de mídia, e o backend copia as páginas para uma
@@ -109,7 +109,8 @@ entrada inteira é recusada antes de enfileirar o processamento.
 ## Snapshot, proveniência e materialização
 
 Ao aceitar a pasta, o adaptador copia os bytes validados para um filho novo de
-`local_sources/` dentro da raiz de runtime (`%LOCALAPPDATA%\TradutorIAuntime\local_sources\` por padrão, ou `TRADUTOR_RUNTIME_ROOT`). Os nomes são gerados (`0001.png`, por exemplo), e o manifesto
+`local_sources/` dentro da raiz de runtime (`%LOCALAPPDATA%\TradutorIA
+untime\local_sources\` por padrão, ou `TRADUTOR_RUNTIME_ROOT`). Os nomes são gerados (`0001.png`, por exemplo), e o manifesto
 interno contém hashes, dimensões, formato, tamanho, IDs opacos e uma impressão digital da origem.
 Ele não contém o caminho original nem os nomes originais das páginas.
 

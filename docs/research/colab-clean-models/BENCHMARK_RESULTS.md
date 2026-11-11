@@ -10,7 +10,7 @@ Completed inference runs are listed here, separated by hardware and evidence typ
 
 These runs used different inputs, resolutions, model families, and configurations; their times are not a fair speed comparison. Outside-mask equality certifies compositor behavior only, not removal quality or fidelity.
 
-On the same synthetic source and mask, the Yomu OpenCV Telea primitive (radius 3) scored masked MAE 10.48, RMSE 34.94, and PSNR 17.26 dB. This is a primitive baseline only, not the complete Yomu candidate-selection/worker path. One fixture cannot establish generalization or beat the production baseline.
+On the same synthetic source and mask, the Komyst OpenCV Telea primitive (radius 3) scored masked MAE 10.48, RMSE 34.94, and PSNR 17.26 dB. This is a primitive baseline only, not the complete Komyst candidate-selection/worker path. One fixture cannot establish generalization or beat the production baseline.
 
 ## Coverage and ranking
 

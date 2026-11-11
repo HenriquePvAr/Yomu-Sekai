@@ -7,15 +7,15 @@
 #endif
 [Setup]
 AppId={{D4G-EVENT-STORM-FIX-20260915}
-AppName=Yomu Sekai - Native Ads Event Storm Fix
+AppName=Komyst - Native Ads Event Storm Fix
 AppVersion=0.9.0-beta.44
 DefaultDirName={localappdata}\Programs\YomuSekai-NativeAdsEventStormFix
-DefaultGroupName=Yomu Sekai - Native Ads Event Storm Fix
+DefaultGroupName=Komyst - Native Ads Event Storm Fix
 PrivilegesRequired=lowest
 ArchitecturesAllowed=x64
 ArchitecturesInstallIn64BitMode=x64
 OutputDir={#OutputDir}
-OutputBaseFilename=YomuSekai-NativeAds-EventStormFix-Setup-x64
+OutputBaseFilename=Komyst-NativeAds-EventStormFix-Setup-x64
 Compression=lzma2
 SolidCompression=yes
 CloseApplications=no
@@ -26,6 +26,6 @@ CreateUninstallRegKey=yes
 [Files]
 Source: "{#BundleRoot}\YomuSekai\*"; DestDir: "{app}"; Flags: recursesubdirs createallsubdirs ignoreversion
 [Icons]
-Name: "{group}\Yomu Sekai - Native Ads Event Storm Fix"; Filename: "{app}\YomuSekai.exe"; WorkingDir: "{app}"
+Name: "{group}\Komyst - Native Ads Event Storm Fix"; Filename: "{app}\YomuSekai.exe"; WorkingDir: "{app}"
 [Run]
-Filename: "{app}\YomuSekai.exe"; Description: "Iniciar Yomu Sekai - Native Ads Event Storm Fix"; Flags: postinstall skipifsilent nowait
+Filename: "{app}\YomuSekai.exe"; Description: "Iniciar Komyst - Native Ads Event Storm Fix"; Flags: postinstall skipifsilent nowait

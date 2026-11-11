@@ -18,7 +18,7 @@
 
 ## O runtime que precisa ser servido
 
-O Yomu Sekai não é um app mobile nem um site. É:
+O Komyst não é um app mobile nem um site. É:
 
 - executável **Win32** empacotado com PyInstaller (Python 3.11), **não UWP**;
 - UI em **WebView local** servida por FastAPI/NiceGUI em `127.0.0.1:8080`;

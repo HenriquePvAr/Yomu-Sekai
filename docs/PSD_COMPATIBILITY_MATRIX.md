@@ -64,7 +64,7 @@ Photoshop product version reported: **2025**. Photopea test date: after the
 M15 commit, as reported by the owner; exact calendar date/version was not
 provided. The owner also reported UTF-8 PT-BR displayed correctly for the
 characters supported by the selected font. A Type Layer was rasterized
-manually as an experiment; this was not attributed to Yomu and does not count
+manually as an experiment; this was not attributed to Komyst and does not count
 as automatic rasterization or loss in the original file. The supplied evidence
 does not establish a direct Photoshop→Photopea→Photoshop round-trip, nor does
 it separately report every operation for every synthetic fixture; those are

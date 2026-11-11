@@ -2,7 +2,7 @@
 
 > **Base verificada:** `5f482ce1` (branch `main`) · **Revisado em:** 2026-10-24
 
-Este é o documento autoritativo para preparar uma release do Yomu Sekai.
+Este é o documento autoritativo para preparar uma release do Komyst.
 
 - `PRODUCT_VERSION` e `BUILD_VERSION` são definidos em `yomu/runtime/version.py` (o antigo
   `app_version.py` da raiz não existe mais); não mantenha uma cópia manual de versões neste

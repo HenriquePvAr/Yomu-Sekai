@@ -1,4 +1,4 @@
-// Supabase authentication for the local Tradutor.Ia UI. SDK pinned to
+// Supabase authentication for the local Komyst UI. SDK pinned to
 // @supabase/supabase-js@2.58.0 and bundled locally (no CDN runtime dependency).
 //
 // Only the browser-safe public config reaches this file: SUPABASE_URL and the

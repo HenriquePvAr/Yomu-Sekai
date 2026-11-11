@@ -1,4 +1,4 @@
-# Estrutura do repositório Yomu
+# Estrutura do repositório Komyst
 
 > **Base verificada:** `5f482ce1` (branch `main`) · **Revisado em:** 2026-10-24
 

@@ -3,7 +3,7 @@
 ## Existing saved Colab run
 
 - Notebook title: `Yomu_Big_LaMa_Colab_Benchmark_V4` (the owner-provided Google Drive notebook; its private link is recorded in `COLAB_ENVIRONMENT.md`).
-- Model: Yomu Anime-Manga Big-LaMa TorchScript checkpoint.
+- Model: Komyst Anime-Manga Big-LaMa TorchScript checkpoint.
 - Public checkpoint source: `https://github.com/Sanster/models/releases/download/AnimeMangaInpainting/anime-manga-big-lama.pt`.
 - Expected checkpoint size: 205,717,870 bytes.
 - Expected SHA-256: `479d3afdcb7ed2fd944ed4ebcc39ca45b33491f0f2e43eb1000bd623cfb41823`.
@@ -30,7 +30,7 @@
 - One CPU inference completed at `%TEMP%/yomu-big-lama-cpu-62u349j6`; SHA-256 matched `479d3afdcb7ed2fd944ed4ebcc39ca45b33491f0f2e43eb1000bd623cfb41823` and file size was 205,717,870 bytes.
 - Load 6.143 s; inference 5.977 s; wall including lazy load 12.179 s; process RSS after run 701,403,136 bytes (not peak). No GPU used.
 - Outside-mask changed pixels: 0. Masked MAE/RMSE/PSNR: 3.57 / 18.49 / 22.79 dB. Human visual review found this simple sample acceptable, but it is one easy synthetic case only.
-- Same-mask OpenCV Telea primitive baseline: MAE/RMSE/PSNR 10.48 / 34.94 / 17.26 dB. This is not the entire Yomu local-candidate pipeline.
+- Same-mask OpenCV Telea primitive baseline: MAE/RMSE/PSNR 10.48 / 34.94 / 17.26 dB. This is not the entire Komyst local-candidate pipeline.
 - Comparison image: `%TEMP%/yomu-big-lama-cpu-62u349j6/comparison.png`. No private input was used or copied into Git.
 
 ## Five-case synthetic dataset and Colab runner

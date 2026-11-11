@@ -9,7 +9,7 @@ let authSceneLoading = null;
 function setAuthSceneActive(active) {
   if (!authSceneModule && !authSceneLoading) {
     if (!active) return;
-    authSceneLoading = import('./auth_scene.js?v=4').then(module => {
+    authSceneLoading = import('./auth_scene.js?v=5').then(module => {
       authSceneModule = module;
       module.setActive(true);
       return module;

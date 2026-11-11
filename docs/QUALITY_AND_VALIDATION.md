@@ -106,11 +106,7 @@ O reparo em modo `conservative` trata padrões estruturais limitados, como junç
 
 Os grupos recebem classe, confidence, motivo e evidências. As classes principais são fala, narração, SFX, decorative e unknown.
 
-A decisão usa texto, geometria, proximidade, orientação e características do container. Isso evita regras simplistas como “todo texto curto é SFX”. Com o default atual `TRANSLATE_SFX=True` (`yomu/config/settings.py`, desde 2026-10-24), SFX
-confirmados recebem a onomatopeia PT-BR do glossário `yomu/translation/sfx_glossary.py`
-(`assets/lexicon/sfx_en_pt.json`); um som que o glossário não conhece mantém o texto de origem.
-Em nenhum dos dois casos o SFX é enviado ao provedor de tradução. Com `TRANSLATE_SFX=False`,
-todo SFX confirmado é preservado. A suíte hermética fixa `TRANSLATE_SFX=0` no `conftest.py` raiz.
+A decisão usa texto, geometria, proximidade, orientação e características do container. Isso evita regras simplistas como “todo texto curto é SFX”. O default atual é `TRANSLATE_SFX=False` (`yomu/config/settings.py`), que preserva todos os SFX confirmados e pula sua limpeza/redraw. Com `True`, sons conhecidos usam o glossário local `yomu/translation/sfx_glossary.py` (`assets/lexicon/sfx_en_pt.json`); alguns SFX de sweep que não constam no glossário podem seguir ao provider. A suíte hermética fixa `TRANSLATE_SFX=0` no `conftest.py` raiz.
 
 Elementos decorativos também podem ser ignorados. Fala, narração, texto de sistema e
 `unknown` com evidência semântica de história seguem para tradução; logos, créditos,

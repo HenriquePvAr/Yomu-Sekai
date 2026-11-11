@@ -106,7 +106,7 @@ exe = EXE(
     [],
     [],
     name="YomuSekai",
-    icon=str(ROOT / "assets" / "branding" / "generated" / "yomu-sekai.ico"),
+    icon=str(ROOT / "assets" / "branding" / "generated" / "komyst.ico"),
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
