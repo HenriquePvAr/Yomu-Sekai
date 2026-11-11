@@ -34,9 +34,9 @@ window.BOARD = {
       "column": "blocked",
       "env": "local",
       "updated": "2026-11-11",
-      "summary": "F0.1–F0.7 implementadas localmente no branch fase-0-jobs-nao-morrem. Suíte completa: 6486 passaram e permanecem 4 falhas antigas de máscara/reconstrução. REF-A físico em Tradução pronta confirmou OCR e LaMa em DirectML e portão físico aprovado, mas o job terminou review_required por itens de qualidade/tradução.",
-      "risk": "TESTED_OFFLINE e PHYSICALLY_VERIFIED para dispositivos e portão físico deste job. Intervalo do monitor em 5 s; seu custo ≤2% ainda NÃO MEDIDO. Comparação de tempo com f181a17e é histórica, não A/B controlado. Suíte não verde e qualidade geral do job requer revisão.",
-      "blockedBy": "Para fechar a PAUSA 0: medir custo do monitor com controle equivalente, executar REF-B na GPU restaurada e tratar a revisão geral do REF-A. Quatro falhas preexistentes mantêm a suíte vermelha.",
+      "summary": "F0.1–F0.7 implementadas localmente em fase-0-jobs-nao-morrem (c8466ab); suíte completa: 6486 passaram, 4 falhas antigas de máscara/reconstrução. REF-A c034a1cf: 57/58 traduzidas, 53 certificados, portão físico passou com zero resíduos, mas review_required. REF-B 432b35af: 169/177 traduzidas, 69/85 certificados; review_required, 7 resíduos iguais à base. Dois REF-A Apenas Clean falharam em p034: imagem final inválida.",
+      "risk": "TESTED_OFFLINE e PHYSICALLY_VERIFIED nos jobs citados. A/B sequencial único do monitor: 364,10 s ligado vs 331,84 s desligado (-8,9%), diferença não causalmente isolada; alvo ≤2% não demonstrado. REF-B não passou o portão físico. Apenas Clean pela UI reproduziu failed em p034 (RuntimeError: imagem final invalida), embora o pipeline registre success.",
+      "blockedBy": "Investigar p034 no Apenas Clean; resolver resíduos/gate do REF-B e revisão do REF-A; medir de forma repetível o custo do monitor. Quatro falhas preexistentes de máscara/reconstrução mantêm a suíte vermelha.",
       "delivered": [
         "Portão SFX só reprova itens que foram enviados ao provedor, coberto por testes offline; falhar rápido por disco; retenção protege histórico e publicações",
         "Timeout real do subprocesso Paddle com reinício dentro do limite existente",
@@ -46,13 +46,12 @@ window.BOARD = {
         "Suíte completa após as alterações: 6486 passed, 4 falhas antigas, 141 skipped, 1 xfailed, 8 warnings e 787 subtests; 942.84 s",
         "REF-A físico c034a1cf: 65 páginas, 354.78 s pelo medidor, OCR/LaMa DirectML, 56 chamadas LaMa em DirectML; portão físico aprovado com zero resíduos",
         "Monitor físico: ativo em 5 s, 68 amostras; pico árvore RSS 3020.32 MB e pico de RAM usada pelo sistema 22765.21 MB; VRAM não medida neste job",
-        "Job REF-A encerrou review_required/REVIEW: itens de revisão manual/qualidade e um item de revisão semântica; outputs e PDF produzidos"
+        "Job REF-A encerrou review_required/REVIEW: itens de revisão manual/qualidade e um item de revisão semântica; outputs e PDF produzidos",
+        "REF-B 432b35af em Completo/SFX off/DirectML: 169/177 traduzidas, 69/85 certificados, 7 resíduos; review_required, contra failed na base",
+        "Dois REF-A Apenas Clean pela UI produziram imagens mas falharam em p034 (imagem final inválida); PDF não solicitado; monitor A/B sequencial único mediu 8,9% de diferença, não causal"
       ],
       "pending": [
-        "Medir custo do monitor comparando execuções equivalentes com e sem monitor; limite de 2% ainda não demonstrado",
-        "Executar REF-B após restauração do DirectML e medir RAM/dispositivos",
-        "Revisar os motivos de quality review_required no REF-A antes de declarar aprovação geral",
-        "Testar Apenas Clean pela interface; a falha de PDF anterior foi em CLI e não foi exercitada por este job",
+        "Resolver os resíduos/gate e as falhas de certificado do REF-B; revisar os motivos de quality review_required no REF-A",
         "As quatro falhas conhecidas impedem o aceite de suíte completa verde; não foram corrigidas nesta tarefa"
       ],
       "links": [

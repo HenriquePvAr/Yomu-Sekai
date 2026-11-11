@@ -52,9 +52,47 @@ A comparação é histórica, não um A/B controlado: versões e condições de 
 
 O estado geral do job ficou `review_required` (`REVIEW`), apesar do portão físico de remoção de texto-fonte passar. O manifesto lista revisão manual/qualidade de tradução e revisão semântica; há um item semântico em `p016:REGION_002:source_segmentation_recovered:GIFTSARERATHER`. Todos os 65 outputs e o PDF foram produzidos. A aprovação de qualidade geral permanece pendente.
 
-## Pendente para a PAUSA 0
+## Validação complementar — REF-A, REF-B e Apenas Clean (2026-11-11)
 
-- Rodar REF-B fisicamente depois de restaurar DirectML e medir seus recursos; nenhum resultado novo de REF-B foi obtido nesta rodada.
-- Comparar o tempo do monitor contra uma execução comparável sem monitor; o limite de 2% ainda não foi verificado fisicamente após o intervalo de 5 segundos.
-- Resolver/revisar os itens de qualidade que mantiveram o job em `review_required`; a aprovação do gate físico não equivale a aprovação geral.
-- Testar Apenas Clean pela interface: execuções anteriores por CLI terminaram com erro na etapa de PDF; este job foi Tradução pronta e não valida esse modo.
+### REF-A: base versus job novo
+
+`job_metrics.py --compare` entre `f181a17e-281d-40a8-bd7e-41b4bbdcdca1` e `c034a1cf-903b-471b-a799-575cad7f85de` confirmou 57/58 regiões traduzidas nos dois jobs. A base certificou 54 páginas, 8 foram classificadas como sem texto comprovado e 3 reprovaram (`10, 52, 60`). O job novo certificou 53, manteve 8 sem texto comprovado e reprovou 4 (`10, 23, 52, 60`); todos com `clean_certificate_not_pass`. O portão físico passou nos dois, com zero resíduos-fonte.
+
+O novo REF-A ficou em `review_required` por 5 grupos com revisão manual, avisos de qualidade de tradução e uma revisão semântica. Na página 16, o OCR leu `OTHER GIFTSARERATHER COMMON,BUTTHAT ONE ISN'T.`; a recuperação canônica foi `OTHER GIFTS ARE RATHER COMMON,BUT THAT ONE ISN'T.`; tradução: `OUTROS PRESENTES SÃO BASTANTE COMUNS, MAS ESSE NÃO É.`. A decisão semântica permaneceu em revisão. Os registros manuais também incluem p10 `FluCK` (SFX preservado) e p60 `PWIP` → `PIP` (fidelidade da reconstrução incerta). O mesmo item de p16 e `PWIP` → `PIP` já constavam na base; a página 23 é a reprovação de certificado que surgiu no job novo.
+
+### REF-B: job completo pela interface
+
+Job `432b35af-048b-4553-b6f6-0d351cf633d0`, modo `Completo`, Qualidade, force ligado, cache desligado e SFX desligado (conferido na configuração da interface). DirectML foi confirmado no log. O job terminou em `review_required`/`REVIEW`, não em `failed`; produziu PDF, imagens e PSDs. A comparação com `278c2486-02ae-4103-8a15-6f5ece95e26b`:
+
+| Métrica | Base `278c2486` | Novo `432b35af` |
+|---|---:|---:|
+| Tempo total | 641,26 s | 599,51 s |
+| Regiões traduzidas / detectadas | 169 / 177 | 169 / 177 |
+| Certificados de limpeza | 69 / 85 | 69 / 85 |
+| Páginas sem texto comprovado | 1 | 1 |
+| Páginas reprovadas | 15 | 15 |
+| Portão físico | reprovado | reprovado |
+| Resíduos-fonte | 7 | 7 |
+
+As mesmas 15 páginas reprovaram certificação: `2, 13, 24, 30, 34, 48, 53, 54, 65, 68, 72, 75, 77, 80, 85`, com `clean_certificate_not_pass`. Os relatórios apontam entre os resíduos idênticos `SIMPLE` (p. 2), `CLUNK-.` (p. 18), texto OCR em inglês (p. 38), `WHOOSH` (p. 53) e `ME?` (p. 72); são 7 no total nos dois jobs. O status melhorou de `ERROR`/`failed` para `REVIEW`/`review_required`, sem mudar a contagem de resíduos nem a cobertura de tradução.
+
+### Custo do monitor e falha real de Apenas Clean pela interface
+
+Foram executados dois REF-A consecutivos pela interface em `Apenas Clean`, Qualidade, force ligado, cache desligado, 65 páginas, sem chamadas de tradução paga. O primeiro teve monitor ligado (5 s); o segundo, desligado temporariamente. O override foi removido depois, e o worker voltou a `RESOURCE_MONITORING=True`, intervalo 5 s.
+
+| Execução | Monitor | RAM livre no início | Total medido | Inpainting |
+|---|---|---:|---:|---:|
+| `5ffc081a-8847-4d32-a944-006e2853eda5` | ligado, 5 s, 70 amostras | 12,99 GB | 364,10 s | 194,00 s |
+| `3ee21928-3731-4b9b-b773-8a8bb5603914` | desligado | 11,17 GB | 331,84 s | 173,22 s |
+
+A diferença observada foi 32,26 s (8,9%) a favor da rodada sem monitor. É uma medição sequencial única, não suficiente para atribuir toda a diferença ao monitor; RAM inicial, variação entre execuções e o custo de outros estágios não foram controlados/repetidos. O objetivo de custo ≤2% não foi demonstrado.
+
+**A interface realmente marca ambos os cartões como falha.** Os logs do pipeline dizem `status=success`, mas os manifestos dos jobs dizem `failed`; os dois têm erro não recuperável em `page_034`: `RuntimeError: imagem final invalida`. Os códigos agregados são `page_processing_error`, `physical_page_population_incomplete` e `source_page_coverage_incomplete`. As imagens Clean foram produzidas; o PDF não faz parte das operações pedidas neste modo (`requested_operations=['clean']`), não houve tentativa de PDF nem erro no estágio de PDF. Assim, o defeito observado pela interface é a falha de processamento da página 34 e o status do job, não uma falha de geração de PDF.
+
+## Pendências após esta medição
+
+- Investigar a imagem final inválida em p. 34 no caminho `Apenas Clean`; ambos os jobs reproduziram o mesmo erro.
+- Reduzir/medir novamente o custo de F0.6: a única comparação atual excedeu 2%, mas não isola causalidade.
+- Corrigir os 7 resíduos/falhas de qualidade do REF-B sem enfraquecer o portão físico.
+- Revisar os itens que mantêm REF-A em `review_required` e investigar a nova reprovação de certificado na p. 23.
+- As quatro falhas preexistentes de máscara/reconstrução continuam documentadas em `reports/falhas_preexistentes_20261111.md`.
