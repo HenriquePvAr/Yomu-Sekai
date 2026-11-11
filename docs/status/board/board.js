@@ -58,6 +58,7 @@ window.BOARD = {
         "A Fase 0 não perdeu certificados no controle dev: p010 manteve revisão preexistente e p023 passou; variação de certificado apenas na p023",
         ".env local conferido em 10.0 e app/worker reiniciados; Clean de painel 5731a21a: 65/65, review_required, 1,08% sampling, porém commit de execução bc02f38 anterior a 6c4734b",
         "REF-A Tradução pronta pela interface abee1571 em 6c4734b: DirectML, 57/58, 62 certificados, gate aprovado/0 resíduos; página 23 FLUX ok em 20,45 s",
+        "Pico RSS árvore medido por job: REF-A abee1571 8901.411 MB; REF-B 432b35af 3230.395 MB; as bases não têm medição por job comparável",
         "Suíte completa nesta checkout: 6499 passed, 4 falhas antigas reproduzidas, 141 skipped, 1 xfailed, 8 warnings e 787 subtests; 917,27 s",
         "Os quatro testes de máscara falham também em processos isolados; fixtures sintéticos, sem dependência de PNG solto ou ordem. Arquivos de máscara/teste idênticos entre bc02f38 e HEAD; diferença externa de resultado não explicada",
         "PAUSA 0 documentada; aprovação de merge em dev pendente. Após aprovação, próxima tarefa é F3.0"

@@ -63,12 +63,12 @@ Os testes simulados de F0.9 confirmam a gravação das últimas 40 linhas do std
 
 ### Tabela antes × depois
 
-| Capítulo / evidência | Tempo total | Traduzidas / detectadas | Certificados de limpeza | Gate físico / resíduos | Resultado |
-|---|---:|---:|---:|---|---|
-| REF-A base `f181a17e` (valores históricos da seção 2; diretório de saída não está mais presente) | 535,00 s | 57 / 58 | 62 / 65 | passou / 0 | `review_required` |
-| REF-A Fase 0, job `abee1571` (medidor lido agora) | 377,904 s | 57 / 58 | 62 / 65 | passou / 0 | `review_required` |
-| REF-B base `278c2486` (medidor) | 641,260 s | 169 / 177 | 70 / 85 | reprovou / 7 | `failed` (`translation_policy_violation`) |
-| REF-B Fase 0, job `432b35af` (medidor) | 599,511 s | 169 / 177 | 70 / 85 | reprovou / 7 | `review_required` |
+| Capítulo / evidência | Tempo total | Traduzidas / detectadas | Certificados de limpeza | Pico RSS da árvore | Gate físico / resíduos | Resultado |
+|---|---:|---:|---:|---:|---|---|
+| REF-A base `f181a17e` (valores históricos da seção 2; diretório de saída não está mais presente) | 535,00 s | 57 / 58 | 62 / 65 | não medido por job | passou / 0 | `review_required` |
+| REF-A Fase 0, job `abee1571` (medidor lido agora) | 377,904 s | 57 / 58 | 62 / 65 | 8.901,411 MB | passou / 0 | `review_required` |
+| REF-B base `278c2486` (medidor) | 641,260 s | 169 / 177 | 70 / 85 | não medido | reprovou / 7 | `failed` (`translation_policy_violation`) |
+| REF-B Fase 0, job `432b35af` (medidor) | 599,511 s | 169 / 177 | 70 / 85 | 3.230,395 MB | reprovou / 7 | `review_required` |
 
 O REF-A manteve cobertura, certificados e gate físico e reduziu o tempo reportado de 535 s para 377,90 s. O artefato de saída da base `f181a17e` não existe mais no caminho registrado pelo banco; para o “antes”, os números de qualidade/tempo são os da linha de base previamente documentada, não uma nova comparação direta do medidor. O REF-B preservou as contagens reais: `job_metrics.py --compare` mediu 70/85 certificados nos dois artefatos e os mesmos 7 resíduos; a gravidade melhorou de `ERROR` para `REVIEW`, e o tempo caiu 41,75 s. Relatos anteriores neste repositório de 69 certificados no REF-B estavam incorretos; prevalece a contagem auditada no `timing_report.json`/`artifact_manifest.json` e pelo medidor.
 
