@@ -33,7 +33,7 @@ class ResourceMonitor:
         output_folder: str | Path,
         *,
         enabled: bool = True,
-        interval_seconds: float = 1.0,
+        interval_seconds: float = 5.0,
         total_pages: int = 0,
         generate_html: bool = False,
     ) -> None:
@@ -295,6 +295,7 @@ class ResourceMonitor:
             "cpu_percent",
         ]
         summary: dict[str, Any] = {"sample_count": len(samples)}
+        summary["interval_seconds"] = self.interval_seconds
         for field in fields:
             values = [float(sample.get(field) or 0.0) for sample in samples]
             summary[f"{field}_avg"] = round(statistics.fmean(values), 3)

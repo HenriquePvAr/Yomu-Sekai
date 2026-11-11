@@ -21,6 +21,7 @@ class ResourceMonitorTests(unittest.TestCase):
     def test_disabled_monitor_is_safe_without_reports(self):
         with tempfile.TemporaryDirectory() as tmp:
             monitor = ResourceMonitor(tmp, enabled=False)
+            self.assertEqual(monitor.interval_seconds, 5.0)
             monitor.start()
             summary = monitor.stop()
             self.assertFalse(summary["enabled"])
