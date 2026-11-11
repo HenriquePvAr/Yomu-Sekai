@@ -289,7 +289,7 @@ Objetivo: nenhum job morre por causa de disco, de uma regra de SFX ou de um subp
 1. Mude o padrão para `True`.
 2. Confirme que `psutil` está em `requirements/*.txt`; se não estiver, acrescente.
 3. Garanta que o resumo (pico de RSS do processo e filhos, pico de RAM do sistema, pico de swap) vai para `timing_report.json` em `resource_monitoring`. Não gere o relatório HTML por padrão (só JSON e CSV); HTML fica opt-in.
-4. Meça o custo diretamente como `resource_monitor_sampling_seconds / total_seconds`. O intervalo inicial foi 5 segundos; se o custo exceder 2%, aumente o intervalo e repita o Apenas Clean. Foi medido 2,13% a 5 s e 1,07% a 10 s em REF-A; 10 s passa a ser o padrão versionado. A instalação local ainda declara 5 s em `.env`; ela não foi alterada.
+4. Meça o custo diretamente como `resource_monitor_sampling_seconds / total_seconds`. O intervalo inicial foi 5 segundos; se o custo exceder 2%, aumente o intervalo e repita o Apenas Clean. Foi medido 2,13% a 5 s e 1,07% a 10 s em REF-A; 10 s passa a ser o padrão versionado. Após autorização do dono, `.env` local passou a declarar `RESOURCE_MONITOR_INTERVAL_SECONDS=10.0`; app e worker foram reiniciados e os jobs do painel registraram `interval_seconds: 10.0`.
 
 **Teste.** Ajuste os testes que assumem o padrão desligado.
 
@@ -325,17 +325,22 @@ Objetivo: nenhum job morre por causa de disco, de uma regra de SFX ou de um subp
 
 **Aceite físico.** Fazer REF-A `Apenas Clean` por linha de comando, conferir 65 imagens e calcular segundos de amostragem / tempo total; após o dono iniciar REF-A `Tradução pronta`, verificar a página 23. Se o FLUX falhar, o artefato em `errors/` deve conter o stderr diagnóstico. Rodar a suíte completa e parar na PAUSA 0 sem push.
 
-**Resultado parcial (2026-11-11).** REF-A Apenas Clean CLI em DirectML produziu 65 PNGs em 384,82 s; 64 certificados passaram e a página 10 ficou `REVIEW_REQUIRED` por `unresolved_clean_regions`. A base `dev` `7879bad`, executada com as mesmas opções em worktree, também reprovou p010 pelo mesmo motivo; pixels da p010 são idênticos. A pendência é preexistente e vai para a Fase 3. A Fase 0 passou p023, que ficou em revisão na base. As imagens da Fase 0 são pixel a pixel idênticas às da rodada anterior a 5 s. Custo de amostragem a 10 s: 4,12 s (1,07%). A verificação pela interface e a rodada paga Tradução pronta ainda dependem de validação específica; consulte `reports/fase_0_f09_validacao_20261111.md`.
+**Resultado físico consolidado (2026-11-11).** REF-A Apenas Clean CLI em DirectML produziu 65 PNGs em 384,82 s; 64 certificados passaram e a página 10 ficou `REVIEW_REQUIRED` por `unresolved_clean_regions`. A base `dev` `7879bad`, com as mesmas opções, também reprovou p010 pelo mesmo motivo e pixels idênticos: preexistente, para Fase 3. A interface registrou Clean `5731a21a…` com 65/65 imagens e `review_required`, monitor 4,35/404,26 s (1,08%), mas o banco e o manifesto identificam o código como `bc02f38`, anterior a `6c4734b`; não fecha a validação física do fix F0.8 no snapshot final. REF-A Tradução pronta `abee1571…`, em `6c4734b`, teve 57/58 traduzidas, 62/65 certificados, gate físico aprovado com zero resíduos; p023 usou FLUX com sucesso em 20,45 s. REF-B base `278c2486` contra `432b35af`: `job_metrics.py` confirma 169/177 traduzidas, 70/85 certificados e 7 resíduos nos dois; tempo 641,260→599,511 s; `failed`→`review_required`. A contagem auditada é 70 em ambos; relatórios anteriores que diziam 69 estavam incorretos. A comparação REF-A usa linha de base documentada porque o diretório de saída `f181a17e` não está mais no caminho registrado pelo banco. Consulte `reports/fase_0_f09_validacao_20261111.md` para a tabela e limitações.
+
+**Suíte (11/11, checkout e runtime identificados).** A execução completa deu 6.499 pass, 4 falhas antigas de máscara/reconstrução, 141 skipped, 1 xfailed, 8 warnings e 787 subtests, em 917,27 s. Cada uma das quatro falhou isoladamente também. Os fixtures são sintéticos; não são afetados pelos PNGs de `download_gate` nem pela ordem da suíte. O relatório externo de 6.502/1 e a alegação de que três passam em `bc02f38` não foram reproduzidos; versões atuais são Python 3.11, OpenCV 4.10.0 e NumPy 2.3.5. Os arquivos de máscara/teste são idênticos entre `bc02f38` e HEAD, portanto ambiente/import diferente é hipótese sem prova. F3.0 segue aberta.
+
+**PAUSA 0.** Resultados físicos e métricas estão registrados; o merge aguarda aprovação do dono. A suíte não está verde nesta checkout e F0.8 ainda precisa de Clean físico cuja proveniência seja `6c4734b` ou descendente.
 
 ### ⏸ PAUSA 0
 
 Rodar REF-A e REF-B (REF-B em modo Completo). Critérios de aceite da fase:
 
-- [ ] REF-B termina `review_required` ou `completed`, nunca `failed`.
+- [x] REF-B termina `review_required`, nunca `failed` (base `failed`; 169/177, 70/85 e 7 resíduos mantidos).
 - [ ] Nenhum job fica mais de 10 s rodando depois de um erro de disco.
-- [ ] Pico de RAM aparece no relatório de tempo dos dois capítulos.
-- [ ] Qualidade (seção 2.2) igual ou melhor nos dois capítulos.
-- [ ] Suíte completa verde.
+- [x] Pico de RAM aparece no relatório de tempo dos dois capítulos (REF-A `abee1571`, REF-B `432b35af`).
+- [x] Qualidade: REF-A manteve 57/58, 62/65 e gate aprovado; REF-B manteve 169/177, 70/85 e 7 resíduos conforme os artefatos auditados.
+- [ ] F0.8 físico executado pelo painel com código `6c4734b` ou descendente (o run Clean disponível está em `bc02f38`).
+- [ ] Suíte completa verde (6.499 pass e 4 falhas reproduzidas nesta checkout).
 
 ---
 

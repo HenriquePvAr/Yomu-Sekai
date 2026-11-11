@@ -68,13 +68,15 @@ Job `432b35af-048b-4553-b6f6-0d351cf633d0`, modo `Completo`, Qualidade, force li
 |---|---:|---:|
 | Tempo total | 641,26 s | 599,51 s |
 | Regiões traduzidas / detectadas | 169 / 177 | 169 / 177 |
-| Certificados de limpeza | 69 / 85 | 69 / 85 |
+| Certificados de limpeza | 70 / 85 | 70 / 85 |
 | Páginas sem texto comprovado | 1 | 1 |
 | Páginas reprovadas | 15 | 15 |
 | Portão físico | reprovado | reprovado |
 | Resíduos-fonte | 7 | 7 |
 
 As mesmas 15 páginas reprovaram certificação: `2, 13, 24, 30, 34, 48, 53, 54, 65, 68, 72, 75, 77, 80, 85`, com `clean_certificate_not_pass`. Os relatórios apontam entre os resíduos idênticos `SIMPLE` (p. 2), `CLUNK-.` (p. 18), texto OCR em inglês (p. 38), `WHOOSH` (p. 53) e `ME?` (p. 72); são 7 no total nos dois jobs. O status melhorou de `ERROR`/`failed` para `REVIEW`/`review_required`, sem mudar a contagem de resíduos nem a cobertura de tradução.
+
+**Correção de contagem (2026-11-11):** a leitura direta de `artifact_manifest.json` e `job_metrics.py --json` confirmou `70 PASS / 15 REVIEW_REQUIRED` em ambos os jobs. A tabela anterior que dizia `69 / 85` estava errada.
 
 ### Custo do monitor e falha real de Apenas Clean pela interface
 

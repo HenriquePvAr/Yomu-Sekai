@@ -34,9 +34,9 @@ window.BOARD = {
       "column": "blocked",
       "env": "local",
       "updated": "2026-11-11",
-      "summary": "F0.1–F0.9 implementadas localmente. REF-A Apenas Clean CLI em DirectML produziu 65 imagens em 384,82 s; 64 certificadas, p010 em REVIEW_REQUIRED. Monitor: 1,07% a 10 s. Suíte completa: 6497 passaram; somente as 4 falhas antigas de máscara/reconstrução.",
-      "risk": "Controle REF-A em dev 7879bad também deixa p010 REVIEW_REQUIRED por unresolved_clean_regions; pixels da p010 são idênticos aos da Fase 0, logo é defeito preexistente para Fase 3. Fase 0 tem 64 PASS/1 revisão; dev 63 PASS/2 revisões (p010,p023). Padrão versionado 10 s; dono vai alterar a única entrada da .env e reiniciar.",
-      "blockedBy": "Aguardar os dois jobs REF-A iniciados pelo dono na interface: Apenas Clean para status/65 imagens/cartão/interval_seconds=10.0; depois Tradução pronta para confirmar DirectML, certificados contra f181a17e, p023 e eventual errors/flux_*.log. Sem push/merge.",
+      "summary": "Fase 0 implementada na branch. REF-A Tradução pronta abee1571: 57/58, 62/65 certificados, gate físico aprovado/0 resíduos; p023 FLUX ok. REF-B 432b35af: 169/177, 70/85 certificados, 7 resíduos, review_required contra failed. Suíte reexecutada: 6499 passaram, 4 falharam.",
+      "risk": "Clean de painel 5731a21a produziu 65/65 e review_required com monitor 10s (1,08%), mas banco/run_manifest marcam bc02f38, anterior ao fix 6c4734b; F0.8 físico no snapshot final não comprovado. Quatro falhas antigas de máscara reproduzidas isoladas e na suíte no Python 3.11/OpenCV 4.10/NumPy 2.3.5; sem dependência de PNG solto ou ordem. F3.0 permanece aberta.",
+      "blockedBy": "Aguardar aprovação do dono antes de merge em dev. Depois da aprovação, iniciar Fase 3 pela F3.0 conforme plano. Não publicar. O REF-A base f181a17e não está mais no caminho de saída registrado; tabela antes/depois usa os números documentados da base.",
       "delivered": [
         "Portão SFX só reprova itens que foram enviados ao provedor, coberto por testes offline; falhar rápido por disco; retenção protege histórico e publicações",
         "Timeout real do subprocesso Paddle com reinício dentro do limite existente",
@@ -49,14 +49,18 @@ window.BOARD = {
         "REF-A físico c034a1cf: 65 páginas, 354.78 s pelo medidor, OCR/LaMa DirectML, 56 chamadas LaMa em DirectML; portão físico aprovado com zero resíduos",
         "Monitor físico: ativo em 5 s, 68 amostras; pico árvore RSS 3020.32 MB e pico de RAM usada pelo sistema 22765.21 MB; VRAM não medida neste job",
         "Job REF-A encerrou review_required/REVIEW: itens de revisão manual/qualidade e um item de revisão semântica; outputs e PDF produzidos",
-        "REF-B 432b35af em Completo/SFX off/DirectML: 169/177 traduzidas, 69/85 certificados, 7 resíduos; review_required, contra failed na base",
+        "REF-B 432b35af em Completo/SFX off/DirectML: 169/177 traduzidas, 70/85 certificados, 7 resíduos; review_required, contra failed na base. job_metrics confirma 70/85 também na base 278c2486",
         "Diagnóstico F0.8: p034 contém dois textos sobre fundo preto e a limpeza correta deixa pixels uniformes; a regra genérica de variância reprovava a saída sem conferir o certificado",
         "REF-A Apenas Clean CLI: DirectML confirmado; 65 PNGs; 64 certificados PASS, p010 REVIEW_REQUIRED; 384.82 s total; amostragem 4.116566 s/38 amostras = 1.07%; pico árvore RSS 8447.20 MB",
         "Suíte completa após o padrão de 10 s: 6497 passed, 4 falhas antigas, 141 skipped, 1 xfailed, 8 warnings e 787 subtests; 1015.71 s",
         "As 65 imagens finais da rodada a 10 s são pixel a pixel idênticas às da execução a 5 s; ambas têm 64 certificados PASS e p010 REVIEW_REQUIRED",
         "Controle REF-A apenas Clean em worktree dev 7879bad: 65 PNGs; 63 PASS, p010 e p023 REVIEW_REQUIRED; a p010 tem pixels idênticos às da Fase 0",
         "A Fase 0 não perdeu certificados no controle dev: p010 manteve revisão preexistente e p023 passou; variação de certificado apenas na p023",
-        "O dono confirmou uma única entrada .env na linha 79 e vai ajustá-la para 10 s. REF-A Clean e Tradução pronta pela interface ainda aguardam aviso de início"
+        ".env local conferido em 10.0 e app/worker reiniciados; Clean de painel 5731a21a: 65/65, review_required, 1,08% sampling, porém commit de execução bc02f38 anterior a 6c4734b",
+        "REF-A Tradução pronta pela interface abee1571 em 6c4734b: DirectML, 57/58, 62 certificados, gate aprovado/0 resíduos; página 23 FLUX ok em 20,45 s",
+        "Suíte completa nesta checkout: 6499 passed, 4 falhas antigas reproduzidas, 141 skipped, 1 xfailed, 8 warnings e 787 subtests; 917,27 s",
+        "Os quatro testes de máscara falham também em processos isolados; fixtures sintéticos, sem dependência de PNG solto ou ordem. Arquivos de máscara/teste idênticos entre bc02f38 e HEAD; diferença externa de resultado não explicada",
+        "PAUSA 0 documentada; aprovação de merge em dev pendente. Após aprovação, próxima tarefa é F3.0"
       ],
       "pending": [
           "Atualizar .env local para RESOURCE_MONITOR_INTERVAL_SECONDS=10 e reiniciar o app/worker, se o dono quiser aplicar o padrão medido",
