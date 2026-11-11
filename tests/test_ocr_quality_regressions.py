@@ -4245,6 +4245,42 @@ class OCRQualityRegressionTests(unittest.TestCase):
         _classify_groups([group], image)
         self.assertEqual(group.classification, "decorative")
 
+    def test_production_credit_stays_decorative_after_background_refinement(self):
+        image = np.full((300, 400, 3), 255, dtype=np.uint8)
+        group = _scored_group("STORY BY:KKULBEOL ARTBY:BEOLKKUL")
+        with (
+            patch(
+                "yomu.ocr.ocr_balloon._classify_background_region",
+                return_value=("textured_art", {"local_texture_mean": 8.0}),
+            ),
+            patch(
+                "yomu.ocr.ocr_balloon._decorative_textured_story_promotion_allowed",
+                side_effect=(False, True),
+            ) as promotion_check,
+        ):
+            _classify_groups([group], image)
+
+        self.assertEqual(group.classification, "decorative")
+        self.assertEqual(promotion_check.call_count, 1)
+
+    def test_background_reclassified_sfx_is_ignored_when_translation_disabled(self):
+        image = np.full((300, 400, 3), 255, dtype=np.uint8)
+        group = _scored_group("A SOUND EFFECT")
+
+        def reclassify_as_sfx(target):
+            target.classification = "sfx"
+
+        with (
+            patch.object(config, "TRANSLATE_SFX", False),
+            patch("yomu.ocr.ocr_balloon._refine_classification_with_background",
+                  side_effect=reclassify_as_sfx),
+        ):
+            _classify_groups([group], image)
+
+        self.assertEqual(group.classification, "sfx")
+        self.assertTrue(group.ignored)
+        self.assertEqual(group.ignore_reason, "sfx_translation_disabled")
+
     def test_short_unknown_text_with_white_context_uses_light_region_cleanup(self):
         image = np.full((180, 360, 3), 255, dtype=np.uint8)
         cv_text.putText(

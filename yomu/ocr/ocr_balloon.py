@@ -4911,10 +4911,11 @@ def _classify_groups(groups, image_bgr, page_index=None):
             )
         with profile_step("classify.refine_background", page_index=page_index):
             _refine_classification_with_background(group)
-        # Background refinement can change the region class after the first
-        # policy pass. Reapply the SFX setting to the final classification.
-        with profile_step("classify.final_policy", page_index=page_index):
-            _apply_classification_policy(group)
+        # Background refinement can reveal an SFX after the initial policy pass.
+        # Apply only the SFX opt-out here: rerunning the full weak-label policy
+        # can promote production credits from decorative to unknown.
+        with profile_step("classify.final_sfx_policy", page_index=page_index):
+            _apply_disabled_sfx_policy(group)
         record_group(
             page_index=page_index,
             group_id=group.group_id,
@@ -4992,7 +4993,7 @@ def _refine_classification_with_background(group):
                 "white_pixel_ratio": metrics.get("white_pixel_ratio"),
             },
         )
-        _apply_classification_policy(group)
+        _apply_disabled_sfx_policy(group)
         return
 
     false_light_enclosure_effect = bool(
@@ -5044,7 +5045,7 @@ def _refine_classification_with_background(group):
                 "local_texture_mean": metrics.get("local_texture_mean"),
             },
         )
-        _apply_classification_policy(group)
+        _apply_disabled_sfx_policy(group)
         return
 
     if (
@@ -5203,7 +5204,10 @@ def _refine_classification_with_background(group):
             "background_type": "sfx_area",
             "reason": "short_stylized_text_embedded_in_art",
         }
-    _apply_classification_policy(group)
+    if group.classification == "sfx":
+        _apply_disabled_sfx_policy(group)
+    else:
+        _apply_classification_policy(group)
 
 
 def _recover_lexical_dialogue_on_plain_field(group, metrics, words, saturation):
@@ -5451,10 +5455,16 @@ def _decorative_short_display_story_promotion_allowed(group):
     return (dark_context or clause or typeset_caption) and saturated_context
 
 
-def _apply_classification_policy(group):
+def _apply_disabled_sfx_policy(group):
+    """Apply only the disabled-SFX translation flag after background refinement."""
     if group.classification == "sfx" and not config.TRANSLATE_SFX:
         group.ignored = True
         group.ignore_reason = "sfx_translation_disabled"
+
+
+def _apply_classification_policy(group):
+    _apply_disabled_sfx_policy(group)
+    if group.classification == "sfx" and not config.TRANSLATE_SFX:
         return
     # A sound the glossary knows keeps its region alive even when the visual
     # evidence is weak ("unknown"/"decorative" with a plain or ambiguous
