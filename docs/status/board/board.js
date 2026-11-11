@@ -34,25 +34,29 @@ window.BOARD = {
       "column": "blocked",
       "env": "local",
       "updated": "2026-11-11",
-      "summary": "F0.1–F0.7 implementadas localmente em fase-0-jobs-nao-morrem (c8466ab); suíte completa: 6486 passaram, 4 falhas antigas de máscara/reconstrução. REF-A c034a1cf: 57/58 traduzidas, 53 certificados, portão físico passou com zero resíduos, mas review_required. REF-B 432b35af: 169/177 traduzidas, 69/85 certificados; review_required, 7 resíduos iguais à base. Dois REF-A Apenas Clean falharam em p034: imagem final inválida.",
-      "risk": "TESTED_OFFLINE e PHYSICALLY_VERIFIED nos jobs citados. A/B sequencial único do monitor: 364,10 s ligado vs 331,84 s desligado (-8,9%), diferença não causalmente isolada; alvo ≤2% não demonstrado. REF-B não passou o portão físico. Apenas Clean pela UI reproduziu failed em p034 (RuntimeError: imagem final invalida), embora o pipeline registre success.",
-      "blockedBy": "Investigar p034 no Apenas Clean; resolver resíduos/gate do REF-B e revisão do REF-A; medir de forma repetível o custo do monitor. Quatro falhas preexistentes de máscara/reconstrução mantêm a suíte vermelha.",
+      "summary": "F0.1–F0.8 implementadas localmente; F0.9 instrumenta falhas do FLUX e tenta novamente uma vez apenas em output_or_process_failure. REF-A c034a1cf e REF-B 432b35af mantêm os resultados físicos já medidos; REF-A p023 falhou no sd-cli com código 1 em 7,2 s, enquanto a base terminou FLUX em 21 s/ok. A rodada nova e a suíte completa seguem pendentes.",
+      "risk": "45 testes focados passaram. F0.8 aceita página uniforme somente com certificado e identidade de pixels; estado terminal do log acompanha relatório. F0.9 salva stderr (40 linhas finais) por página/região, preserva o motivo real, não repete device_memory e deixa o fallback LaMa ativo após falha. A validação de produção ainda depende dos jobs autorizados.",
+      "blockedBy": "Rodar REF-A Apenas Clean por CLI, verificar 65 imagens/certificados e calcular resource_monitor_sampling_seconds / tempo total. Aguardar o dono iniciar REF-A pago em Tradução pronta e revisar p023/log. Rodar suíte completa; quatro falhas preexistentes de máscara/reconstrução permanecem conhecidas.",
       "delivered": [
         "Portão SFX só reprova itens que foram enviados ao provedor, coberto por testes offline; falhar rápido por disco; retenção protege histórico e publicações",
         "Timeout real do subprocesso Paddle com reinício dentro do limite existente",
         "Diagnóstico F0.4 documenta que psd/ e result_path têm conteúdo próprio e ambos são preservados",
         "Monitor psutil ligado por padrão com amostragem a cada 5 s; timing_report registra pico de árvore RSS, RAM do sistema, swap e intervalo; JSON/CSV padrão, HTML opt-in",
         "Alerta em GPU_INFERENCE=auto sem DirectML; timing_report e job_metrics exibem dispositivos efetivos de OCR e LaMa",
+        "F0.8: exceção certificada para página uniforme no modo sem typeset; log terminal coerente com status do relatório; monitor grava segundos e contagem de amostragem no timing_report; 24 testes focados passaram",
+          "F0.9: stderr final preservado em errors/flux_<página>_<região>.log; motivo da falha real na telemetria; retry único para output_or_process_failure e nenhum retry para device_memory; testes de subprocesso simulados",
         "Suíte completa após as alterações: 6486 passed, 4 falhas antigas, 141 skipped, 1 xfailed, 8 warnings e 787 subtests; 942.84 s",
         "REF-A físico c034a1cf: 65 páginas, 354.78 s pelo medidor, OCR/LaMa DirectML, 56 chamadas LaMa em DirectML; portão físico aprovado com zero resíduos",
         "Monitor físico: ativo em 5 s, 68 amostras; pico árvore RSS 3020.32 MB e pico de RAM usada pelo sistema 22765.21 MB; VRAM não medida neste job",
         "Job REF-A encerrou review_required/REVIEW: itens de revisão manual/qualidade e um item de revisão semântica; outputs e PDF produzidos",
         "REF-B 432b35af em Completo/SFX off/DirectML: 169/177 traduzidas, 69/85 certificados, 7 resíduos; review_required, contra failed na base",
-        "Dois REF-A Apenas Clean pela UI produziram imagens mas falharam em p034 (imagem final inválida); PDF não solicitado; monitor A/B sequencial único mediu 8,9% de diferença, não causal"
+        "Diagnóstico F0.8: p034 contém dois textos sobre fundo preto e a limpeza correta deixa pixels uniformes; a regra genérica de variância reprovava a saída sem conferir o certificado",
+          "A automação não será usada para iniciar tradução paga; Apenas Clean por CLI autorizado ainda precisa rodar. A revisão física de p023 depende do dono iniciar REF-A Tradução pronta"
       ],
       "pending": [
-        "Resolver os resíduos/gate e as falhas de certificado do REF-B; revisar os motivos de quality review_required no REF-A",
-        "As quatro falhas conhecidas impedem o aceite de suíte completa verde; não foram corrigidas nesta tarefa"
+          "Executar REF-A Apenas Clean por CLI, aferir custo do monitor e conferir 65 imagens/certificados",
+          "Aguardar REF-A Tradução pronta iniciado pelo dono; revisar página 23 e log FLUX, se houver nova falha",
+          "Rodar suíte completa e tratar as quatro falhas preexistentes sem misturá-las aos commits F0.8/F0.9"
       ],
       "links": [
         { "label": "Plano Fase 0", "path": "docs/plans/PLANO_EXECUCAO_KOMYST.md" },

@@ -53,6 +53,10 @@ Em cada **PAUSA** o agente para, não inicia a fase seguinte, e entrega:
 
 Quem revisa a PAUSA confere os critérios de aceite da fase. **Se qualquer critério de aceite falhar, a fase não é mergeada.**
 
+**Autonomia no trabalho da fase (decisão do dono, 2026-11-11).** Execute as tarefas na ordem, na branch da fase; faça commits locais por assunto com autor HenriquePvAr e sem coautoria; rode testes focados e a suíte completa; atualize relatórios, quadro e as notas `Status\\` e `Qualidade\\` do cofre Obsidian. Jobs Apenas Clean por linha de comando são permitidos nos dois capítulos de referência, quantas rodadas forem necessárias. Leia logs, relatórios e o banco de jobs somente leitura. Corrija testes desatualizados quando o comportamento mudou intencionalmente, explicando a decisão no commit. Quando detalhes não estiverem prescritos, decida estruturalmente e registre a escolha no relatório.
+
+Pare e pergunte antes de push, merge em `dev` ou `main`, force, exclusão de dados/pastas/branches, alterações em `.env`, instalação global ou mudança no ambiente da máquina, mudança de comportamento visível fora do escopo, queda de qualidade em REF-A/REF-B, mais de duas tentativas frustradas na mesma correção ou qualquer tarefa fora do plano. Se houver bloqueio, registre a pergunta em `reports/perguntas_pendentes.md`, avance tarefas independentes e só pare quando não houver trabalho independente. Agrupe pedidos de jobs pagos (máximo de dois por fase), nunca inicie tradução paga por automação de navegador: informe os cliques exatos e aguarde o dono iniciar. Não aceite tempo sem confirmar `(GPU DirectML)` no log.
+
 ### 1.6 Capítulos de referência
 
 | Id | Uso | URL |
@@ -60,7 +64,7 @@ Quem revisa a PAUSA confere os critérios de aceite da fase. **Se qualquer crit�
 | **REF-A** | Regressão (histórico de medições) | `https://www.webtoons.com/en/action/hero-killer/episode-285/viewer?title_no=2745&episode_no=285` |
 | **REF-B** | Capítulo novo, romance, 85 páginas, muito balão | `https://www.webtoons.com/en/romance/were-not-a-couple/ep-4-at-my-ex-boyfriends-place/viewer?title_no=11536&episode_no=4` |
 
-Tradução paga está autorizada **somente** nesses dois capítulos. Rode pela interface em `http://127.0.0.1:8080` (não `localhost`). O login é feito pelo dono no navegador; se a sessão não estiver logada, PARE e peça.
+Tradução paga está autorizada **somente** nesses dois capítulos. O dono inicia jobs pagos pela interface em `http://127.0.0.1:8080` (não `localhost`); não use automação de navegador para iniciar esses jobs. Diga exatamente capítulo, modo e opções e aguarde o dono informar que iniciou; depois acompanhe pelo banco de jobs e pelo `job_metrics.py`. Jobs Apenas Clean sem provedor podem ser executados por linha de comando.
 
 Modo padrão das medições: plano **Tradução pronta**, "traduzir SFX" desligado (é o padrão da tela). Quando a tarefa disser "modo Completo", use o plano **Completo**.
 
@@ -300,6 +304,26 @@ Objetivo: nenhum job morre por causa de disco, de uma regra de SFX ou de um subp
 **Teste.** Testes offline cobrem ausência de DirectML com conflito de distribuições, operação normal com DirectML e leitura/exibição das métricas.
 
 **Aceite.** Job com perda silenciosa de DirectML gera aviso acionável e identifica os dispositivos efetivos no relatório; OCR e LaMa observados durante a execução ficam distinguíveis de uma mera detecção de capacidade do ambiente.
+
+### F0.8 Apenas Clean aceita página uniforme somente com prova de limpeza
+
+**Problema.** Em REF-A, duas execuções `Apenas Clean` pela interface falharam na página 34 com `RuntimeError: imagem final invalida`. A fonte dessa página contém apenas dois textos claros sobre fundo preto; removidos os dois alvos, a saída uniformemente preta é válida. O validador relativo à fonte, porém, interpreta qualquer fonte com variância alta seguida de saída uniforme como destruição de conteúdo. Em `Apenas Clean`, não há texto traduzido para elevar a variância da imagem final.
+
+**Como fazer.** Na validação de render, manter a regra geral de rejeitar saídas vazias/corrompidas. Abrir a exceção apenas quando o plano não pede composição de texto, o certificado Clean da página valida e os pixels da saída são idênticos ao artefato limpo certificado. Não aceitar página uniforme sem certificado ou quando saída e artefato limpo diferirem. Garantir que a falha de página resulte em status coerente entre log, manifesto e cartão do histórico.
+
+**Teste.** Cobrir: página uniforme com certificado válido e bytes de pixels iguais é aceita; página uniforme sem certificado é rejeitada; saída diferente do artefato certificado é rejeitada. Adicionar verificação de `resource_monitor_sample_count` e `resource_monitor_sampling_seconds` no `timing_report.json`.
+
+**Aceite físico.** REF-A `Apenas Clean` disparado pela interface termina sem estado `failed` e produz as 65 imagens limpas; log, manifesto e cartão de histórico concordam. O relatório de tempo inclui a contagem de amostras e segundos gastos dentro das amostragens, permitindo calcular a fração sobre o tempo total.
+
+### F0.9 Falhas do FLUX rastreáveis e repetição controlada
+
+**Problema.** Um erro real do `sd-cli.exe` foi resumido como `caption_effect_model_unavailable`, escondendo o motivo (`generative_output_missing`, categoria `output_or_process_failure`) e apagando o stderr junto com o diretório temporário. A tentativa isolada funciona; o erro precisa ficar diagnosticável no job.
+
+**Como fazer.** Em falha do subprocesso, preservar as últimas 40 linhas do stderr em `errors/flux_<página>_<região>.log` e registrar o caminho na telemetria. A recusa por modelo indisponível só se aplica quando `available()` retorna falso; resultado nulo do processo preserva o motivo real da telemetria. Repetir uma vez somente quando `process_failure_category == output_or_process_failure`; não repetir para `device_memory` nem outras categorias.
+
+**Teste.** Simular o subprocesso: falha grava o arquivo e a telemetria mantém o motivo; falha seguida de sucesso retorna a imagem para os validadores normais; duas falhas param após a segunda tentativa e deixam o fluxo de reconstrução LaMa prosseguir.
+
+**Aceite físico.** Fazer REF-A `Apenas Clean` por linha de comando, conferir 65 imagens e calcular segundos de amostragem / tempo total; após o dono iniciar REF-A `Tradução pronta`, verificar a página 23. Se o FLUX falhar, o artefato em `errors/` deve conter o stderr diagnóstico. Rodar a suíte completa e parar na PAUSA 0 sem push.
 
 ### ⏸ PAUSA 0
 

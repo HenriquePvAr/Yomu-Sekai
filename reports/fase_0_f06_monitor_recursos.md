@@ -89,10 +89,57 @@ A diferença observada foi 32,26 s (8,9%) a favor da rodada sem monitor. É uma 
 
 **A interface realmente marca ambos os cartões como falha.** Os logs do pipeline dizem `status=success`, mas os manifestos dos jobs dizem `failed`; os dois têm erro não recuperável em `page_034`: `RuntimeError: imagem final invalida`. Os códigos agregados são `page_processing_error`, `physical_page_population_incomplete` e `source_page_coverage_incomplete`. As imagens Clean foram produzidas; o PDF não faz parte das operações pedidas neste modo (`requested_operations=['clean']`), não houve tentativa de PDF nem erro no estágio de PDF. Assim, o defeito observado pela interface é a falha de processamento da página 34 e o status do job, não uma falha de geração de PDF.
 
-## Pendências após esta medição
+## Diagnóstico e implementação F0.8 (2026-11-11)
 
-- Investigar a imagem final inválida em p. 34 no caminho `Apenas Clean`; ambos os jobs reproduziram o mesmo erro.
-- Reduzir/medir novamente o custo de F0.6: a única comparação atual excedeu 2%, mas não isola causalidade.
-- Corrigir os 7 resíduos/falhas de qualidade do REF-B sem enfraquecer o portão físico.
-- Revisar os itens que mantêm REF-A em `review_required` e investigar a nova reprovação de certificado na p. 23.
+### Página 23 do REF-A
+
+Os artefatos das duas execuções mostram uma diferença concreta, não apenas variação de saída:
+
+| Evidência | Base `f181a17e` (`cda3f90`) | Novo `c034a1cf` (`e3fa1dff`) |
+|---|---|---|
+| Método final da região | `flux2_klein_reference` | `lama_large` |
+| Decisão | `accepted`, `ok` | `accepted_with_review`, `art_reconstruction_fidelity_uncertain` |
+| Tentativa FLUX | validada e aceita | tentativa registrada como `caption_effect_model_unavailable`; depois LaMa foi aceito com revisão |
+| Tempo de inpainting da página | 27,17 s (estágio agregado) | 18,80 s (estágio agregado) |
+| Certificado da página | sem reprovação | `clean_certificate_not_pass` |
+
+O dono complementou a inspeção: no job novo `sd-cli.exe` encerrou com código 1 em 7,2 s, telemetria `generative_output_missing` / `output_or_process_failure`; na base a chamada levou 21 s e terminou `ok`. Os modelos existem e uma chamada isolada funciona hoje. Isso fecha a causa observável como falha do processo, não timeout nem perda de modelo e não indica regressão da Fase 0. A implementação F0.9 abaixo preserva o stderr e repete uma vez somente essa categoria.
+
+### Causa da falha do Apenas Clean
+
+O erro nasce em `_process_post_translation_page` / no caminho serial equivalente, no teste `_reconstructed_page_is_valid(output_path, source_path)`. Ele rejeita arquivo ilegível/vazio e, quando a fonte tem variância acima de 5, também rejeita uma saída com variância até 5. A página 34 é uma página preta com dois textos brilhantes; sua limpeza correta remove os únicos pixels visíveis e deixa a página uniforme preta. No modo `Apenas Clean`, a saída é exatamente a imagem limpa, sem texto traduzido sobreposto, então o teste genérico a marcou incorretamente como conteúdo destruído. A `dev` em `7879bad` mantém o mesmo teste relativo à fonte e não contém uma exceção baseada em certificado Clean; o modo falha pela mesma regra. Isso é consistente com os dois erros já observados em jobs anteriores.
+
+Correção local: `_clean_only_output_is_valid` permite saída uniforme só no plano sem typeset quando `_clean_page_certificate_valid` passa e a saída é pixel a pixel idêntica ao artefato limpo certificado. Saída corrompida, sem certificado ou divergente continua reprovada. Os caminhos paralelo e serial usam a exceção restrita; a regra geral permanece intacta. Em `run_webtoon.py`, `PIPELINE_MAIN_RESULT` agora usa a classificação terminal do relatório (`failed`, `review_required` ou `finished`) em vez de indicar sucesso só porque algum arquivo foi gerado. Isso elimina o sinal de sucesso enganoso quando há erro estrutural. **Ainda não foi fisicamente validado pela interface**, então não há evidência de que os 65 artefatos serão entregues com sucesso.
+
+### Medição direta do monitor
+
+`ResourceMonitor` acumula com `perf_counter` a duração interna de cada tentativa de amostragem e grava `sampling_seconds`, `sampling_count` e `sample_count` em `resource_report.json`. O `timing_report.json` recebe `resource_monitor_sampling_seconds` e `resource_monitor_sample_count`; com monitor desligado, ambos valem zero. O teste unitário confirmou acumulação positiva e contagem de amostras. A razão física (segundos de amostragem / total do job) permanece pendente até o novo REF-A Apenas Clean autorizado por CLI.
+
+Testes offline executados nesta alteração:
+
+```text
+tests/test_short_page_reconstruction.py
+tests/test_resource_monitor.py
+tests/test_clean_page_completion_integration.py
+tests/test_local_benchmark_pipeline_e2e.py
+tests/test_run_webtoon_terminal_status.py
+24 passed in 63.46s
+```
+
+### Pendências
+
+- Rodar REF-A `Apenas Clean` por CLI (autorizado em 2026-11-11) e verificar 65 imagens, certificados e a página 34. Isso valida o pipeline; o estado do cartão de UI ainda requer execução pela interface.
+- Ler os dois novos campos do `timing_report.json` nesse job e calcular o custo direto; o limite de 2% ainda não foi medido.
+- Se a página 34 ou qualquer outra continuar falhando, preservar o log/manifesto e corrigir a causa estrutural antes de declarar F0.8 aceito.
+- Reproduzir a página 23 em REF-A `Tradução pronta` após o dono iniciar o job pago; conferir dispositivo DirectML e, se FLUX falhar, ler o novo log em `errors/`.
+- Corrigir os 7 resíduos/falhas de qualidade do REF-B sem enfraquecer o portão físico; revisar os itens de REF-A em `review_required`.
 - As quatro falhas preexistentes de máscara/reconstrução continuam documentadas em `reports/falhas_preexistentes_20261111.md`.
+
+## Implementação F0.9 — falha de FLUX rastreável (2026-11-11)
+
+- `flux_edit.py` salva as últimas 40 linhas de stderr em `errors/flux_<página>_<região>.log` antes de remover o diretório temporário e registra `diagnostic_log_path` na telemetria. Falhas de persistência registram apenas a classe do erro.
+- `ocr_balloon.py` reporta `caption_effect_model_unavailable` apenas quando `available(purpose="caption_effect")` retorna falso; se o processo retornar nulo, mantém o `reason` real. Repete uma vez exclusivamente para `output_or_process_failure`; não repete `device_memory`.
+- O contexto do render fornece pasta `errors` e índice da página; o identificador da região é sanitizado antes de formar o nome do arquivo.
+- Testes simulam stderr de subprocesso (incluindo cauda de 40 linhas), falha seguida de sucesso aceito pelos validadores, não-retry para memória do dispositivo, duas falhas sem terceira tentativa e continuidade do fallback aprendido existente.
+- Validação focada atual: sete arquivos de teste da Fase 0 — 45 passed em 54,09 s.
+- Ainda pendentes: REF-A Apenas Clean CLI para os 65 artefatos e razão do monitor; REF-A pago Tradução pronta, iniciado pelo dono, para revalidar p023; suíte completa.
