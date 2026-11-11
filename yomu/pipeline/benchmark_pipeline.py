@@ -919,6 +919,14 @@ def _clean_only_output_is_valid(state: dict) -> bool:
     )
 
 
+def _flux_error_directory(state: dict) -> str | None:
+    """Resolve the run's errors folder when this page has an artifact destination."""
+    output_path = str(state.get("output_path") or "")
+    if not output_path:
+        return None
+    return str(Path(output_path).parent.parent / "errors")
+
+
 def _clean_output_accounting(states):
     """Count verified Clean pages separately from merely written image files."""
     pages = len(states)
@@ -1552,7 +1560,7 @@ def process_post_translation_page(state, *, diagnostic_folder=None, targeted_reg
                 local["groups"], font_path=config.FONT_PATH, debug_folder=debug_folder,
                 page_index=local["index"], image_path=local["image_path"], stage_timings=timings,
                 capture=cleaned_capture, typeset=_want_typeset,
-                flux_error_dir=str(Path(local["output_path"]).parent.parent / "errors"),
+                flux_error_dir=_flux_error_directory(local),
             )
             overflow_groups = [
                 group for group in local["groups"]
@@ -4014,7 +4022,7 @@ def run_benchmark(args):
                     stage_timings=render_timings,
                     capture=cleaned_capture,
                     typeset=_pipeline_flags["want_typeset"],
-                    flux_error_dir=str(Path(state["output_path"]).parent.parent / "errors"),
+                    flux_error_dir=_flux_error_directory(state),
                 )
                 overflow_groups = [
                     group
@@ -5286,7 +5294,7 @@ def _resolve_layout_overflow_before_settlement(
                 image_path=state["image_path"],
                 stage_timings=preflight_timings,
                 capture=preflight_capture,
-                flux_error_dir=str(Path(state["output_path"]).parent.parent / "errors"),
+                flux_error_dir=_flux_error_directory(state),
             )
             state["_preflight_render"] = {
                 "signature": _translation_render_signature(state["groups"]),
