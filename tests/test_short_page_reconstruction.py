@@ -14,6 +14,7 @@ from tempfile import TemporaryDirectory
 
 import numpy as np
 import cv2
+from unittest.mock import patch
 
 import yomu.pipeline.benchmark_pipeline as bp
 
@@ -55,6 +56,34 @@ class ShortPageReconstructionTests(unittest.TestCase):
             src = self._write(tmp, "s.png", _content(800, 1000))
             out = self._write(tmp, "o.png", _blank(800, 1000))
             self.assertFalse(bp._reconstructed_page_is_valid(out, src))
+
+    def test_clean_only_accepts_intentionally_blank_certified_output(self):
+        """Clean may remove all visible pixels when the source consists only of text."""
+        with TemporaryDirectory() as tmp:
+            black = np.zeros((800, 1000, 3), dtype=np.uint8)
+            source = self._write(tmp, "source.png", _content(1000, 800))
+            output = self._write(tmp, "output.png", black)
+            clean = self._write(tmp, "clean.png", black)
+            state = {"output_path": output, "cleaned_path": clean}
+            with patch.object(bp, "_clean_page_certificate_valid", return_value=(True, "verified")):
+                self.assertTrue(bp._clean_only_output_is_valid(state))
+
+    def test_clean_only_does_not_accept_blank_output_without_certificate(self):
+        with TemporaryDirectory() as tmp:
+            black = np.zeros((800, 1000, 3), dtype=np.uint8)
+            output = self._write(tmp, "output.png", black)
+            clean = self._write(tmp, "clean.png", black)
+            state = {"output_path": output, "cleaned_path": clean}
+            with patch.object(bp, "_clean_page_certificate_valid", return_value=(False, "not_verified")):
+                self.assertFalse(bp._clean_only_output_is_valid(state))
+
+    def test_clean_only_requires_output_to_match_certified_clean_artifact(self):
+        with TemporaryDirectory() as tmp:
+            output = self._write(tmp, "output.png", _blank(1000, 800))
+            clean = self._write(tmp, "clean.png", _content(1000, 800))
+            state = {"output_path": output, "cleaned_path": clean}
+            with patch.object(bp, "_clean_page_certificate_valid", return_value=(True, "verified")):
+                self.assertFalse(bp._clean_only_output_is_valid(state))
 
     def test_blank_source_blank_render_is_valid(self):  # G: faithfully blank page kept
         with TemporaryDirectory() as tmp:

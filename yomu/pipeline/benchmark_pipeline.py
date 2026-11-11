@@ -894,6 +894,31 @@ def _clean_page_certificate_valid(state):
     return True, "verified"
 
 
+def _clean_only_output_is_valid(state: dict) -> bool:
+    """Accept a blank Clean page only when its exact pixels have a valid Clean certificate.
+
+    A page whose visible content consists only of verified OCR targets can correctly become
+    uniform after cleanup. The generic source-relative render guard rejects that result as a
+    destroyed page, so this narrower path requires both the Clean certificate and exact
+    pixel identity with the persisted clean artifact.
+    """
+    certificate_valid, _reason = _clean_page_certificate_valid(state)
+    if not certificate_valid:
+        return False
+    output_path = str(state.get("output_path") or "")
+    clean_path = str(state.get("cleaned_path") or "")
+    if not output_path or not clean_path:
+        return False
+    output = cv2.imread(output_path, cv2.IMREAD_COLOR)
+    clean = cv2.imread(clean_path, cv2.IMREAD_COLOR)
+    return bool(
+        output is not None and clean is not None
+        and output.size and clean.size
+        and output.shape == clean.shape
+        and np.array_equal(output, clean)
+    )
+
+
 def _clean_output_accounting(states):
     """Count verified Clean pages separately from merely written image files."""
     pages = len(states)
@@ -1560,7 +1585,9 @@ def process_post_translation_page(state, *, diagnostic_folder=None, targeted_reg
         if not cv2.imwrite(local["output_path"], final):
             raise RuntimeError("cv2.imwrite retornou False")
         timings["image_save"] = time.perf_counter() - save_started
-        if not _reconstructed_page_is_valid(local["output_path"], local.get("image_path", "")):
+        if not _reconstructed_page_is_valid(local["output_path"], local.get("image_path", "")) and not (
+            not _plan_pipeline_flags()["want_typeset"] and _clean_only_output_is_valid(local)
+        ):
             raise RuntimeError("imagem final invalida")
         # Canonical Cleaned artifact (P1): page after text removal/inpaint, before
         # translated glyphs. Persisted deterministically (not debug-gated) so the
@@ -4024,7 +4051,9 @@ def run_benchmark(args):
             state["timings"]["image_save"] = save_elapsed
             stage_seconds["image_save"] += save_elapsed
 
-            if not _reconstructed_page_is_valid(state["output_path"], state.get("image_path", "")):
+            if not _reconstructed_page_is_valid(state["output_path"], state.get("image_path", "")) and not (
+                not _pipeline_flags["want_typeset"] and _clean_only_output_is_valid(state)
+            ):
                 raise RuntimeError("imagem final invalida")
 
             state["status"] = "completed"

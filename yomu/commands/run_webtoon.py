@@ -204,13 +204,9 @@ def main(argv=None):
     print(f"Saida: {output_folder}")
 
     report = _run_benchmark(benchmark_args)
-    # Success signal is plan-aware: a translate-only job's deliverable is the persisted
-    # translation (translation_manifest_path), not a PDF/PNG.
-    _produced_output = bool(
-        report.get("pdf_path") or report.get("png_path")
-        or report.get("translation_manifest_path"))
+    log_status, final_status = _pipeline_main_status(report)
     print(
-        f"PIPELINE_MAIN_RESULT status={'success' if _produced_output else 'failed'} "
+        f"PIPELINE_MAIN_RESULT status={log_status} "
         f"report_type={type(report).__name__}", flush=True,
     )
     pdf_path = Path(report.get("pdf_path") or "")
@@ -218,13 +214,9 @@ def main(argv=None):
         context_path.unlink()
         print(f"Contexto temporario removido: {context_path}")
 
-    from yomu.ui.ui_helpers import derive_final_run_status
-
-    final_status = derive_final_run_status(
-        technical_success=_produced_output,
-        quality_validation=report.get("quality_validation") or {},
-    )
-    if final_status == "review_required":
+    if final_status == "error":
+        print("\nExecucao concluida com erro estrutural")
+    elif final_status == "review_required":
         print("\nExecucao concluida, mas requer revisao de qualidade")
     else:
         print("\nExecucao concluida")
@@ -519,6 +511,29 @@ def _run_benchmark(benchmark_args):
     from yomu.pipeline.benchmark_pipeline import run_benchmark
 
     return run_benchmark(benchmark_args)
+
+
+def _pipeline_main_status(report: dict) -> tuple[str, str]:
+    """Return the terminal result, accounting for structural QC as well as artifacts."""
+    from yomu.ui.ui_helpers import derive_final_run_status
+
+    produced_output = bool(
+        report.get("pdf_path") or report.get("png_path")
+        or report.get("psd_path") or report.get("translation_manifest_path")
+    )
+    status = str(report.get("status") or "").strip().lower()
+    if status not in {"finished", "review_required", "error", "cancelled"}:
+        status = derive_final_run_status(
+            technical_success=produced_output,
+            quality_validation=report.get("quality_validation") or {},
+        )
+    log_status = {
+        "finished": "finished",
+        "review_required": "review_required",
+        "cancelled": "cancelled",
+        "error": "failed",
+    }.get(status, "failed")
+    return log_status, status
 
 
 def _interactive_args(parser):
