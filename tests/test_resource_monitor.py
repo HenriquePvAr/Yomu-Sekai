@@ -4,14 +4,20 @@ install_offline_network_guard()
 
 import tempfile
 import unittest
+import os
 from pathlib import Path
 from unittest.mock import patch
 
 import yomu.runtime.resource_monitor as resource_monitor
+from yomu.config import settings
 from yomu.runtime.resource_monitor import ResourceMonitor
 
 
 class ResourceMonitorTests(unittest.TestCase):
+    def test_resource_monitoring_defaults_to_enabled(self):
+        with patch.dict(os.environ, {}, clear=True):
+            self.assertTrue(settings._env_bool("RESOURCE_MONITORING", True))
+
     def test_disabled_monitor_is_safe_without_reports(self):
         with tempfile.TemporaryDirectory() as tmp:
             monitor = ResourceMonitor(tmp, enabled=False)
@@ -49,6 +55,7 @@ class ResourceMonitorTests(unittest.TestCase):
                     "child_count": 1,
                     "children_rss_mb": 1500.0,
                     "total_pipeline_rss_mb": 2000.0,
+                    "system_used_mb": 8000.0,
                     "system_available_mb": 12000.0,
                     "system_ram_percent": 50.0,
                     "swap_used_mb": 0.0,
@@ -66,10 +73,21 @@ class ResourceMonitorTests(unittest.TestCase):
             summary = monitor.write_reports()
             self.assertTrue(summary["enabled"])
             self.assertEqual(summary["sample_count"], 1)
+            self.assertEqual(summary["total_pipeline_rss_mb_peak"], 2000.0)
+            self.assertEqual(summary["system_used_mb_peak"], 8000.0)
+            self.assertEqual(summary["swap_used_mb_peak"], 0.0)
             self.assertEqual(summary["ocr_worker_rss_mb_peak"], 1500.0)
             self.assertTrue(Path(summary["resource_report_json"]).is_file())
-            self.assertTrue(Path(summary["resource_report_html"]).is_file())
+            self.assertEqual(summary["resource_report_html"], "")
+            self.assertFalse((Path(tmp) / "resource_report.html").exists())
             self.assertTrue(Path(summary["resource_timeline_csv"]).is_file())
+
+    def test_html_report_is_opt_in(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            monitor = ResourceMonitor(tmp, enabled=False, generate_html=True)
+            monitor.enabled = True
+            summary = monitor.write_reports()
+            self.assertTrue(Path(summary["resource_report_html"]).is_file())
 
 
 if __name__ == "__main__":

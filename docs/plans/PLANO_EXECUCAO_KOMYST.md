@@ -278,12 +278,12 @@ Objetivo: nenhum job morre por causa de disco, de uma regra de SFX ou de um subp
 
 1. Mude o padrão para `True`.
 2. Confirme que `psutil` está em `requirements/*.txt`; se não estiver, acrescente.
-3. Garanta que o resumo (pico de RSS do processo e filhos, pico de RAM do sistema, pico de swap) vai para `timing_report.json` em `resource_monitoring`. Não gere o relatório HTML por padrão (só JSON e CSV).
+3. Garanta que o resumo (pico de RSS do processo e filhos, pico de RAM do sistema, pico de swap) vai para `timing_report.json` em `resource_monitoring`. Não gere o relatório HTML por padrão (só JSON e CSV); HTML fica opt-in.
 4. Meça o custo: o job não pode ficar mais de 2% mais lento. Se ficar, aumente o intervalo de amostragem.
 
 **Teste.** Ajuste os testes que assumem o padrão desligado.
 
-**Aceite.** `tools/audit/job_metrics.py` mostra pico de RAM em REF-A e REF-B.
+**Aceite.** `tools/audit/job_metrics.py` mostra pico de RAM em REF-A e REF-B; custo de tempo medido nos dois jobs físicos da PAUSA 0 e mantido em até 2% (ajustar o intervalo se exceder).
 
 ### ⏸ PAUSA 0
 

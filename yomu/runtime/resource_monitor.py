@@ -35,11 +35,13 @@ class ResourceMonitor:
         enabled: bool = True,
         interval_seconds: float = 1.0,
         total_pages: int = 0,
+        generate_html: bool = False,
     ) -> None:
         self.output_folder = Path(output_folder)
         self.enabled = bool(enabled and psutil is not None)
         self.interval_seconds = max(0.25, float(interval_seconds or 1.0))
         self.total_pages = int(total_pages or 0)
+        self.generate_html = bool(generate_html)
         self.stage = "preparing"
         self.pages_done = 0
         self.queue_depth = 0
@@ -250,7 +252,7 @@ class ResourceMonitor:
     def write_reports(self) -> dict[str, Any]:
         self.output_folder.mkdir(parents=True, exist_ok=True)
         report_path = self.output_folder / "resource_report.json"
-        html_path = self.output_folder / "resource_report.html"
+        html_path = self.output_folder / "resource_report.html" if self.generate_html else None
         csv_path = self.output_folder / "resource_timeline.csv"
         summary = self._summary()
         payload = {
@@ -260,7 +262,7 @@ class ResourceMonitor:
             "events": list(self.events),
             "samples": list(self.samples),
             "resource_report_json": str(report_path),
-            "resource_report_html": str(html_path),
+            "resource_report_html": str(html_path) if html_path else "",
             "resource_timeline_csv": str(csv_path),
         }
         report_path.write_text(
@@ -268,12 +270,13 @@ class ResourceMonitor:
             encoding="utf-8",
         )
         self._write_csv(csv_path)
-        html_path.write_text(self._html(payload), encoding="utf-8")
+        if html_path is not None:
+            html_path.write_text(self._html(payload), encoding="utf-8")
         return {
             "enabled": True,
             **summary,
             "resource_report_json": str(report_path),
-            "resource_report_html": str(html_path),
+            "resource_report_html": str(html_path) if html_path else "",
             "resource_timeline_csv": str(csv_path),
         }
 
@@ -285,6 +288,7 @@ class ResourceMonitor:
             "total_pipeline_rss_mb",
             "parent_rss_mb",
             "children_rss_mb",
+            "system_used_mb",
             "system_available_mb",
             "system_ram_percent",
             "swap_used_mb",
