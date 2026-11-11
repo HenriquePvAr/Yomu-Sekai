@@ -244,19 +244,13 @@ Objetivo: nenhum job morre por causa de disco, de uma regra de SFX ou de um subp
 
 ### F0.4 PSD gravado uma única vez
 
-**Problema.** No modo Completo o PSD aparece em `psd/` (≈844 MB) e de novo na pasta com o nome do capítulo (≈993 MB).
+**Objetivo.** Determinar se os dois conjuntos PSD são duplicatas ou saídas distintas antes de qualquer alteração ou remoção.
 
-**Onde.** `bp`: procure `output_format == "psd"` (~linha 4247) e os usos de `professional_psd`; `yomu/export/professional_psd.py`.
+**Como fazer.** Para uma página de REF-A, registrar em `reports/` tamanho e camadas recursivas dos PSDs em `psd/` e em `result_path`, identificar quais camadas são texto nativo/imagem/grupo, verificar se cada caminho tem conteúdo exclusivo e listar os consumidores em UI, manifesto e testes. Não alterar os arquivos gerados nesta tarefa.
 
-**Como fazer.**
+**Resultado inicial (2026-11-11).** `reports/fase_0_f04_psd_diagnostico.md`: as saídas são diferentes, ambas contêm texto nativo editável; `psd/` tem uma camada adicional de texto e `result_path` tem a prévia traduzida. Manter ambas até uma decisão de produto sobre eventual consolidação.
 
-1. Primeiro descubra **quem lê** cada uma das duas pastas: `grep -rn "psd_path\|psd_folder\|/psd" yomu static tests`. Liste os consumidores no relatório.
-2. Mantenha uma única cópia física na pasta de resultado (`result_path`). A outra referência passa a apontar para o mesmo caminho no `artifact_manifest`.
-3. Se algum consumidor exigir os dois caminhos, PARE e reporte; não crie link simbólico (não funciona sem privilégio no Windows).
-
-**Teste.** Ajuste os testes de exportação PSD existentes para afirmar que o conjunto de arquivos `.psd` aparece uma vez na árvore de saída.
-
-**Aceite (ajustado em 2026-11-11).** Medir a redução de MB/página separadamente em REF-A e REF-B depois de eliminar uma gravação redundante de PSD. REF-A parte de 37,4 MB/página e REF-B de 21,6 MB/página; não presumir que o valor de REF-A representa REF-B. Preservar a qualidade e os consumidores de cada formato PSD.
+**Teste/aceite.** Diagnóstico verificável com uma página de REF-A e consumidores rastreados. Nenhuma alteração de conteúdo ou comportamento PSD nesta tarefa. Uma futura mudança de gravação precisa de decisão sobre os recursos exclusivos de cada formato e medição separada de MB/página em REF-A e REF-B.
 
 ### F0.5 Timeout real no subprocesso do Paddle
 
@@ -297,7 +291,6 @@ Rodar REF-A e REF-B (REF-B em modo Completo). Critérios de aceite da fase:
 
 - [ ] REF-B termina `review_required` ou `completed`, nunca `failed`.
 - [ ] Nenhum job fica mais de 10 s rodando depois de um erro de disco.
-- [ ] MB/página do modo Completo ≤ 26.
 - [ ] Pico de RAM aparece no relatório de tempo dos dois capítulos.
 - [ ] Qualidade (seção 2.2) igual ou melhor nos dois capítulos.
 - [ ] Suíte completa verde.
