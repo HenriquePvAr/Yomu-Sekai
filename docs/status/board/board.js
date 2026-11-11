@@ -35,8 +35,8 @@ window.BOARD = {
       "env": "local",
       "updated": "2026-11-11",
       "summary": "F0.1–F0.9 implementadas localmente. REF-A Apenas Clean CLI em DirectML produziu 65 imagens em 384,82 s; 64 certificadas, p010 em REVIEW_REQUIRED. Monitor: 1,07% a 10 s. Suíte completa: 6497 passaram; somente as 4 falhas antigas de máscara/reconstrução.",
-      "risk": "Imagens Clean da rodada 10 s são pixel a pixel idênticas à rodada anterior de 5 s, com os mesmos 64 PASS e p010 em revisão. O padrão versionado agora é 10 s, mas o .env local ainda fixa 5 s e não foi alterado. REF-A pago Tradução pronta e verificação de p023 ainda dependem do dono iniciar o job; interface Clean não foi fisicamente revalidada nesta rodada.",
-      "blockedBy": "Aguardar o dono atualizar o .env local para RESOURCE_MONITOR_INTERVAL_SECONDS=10 e iniciar REF-A pago em Tradução pronta pela interface. Depois conferir (GPU DirectML), página 23 e eventual errors/flux_*.log. F0.8 pela interface permanece pendente.",
+      "risk": "Controle REF-A em dev 7879bad também deixa p010 REVIEW_REQUIRED por unresolved_clean_regions; pixels da p010 são idênticos aos da Fase 0, logo é defeito preexistente para Fase 3. Fase 0 tem 64 PASS/1 revisão; dev 63 PASS/2 revisões (p010,p023). Padrão versionado 10 s; dono vai alterar a única entrada da .env e reiniciar.",
+      "blockedBy": "Aguardar os dois jobs REF-A iniciados pelo dono na interface: Apenas Clean para status/65 imagens/cartão/interval_seconds=10.0; depois Tradução pronta para confirmar DirectML, certificados contra f181a17e, p023 e eventual errors/flux_*.log. Sem push/merge.",
       "delivered": [
         "Portão SFX só reprova itens que foram enviados ao provedor, coberto por testes offline; falhar rápido por disco; retenção protege histórico e publicações",
         "Timeout real do subprocesso Paddle com reinício dentro do limite existente",
@@ -54,7 +54,9 @@ window.BOARD = {
         "REF-A Apenas Clean CLI: DirectML confirmado; 65 PNGs; 64 certificados PASS, p010 REVIEW_REQUIRED; 384.82 s total; amostragem 4.116566 s/38 amostras = 1.07%; pico árvore RSS 8447.20 MB",
         "Suíte completa após o padrão de 10 s: 6497 passed, 4 falhas antigas, 141 skipped, 1 xfailed, 8 warnings e 787 subtests; 1015.71 s",
         "As 65 imagens finais da rodada a 10 s são pixel a pixel idênticas às da execução a 5 s; ambas têm 64 certificados PASS e p010 REVIEW_REQUIRED",
-        "A instalação .env local ainda define intervalo 5 s; não foi modificada. REF-A pago Tradução pronta e F0.8 pela interface ainda precisam de evidência física"
+        "Controle REF-A apenas Clean em worktree dev 7879bad: 65 PNGs; 63 PASS, p010 e p023 REVIEW_REQUIRED; a p010 tem pixels idênticos às da Fase 0",
+        "A Fase 0 não perdeu certificados no controle dev: p010 manteve revisão preexistente e p023 passou; variação de certificado apenas na p023",
+        "O dono confirmou uma única entrada .env na linha 79 e vai ajustá-la para 10 s. REF-A Clean e Tradução pronta pela interface ainda aguardam aviso de início"
       ],
       "pending": [
           "Atualizar .env local para RESOURCE_MONITOR_INTERVAL_SECONDS=10 e reiniciar o app/worker, se o dono quiser aplicar o padrão medido",

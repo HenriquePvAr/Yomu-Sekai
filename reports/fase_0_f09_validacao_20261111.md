@@ -25,11 +25,26 @@ O custo é calculado diretamente como `resource_monitoring.sampling_seconds / to
 
 ## Intervalo aplicado
 
-10 s ficou abaixo da meta de 2% com 1,07% medido. O padrão do código e `.env.example` foi alterado para 10 s. A instalação local ainda contém `RESOURCE_MONITOR_INTERVAL_SECONDS=5.0` (inclusive chave duplicada); ela não foi alterada conforme a regra que exige autorização antes de modificar `.env`. Para a interface adotar o intervalo medido, o dono deve ajustar essa chave local para 10 s e reiniciar app/worker.
+10 s ficou abaixo da meta de 2% com 1,07% medido. O padrão do código e `.env.example` foi alterado para 10 s. O dono confirmou que o `.env` local tem uma única entrada `RESOURCE_MONITOR_INTERVAL_SECONDS` na linha 79 e vai alterá-la para 10 s; o arquivo não foi modificado por nós. Para a interface adotar o intervalo medido, reinicie app/worker após a alteração e confirme `interval_seconds: 10.0` no relatório.
 
 ## Suíte completa
 
 Com o snapshot do código já usando intervalo padrão de 10 s: **6.497 passaram, 4 falharam, 141 foram ignorados, 1 xfailed, 8 warnings e 787 subtests passaram**, em 1.015,71 s. As quatro falhas são as antigas de máscara/reconstrução registradas em `reports/falhas_preexistentes_20261111.md`; nenhuma falha nova apareceu.
+
+## Controle na base `dev` — página 10
+
+Foi executado REF-A Apenas Clean em worktree isolada no commit `7879bad275bcf4151117fd3d96f982ddba2c9fd1`, importando `yomu` da própria worktree. Opções idênticas: tradução e SFX desligados, modo Quality, force, sem contexto, typesetting off, PNG, monitor no processo em 10 s.
+
+| Execução | Tempo total* | Inpainting | PNGs | Certificados | Pág. 10 |
+|---|---:|---:|---:|---|---|
+| `dev` `7879bad` (`fase0-base-dev-refa-clean-7879bad-20261111`) | 341,192 s | 222,401 s | 65 | 63 PASS, 2 REVIEW_REQUIRED (p010, p023) | `REVIEW_REQUIRED`, `unresolved_clean_regions` |
+| Fase 0 (`fase0-f09-clean-10s-20261111`) | 384,824 s | 221,516 s | 65 | 64 PASS, 1 REVIEW_REQUIRED (p010) | `REVIEW_REQUIRED`, `unresolved_clean_regions` |
+
+\* Os tempos são informativos; a versão `7879bad` não tem a telemetria de custo/dispositivo adicionada depois, então não são usados para atribuir velocidade nem custo do monitor.
+
+Os estados de certificado diferem somente na página 23 (`dev`: REVIEW_REQUIRED; Fase 0: PASS). Para p010, ambos têm `clean_execution_status=EXECUTION_COMPLETED`, `clean_produced=true`, `clean_verified=false`, motivo `unresolved_clean_regions` e certificado `REVIEW_REQUIRED`. As imagens finais da p010 têm o mesmo tamanho e são pixel a pixel idênticas. Assim, a pendência da página 10 já existe na `dev` e não é regressão da Fase 0; registrar para a Fase 3. Nesta comparação, a Fase 0 não perdeu certificado; a p023 passou nela.
+
+O `timing_report.json` antigo da `dev` não contém `inference_devices`; o provider DirectML está disponível no ambiente, mas não alegamos uso efetivo nem usamos o tempo comparativamente sem a linha de log do dispositivo.
 
 ## Estado do F0.9 físico
 
@@ -39,6 +54,6 @@ Os testes simulados de F0.9 confirmam a gravação das últimas 40 linhas do std
 
 - Plano: custo medido, intervalo padrão e evidência parcial F0.9 registrados.
 - Quadro: estado físico e bloqueios atualizados.
-- Obsidian: atualizar as notas de Estado e Métricas com esta tabela.
+- Obsidian: notas de Estado e Métricas atualizadas com a comparação contra `dev`.
 - Pendências físicas: F0.8 via interface e REF-A pago `Tradução pronta`/página 23.
 - Publicação: nenhuma; sem merge ou push.

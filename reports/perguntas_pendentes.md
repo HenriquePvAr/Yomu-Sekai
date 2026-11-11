@@ -14,8 +14,12 @@ O job precisa ser iniciado pelo dono na interface autenticada, conforme a regra 
 
 ## Aplicar intervalo de monitor medido na interface
 
-A medição CLI a 10 s ficou em 1,07%, abaixo da meta de 2%. O `.env` local contém `RESOURCE_MONITOR_INTERVAL_SECONDS=5.0` em duas linhas. Não foi alterado. O dono precisa mudar ambas para `10.0` e reiniciar app/worker antes de usar essa configuração; confirmar que o `timing_report.json` do job registra `interval_seconds: 10.0`.
+A medição CLI a 10 s ficou em 1,07%, abaixo da meta de 2%. O dono confirmou que o `.env` local contém uma única entrada `RESOURCE_MONITOR_INTERVAL_SECONDS` (linha 79) e vai alterá-la para `10.0`. O arquivo não foi alterado por nós. Depois, reiniciar app/worker e confirmar que o `timing_report.json` registra `interval_seconds: 10.0`.
 
 ## F0.8 pela interface
 
-A execução CLI terminou `review_required`, gerou 65 PNGs e manteve a página 10 em revisão; as duas rodadas Clean são pixel a pixel idênticas. Isso valida o pipeline offline/CLI, mas não prova o estado do cartão de histórico pela interface. Revalidar F0.8 pela interface ainda é necessário, sem iniciar tradução paga.
+A comparação controlada contra `dev` `7879bad` resolveu a dúvida de regressão: ambas as versões reprovam p010 por `unresolved_clean_regions`, e a imagem final de p010 é pixel a pixel idêntica. Tratar como defeito preexistente para a Fase 3. Fase 0 tem 64 PASS e p010 em revisão; `dev` tem 63 PASS e p010+p023 em revisão. O teste pela interface e o cartão de histórico ainda aguardam o job Clean que o dono informou que vai iniciar.
+
+## Jobs de interface aguardados
+
+O dono informou que iniciará REF-A Apenas Clean primeiro e REF-A Tradução pronta depois. Não iniciar esses jobs por automação; acompanhar somente após cada aviso de início.

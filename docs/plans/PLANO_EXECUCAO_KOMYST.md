@@ -325,7 +325,7 @@ Objetivo: nenhum job morre por causa de disco, de uma regra de SFX ou de um subp
 
 **Aceite físico.** Fazer REF-A `Apenas Clean` por linha de comando, conferir 65 imagens e calcular segundos de amostragem / tempo total; após o dono iniciar REF-A `Tradução pronta`, verificar a página 23. Se o FLUX falhar, o artefato em `errors/` deve conter o stderr diagnóstico. Rodar a suíte completa e parar na PAUSA 0 sem push.
 
-**Resultado parcial (2026-11-11).** REF-A Apenas Clean CLI em DirectML produziu 65 PNGs em 384,82 s; 64 certificados passaram e a página 10 ficou `REVIEW_REQUIRED` por `unresolved_clean_regions`. As imagens finais foram pixel a pixel idênticas às da rodada anterior a 5 s, que teve a mesma distribuição de certificados. Custo de amostragem a 10 s: 4,12 s (1,07%). A verificação pela interface e a rodada paga Tradução pronta ainda dependem de validação específica; consulte `reports/fase_0_f09_validacao_20261111.md`.
+**Resultado parcial (2026-11-11).** REF-A Apenas Clean CLI em DirectML produziu 65 PNGs em 384,82 s; 64 certificados passaram e a página 10 ficou `REVIEW_REQUIRED` por `unresolved_clean_regions`. A base `dev` `7879bad`, executada com as mesmas opções em worktree, também reprovou p010 pelo mesmo motivo; pixels da p010 são idênticos. A pendência é preexistente e vai para a Fase 3. A Fase 0 passou p023, que ficou em revisão na base. As imagens da Fase 0 são pixel a pixel idênticas às da rodada anterior a 5 s. Custo de amostragem a 10 s: 4,12 s (1,07%). A verificação pela interface e a rodada paga Tradução pronta ainda dependem de validação específica; consulte `reports/fase_0_f09_validacao_20261111.md`.
 
 ### ⏸ PAUSA 0
 
