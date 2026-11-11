@@ -919,6 +919,16 @@ def _clean_only_output_is_valid(state: dict) -> bool:
     )
 
 
+def _page_output_is_valid(state: dict) -> bool:
+    """Single page-validity rule for every pipeline stage.
+
+    A render must mirror its source, except that a Clean run without typesetting may
+    deliver a page that became blank when its certificate proves the cleanup."""
+    if _reconstructed_page_is_valid(state.get("output_path"), state.get("image_path", "")):
+        return True
+    return not _plan_pipeline_flags()["want_typeset"] and _clean_only_output_is_valid(state)
+
+
 def _flux_error_directory(state: dict) -> str | None:
     """Resolve the run's errors folder when this page has an artifact destination."""
     output_path = str(state.get("output_path") or "")
@@ -1594,10 +1604,6 @@ def process_post_translation_page(state, *, diagnostic_folder=None, targeted_reg
         if not cv2.imwrite(local["output_path"], final):
             raise RuntimeError("cv2.imwrite retornou False")
         timings["image_save"] = time.perf_counter() - save_started
-        if not _reconstructed_page_is_valid(local["output_path"], local.get("image_path", "")) and not (
-            not _plan_pipeline_flags()["want_typeset"] and _clean_only_output_is_valid(local)
-        ):
-            raise RuntimeError("imagem final invalida")
         # Canonical Cleaned artifact (P1): page after text removal/inpaint, before
         # translated glyphs. Persisted deterministically (not debug-gated) so the
         # professional PSD exporter has a real base layer.
@@ -1608,6 +1614,10 @@ def process_post_translation_page(state, *, diagnostic_folder=None, targeted_reg
             if cv2.imwrite(str(cleaned_path), cleaned_bgr):
                 local["cleaned_path"] = str(cleaned_path)
         _complete_page_clean(local, cleaned_capture, debug_data, job_id=job_id)
+        # Validated after the Clean boundary: the clean-only exception needs the
+        # persisted clean artifact and its certificate, which only exist from here.
+        if not _page_output_is_valid(local):
+            raise RuntimeError("imagem final invalida")
         local["timings"] = {**dict(local.get("timings") or {}), **timings}
         local["status"] = "completed"
         local["cache_source"] = "fresh"
@@ -3961,7 +3971,7 @@ def run_benchmark(args):
     rendered_page_ids = {
         int(state["index"]) for state in page_states
         if state.get("status") == "completed"
-        and _reconstructed_page_is_valid(state.get("output_path"), state.get("image_path", ""))
+        and _page_output_is_valid(state)
     }
     emit_progress_v1(
         stage_id="rendering", phase="render", status="running",
@@ -4061,9 +4071,7 @@ def run_benchmark(args):
             state["timings"]["image_save"] = save_elapsed
             stage_seconds["image_save"] += save_elapsed
 
-            if not _reconstructed_page_is_valid(state["output_path"], state.get("image_path", "")) and not (
-                not _pipeline_flags["want_typeset"] and _clean_only_output_is_valid(state)
-            ):
+            if not _page_output_is_valid(state):
                 raise RuntimeError("imagem final invalida")
 
             state["status"] = "completed"
@@ -4091,7 +4099,7 @@ def run_benchmark(args):
             ),),
                 terminal=False,
             )
-            if _reconstructed_page_is_valid(state.get("output_path"), state.get("image_path", "")):
+            if _page_output_is_valid(state):
                 page_index = int(state["index"])
                 rendered_page_ids.add(page_index)
                 emit_progress_v1(
@@ -4136,7 +4144,7 @@ def run_benchmark(args):
                 total_units=1,
                 code="page_completed_with_error",
             ),), terminal=False)
-            if _reconstructed_page_is_valid(state.get("output_path"), state.get("image_path", "")):
+            if _page_output_is_valid(state):
                 page_index = int(state["index"])
                 rendered_page_ids.add(page_index)
                 emit_progress_v1(
@@ -4197,7 +4205,7 @@ def run_benchmark(args):
         state
         for state in sorted(page_states, key=lambda item: item["index"])
         if state.get("status") in {"completed", "completed_with_error"}
-        and _reconstructed_page_is_valid(state.get("output_path"), state.get("image_path", ""))
+        and _page_output_is_valid(state)
     ]
     if not completed_states:
         raise RuntimeError("Nenhuma pagina valida foi produzida.")
@@ -8206,7 +8214,7 @@ def _sfx_policy_summary(items, translate_sfx):
 def _validate_quality(states, pdf_path, expected_page_count=None, full=False, *, pdf_expected=True):
     invalid_pages = []
     for state in states:
-        if not _reconstructed_page_is_valid(state.get("output_path"), state.get("image_path", "")):
+        if not _page_output_is_valid(state):
             invalid_pages.append(state["index"])
 
     # ``expected_page_count`` used to be the LOGICAL page count (one per output

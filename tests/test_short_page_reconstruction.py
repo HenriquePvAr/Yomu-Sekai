@@ -85,6 +85,24 @@ class ShortPageReconstructionTests(unittest.TestCase):
             with patch.object(bp, "_clean_page_certificate_valid", return_value=(True, "verified")):
                 self.assertFalse(bp._clean_only_output_is_valid(state))
 
+    def test_page_worker_validates_after_the_clean_boundary(self):
+        """The clean-only exception needs the clean artifact and certificate.
+
+        The per-page worker used to validate before producing either, so a page that
+        legitimately becomes blank always failed there with "imagem final invalida".
+        """
+        import inspect
+        source = inspect.getsource(bp.process_post_translation_page)
+        self.assertLess(source.index("_complete_page_clean("),
+                        source.index("_page_output_is_valid("))
+
+    def test_every_stage_uses_the_single_page_validity_rule(self):
+        """A certified blank Clean page was accepted by the renderer and then dropped by
+        the stages that still called the source-relative guard directly."""
+        import inspect
+        module = inspect.getsource(bp)
+        self.assertEqual(module.count("_reconstructed_page_is_valid("), 2)  # def + the rule
+
     def test_blank_source_blank_render_is_valid(self):  # G: faithfully blank page kept
         with TemporaryDirectory() as tmp:
             for w, h in ((800, 1000), (800, 83), (800, 56)):
