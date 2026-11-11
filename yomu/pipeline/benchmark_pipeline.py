@@ -8100,6 +8100,18 @@ def _create_preview_compare_sheet(selected_states, target):
     canvas.save(target, "JPEG", quality=82, optimize=True, progressive=True)
 
 
+def _sfx_policy_summary(items, translate_sfx):
+    sfx_items = [item for item in items if item.get("classification") == "sfx"]
+    sent_items = [item for item in sfx_items if item.get("sent_to_nvidia")]
+    not_ignored_items = [item for item in sfx_items if not item.get("ignored")]
+    return {
+        "sfx_policy_valid": bool(translate_sfx) or not sent_items,
+        "sfx_sent_to_provider_groups": len(sent_items),
+        "sfx_not_ignored_groups": len(not_ignored_items),
+        "preserved_sfx_groups": len(sfx_items),
+    }
+
+
 def _validate_quality(states, pdf_path, expected_page_count=None, full=False, *, pdf_expected=True):
     invalid_pages = []
     for state in states:
@@ -8132,20 +8144,11 @@ def _validate_quality(states, pdf_path, expected_page_count=None, full=False, *,
         for state in states
         for item in state.get("debug_data", {}).get("items", [])
     ]
-    preserved_sfx_items = [
-        item
-        for item in all_items
-        if item.get("classification") == "sfx"
-    ]
-    # The policy is TRANSLATE_SFX. Translated sound effects are the configured
-    # behaviour, not a violation; only with it off must every sound stay out of the
-    # provider. (Treating translation itself as the violation failed every chapter.)
-    sfx_policy_ok = bool(config.TRANSLATE_SFX) or all(
-        item.get("classification") == "sfx"
-        and item.get("ignored")
-        and not item.get("sent_to_nvidia")
-        for item in preserved_sfx_items
-    )
+    # With translation disabled, SFX must stay out of the provider. A
+    # reclassified SFX may remain visible without being ignored, so `ignored`
+    # is diagnostic rather than the policy gate.
+    sfx_policy = _sfx_policy_summary(all_items, config.TRANSLATE_SFX)
+    sfx_policy_ok = sfx_policy["sfx_policy_valid"]
     visual_failures = [
         item
         for item in all_items
@@ -8182,8 +8185,8 @@ def _validate_quality(states, pdf_path, expected_page_count=None, full=False, *,
         "invalid_or_blank_pages": invalid_pages,
         "high_translation_pages_valid": high_translation_valid,
         "translate_sfx_disabled": config.TRANSLATE_SFX is False,
-        "preserved_sfx_groups": len(preserved_sfx_items),
-        "sfx_policy_valid": sfx_policy_ok,
+        "preserved_sfx_groups": sfx_policy["preserved_sfx_groups"],
+        **sfx_policy,
         "visual_validation_failures": len(visual_failures),
         "manual_review_required_groups": len(manual_review_items),
         "text_overflow_groups": len(overflow_items),

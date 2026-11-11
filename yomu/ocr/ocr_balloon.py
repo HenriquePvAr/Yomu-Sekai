@@ -4911,6 +4911,10 @@ def _classify_groups(groups, image_bgr, page_index=None):
             )
         with profile_step("classify.refine_background", page_index=page_index):
             _refine_classification_with_background(group)
+        # Background refinement can change the region class after the first
+        # policy pass. Reapply the SFX setting to the final classification.
+        with profile_step("classify.final_policy", page_index=page_index):
+            _apply_classification_policy(group)
         record_group(
             page_index=page_index,
             group_id=group.group_id,
