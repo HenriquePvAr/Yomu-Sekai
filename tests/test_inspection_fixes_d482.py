@@ -103,8 +103,8 @@ def test_open_artifact_path_uses_explorer_on_windows_dir(tmp_path):
     folder.mkdir()
 
     with patch("yomu.ui.ui_bridge.os.name", "nt"):
-        with patch("yomu.ui.ui_bridge.subprocess.Popen") as mock_popen:
+        with patch("yomu.ui.ui_bridge.os.startfile", create=True) as mock_startfile:
             with patch.object(bridge, "_focus_explorer_window") as mock_focus:
                 bridge._open_artifact_path(str(folder))
-                mock_popen.assert_called_once_with(["explorer.exe", str(folder.resolve())])
+                mock_startfile.assert_called_once_with(str(folder.resolve()), "explore")
                 mock_focus.assert_called_once_with(folder.name)

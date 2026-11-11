@@ -640,14 +640,14 @@ class TexturedSpeechMaskAcceptance(unittest.TestCase):
 
     # 38 - the fallback is the last strategy, so an earlier accept still wins.
     def test_fallback_is_the_last_render_strategy(self):
-        import inspect
-
-        source = inspect.getsource(ocr_balloon._render_analyzed_image)
-        self.assertIn('"%s",' % FALLBACK, source)
-        self.assertLess(
-            source.index('"caption_overlay"'),
-            source.index('"%s"' % FALLBACK),
+        group = self._p002_shaped_case()[1]
+        with patch.object(config, "GENERATIVE_CAPTION_REPAIR_ENABLED", False):
+            strategies = ocr_balloon._cleanup_strategies(group)
+        self.assertEqual(
+            strategies,
+            ("primary", "conservative", "glyph_overlay", "caption_overlay", FALLBACK),
         )
+        self.assertLess(strategies.index("caption_overlay"), strategies.index(FALLBACK))
 
     # 41 - the decision must stay explainable in the persisted evidence.
     def test_fallback_records_bounded_decision_telemetry(self):

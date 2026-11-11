@@ -122,14 +122,22 @@ class PhysicalFailClosedTests(unittest.TestCase):
             mock.patch.object(
                 ob,
                 "_remove_text_for_group",
-                return_value=(original.copy(), mask, {"mask_valid": True}),
+                return_value=(original.copy(), mask, {
+                    "mask_valid": True, "text_component_pixels": 11700,
+                    "background_type": "white_balloon",
+                }),
             ) as remove,
             mock.patch.object(ob, "_draw_group_translation") as draw,
             mock.patch.object(ob, "typography_profile_for_region") as typography,
             mock.patch.object(
                 ob,
                 "_uncovered_source_text_evidence",
-                return_value={"measured": True, "source_text_coverage": 0.0},
+                return_value={"measured": True, "source_text_pixels": 100,
+                              "source_owned_geometry_coverage": 1.0,
+                              "source_text_coverage": 1.0,
+                              "largest_uncovered_source_component": 0,
+                              "largest_unmasked_source_component": 0,
+                              "unmeasured_source_line_ids": []},
             ),
         ):
             rendered, _debug = ob.render_analyzed_image(
@@ -163,7 +171,10 @@ class PhysicalFailClosedTests(unittest.TestCase):
             mock.patch.object(
                 ob,
                 "_remove_text_for_group",
-                return_value=(original.copy(), mask, {"mask_valid": True}),
+                return_value=(original.copy(), mask, {
+                    "mask_valid": True, "text_component_pixels": 11700,
+                    "background_type": "white_balloon",
+                }),
             ) as remove,
             mock.patch.object(
                 ob,
@@ -175,6 +186,7 @@ class PhysicalFailClosedTests(unittest.TestCase):
                 "_enforce_visual_bounds",
                 return_value=(original.copy(), {"visual_validation_passed": True}),
             ),
+            mock.patch.object(ob, "_reconstruction_gate_failure", return_value=None),
             mock.patch.object(
                 ob,
                 "_uncovered_source_text_evidence",
@@ -201,6 +213,57 @@ class PhysicalFailClosedTests(unittest.TestCase):
         draw.assert_called()
         self.assertEqual(group.render_disposition, ob.RENDER_WITH_REVIEW)
         self.assertTrue(group.manual_review_required)
+
+    def test_renderable_review_without_removal_proof_stays_unrendered(self):
+        original = np.full((180, 420, 3), 255, dtype=np.uint8)
+        mask = np.zeros(original.shape[:2], dtype=np.uint8)
+        mask[45:90, 40:300] = 255
+        group = _group()
+        group.semantic_review_reason = "terminology_conflict_after_retries"
+
+        with (
+            mock.patch.object(
+                ob,
+                "_remove_text_for_group",
+                return_value=(original.copy(), mask, {
+                    "mask_valid": True, "text_component_pixels": 11700,
+                    "background_type": "white_balloon",
+                }),
+            ),
+            mock.patch.object(
+                ob,
+                "_draw_group_translation",
+                side_effect=lambda img, *_args, **_kwargs: img.copy(),
+            ) as draw,
+            mock.patch.object(
+                ob,
+                "_enforce_visual_bounds",
+                return_value=(original.copy(), {"visual_validation_passed": True}),
+            ),
+            mock.patch.object(ob, "_reconstruction_gate_failure", return_value=None),
+            mock.patch.object(
+                ob,
+                "_uncovered_source_text_evidence",
+                return_value={"measured": False},
+            ),
+        ):
+            rendered, _debug = ob.render_analyzed_image(
+                original,
+                group.lines,
+                [],
+                [group],
+                font_path="",
+                page_index=65,
+            )
+
+        self.assertTrue(np.array_equal(rendered, original))
+        draw.assert_called()
+        self.assertFalse(group.redrawn)
+        self.assertTrue(group.preserved_original)
+        self.assertTrue(any(
+            attempt.get("reason") == "source_removal_unverified"
+            for attempt in group.visual_attempts
+        ))
 
 
 class RapidOCRSourceRecoveryTests(unittest.TestCase):
