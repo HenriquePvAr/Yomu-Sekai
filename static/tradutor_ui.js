@@ -975,10 +975,10 @@
     connection_error: 'Nao foi possivel conectar ao site.',
     transport_error: 'Ocorreu um problema ao baixar as imagens.',
     incomplete_download: 'Algumas páginas não puderam ser baixadas.',
-    unsupported_source: 'Esta fonte ainda não é compatível com o Yomu Sekai.',
+    unsupported_source: 'Esta fonte ainda não é compatível com o Komyst.',
     environment_not_configured: 'O ambiente ainda não está pronto para processar esta tradução.',
-    INSUFFICIENT_YOMU_KEYS: 'Yomu Keys insuficientes para iniciar esta tradução.',
-    insufficient_yk: 'Yomu Keys insuficientes para iniciar esta tradução.',
+    INSUFFICIENT_YOMU_KEYS: 'Komyst Keys insuficientes para iniciar esta tradução.',
+    insufficient_yk: 'Komyst Keys insuficientes para iniciar esta tradução.',
     not_entitled: 'Seu acesso atual não permite iniciar esta tradução.',
     license_not_entitled: 'Seu acesso atual não permite iniciar esta tradução.',
     license_not_active: 'Seu acesso à versão beta ainda não está ativo.',
@@ -1405,7 +1405,7 @@
   }
   async function chooseLocalFolder() {
     if (!window.pywebview?.api?.choose_local_folder) {
-      showToast('O seletor de pasta está disponível somente no aplicativo Yomu.', 'warn');
+      showToast('O seletor de pasta está disponível somente no aplicativo Komyst.', 'warn');
       return;
     }
     try {
@@ -2013,6 +2013,7 @@
       // Snapshot the current control-plane decision into the job request.
       // Missing/unavailable bootstrap remains fail-closed.
       translation_enabled: appState.translationEnabled === true,
+      translate_sfx: $('#translateSfxToggle')?.checked === true,
       pipeline_intent: {
         requested: true,
         mode: appState.selectedMode === 'download_only' ? 'download_only' : appState.selectedMode,
@@ -7408,7 +7409,7 @@
     const jobId = String(record.job_id || '');
     if (!jobId) return '';
     const title = record.chapter_name || record.slug || 'capítulo';
-    return `<button class="btn-ghost hm-read-action" data-action="read" data-job-id="${escapeAttr(jobId)}" title="Ler dentro do Yomu Sekai" aria-label="${escapeAttr(`Ler: ${title}`)}">LER</button>`;
+    return `<button class="btn-ghost hm-read-action" data-action="read" data-job-id="${escapeAttr(jobId)}" title="Ler dentro do Komyst" aria-label="${escapeAttr(`Ler: ${title}`)}">LER</button>`;
   }
   // Compatibility contract: actionButton('Abrir PDF', 'pdf', record.pdf_path)
   function retryAction(record) {
@@ -9178,7 +9179,10 @@
   });
   async function openArtifact(jobId, artifact) {
     if (!jobId || !artifact) return;
-    try { await api('/api/ui/open', {method: 'POST', body: JSON.stringify({job_id: jobId, artifact})}); }
+    try {
+      await api('/api/ui/open', {method: 'POST', body: JSON.stringify({job_id: jobId, artifact})});
+      if (['folder', 'psd_folder', 'qc_folder'].includes(artifact)) showToast('Pasta solicitada ao Explorador de Arquivos.', 'ok');
+    }
     catch (error) { showToast(error.message, 'error'); }
   }
 
@@ -9214,6 +9218,7 @@
       output_format: 'pdf', output_profile: 'automatic', typesetting_mode: 'on',
       ...(downloadOnly ? {} : {output_plan: appState.outputPlan === 'personalizado' ? 'traducao_pronta' : (appState.outputPlan || 'traducao_pronta')}),
       full: true, use_cache: $('#cacheToggle').checked, force: $('#forceToggle').checked,
+      translate_sfx: $('#translateSfxToggle')?.checked === true,
       use_context: $('#ctxToggle').checked, open_output: false,
       translation_provider: normalizeTranslationProvider(appState.settings?.translation_provider) || 'deepl',
       translation_enabled: appState.translationEnabled === true,
@@ -9387,11 +9392,11 @@
                   setState('ready_to_install', 'Atualização pronta para instalar', 'O instalador foi baixado e verificado.');
                   download.textContent = 'Instalar agora'; download.disabled = false;
                   download.onclick = async () => {
-                    download.disabled = true; setState('installing', 'Instalando atualização…', 'O Yomu Sekai será fechado para concluir a instalação.');
+                    download.disabled = true; setState('installing', 'Instalando atualização…', 'O Komyst será fechado para concluir a instalação.');
                     const installed = await fetch('/api/update/install', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({handoff_token: current.handoff_token})});
                     const installedJson = await installed.json().catch(() => ({}));
                     if (!installed.ok) { setState('error', 'Instalação indisponível', 'A versão atual continua utilizável.'); download.disabled = false; return; }
-                    setState('installing', 'Instalação iniciada', 'O Yomu Sekai será fechado para concluir a atualização.');
+                    setState('installing', 'Instalação iniciada', 'O Komyst será fechado para concluir a atualização.');
                     if (installed.ok && installedJson?.shutdown_required) {
                       if (window.pywebview?.api?.request_shutdown) await window.pywebview.api.request_shutdown();
                       else setTimeout(() => window.close(), 200);
@@ -9550,6 +9555,9 @@
   function applyProductSettings(settings = {}) {
     const form = $('#productSettingsForm');
     if (!form) return;
+    if (typeof settings.translate_sfx === 'boolean') appState.translateSfx = settings.translate_sfx;
+    const sfxStatus = $('#translateSfxStatus');
+    if (sfxStatus) sfxStatus.textContent = `${appState.translateSfx === true ? 'Ativado' : 'Desativado'} · vale para novos jobs`;
     Object.entries(settings).forEach(([key, value]) => {
       if (key === 'passive_ads_enabled') return;
       const field = form.elements.namedItem(key);
@@ -9563,6 +9571,22 @@
       window.TradutorI18n.apply(document);
     }
   }
+  $('#translateSfxToggle')?.addEventListener('change', async event => {
+    const toggle = event.currentTarget;
+    const previous = appState.translateSfx === true;
+    toggle.disabled = true;
+    try {
+      const result = await api('/api/community/settings', {
+        method: 'PUT', body: JSON.stringify({translate_sfx: toggle.checked === true}),
+      });
+      applyProductSettings(result.settings || {});
+      $('#translateSfxStatus').textContent = `${toggle.checked ? 'Ativado' : 'Desativado'} · vale para novos jobs`;
+      showToast('Preferência de SFX salva para os próximos jobs.', 'ok');
+    } catch (error) {
+      toggle.checked = previous;
+      showToast(error.message || 'Não foi possível salvar a opção de SFX.', 'error');
+    } finally { toggle.disabled = false; }
+  });
   function renderPassiveAdsPreference(enabled) {
     const toggle = $('#passiveAdsToggle');
     if (toggle) toggle.checked = enabled === true;
@@ -10022,7 +10046,15 @@
       window.setTimeout(closeBoot, 250);
     } catch (error) {
       window.clearTimeout(bootTimer);
-      setBootFailed('Não foi possível carregar a interface.');
+      if (!bootHasClosed) {
+        setBootFailed('Não foi possível carregar a interface.');
+      } else {
+        // A refresh timeout is not a failed first boot. The boot overlay is
+        // already hidden; changing shellState to boot_failed here hid both
+        // the authenticated panel and login, leaving only a dark background.
+        const status = $('#appStatus');
+        if (status) { status.textContent = 'reconectando'; status.dataset.state = 'warning'; }
+      }
       showToast(`Interface local: ${error.message}`, 'error');
     }
   }

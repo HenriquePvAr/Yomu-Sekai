@@ -841,6 +841,7 @@ class CommunityStore:
 
     def save_user_settings(self, user_id: str, settings: dict[str, Any]) -> dict[str, Any]:
         allowed = {
+            "translate_sfx",
             "interface_language", "theme", "open_folder_on_finish", "local_notifications",
             "confirm_destructive_actions", "restore_session", "home_page", "default_mode",
             "default_scope", "use_cache", "temporary_context", "default_ocr", "default_translation",
@@ -850,7 +851,10 @@ class CommunityStore:
             "cache_budget_mb", "reduced_motion", "high_contrast", "ui_scale", "tooltips",
             "keyboard_shortcuts", "clear_session_on_close", "diagnostic_logs", "developer_mode",
         }
-        clean = {key: settings[key] for key in allowed if key in settings}
+        clean = {key: value for key, value in self.user_settings(user_id).items() if key in allowed}
+        clean.update({key: settings[key] for key in allowed if key in settings})
+        if "translate_sfx" in settings:
+            clean["translate_sfx"] = settings["translate_sfx"] is True
         now = time.time()
         self._conn.execute(
             "INSERT INTO community_user_settings(user_id,settings_json,updated_at) VALUES(?,?,?) "
@@ -861,6 +865,7 @@ class CommunityStore:
 
     def user_settings(self, user_id: str) -> dict[str, Any]:
         defaults = {
+            "translate_sfx": False,
             "interface_language": "pt-BR", "theme": "system", "open_folder_on_finish": False,
             "local_notifications": True, "confirm_destructive_actions": True, "restore_session": True,
             "home_page": "inicio", "default_mode": "fast", "default_scope": "full", "use_cache": True,

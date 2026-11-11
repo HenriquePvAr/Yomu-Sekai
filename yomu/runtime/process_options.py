@@ -63,6 +63,37 @@ def hidden_console_options() -> dict[str, Any]:
     }
 
 
+def configure_headless_subprocesses() -> None:
+    """Hide dependency-launched children inside a dedicated headless worker.
+
+    Paddle's imports probe tools with subprocess.check_output (e.g. where.exe).
+    Those calls cannot use our launch helper. Install this policy only in its
+    isolated worker, never in the UI or an interactive command entrypoint.
+    Standard streams, arguments, errors and exit codes remain unchanged.
+    """
+    if os.name != "nt" or getattr(subprocess.Popen, "_yomu_headless", False):
+        return
+    import copy
+    original = subprocess.Popen
+
+    class HeadlessPopen(original):
+        _yomu_headless = True
+
+        def __init__(self, *args, **kwargs):
+            hidden = hidden_console_options()
+            flags = int(kwargs.get("creationflags", 0))
+            flags &= ~getattr(subprocess, "CREATE_NEW_CONSOLE", 0)
+            kwargs["creationflags"] = flags | hidden["creationflags"]
+            startup = kwargs.get("startupinfo")
+            startup = copy.copy(startup) if startup is not None else hidden["startupinfo"]
+            startup.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+            startup.wShowWindow = getattr(subprocess, "SW_HIDE", 0)
+            kwargs["startupinfo"] = startup
+            super().__init__(*args, **kwargs)
+
+    subprocess.Popen = HeadlessPopen
+
+
 def build_background_process_options(
     *,
     stdin: Any = subprocess.DEVNULL,

@@ -13,12 +13,22 @@ def _base_mask():
     return mask
 
 
-def test_refinement_covers_gaps_and_stays_in_the_box():
-    group = SimpleNamespace(classification="sfx", box=(80, 80, 260, 100))
-    refined = _refine_lettering_mask(_base_mask(), group, {"lettering_stroke_width": 4})
+def _group():
+    return SimpleNamespace(classification="sfx", box=(80, 80, 260, 100),
+        lines=[SimpleNamespace(box=(80, 80, 260, 100))], cleanup_lines=[],
+        background_type="textured_art", background_metrics={})
+
+
+def _metrics(stroke):
+    return {"lettering_stroke_width": stroke, "text_component_pixels": 8000}
+
+
+def test_refinement_preserves_gaps_and_uses_a_small_halo():
+    group = _group()
+    refined = _refine_lettering_mask(_base_mask(), group, _metrics(4))
     assert int((refined > 0).sum()) > int((_base_mask() > 0).sum())
-    # the gap between the two glyph cores is bridged
-    assert bool(refined[115, 205:215].all())
+    # Closing across separate letters was the overpainting behaviour; forbid it.
+    assert not refined[115, 205:215].any()
     ys, xs = np.where(refined > 0)
     pad_x = max(2, int(260 * 0.06))
     pad_y = max(2, int(100 * 0.06))
@@ -27,16 +37,16 @@ def test_refinement_covers_gaps_and_stays_in_the_box():
 
 
 def test_refinement_respects_measured_stroke():
-    group = SimpleNamespace(classification="sfx", box=(80, 80, 260, 100))
-    small = _refine_lettering_mask(_base_mask(), group, {"lettering_stroke_width": 1})
-    large = _refine_lettering_mask(_base_mask(), group, {"lettering_stroke_width": 8})
+    group = _group()
+    small = _refine_lettering_mask(_base_mask(), group, _metrics(1))
+    large = _refine_lettering_mask(_base_mask(), group, _metrics(8))
     assert int((large > 0).sum()) > int((small > 0).sum())
 
 
-def test_non_sfx_mask_untouched():
-    group = SimpleNamespace(classification="speech", box=(80, 80, 260, 100))
+def test_surgical_v4_mask_is_never_expanded_again():
+    group = _group()
     assert np.array_equal(
-        _refine_lettering_mask(_base_mask(), group, {"lettering_stroke_width": 4}),
+        _refine_lettering_mask(_base_mask(), group, {**_metrics(4), "sfx_glyph_halo_mask": True}),
         _base_mask(),
     )
 

@@ -50,7 +50,7 @@ def test_unrenderable_target_still_produces_clean_artifact_without_typography():
         mock.patch.object(
             ob,
             "_remove_text_for_group",
-            return_value=(source.copy(), mask, {"mask_valid": True}),
+            return_value=(clean.copy(), mask, {"mask_valid": True}),
         ) as remove,
         mock.patch.object(ob, "_apply_cleanup_mask", return_value=clean),
         mock.patch.object(

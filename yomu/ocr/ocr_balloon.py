@@ -797,42 +797,49 @@ def get_translatable_groups(groups):
 
 
 def get_cleanable_translatable_groups(groups):
-    """Return story regions whose source belongs in CLEAN, regardless of target.
+    """Return owned story/SFX regions for CLEAN, independently of typesetting.
 
     Translation validity is intentionally absent from this predicate.  It is a
     gate for drawing target glyphs, not a reason for a professional CLEAN layer
     to retain ordinary source dialogue.  Classification and OCR safety remain
-    authoritative, so SFX, names, decorative art and unreadable OCR are never
-    erased merely because they have no target candidate.
+    authoritative. SFX require traceable lines and sufficient detection confidence;
+    their source reading need not be a dictionary word. Names/decorative art and
+    unowned or unreliable detections remain protected.
     """
 
     eligible = []
     for group in groups:
-        if group.ignored or group.preserve_as_name:
+        # Classification marks disabled SFX ignored for translation. That flag
+        # must not veto independently requested CLEAN source removal.
+        translation_only_skip = (group.classification == "sfx"
+                                 and (group.ignore_reason == "sfx_translation_disabled"
+                                      or (group.ignore_reason == "weak_unknown_text"
+                                          and group.classification_reason == "glossary_sound_outside_balloon")))
+        if (group.ignored and not translation_only_skip) or group.preserve_as_name:
             from yomu.clean.disposition import classify_group_disposition
             group.clean_disposition, group.clean_disposition_reason = map(
                 str, classify_group_disposition(group)
             )
             continue
-        if group.classification == "sfx":
-            from yomu.translation.sfx_glossary import translate_sfx_fuzzy
-            sfx_target = translate_sfx_fuzzy(group.text) if config.TRANSLATE_SFX else None
-            if not config.TRANSLATE_SFX or (
-                not getattr(group, "sent_to_translation", False)
-                and (not sfx_target or sfx_target.strip().casefold() == str(group.text or "").strip().casefold())
-            ):
-                from yomu.clean.disposition import RegionDisposition
-                group.clean_disposition = RegionDisposition.PRESERVE_SFX.value
-                group.clean_disposition_reason = "sfx_policy_preserve"
-                group.manual_review_required = False
-                continue
-        if group.ocr_quality_blocked or _ocr_unintelligible_source_text(group.text):
+        if (group.ocr_quality_blocked
+                or (group.classification != "sfx" and _ocr_unintelligible_source_text(group.text))
+                or (group.classification == "sfx" and group.confidence < max(
+                    .55, float(getattr(config, "RAPIDOCR_MIN_CONFIDENCE", .55))))):
             from yomu.clean.disposition import RegionDisposition
             group.clean_disposition = RegionDisposition.REVIEW_OCR.value
             group.clean_disposition_reason = "ocr_not_reliable"
             group.manual_review_required = True
             continue
-        if not _group_has_story_translation_authority(group):
+        if group.classification == "sfx":
+            # Erasing detected source sounds in CLEAN is independent of typesetting.
+            lines = _cleanup_lines_for_group(group)
+            if not lines or any(not (getattr(line, "metadata", None) or {}).get("ocr_line_id")
+                                for line in lines):
+                group.clean_disposition = "REVIEW_OCR"
+                group.clean_disposition_reason = "sfx_cleanup_requires_line_provenance"
+                group.manual_review_required = True
+                continue
+        elif not _group_has_story_translation_authority(group):
             from yomu.clean.disposition import RegionDisposition
             group.clean_disposition = RegionDisposition.REVIEW_SEMANTIC.value
             group.clean_disposition_reason = "story_ownership_not_established"
@@ -2255,19 +2262,17 @@ _LAST_RESORT_ART_REASONS = frozenset({
 
 
 def _last_resort_allowed(group):
-    """Only prose earns the learned last resort; signs, credits and sounds do not.
+    """Readable prose or an identified sound may use the learned last resort.
 
     The ordinary refusals also protect art lettering that slipped into a story
     class (a shop sign "ASSISTANCE", a scanlator credit, a "*dong*"). Removing
-    those is worse than leaving them, so the region must read as a sentence.
+    those is worse than leaving them, so prose needs sentence evidence and SFX
+    needs a recognized sound/word. Typesetting is a separate decision.
     """
     text = str(getattr(group, "text", "") or "")
     classification = str(getattr(group, "classification", "") or "").lower()
     if classification == "sfx":
-        # Sound effects are only replaced when SFX translation is on, and only a
-        # sound with a known rendering (glossary or a real English word).
-        if not config.TRANSLATE_SFX:
-            return False
+        # CLEAN can remove owned sounds without a target translation.
         from yomu.translation.sfx_glossary import translate_sfx_fuzzy
         words = re.findall(r"[A-Za-z]+", text)
         return bool(words) and (translate_sfx_fuzzy(text) is not None
@@ -2392,6 +2397,125 @@ def _render_on_clean_rescue(before_group, clean_before, clean_after, original_bg
     return rendered, allowed
 
 
+def _cleanup_strategies(group):
+    strategies = ("primary", "conservative", "glyph_overlay", "caption_overlay", "source_scoped")
+    if (getattr(config, "GENERATIVE_CAPTION_REPAIR_ENABLED", False)
+            and str(getattr(group, "classification", "")).lower() not in {"sfx", "logo", "credit"}):
+        return ("caption_effect",) + strategies
+    return strategies
+
+
+def _caption_effect_cleanup(current_bgr, original_bgr, group):
+    """Reconstruct a proven chromatic caption effect through the normal gates."""
+    from yomu.clean.inpainting import flux_edit
+    from yomu.clean.ownership import lettering_effects as effects
+
+    empty = np.zeros(original_bgr.shape[:2], np.uint8)
+    refused = {"mask_valid": False, "reason": "caption_effect_not_eligible"}
+    if (str(getattr(group, "classification", "")).lower() in {"sfx", "logo", "credit", "decorative"}
+            or getattr(group, "preserve_as_name", False) or getattr(group, "ignored", False)
+            or getattr(group, "ocr_quality_blocked", False)
+            or not flux_edit.available(purpose="caption_effect")):
+        return current_bgr.copy(), empty, refused
+    lines = _cleanup_lines_for_group(group)
+    if (not lines or max(line.box[3] for line in lines) < 36
+            or min(line.confidence for line in lines) < .8
+            or any(not (getattr(line, "metadata", None) or {}).get("ocr_line_id") for line in lines)):
+        return current_bgr.copy(), empty, refused
+    completeness = source_completeness.check_live_group(group, render_lines=lines)
+    group.source_completeness = completeness
+    if completeness.get("status") != source_completeness.STATUS_PASS:
+        return current_bgr.copy(), empty, {**refused, "reason": "caption_effect_source_not_complete"}
+    source_key = hashlib.sha256(original_bgr.tobytes() + repr([
+        (line.text, tuple(line.box), line.confidence, line.metadata.get("ocr_line_id"))
+        for line in lines]).encode()).hexdigest()
+    cached = getattr(group, "_caption_effect_result", None)
+    if cached and cached["source_key"] == source_key:
+        if cached["accepted"]:
+            result = current_bgr.copy()
+            result[cached["mask"] > 0] = cached["pixels"]
+            return result, cached["mask"], dict(cached["metrics"])
+        return current_bgr.copy(), empty, dict(cached["metrics"])
+
+    def reject(metrics):
+        group._caption_effect_result = {"source_key": source_key, "accepted": False, "metrics": metrics}
+        return current_bgr.copy(), empty, metrics
+
+    background, background_metrics = _classify_background_region(original_bgr, group)
+    if background not in {"textured_art", "speed_lines", "unknown"}:
+        return reject(refused)
+    group.background_type, group.background_metrics = background, background_metrics
+    glyph_profile = extract_glyph_style_profile(original_bgr, group, group.box)
+    if glyph_profile.get("confidence", 0) < .8 or glyph_profile.get("family_class") not in {"serif", "sans"}:
+        return reject(refused)
+    core = empty.copy()
+    total_letters = 0
+    for line in lines:
+        letters = re.findall(r"[A-Za-z]", str(line.text or ""))
+        if not letters:
+            return reject(refused)
+        pad = max(12, min(48, round(line.box[3] * .36)))
+        ink, _ = _glyph_ink_mask(original_bgr, line.box, padding=pad, dark_core=True)
+        if ink is None:
+            return reject(refused)
+        count, labels, stats, _ = cv2.connectedComponentsWithStats(ink, 8)
+        components = [label for label in range(1, count) if stats[label, 3] >= line.box[3]*.48]
+        if len(components) != len(letters):
+            return reject({**refused, "reason": "caption_effect_glyph_geometry_incomplete"})
+        x, y, w, h = _expanded_box(line.box, original_bgr.shape, pad)
+        core[y:y+h, x:x+w] |= np.isin(labels, components).astype(np.uint8)*255
+        total_letters += len(letters)
+    if total_letters < 8:
+        return reject(refused)
+    layers = effects.build_effect_layers(original_bgr, core, [line.box for line in lines],
+        neighbor_boxes=getattr(group, "neighbor_text_boxes", ()))
+    if layers is None:
+        return reject(refused)
+    group._caption_effect_layers = layers
+    group._caption_effect_source_hash = hashlib.sha256(original_bgr.tobytes()).hexdigest()
+    group.structure_protect_mask = layers.protected > 0
+    telemetry = {}
+    x, y, w, h = layers.crop_box
+    purple = 130 <= layers.profile["halo_hue"] <= 170
+    surface = "dark purple comic background" if purple else "comic background with its original colors"
+    glow = "purple glow" if purple else "colored glow"
+    lines_and_effects = "fine white radial lines and purple laser beams" if purple and background == "speed_lines" else "existing lines and lighting effects"
+    prompt = (f"Remove all printed typography from the image. Erase the black text and all {glow} shaped like letters. "
+              f"Fill the erased areas with the surrounding {surface} and continue the {lines_and_effects}. "
+              "Preserve the camera angle, colors and objects. The result contains no text, letters, words, symbols or caption boxes.")
+    edited = flux_edit.flux_reference_edit(original_bgr[y:y+h, x:x+w], prompt=prompt,
+                                          purpose="caption_effect", telemetry=telemetry)
+    metrics = {"strategy": "caption_effect", "background_type": background,
+               "inpaint_method": "flux2_klein_reference", "effect_profile": layers.profile,
+               "generative_telemetry": telemetry, "glyphs_verified": total_letters}
+    if edited is None:
+        return reject({**metrics, "mask_valid": False, "reason": "caption_effect_model_unavailable"})
+    generated = original_bgr.copy()
+    generated[y:y+h, x:x+w] = edited
+    cleaned = effects.composite_effect(original_bgr, generated, layers)
+    mask = layers.authorized
+    failure = _reconstruction_gate_failure(original_bgr, cleaned, group, mask, background, "caption_effect", metrics)
+    leak = _inpaint_change_metrics(original_bgr, cleaned, mask)
+    metrics.update(leak)
+    if failure or leak["changed_pixels_outside_mask"]:
+        return reject({**metrics, "mask_valid": False, "reason": failure or "effect_outside_mask_change"})
+    legibility = _legible_source_residual(cleaned, group, include_shared_tokens=True)
+    metrics["residual_ocr_check"] = legibility
+    if legibility.get("status") != "not_legible":
+        return reject({**metrics, "mask_valid": False, "reason": "caption_effect_source_removal_unverified"})
+    pixels = int(np.count_nonzero(mask))
+    metrics.update({"mask_valid": True, "reason": "ok", "lettering_refined_before_fill": True,
+                    "mask_pixels_before_lettering_refine": pixels, "mask_pixels": pixels,
+                    "text_component_pixels": pixels, "source_glyph_pixels": int(np.count_nonzero(core)),
+                    "mask_to_text_area_ratio": 1.0, "caption_effect_reconstructed": True})
+    group.background_metrics["cleanup_fill_source"] = "flux2_klein_reference"
+    group._caption_effect_result = {"source_key": source_key, "accepted": True, "mask": mask,
+                                    "pixels": cleaned[mask > 0].copy(), "metrics": dict(metrics)}
+    result = current_bgr.copy()
+    result[mask > 0] = cleaned[mask > 0]
+    return result, mask, metrics
+
+
 def _clean_source_for_clean_artifact(current_bgr, original_bgr, group):
     """Remove owned source glyphs for the CLEAN artifact without drawing a target.
 
@@ -2405,13 +2529,7 @@ def _clean_source_for_clean_artifact(current_bgr, original_bgr, group):
     last_resort_mask = None
     group.clean_local_attempted = True
     group.spatial_harmonic_gate_rejected = False
-    for strategy in (
-        "primary",
-        "conservative",
-        "glyph_overlay",
-        "caption_overlay",
-        "source_scoped",
-    ):
+    for strategy in _cleanup_strategies(group):
         cleaned, cleanup_mask, metrics = _remove_text_for_group(
             current_bgr,
             original_bgr,
@@ -2426,13 +2544,7 @@ def _clean_source_for_clean_artifact(current_bgr, original_bgr, group):
         if not metrics.get("mask_valid", False):
             attempts.append(attempt)
             continue
-        cleaned = _apply_cleanup_mask(
-            current_bgr,
-            original_bgr,
-            group,
-            cleanup_mask,
-            strategy=strategy,
-        )
+        # _remove_text_for_group already filled and checked this exact mask.
         removal = _uncovered_source_text_evidence(
             original_bgr,
             cleaned,
@@ -2494,7 +2606,12 @@ def _clean_source_for_clean_artifact(current_bgr, original_bgr, group):
         # drips) cannot survive outside an art-respecting mask, and neither
         # verifier nor OCR reliably sees such remains. The art-respecting mask is
         # the fallback. Either way the result is marked for art review.
-        for candidate_mask in (_line_box_mask(group, last_resort_mask), last_resort_mask):
+        is_sfx_or_art = (
+            str(getattr(group, "classification", "") or "").lower() == "sfx"
+            or str(getattr(group, "background_type", "") or "").lower() in {"sfx_area", "textured_art", "speed_lines"}
+        )
+        candidate_masks = (last_resort_mask,) if is_sfx_or_art else (last_resort_mask, _line_box_mask(group, last_resort_mask))
+        for candidate_mask in candidate_masks:
             if candidate_mask is None:
                 continue
             rescued = _learned_last_resort_clean(current_bgr, original_bgr, group, candidate_mask)
@@ -2879,9 +2996,13 @@ def _render_analyzed_image(
 
         render_allowed, render_block_reason = translation_allows_physical_render(group)
         if not render_allowed:
+            clean_started = time.perf_counter()
             inpainted, clean_mask, _clean_strategy, clean_ok = (
                 _clean_source_for_clean_artifact(inpainted, original, group)
             )
+            clean_elapsed = time.perf_counter() - clean_started
+            cleanup_seconds += clean_elapsed
+            inpaint_seconds += clean_elapsed
             if clean_ok and clean_mask is not None:
                 text_mask = cv2.bitwise_or(text_mask, clean_mask)
             _preserve_unrenderable_translation(group, render_block_reason)
@@ -2957,17 +3078,9 @@ def _render_analyzed_image(
             and str(getattr(group, "classification", "") or "").lower() == "sfx"
             and str(getattr(group, "background_type", "") or "")
             in {"sfx_area", "textured_art"}
-            and int(group.box[2]) * int(group.box[3]) >= 20000
+            and int(group.box[2]) * int(group.box[3]) >= 8000
         )
-        for strategy in (
-            "primary",
-            "conservative",
-            "glyph_overlay",
-            "caption_overlay",
-            # Last resort: only proven ordinary speech reaches it, and only after
-            # every broad strategy above already refused the region.
-            "source_scoped",
-        ):
+        for strategy in _cleanup_strategies(group):
             if straight_to_lama and strategy != "source_scoped":
                 continue
             inpaint_started = time.perf_counter()
@@ -2980,10 +3093,99 @@ def _render_analyzed_image(
                 group,
                 **cleanup_kwargs,
             )
-            if cleanup_mask is not None and str(
-                getattr(group, "classification", "") or ""
-            ).lower() == "sfx":
-                cleanup_mask = _refine_lettering_mask(cleanup_mask, group, mask_metrics)
+            if cleanup_mask is not None and np.any(cleanup_mask):
+                broad_mask = cleanup_mask
+                broad_mask_pixels = int(mask_metrics.get("mask_pixels_before_lettering_refine")
+                                        or np.count_nonzero(cleanup_mask))
+                if not mask_metrics.get("lettering_refined_before_fill"):
+                    cleanup_mask = _refine_lettering_mask(cleanup_mask, group, mask_metrics)
+                # The cleanup routine above already produced a fill. Rebuild it
+                # from the final (tighter) mask only when refinement actually changed
+                # the mask, avoiding a duplicate inpaint call when unchanged.
+                if (
+                    not mask_metrics.get("lettering_refined_before_fill")
+                    and mask_metrics.get("mask_valid")
+                    and cleanup_mask is not None
+                    and np.any(cleanup_mask)
+                    and not np.array_equal(cleanup_mask, broad_mask)
+                ):
+                    cleaned = _apply_cleanup_mask(
+                        before_group, original, group, cleanup_mask, strategy=strategy,
+                    )
+                page_pixels = max(1, int(original.shape[0] * original.shape[1]))
+                mask_pixels = int(np.count_nonzero(cleanup_mask)) if cleanup_mask is not None else 0
+                fill_mask = (
+                    (_grown_fill_mask(group, cleanup_mask) > 0)
+                    if cleanup_mask is not None and np.any(cleanup_mask)
+                    else np.zeros(original.shape[:2], dtype=bool)
+                )
+                fill_mask_pixels = int(np.count_nonzero(fill_mask))
+                text_pixels = max(1, int(mask_metrics.get("text_component_pixels", 0) or 0))
+                changed_base = _inpaint_change_metrics(before_group, cleaned, cleanup_mask)
+                changed_fill = _inpaint_change_metrics(before_group, cleaned, fill_mask)
+                mask_metrics.update({
+                    "mask_pixels_before_lettering_refine": broad_mask_pixels,
+                    "mask_pixels": mask_pixels,
+                    "mask_page_area_pixels": page_pixels,
+                    "mask_page_area_ratio": round(mask_pixels / page_pixels, 7),
+                    "mask_to_text_area_ratio": round(mask_pixels / text_pixels, 4),
+                    "fill_mask_pixels": fill_mask_pixels,
+                    "fill_mask_page_area_ratio": round(fill_mask_pixels / page_pixels, 7),
+                    "fill_mask_to_text_area_ratio": round(fill_mask_pixels / text_pixels, 4),
+                    "fill_mask_expansion_pixels": max(0, fill_mask_pixels - mask_pixels),
+                    "fill_mask_expansion_ratio": round(
+                        max(0, fill_mask_pixels - mask_pixels) / max(1, mask_pixels), 4,
+                    ),
+                    "mask_refine_reduction_ratio": round(
+                        1.0 - mask_pixels / max(1, broad_mask_pixels), 4,
+                    ),
+                    "mask_area_change_ratio": round(
+                        mask_pixels / max(1, broad_mask_pixels) - 1.0, 4,
+                    ),
+                    "changed_pixels_in_mask": changed_base["changed_pixels_in_mask"],
+                    "changed_pixels_outside_mask": changed_base["changed_pixels_outside_mask"],
+                    "changed_fraction_in_mask": changed_base["changed_fraction_in_mask"],
+                    "changed_pixels_inside_fill_mask": changed_fill["changed_pixels_in_mask"],
+                    "changed_pixels_outside_fill_mask": changed_fill["changed_pixels_outside_mask"],
+                    "changed_fraction_in_fill_mask": changed_fill["changed_fraction_in_mask"],
+                    "changed_pixels_in_fill_halo": int(np.count_nonzero(
+                        np.any(np.asarray(cleaned) != np.asarray(before_group), axis=2)
+                        & fill_mask & ~(np.asarray(cleanup_mask) > 0)
+                    )),
+                    "inpaint_method": str(
+                        (getattr(group, "background_metrics", {}) or {}).get("cleanup_fill_source")
+                        or strategy
+                    ),
+                })
+                complex_background = (
+                    str(mask_metrics.get("background_type") or group.background_type).lower()
+                    in {"textured_art", "speed_lines", "sfx_area", "unknown"}
+                    or str((getattr(group, "background_metrics", {}) or {}).get(
+                        "local_background_class", ""
+                    )).lower() in {"gradient", "structured_or_textured"}
+                )
+                if complex_background and mask_metrics["fill_mask_to_text_area_ratio"] > 2.0:
+                    mask_metrics["mask_valid"] = False
+                    mask_metrics["reason"] = "complex_background_mask_exceeds_text_area_limit"
+                    mask_metrics["narrow_mask_reconstruction_retry"] = True
+                if mask_metrics["changed_pixels_outside_fill_mask"] > _LAMA_COMPOSITE_LEAK_BUDGET_PX:
+                    mask_metrics["mask_valid"] = False
+                    mask_metrics["reason"] = "fill_changed_outside_effective_mask"
+                    mask_metrics["narrow_mask_reconstruction_retry"] = True
+                # Recheck the actual candidate against its final mask. This does
+                # not suppress complex-art attempts: a rejected local fill still
+                # proceeds through the existing SFX/LaMA fallback and review path.
+                if mask_pixels:
+                    refine_gate_metrics = {}
+                    refine_gate_failure = _reconstruction_gate_failure(
+                        original, cleaned, group, cleanup_mask,
+                        mask_metrics.get("background_type") or group.background_type,
+                        strategy, refine_gate_metrics,
+                    )
+                    mask_metrics.update(refine_gate_metrics)
+                    if refine_gate_failure:
+                        mask_metrics["mask_valid"] = False
+                        mask_metrics["reason"] = refine_gate_failure
             cleanup_elapsed = time.perf_counter() - inpaint_started
             cleanup_seconds += cleanup_elapsed
             inpaint_seconds += cleanup_elapsed
@@ -3006,6 +3208,11 @@ def _render_analyzed_image(
                     mask_metrics["art_fidelity_uncertain"] = True
                     region_fidelity_uncertain = True
             if strategy == "source_scoped":
+                if straight_to_lama and cleanup_mask is not None and int(np.count_nonzero(cleanup_mask)) > 0:
+                    mask_metrics["mask_valid"] = False
+                    mask_metrics["reason"] = "sfx_straight_to_lama"
+                    mask_metrics["art_fidelity_uncertain"] = True
+                    region_fidelity_uncertain = True
                 advanced_fallback_mask = cleanup_mask
                 advanced_fallback_metrics = dict(mask_metrics or {})
                 if region_fidelity_uncertain:
@@ -3093,7 +3300,8 @@ def _render_analyzed_image(
                         else "source_removal_unverified"
                     )
                 if config.POST_RENDER_OCR_VALIDATION:
-                    residual_summary = _post_render_source_text_check(
+                    residual_started = time.perf_counter()
+                    residual_summary = timed_substage("post_render_source_text_check", _post_render_source_text_check,
                         rendered,
                         group,
                         page_index,
@@ -3102,6 +3310,7 @@ def _render_analyzed_image(
                         removal=removal,
                         rendered_occupancy=translated_occupancy,
                     )
+                    quality_seconds += time.perf_counter() - residual_started
                     visual_summary["post_render_ocr"] = residual_summary
                     if not residual_summary.get("passed", True):
                         visual_summary["visual_validation_passed"] = False
@@ -3110,6 +3319,19 @@ def _render_analyzed_image(
                             or "post_render_ocr_validation_failed"
                         )
             visual_summary["strategy"] = strategy
+            visual_summary["mask_pixels"] = int(np.count_nonzero(cleanup_mask))
+            visual_summary["mask_page_area_ratio"] = mask_metrics.get("mask_page_area_ratio")
+            visual_summary["mask_to_text_area_ratio"] = mask_metrics.get("mask_to_text_area_ratio")
+            visual_summary["fill_mask_pixels"] = mask_metrics.get("fill_mask_pixels")
+            visual_summary["fill_mask_page_area_ratio"] = mask_metrics.get("fill_mask_page_area_ratio")
+            visual_summary["changed_pixels_inside_fill_mask"] = mask_metrics.get("changed_pixels_inside_fill_mask")
+            visual_summary["changed_pixels_outside_fill_mask"] = mask_metrics.get("changed_pixels_outside_fill_mask")
+            visual_summary["inpaint_method"] = mask_metrics.get("inpaint_method") or strategy
+            for key in ("generative_telemetry", "effect_profile", "glyphs_verified",
+                        "paired_boundary_color", "caption_effect_reconstructed",
+                        "protected_effect_art_changed_pixels"):
+                if key in mask_metrics:
+                    visual_summary[key] = mask_metrics[key]
             group.visual_attempts.append(visual_summary)
             if (
                 visual_summary.get("visual_validation_passed")
@@ -3333,6 +3555,21 @@ def _render_analyzed_image(
                         **(advanced_fallback_metrics or {}),
                         "advanced_inpaint_used": True,
                         "advanced_fallback_status": "success",
+                        "inpaint_method": (
+                            visual_summary.get("generative_engine") or "lama_large"
+                        ),
+                        "mask_pixels": int(advanced_attempt.get("mask_pixels") or 0),
+                        "fill_mask_pixels": int(advanced_attempt.get("fill_mask_pixels")
+                                                 or advanced_attempt.get("mask_pixels") or 0),
+                        "mask_page_area_ratio": advanced_attempt.get("mask_page_area_ratio"),
+                        "fill_mask_page_area_ratio": advanced_attempt.get("fill_mask_page_area_ratio"
+                                                                            or advanced_attempt.get("mask_page_area_ratio")),
+                        "changed_pixels_in_mask": advanced_attempt.get("changed_pixels_in_mask"),
+                        "changed_pixels_outside_mask": advanced_attempt.get("changed_pixels_outside_mask"),
+                        "changed_fraction_in_mask": advanced_attempt.get("changed_fraction_in_mask"),
+                        "changed_pixels_inside_fill_mask": advanced_attempt.get("changed_pixels_in_mask"),
+                        "changed_pixels_outside_fill_mask": advanced_attempt.get("changed_pixels_outside_mask"),
+                        "changed_fraction_in_fill_mask": advanced_attempt.get("changed_fraction_in_mask"),
                         "model_id": visual_summary.get("model_id"),
                         "model_hash_verified": visual_summary.get(
                             "model_hash_verified"
@@ -3421,7 +3658,8 @@ def _render_analyzed_image(
         if accepted:
             text_mask = cv2.bitwise_or(text_mask, accepted_cleanup_mask)
             allowed_mask = cv2.bitwise_or(allowed_mask, accepted_allowed_mask)
-            inpainted = _apply_cleanup_mask(
+            commit_started = time.perf_counter()
+            inpainted = timed_substage("commit_accepted_clean", _apply_cleanup_mask,
                 inpainted,
                 original,
                 group,
@@ -3429,6 +3667,9 @@ def _render_analyzed_image(
                 strategy=accepted_strategy,
                 accepted_candidate=accepted_cleaned_bgr,
             )
+            commit_elapsed = time.perf_counter() - commit_started
+            cleanup_seconds += commit_elapsed
+            inpaint_seconds += commit_elapsed
             if group.spatial_harmonic_gate_rejected:
                 from yomu.clean.disposition import RegionDisposition
                 group.clean_disposition = RegionDisposition.REVIEW_OCR.value
@@ -3455,9 +3696,24 @@ def _render_analyzed_image(
             # translated page deliberately retains its source for review; CLEAN
             # is separately validated as source-free artwork.
             clean_before = inpainted.copy()
-            inpainted, clean_mask, _clean_strategy, clean_ok = (
-                _clean_source_for_clean_artifact(inpainted, original, group)
-            )
+            _clean_rescue_t0 = time.perf_counter()
+            if (
+                str(getattr(group, "classification", "") or "").lower() == "sfx"
+                and accepted_cleaned_bgr is None
+                and any(a.get("strategy") == "lama_large" and a.get("advanced_fallback_status") == "success" for a in (group.visual_attempts or []))
+                and advanced_fallback_mask is not None
+            ):
+                # Avoid running a redundant 5-strategy + learned_last_resort pass when
+                # lama_large already produced a valid clean reconstruction.
+                clean_mask = advanced_fallback_mask
+                clean_ok = True
+            else:
+                inpainted, clean_mask, _clean_strategy, clean_ok = (
+                    _clean_source_for_clean_artifact(inpainted, original, group)
+                )
+            _clean_rescue_dt = time.perf_counter() - _clean_rescue_t0
+            cleanup_seconds += _clean_rescue_dt
+            inpaint_seconds += _clean_rescue_dt
             if clean_ok and clean_mask is not None:
                 text_mask = cv2.bitwise_or(text_mask, clean_mask)
             rescued_render, rescued_allowed = None, None
@@ -3471,8 +3727,12 @@ def _render_analyzed_image(
                 # where every render strategy was refused: the translation can be
                 # set on that reconstruction, under the same visual bounds, as a
                 # review item - instead of shipping the English page.
+                _rescue_draw_t0 = time.perf_counter()
                 rescued_render, rescued_allowed = _render_on_clean_rescue(
                     before_group, clean_before, inpainted, original, group, clean_mask, font_path)
+                _rescue_draw_dt = time.perf_counter() - _rescue_draw_t0
+                typography_seconds += _rescue_draw_dt
+                redraw_seconds += _rescue_draw_dt
             if rescued_render is not None:
                 final = rescued_render
                 allowed_mask = cv2.bitwise_or(allowed_mask, rescued_allowed)
@@ -3524,9 +3784,13 @@ def _render_analyzed_image(
     # translated page must fail closed.  They still belong in the CLEAN artifact
     # when OCR/classification established that the owned source is translatable.
     for group in clean_only_groups:
+        clean_started = time.perf_counter()
         inpainted, clean_mask, _clean_strategy, clean_ok = (
             _clean_source_for_clean_artifact(inpainted, original, group)
         )
+        clean_elapsed = time.perf_counter() - clean_started
+        cleanup_seconds += clean_elapsed
+        inpaint_seconds += clean_elapsed
         if clean_ok and clean_mask is not None:
             text_mask = cv2.bitwise_or(text_mask, clean_mask)
 
@@ -3657,6 +3921,18 @@ def _candidate_from_line(line, image_shape):
     return TextCandidate(line=line, ignored=bool(reason), ignore_reason=reason)
 
 
+def _verified_sweep_display_read(line):
+    """A repeated sound may look like noise, but needs independent pixel proof."""
+    metadata = getattr(line, "metadata", None) or {}
+    return bool(
+        getattr(line, "engine", "") == "paddle_residual_sweep"
+        and float(getattr(line, "confidence", 0)) >= .90
+        and metadata.get("residual_sweep_recovered") is True
+        and metadata.get("residual_sweep_glyphs_verified") is True
+        and re.fullmatch(r"[A-Z]{3,12}", str(getattr(line, "text", "") or ""))
+    )
+
+
 def _line_ignore_reason(line, image_shape):
     text = clean_ocr_text(line.text)
     if not text:
@@ -3690,7 +3966,7 @@ def _line_ignore_reason(line, image_shape):
     if upper not in SHORT_REAL_TEXTS and alpha_ratio < 0.45 and not _holds_real_word(text):
         return "low_alpha_ratio"
 
-    if _looks_like_noise(text):
+    if _looks_like_noise(text) and not _verified_sweep_display_read(line):
         return "noise_like_text"
 
     return ""
@@ -4057,7 +4333,9 @@ def _filter_groups(groups, image_shape):
             if translate_sfx_fuzzy(text) is None:
                 group.ignored = True
                 group.ignore_reason = "group_too_large"
-        elif _looks_like_noise(text):
+        elif _looks_like_noise(text) and not (
+            group.lines and all(_verified_sweep_display_read(line) for line in group.lines)
+        ):
             group.ignored = True
             group.ignore_reason = "noise_like_group"
 
@@ -4247,6 +4525,11 @@ def _promote_glossary_sounds(groups):
             _set_group_classification(
                 group, "sfx", "glossary_sound_outside_balloon", confidence=0.8,
                 evidence={"previous_classification": group.classification, "tokens": len(words)})
+            if group.ignored and group.ignore_reason == "weak_unknown_text":
+                # Complete the promotion: a stale weak-label veto must not
+                # suppress CLEAN or an enabled target after sound ownership
+                # has been established by the classifier/glossary.
+                _apply_classification_policy(group)
 
 
 def _set_group_classification(
@@ -5318,6 +5601,21 @@ def _should_translate_group(group):
     # glossary guards (real-word refusal, length tiers) keep this from
     # promoting ordinary words.
     if known_sound_translation_target(group) is not None:
+        return True
+    # A high-confidence, short display token supplied by the isolated residual
+    # sweep has already passed the ordinary visual SFX classifier. Allow that
+    # narrow population to reach the provider; if it echoes or fails validation,
+    # the untouched source lettering remains in place.
+    if (
+        group.classification == "sfx"
+        and bool((getattr(group, "classification_evidence", None) or {}).get(
+            "residual_sweep_recovered"
+        ))
+        and any(
+            bool((getattr(line, "metadata", None) or {}).get("residual_sweep_recovered"))
+            for line in (getattr(group, "lines", []) or [])
+        )
+    ):
         return True
     # OCR corruption is an OCR problem. A region the recogniser could not read
     # twice is held back for review instead of being handed to the translator,
@@ -11515,9 +11813,13 @@ def _advanced_art_fallback_eligibility_trace(group, mask_metrics=None) -> dict:
             "dark_blotch_rejected",
             "art_fidelity_uncertain",
             "residual_source_lettering_detected",
+            "narrow_mask_reconstruction_retry",
         )
     }
-    fidelity_evidence = flags["art_fidelity_uncertain"]
+    fidelity_evidence = bool(
+        flags["art_fidelity_uncertain"]
+        or flags["narrow_mask_reconstruction_retry"]
+    )
     trace = {
         "advanced_art_inpainting": bool(getattr(config, "ADVANCED_ART_INPAINTING", False)),
         "max_attempts": int(getattr(config, "ADVANCED_ART_INPAINT_MAX_ATTEMPTS_PER_REGION", 1) or 0),
@@ -11544,14 +11846,20 @@ def _advanced_art_fallback_eligible(group, mask_metrics=None):
     metrics = mask_metrics or getattr(group, "mask_metrics", {}) or {}
     if classification == "logo":
         return False
-    if classification == "sfx" and not metrics.get("art_fidelity_uncertain"):
+    if classification == "sfx" and not (
+        metrics.get("art_fidelity_uncertain")
+        or metrics.get("narrow_mask_reconstruction_retry")
+    ):
         # Sound lettering over art is eligible only on measured evidence that
         # the analytic fill destroyed line continuity (edge_continuity gate);
         # the blanket exclusion stays for ordinary SFX regions.
         return False
     translation_state, _translation_reason = translation_render_state(group)
     completeness = getattr(group, "source_completeness", {}) or {}
-    fidelity_evidence = bool(metrics.get("art_fidelity_uncertain"))
+    fidelity_evidence = bool(
+        metrics.get("art_fidelity_uncertain")
+        or metrics.get("narrow_mask_reconstruction_retry")
+    )
     if translation_state == "reject":
         return False
     if not fidelity_evidence and translation_state not in {"clean", "translated", "renderable_review"}:
@@ -11606,39 +11914,70 @@ def _lama_composite_leak_px(base_bgr, composite_bgr, mask) -> int:
     return int(np.count_nonzero(changed))
 
 
-def _refine_lettering_mask(cleanup_mask, group, mask_metrics):
-    """Grow an SFX lettering mask to cover stroke + outline, bounded by the box.
+def _inpaint_change_metrics(before_bgr, after_bgr, mask) -> dict:
+    """Measure candidate changes inside and outside its authorized mask."""
+    before = np.asarray(before_bgr)
+    after = np.asarray(after_bgr)
+    raw_mask = np.asarray(mask)
+    if before.shape != after.shape or before.shape[:2] != raw_mask.shape[:2]:
+        return {"changed_pixels_in_mask": None, "changed_pixels_outside_mask": None,
+                "changed_fraction_in_mask": None, "change_measurement_error": "shape_mismatch"}
+    inside = raw_mask > 0
+    changed = np.any(before != after, axis=2)
+    changed_inside = int(np.count_nonzero(changed & inside))
+    changed_outside = int(np.count_nonzero(changed & ~inside))
+    return {
+        "changed_pixels_in_mask": changed_inside,
+        "changed_pixels_outside_mask": changed_outside,
+        "changed_fraction_in_mask": round(changed_inside / max(1, int(np.count_nonzero(inside))), 4),
+    }
 
-    Two failure modes share one root - the mask not matching the lettering:
-    strategies reject with ``uncovered_source_text_evidence`` (mask smaller
-    than the glyphs' outline ring) and LaMA rejects with
-    ``large_white_patch_on_nonwhite_background`` (mask so large it swallows
-    background the model then fills with white). Refine: dilate by ~2x the
-    measured stroke width + close fragments, then intersect with the group
-    box grown 6 % - bigger than the dark cores, never bigger than the
-    lettering cluster.
+
+def _refine_lettering_mask(cleanup_mask, group, mask_metrics):
+    """Grow a lettering mask only by a small, line-height-scaled halo.
+
+    Add a small halo scaled to source line height. Complex backgrounds get a
+    stricter cap and no closing operation, so disconnected letters do not turn
+    into one broad paint region. Residual/removal gates decide whether this
+    tighter attempt covered enough of the lettering.
     """
 
-    if str(getattr(group, "classification", "") or "").lower() != "sfx":
+    if (mask_metrics or {}).get("sfx_glyph_halo_mask"):
         return cleanup_mask
     mask = (np.asarray(cleanup_mask) > 0).astype(np.uint8)
     if not np.any(mask):
         return cleanup_mask
+    lines = _cleanup_lines_for_group(group)
+    line_heights = [int(line.box[3]) for line in lines if len(line.box) >= 4 and int(line.box[3]) > 0]
+    line_height = max(1, int(np.median(line_heights))) if line_heights else max(1, int(group.box[3]))
+    background_type = str(
+        (mask_metrics or {}).get("background_type")
+        or getattr(group, "background_type", "unknown")
+    ).lower()
+    background_metrics = getattr(group, "background_metrics", {}) or {}
+    profile = str(background_metrics.get("local_background_class") or "").lower()
+    simple_container = background_type in {"white_balloon", "dark_balloon", "narration_box"}
+    complex_background = (
+        background_type in {"textured_art", "speed_lines", "sfx_area", "unknown"}
+        or profile in {"gradient", "structured_or_textured"}
+    ) and not simple_container
     stroke = int((mask_metrics or {}).get("lettering_stroke_width") or 0)
-    radius = max(3, min(15, stroke * 2 + 3))
+    # The component mask already follows observed ink. Add a modest outline
+    # allowance; cap it more tightly over art/reticulation than in a balloon.
+    proportional_cap = max(2, min(7 if complex_background else 9,
+                                  int(round(line_height * (0.06 if complex_background else 0.08)))))
+    radius = min(proportional_cap, max(2, stroke + 1))
     kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (radius * 2 + 1, radius * 2 + 1))
     refined = cv2.dilate(mask, kernel)
-    refined = cv2.morphologyEx(refined, cv2.MORPH_CLOSE, kernel)
-    gx, gy, gw, gh = (int(v) for v in (getattr(group, "box", None) or (0, 0, mask.shape[1], mask.shape[0])))
-    pad_x = max(2, int(gw * 0.06))
-    pad_y = max(2, int(gh * 0.06))
-    bound = np.zeros_like(refined)
-    y1 = max(0, gy - pad_y)
-    y2 = min(refined.shape[0], gy + gh + pad_y)
-    x1 = max(0, gx - pad_x)
-    x2 = min(refined.shape[1], gx + gw + pad_x)
-    bound[y1:y2, x1:x2] = 1
-    refined = refined & bound
+    # Do not close across gaps: on a wide effect this can join separate strokes
+    # and turn the whole lettering box into one painted patch.
+    max_mask_ratio = (2.0 if complex_background else 3.0)
+    text_area = max(1, int((mask_metrics or {}).get("text_component_pixels", 0) or 0))
+    max_pixels = int(round(text_area * max_mask_ratio))
+    if int(np.count_nonzero(refined)) > max_pixels:
+        # Keep the observed component mask and drop only the added halo. The
+        # normal removal/visual gates decide whether that tighter attempt worked.
+        refined = mask.copy()
     return (refined * 255).astype(np.uint8)
 
 
@@ -11664,20 +12003,35 @@ def _generative_second_chance(current_bgr, cleanup_mask, original_bgr, group, ma
     if not flux_edit.available():
         return None
     try:
-        composited = flux_edit.flux_edit_inpaint(current_bgr, cleanup_mask)
+        # Use the same protected, halo-aware mask as the LaMA path and a
+        # region-contextual prompt. FLUX remains opt-in; its output is still
+        # judged by the existing reconstruction gates below.
+        flux_mask = _grown_fill_mask(group, cleanup_mask)
+        prompt = flux_edit.manga_reconstruction_prompt(group)
+        composited = flux_edit.flux_edit_inpaint(
+            current_bgr, flux_mask, prompt=prompt,
+        )
     except Exception:  # noqa: BLE001 - generative engine is best-effort
         return None
     if composited is None:
         return None
     metrics = _advanced_art_reconstruction_metrics(
-        original_bgr, composited, group, cleanup_mask, mask_metrics or {},
+        original_bgr, composited, group, flux_mask, mask_metrics or {},
     )
     return composited, metrics
 
 
 def _try_advanced_art_fallback(current_bgr, original_bgr, group, cleanup_mask, mask_metrics, stage_timings=None):
+    mask_pixels = int(np.count_nonzero(cleanup_mask)) if cleanup_mask is not None else 0
+    page_pixels = max(1, int(np.asarray(original_bgr).shape[0] * np.asarray(original_bgr).shape[1]))
     attempt = {
         "strategy": "lama_large",
+        "inpaint_method": "lama_large",
+        "mask_pixels": mask_pixels,
+        "mask_page_area_pixels": page_pixels,
+        "mask_page_area_ratio": round(mask_pixels / page_pixels, 7),
+        "fill_mask_pixels": mask_pixels,
+        "fill_mask_page_area_ratio": round(mask_pixels / page_pixels, 7),
         "advanced_fallback_attempted": True,
         "advanced_fallback_eligible": True,
         "advanced_fallback_status": "failed",
@@ -11717,6 +12071,7 @@ def _try_advanced_art_fallback(current_bgr, original_bgr, group, cleanup_mask, m
             cleanup_mask,
             mask_metrics or {},
         )
+        advanced_metrics.update(_inpaint_change_metrics(current_bgr, cleaned, cleanup_mask))
         attempt.update(advanced_metrics)
         if _advanced_art_metrics_rejected(advanced_metrics):
             # Retry once with a cores-only mask: when the metrics reject with a
@@ -11747,6 +12102,7 @@ def _try_advanced_art_fallback(current_bgr, original_bgr, group, cleanup_mask, m
                         retry_metrics = _advanced_art_reconstruction_metrics(
                             original_bgr, retry_cleaned, group, _eroded, mask_metrics or {},
                         )
+                        retry_metrics.update(_inpaint_change_metrics(current_bgr, retry_cleaned, _eroded))
                         attempt["lama_retry"]["metrics"] = retry_metrics
                         if not _advanced_art_metrics_rejected(retry_metrics):
                             attempt["advanced_fallback_status"] = "success"
@@ -11765,12 +12121,25 @@ def _try_advanced_art_fallback(current_bgr, original_bgr, group, cleanup_mask, m
             )
             if second is not None:
                 flux_cleaned, flux_metrics = second
+                flux_mask = _grown_fill_mask(group, cleanup_mask)
+                flux_metrics.update(_inpaint_change_metrics(current_bgr, flux_cleaned, flux_mask))
+                flux_pixels = int(np.count_nonzero(flux_mask))
+                flux_page_pixels = max(1, int(np.asarray(original_bgr).shape[0] * np.asarray(original_bgr).shape[1]))
+                flux_metrics.update({
+                    "fill_mask_pixels": flux_pixels,
+                    "fill_mask_page_area_ratio": round(flux_pixels / flux_page_pixels, 7),
+                    "inpaint_method": "flux2_klein",
+                })
                 attempt["generative_attempted"] = True
                 attempt["generative_metrics"] = flux_metrics
                 if not _advanced_art_metrics_rejected(flux_metrics):
                     attempt["advanced_fallback_status"] = "success"
                     attempt["advanced_fallback_reason"] = "generative_model_reconstruction"
                     attempt["generative_engine"] = "flux2_klein"
+                    attempt["inpaint_method"] = "flux2_klein"
+                    attempt["fill_mask_pixels"] = flux_pixels
+                    attempt["fill_mask_page_area_ratio"] = round(flux_pixels / flux_page_pixels, 7)
+                    attempt.update(_inpaint_change_metrics(current_bgr, flux_cleaned, flux_mask))
                     attempt["_advanced_cleaned_bgr"] = flux_cleaned
                     return attempt
                 attempt["advanced_fallback_reason"] = (
@@ -12611,7 +12980,7 @@ def source_lettering_footprint(
 _RESIDUAL_OCR_ENGINES = []
 
 
-def _legible_source_residual(cleaned_bgr, group):
+def _legible_source_residual(cleaned_bgr, group, *, include_shared_tokens=False):
     """Whether the source words are still legible on the cleaned pixels.
 
     The pixel residual checks compare against a "lettering footprint" that, on
@@ -12663,11 +13032,17 @@ def _legible_source_residual(cleaned_bgr, group):
                 iy = max(0, min(cy + by + bh, own[3]) - max(cy + by, own[1]))
                 if ix * iy >= 0.3 * max(1, bw * bh):
                     read_stream.extend(source_completeness.fold_tokens(item.text))
+        if read_stream:
+            _early_present = source_completeness._represented_token_forms(
+                source_completeness.fold_tokens(getattr(group, "text", "") or ""), [read_stream])
+            _early_target = set() if include_shared_tokens else set(source_completeness.fold_tokens(getattr(group, "translation", "") or ""))
+            if any(tok in _early_present and tok not in _early_target for tok in source_tokens):
+                break
     if errors and not read_stream:
         return {"status": "unavailable", "reason": "engine_failed", "engine_errors": errors}
     present = source_completeness._represented_token_forms(
         source_completeness.fold_tokens(getattr(group, "text", "") or ""), [read_stream])
-    target_tokens = set(source_completeness.fold_tokens(getattr(group, "translation", "") or ""))
+    target_tokens = set() if include_shared_tokens else set(source_completeness.fold_tokens(getattr(group, "translation", "") or ""))
     legible = sorted(token for token in source_tokens if token in present and token not in target_tokens)
     return {"status": "legible" if legible else "not_legible",
             "legible_source_tokens": legible, "read_token_count": len(read_stream)}
@@ -13489,6 +13864,8 @@ def _remove_text_for_group(
     strategy="primary",
     forensic_capture=None,
 ):
+    if strategy == "caption_effect":
+        return _caption_effect_cleanup(current_bgr, original_bgr, group)
     # Attempt-scoped, like texture_synthesized: never carry a previous strategy's lines.
     group.structure_continuations = []
     group.structure_protect_mask = None
@@ -13526,18 +13903,20 @@ def _remove_text_for_group(
             "mask_valid": False,
             "reason": "textured_caption_overlay_disabled",
         }
+    is_sfx_group = str(getattr(group, "classification", "") or "").lower() == "sfx"
     if strategy == "source_scoped":
         if not tight_background:
             return current_bgr.copy(), np.zeros(original_bgr.shape[:2], dtype=np.uint8), {
                 "mask_valid": False,
                 "reason": "source_scoped_not_needed_on_uniform_background",
             }
-        scope_reason = _source_scoped_speech_reason(group)
-        if scope_reason:
-            return current_bgr.copy(), np.zeros(original_bgr.shape[:2], dtype=np.uint8), {
-                "mask_valid": False,
-                "reason": scope_reason,
-            }
+        if not is_sfx_group:
+            scope_reason = _source_scoped_speech_reason(group)
+            if scope_reason:
+                return current_bgr.copy(), np.zeros(original_bgr.shape[:2], dtype=np.uint8), {
+                    "mask_valid": False,
+                    "reason": scope_reason,
+                }
     base_mask = _build_text_mask(original_bgr.shape, [group], padding=0)
     if not np.any(base_mask):
         return current_bgr.copy(), base_mask, {
@@ -13562,7 +13941,42 @@ def _remove_text_for_group(
             iterations=1,
         )
     mask_strategy = "conservative" if tight_background else strategy
-    if strategy == "caption_overlay":
+    if is_sfx_group and tight_background:
+        sfx_max_mask = cv2.dilate(
+            maximum_mask,
+            cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (25, 25)),
+            iterations=1,
+        )
+        # v4 measures complete components inside the OCR line's bounding box.
+        # A rotated OCR polygon can cut the tapered ends of those same proven
+        # glyphs. This rectangle is only a ceiling for v4's surgical mask, never
+        # a filled removal mask; v4 still rejects hair, panel borders and art.
+        for source_line in _cleanup_lines_for_group(group):
+            sx, sy, sw, sh = _expanded_box(source_line.box, original_bgr.shape, 12)
+            sfx_max_mask[sy:sy+sh, sx:sx+sw] = 255
+        component_mask, component_metrics = _sfx_glyph_halo_mask(
+            original_bgr,
+            group,
+            maximum_mask=sfx_max_mask,
+        )
+        halo_area = int(np.count_nonzero(component_mask))
+        halo_ratio = halo_area / max(1, int(component_metrics.get("text_component_pixels", 0)))
+        halo_oversized = bool(halo_area and halo_ratio > config.MAX_MASK_TO_TEXT_AREA_RATIO)
+        if not halo_area or halo_oversized:
+            # A blurred sound can yield only a few pure-black cores in v4.
+            # Do not relax its area guard or repeatedly retry the same refused
+            # mask. Try the existing bounded component extractor instead;
+            # every normal reconstruction/removal/art gate still follows.
+            component_mask, component_metrics = _component_text_mask(
+                original_bgr,
+                group,
+                maximum_mask=maximum_mask,
+                strategy=mask_strategy,
+            )
+            if halo_oversized:
+                component_metrics["sfx_glyph_halo_rejected_reason"] = "mask_too_large_for_detected_characters"
+                component_metrics["sfx_glyph_halo_rejected_ratio"] = round(halo_ratio, 4)
+    elif strategy == "caption_overlay":
         component_mask, component_metrics = _caption_overlay_mask(
             original_bgr,
             group,
@@ -13583,7 +13997,7 @@ def _remove_text_for_group(
         )
     cleanup_mask = component_mask
     source_evidence_mask = (
-        _build_text_mask(original_bgr.shape, [group])
+        _build_text_mask(original_bgr.shape, [group], padding=12 if is_sfx_group else None)
         if strategy == "source_scoped"
         else None
     )
@@ -13624,7 +14038,7 @@ def _remove_text_for_group(
                 component_metrics["source_scoped_display_dark_evidence_cleanup"] = True
     source_scoped_outline_growth_pixels = 0
     source_scoped_outline_material = False
-    if strategy == "source_scoped" and tight_background:
+    if strategy == "source_scoped" and tight_background and not component_metrics.get("sfx_glyph_halo_mask"):
         source_scoped_evidence_page_ratio = (
             float(np.count_nonzero(source_evidence_mask))
             / max(1.0, float(original_bgr.shape[0] * original_bgr.shape[1]))
@@ -13704,72 +14118,73 @@ def _remove_text_for_group(
                 component_metrics["source_scoped_footprint_iterations"] = (
                     footprint_iterations
                 )
-    dark_line_mask, dark_line_metrics = _uniform_dark_line_text_mask(
-        original_bgr,
-        group,
-    )
-    if np.any(dark_line_mask):
-        new_dark_line_pixels = int(
-            np.count_nonzero((dark_line_mask > 0) & (cleanup_mask == 0))
+    if not component_metrics.get("sfx_glyph_halo_mask"):
+        dark_line_mask, dark_line_metrics = _uniform_dark_line_text_mask(
+            original_bgr,
+            group,
         )
-        cleanup_mask = cv2.bitwise_or(cleanup_mask, dark_line_mask)
-        component_metrics["text_component_pixels"] = int(
-            component_metrics.get("text_component_pixels", 0)
-            + new_dark_line_pixels
+        if np.any(dark_line_mask):
+            new_dark_line_pixels = int(
+                np.count_nonzero((dark_line_mask > 0) & (cleanup_mask == 0))
+            )
+            cleanup_mask = cv2.bitwise_or(cleanup_mask, dark_line_mask)
+            component_metrics["text_component_pixels"] = int(
+                component_metrics.get("text_component_pixels", 0)
+                + new_dark_line_pixels
+            )
+        component_metrics.update(dark_line_metrics)
+        light_line_mask, light_line_metrics = _uniform_light_line_text_mask(
+            original_bgr,
+            group,
         )
-    component_metrics.update(dark_line_metrics)
-    light_line_mask, light_line_metrics = _uniform_light_line_text_mask(
-        original_bgr,
-        group,
-    )
-    if np.any(light_line_mask):
-        new_light_line_pixels = int(
-            np.count_nonzero((light_line_mask > 0) & (cleanup_mask == 0))
+        if np.any(light_line_mask):
+            new_light_line_pixels = int(
+                np.count_nonzero((light_line_mask > 0) & (cleanup_mask == 0))
+            )
+            cleanup_mask = cv2.bitwise_or(cleanup_mask, light_line_mask)
+            component_metrics["text_component_pixels"] = int(
+                component_metrics.get("text_component_pixels", 0)
+                + new_light_line_pixels
+            )
+        component_metrics.update(light_line_metrics)
+        detached_dark_mask, detached_dark_metrics = _detached_dark_text_components_mask(
+            original_bgr,
+            group,
+            cleanup_mask,
         )
-        cleanup_mask = cv2.bitwise_or(cleanup_mask, light_line_mask)
-        component_metrics["text_component_pixels"] = int(
-            component_metrics.get("text_component_pixels", 0)
-            + new_light_line_pixels
+        if np.any(detached_dark_mask):
+            cleanup_mask = cv2.bitwise_or(cleanup_mask, detached_dark_mask)
+            component_metrics["text_component_pixels"] = int(
+                component_metrics.get("text_component_pixels", 0)
+                + detached_dark_metrics["detached_dark_text_pixels"]
+            )
+        component_metrics.update(detached_dark_metrics)
+        detached_mask, detached_metrics = _detached_light_text_components_mask(
+            original_bgr,
+            group,
+            cleanup_mask,
         )
-    component_metrics.update(light_line_metrics)
-    detached_dark_mask, detached_dark_metrics = _detached_dark_text_components_mask(
-        original_bgr,
-        group,
-        cleanup_mask,
-    )
-    if np.any(detached_dark_mask):
-        cleanup_mask = cv2.bitwise_or(cleanup_mask, detached_dark_mask)
-        component_metrics["text_component_pixels"] = int(
-            component_metrics.get("text_component_pixels", 0)
-            + detached_dark_metrics["detached_dark_text_pixels"]
-        )
-    component_metrics.update(detached_dark_metrics)
-    detached_mask, detached_metrics = _detached_light_text_components_mask(
-        original_bgr,
-        group,
-        cleanup_mask,
-    )
-    if np.any(detached_mask):
-        cleanup_mask = cv2.bitwise_or(cleanup_mask, detached_mask)
-        component_metrics["text_component_pixels"] = int(
-            component_metrics.get("text_component_pixels", 0)
-            + detached_metrics["detached_text_pixels"]
-        )
-    component_metrics.update(detached_metrics)
-    fringe_mask, fringe_metrics = _antialias_fringe_mask(original_bgr, cleanup_mask, group)
-    if np.any(fringe_mask):
-        cleanup_mask = cv2.bitwise_or(cleanup_mask, fringe_mask)
-        # Fringe pixels are glyph pixels (partial ink), so they count as text area.
-        component_metrics["text_component_pixels"] = int(
-            component_metrics.get("text_component_pixels", 0)
-            + fringe_metrics["antialias_fringe_pixels"]
-        )
-    component_metrics.update(fringe_metrics)
-    cleanup_mask, hole_pixels = _fill_enclosed_glyph_holes(cleanup_mask, group)
-    component_metrics["enclosed_glyph_hole_pixels"] = hole_pixels
-    if hole_pixels:
-        component_metrics["text_component_pixels"] = int(
-            component_metrics.get("text_component_pixels", 0) + hole_pixels)
+        if np.any(detached_mask):
+            cleanup_mask = cv2.bitwise_or(cleanup_mask, detached_mask)
+            component_metrics["text_component_pixels"] = int(
+                component_metrics.get("text_component_pixels", 0)
+                + detached_metrics["detached_text_pixels"]
+            )
+        component_metrics.update(detached_metrics)
+        fringe_mask, fringe_metrics = _antialias_fringe_mask(original_bgr, cleanup_mask, group)
+        if np.any(fringe_mask):
+            cleanup_mask = cv2.bitwise_or(cleanup_mask, fringe_mask)
+            # Fringe pixels are glyph pixels (partial ink), so they count as text area.
+            component_metrics["text_component_pixels"] = int(
+                component_metrics.get("text_component_pixels", 0)
+                + fringe_metrics["antialias_fringe_pixels"]
+            )
+        component_metrics.update(fringe_metrics)
+        cleanup_mask, hole_pixels = _fill_enclosed_glyph_holes(cleanup_mask, group)
+        component_metrics["enclosed_glyph_hole_pixels"] = hole_pixels
+        if hole_pixels:
+            component_metrics["text_component_pixels"] = int(
+                component_metrics.get("text_component_pixels", 0) + hole_pixels)
     if strategy == "source_scoped":
         # The owned OCR line polygons expanded by the existing text-scale padding
         # are the only artwork this strategy is ever allowed to touch.
@@ -13900,8 +14315,15 @@ def _remove_text_for_group(
         )
         footprint_pixels = int(metrics.get("source_lettering_footprint_pixels", 0))
         footprint_scoped = bool(
-            footprint_pixels
-            and metrics["mask_to_source_evidence_ratio"] <= 0.72
+            (
+                footprint_pixels
+                and metrics["mask_to_source_evidence_ratio"] <= 0.72
+            )
+            or (
+                metrics.get("sfx_glyph_halo_mask")
+                and metrics["mask_to_source_evidence_ratio"] <= 0.88
+                and metrics["source_scoped_mask_to_page_ratio"] <= 0.20
+            )
         )
         display_footprint_scoped = bool(
             metrics.get("source_scoped_display_footprint_required")
@@ -13959,12 +14381,28 @@ def _remove_text_for_group(
             metrics["reason"] = "broad_mask_rejected_on_nonuniform_background"
             return current_bgr.copy(), cleanup_mask, metrics
 
+    if (
+        strategy == "source_scoped"
+        and bool(component_metrics.get("sfx_glyph_halo_mask"))
+        and config.RENDER_SFX_STRAIGHT_TO_LAMA
+        and int(group.box[2]) * int(group.box[3]) >= 8000
+    ):
+        metrics["mask_valid"] = False
+        metrics["reason"] = "sfx_straight_to_lama"
+        metrics["art_fidelity_uncertain"] = True
+        return current_bgr.copy(), cleanup_mask, metrics
+
+    metrics["mask_pixels_before_lettering_refine"] = int(np.count_nonzero(cleanup_mask))
+    cleanup_mask = _refine_lettering_mask(cleanup_mask, group, metrics)
+    metrics["lettering_refined_before_fill"] = True
+    metrics["mask_pixels"] = int(np.count_nonzero(cleanup_mask))
+    metrics["mask_to_text_area_ratio"] = round(metrics["mask_pixels"] / text_area, 4)
+    if metrics["mask_to_text_area_ratio"] > config.MAX_MASK_TO_TEXT_AREA_RATIO:
+        metrics["mask_valid"] = False
+        metrics["reason"] = "mask_too_large_for_detected_characters"
+        return current_bgr.copy(), cleanup_mask, metrics
     cleaned = _apply_cleanup_mask(
-        current_bgr,
-        original_bgr,
-        group,
-        cleanup_mask,
-        strategy=strategy,
+        current_bgr, original_bgr, group, cleanup_mask, strategy=strategy,
     )
     if strategy == "caption_overlay":
         metrics["reconstruction_method"] = "glyph_inpaint_telea"
@@ -14283,9 +14721,26 @@ def _lettering_contour_ghost_metrics(original_bgr, cleaned_bgr, cleanup_mask, pr
     return out
 
 
+def _active_caption_effect_layers(original_bgr, group, mask):
+    layers = getattr(group, "_caption_effect_layers", None)
+    if (layers is None or not layers.profile.get("source_effect_verified")
+            or getattr(group, "source_completeness", {}).get("status") != source_completeness.STATUS_PASS
+            or not np.array_equal(np.asarray(mask), layers.authorized)
+            or getattr(group, "_caption_effect_source_hash", "") != hashlib.sha256(original_bgr.tobytes()).hexdigest()):
+        return None
+    return layers
+
+
 def _reconstruction_gate_failure(original_bgr, cleaned, group, cleanup_mask, background_type,
                                 strategy, metrics):
     """Run the reconstruction gates on one fill; the first failing reason, or None."""
+    effect_layers = _active_caption_effect_layers(original_bgr, group, cleanup_mask)
+    if effect_layers is not None:
+        protected = (effect_layers.protected > 0) & (effect_layers.effect > 0)
+        count = int(np.count_nonzero(np.any(original_bgr != cleaned, axis=2) & protected))
+        metrics["protected_effect_art_changed_pixels"] = count
+        if count:
+            return "protected_effect_art_changed"
     ghost_metrics = _lettering_contour_ghost_metrics(
         original_bgr, cleaned, cleanup_mask, getattr(group, "structure_protect_mask", None))
     metrics.update(ghost_metrics)
@@ -14479,13 +14934,23 @@ def _local_background_reconstruction_metrics(original_bgr, cleaned_bgr, group, c
     error = float(np.mean(np.abs(np.median(actual, axis=0) - expected_arr)))
     # A gradient is allowed to vary; compare its median only as a coarse guard.
     threshold = 30.0 if profile == "gradient" else 24.0
-    return {
+    result = {
         "local_background_color_mismatch": bool(error > threshold),
         "local_background_color_error": round(error, 3),
         "local_background_gradient_consistent": (
             None if profile != "gradient" else bool(error <= 42.0)
         ),
     }
+    layers = _active_caption_effect_layers(original_bgr, group, cleanup_mask)
+    if layers is not None:
+        from yomu.clean.ownership.lettering_effects import paired_boundary_color
+        paired = paired_boundary_color(original_bgr, cleaned_bgr, cleanup_mask,
+                                       protected_mask=layers.protected)
+        result.update({"global_background_color_mismatch": result["local_background_color_mismatch"],
+                       "local_background_color_basis": "paired_spatial_boundary",
+                       "paired_boundary_color": paired,
+                       "local_background_color_mismatch": not paired.get("passed", False)})
+    return result
 
 
 def _textured_fill_shift_metrics(original_bgr, cleaned_bgr, group, cleanup_mask):
@@ -14865,6 +15330,21 @@ def _dark_blotch_artifact_metrics(
         & (cleaned_gray <= 35)
         & ((original_gray.astype(np.int16) - cleaned_gray.astype(np.int16)) >= 55)
     )
+    original_new_dark_pixels = int(np.count_nonzero(new_dark))
+    owned_glow_darkened_pixels = 0
+    layers = _active_caption_effect_layers(original_bgr, group, cleanup_mask)
+    if layers is not None:
+        from yomu.clean.ownership.lettering_effects import paired_boundary_color
+        continuity = paired_boundary_color(original_bgr, cleaned_bgr, cleanup_mask,
+                                           protected_mask=layers.protected)
+        protected = (layers.protected > 0) & (layers.effect > 0)
+        protected_changed = np.any(np.any(original_bgr != cleaned_bgr, axis=2) & protected)
+        if continuity.get("passed") and not protected_changed:
+            owned_glow = layers.glow > 0
+            owned_glow_darkened_pixels = int(np.count_nonzero(new_dark & owned_glow))
+            # Only source-evidenced glow pixels are exempt. Remaining light art
+            # still enters the original island/continuity checks below.
+            new_dark = new_dark & ~owned_glow
     new_dark_u8 = new_dark.astype(np.uint8) * 255
     count, labels, stats, _ = cv2.connectedComponentsWithStats(new_dark_u8, 8)
     # Dark reconstruction where light *lettering* was, touching dark artwork just
@@ -14943,6 +15423,8 @@ def _dark_blotch_artifact_metrics(
         "dark_backdrop_restored": dark_backdrop_restored,
         "saturated_dark_context_restored": saturated_dark_context_restored,
         "dark_blotch_rejected": rejected,
+        "original_new_dark_pixels": original_new_dark_pixels,
+        "owned_glow_darkened_pixels": owned_glow_darkened_pixels,
     }
 
 
@@ -15233,6 +15715,144 @@ def _outlined_light_text_mask(img_bgr, group, maximum_mask):
         "accepted_text_components": int(accepted),
         "component_based": True,
         "outlined_glyph_mask": True,
+    }
+
+
+def _sfx_glyph_halo_mask(img_bgr, group, maximum_mask=None, erode_outer=False):
+    """Build a surgical stroke-coupled SFX glyph + outline mask (v4).
+
+    Separates pure-ink SFX glyphs with a coupled white outline from dark background
+    art (hair strands, shadows, pillars, collar/tie, panel borders) and prevents
+    white outline flood-filling into bright background regions.
+    """
+    h_img, w_img = img_bgr.shape[:2]
+    bx, by, bw, bh = [int(v) for v in group.box]
+    x1 = max(0, bx)
+    y1 = max(0, by)
+    x2 = min(w_img, bx + bw)
+    y2 = min(h_img, by + bh)
+    if x2 <= x1 or y2 <= y1:
+        return np.zeros((h_img, w_img), dtype=np.uint8), {
+            "text_component_pixels": 0,
+            "accepted_text_components": 0,
+            "component_based": True,
+            "sfx_glyph_halo_mask": True,
+            "lettering_stroke_width": 3,
+        }
+
+    roi_bgr = img_bgr[y1:y2, x1:x2]
+    roi_g = cv2.cvtColor(roi_bgr, cv2.COLOR_BGR2GRAY)
+    rh, rw = roi_g.shape[:2]
+
+    # 1. Pure ink candidates (gray <= 45) inside the tight OCR box
+    dark_raw = (roi_g <= 45).astype(np.uint8) * 255
+    num_d, labels_d, stats_d, _ = cv2.connectedComponentsWithStats(dark_raw, connectivity=8)
+    core_dark = np.zeros_like(roi_g)
+    k_ring = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+
+    for i in range(1, num_d):
+        area = int(stats_d[i, cv2.CC_STAT_AREA])
+        if area < 12:
+            continue
+        cx = int(stats_d[i, cv2.CC_STAT_LEFT])
+        cy = int(stats_d[i, cv2.CC_STAT_TOP])
+        cw = int(stats_d[i, cv2.CC_STAT_WIDTH])
+        ch = int(stats_d[i, cv2.CC_STAT_HEIGHT])
+        touches_border = (cx <= 1) or (cy <= 1) or (cx + cw >= rw - 1) or (cy + ch >= rh - 1)
+        comp = (labels_d == i)
+        med_g = float(np.median(roi_g[comp]))
+        comp_u8 = comp.astype(np.uint8) * 255
+        ring_i = (cv2.dilate(comp_u8, k_ring) > 0) & (dark_raw == 0)
+        white_ring_frac = float(np.count_nonzero(ring_i & (roi_g >= 195))) / max(1, int(np.count_nonzero(ring_i)))
+
+        if med_g <= 15.0 and white_ring_frac >= 0.45:
+            if not touches_border or (ch >= int(0.45 * rh) and white_ring_frac >= 0.65):
+                core_dark[comp] = 255
+
+    # Fallback for synthetic or non-white-outlined SFX where no component passed the white-ring check
+    if int(np.count_nonzero(core_dark)) == 0:
+        for i in range(1, num_d):
+            area = int(stats_d[i, cv2.CC_STAT_AREA])
+            if area < 12:
+                continue
+            cx = int(stats_d[i, cv2.CC_STAT_LEFT])
+            cy = int(stats_d[i, cv2.CC_STAT_TOP])
+            cw = int(stats_d[i, cv2.CC_STAT_WIDTH])
+            ch = int(stats_d[i, cv2.CC_STAT_HEIGHT])
+            touches_border = (cx <= 1) or (cy <= 1) or (cx + cw >= rw - 1) or (cy + ch >= rh - 1)
+            if not touches_border or area >= int(0.18 * rw * rh):
+                core_dark[labels_d == i] = 255
+
+    if int(np.count_nonzero(core_dark)) == 0:
+        return np.zeros((h_img, w_img), dtype=np.uint8), {
+            "text_component_pixels": 0,
+            "accepted_text_components": 0,
+            "component_based": True,
+            "sfx_glyph_halo_mask": True,
+            "lettering_stroke_width": 3,
+        }
+
+    # Include small pure-black ink splatters (area <= 600) within 10px of primary glyph strokes
+    dist_to_core = cv2.distanceTransform((core_dark == 0).astype(np.uint8), cv2.DIST_L2, 5)
+    for i in range(1, num_d):
+        area = int(stats_d[i, cv2.CC_STAT_AREA])
+        if 8 <= area <= 600:
+            comp = (labels_d == i)
+            if float(np.median(roi_g[comp])) <= 20.0 and float(dist_to_core[comp].min()) <= 10.0:
+                core_dark[comp] = 255
+
+    dt_inside = cv2.distanceTransform((core_dark > 0).astype(np.uint8), cv2.DIST_L2, 5)
+    vals = dt_inside[dt_inside > 0]
+    stroke_w = max(2, int(round(float(np.percentile(vals, 70)) * 2.0))) if len(vals) > 0 else 4
+
+    # 2. Embed core_dark into a 12px halo-padded ROI so white outlines on box-edge glyphs aren't clipped
+    pad = 12
+    px1 = max(0, x1 - pad)
+    py1 = max(0, y1 - pad)
+    px2 = min(w_img, x2 + pad)
+    py2 = min(h_img, y2 + pad)
+    proi_g = cv2.cvtColor(img_bgr[py1:py2, px1:px2], cv2.COLOR_BGR2GRAY)
+    prh, prw = proi_g.shape[:2]
+    pcore_dark = np.zeros((prh, prw), dtype=np.uint8)
+    ox, oy = x1 - px1, y1 - py1
+    pcore_dark[oy : oy + rh, ox : ox + rw] = core_dark
+
+    # Allow 3px continuation of accepted pure-black strokes that were clipped by a tight OCR box edge
+    k_tip = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7))
+    tip_cand = (cv2.dilate(pcore_dark, k_tip) > 0) & (proi_g <= 15)
+    pcore_dark[tip_cand] = 255
+
+    pdist_to_core = cv2.distanceTransform((pcore_dark == 0).astype(np.uint8), cv2.DIST_L2, 5)
+    coupled_white = ((proi_g >= 205) & (pdist_to_core <= 5.5)).astype(np.uint8) * 255
+    base = cv2.bitwise_or(pcore_dark, coupled_white)
+
+    # 3. Fill only small enclosed glyph counters inside pcore_dark (e.g. A, B, P, R, O)
+    inv = cv2.bitwise_not(pcore_dark)
+    num_h, labels_h, stats_h, _ = cv2.connectedComponentsWithStats(inv, connectivity=4)
+    for i in range(1, num_h):
+        ha = int(stats_h[i, cv2.CC_STAT_AREA])
+        hx = int(stats_h[i, cv2.CC_STAT_LEFT])
+        hy = int(stats_h[i, cv2.CC_STAT_TOP])
+        hw = int(stats_h[i, cv2.CC_STAT_WIDTH])
+        hh = int(stats_h[i, cv2.CC_STAT_HEIGHT])
+        if hx > 1 and hy > 1 and hx + hw < prw - 1 and hy + hh < prh - 1 and ha < int(0.025 * rw * rh):
+            base[labels_h == i] = 255
+
+    # 4. Tight proportional anti-alias halo (5x5 for verifier, 9x9 for cleanup)
+    ksize = 5 if erode_outer else 9
+    k_halo = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (ksize, ksize))
+    roi_mask = cv2.dilate(base, k_halo)
+
+    full_mask = np.zeros((h_img, w_img), dtype=np.uint8)
+    full_mask[py1:py2, px1:px2] = roi_mask
+    if maximum_mask is not None:
+        full_mask = cv2.bitwise_and(full_mask, maximum_mask)
+    return full_mask, {
+        "text_component_pixels": max(1, int(np.count_nonzero(base))),
+        "accepted_text_components": max(1, int(num_d - 1)),
+        "component_based": True,
+        "sfx_glyph_halo_mask": True,
+        "lettering_stroke_width": int(stroke_w),
     }
 
 
@@ -15703,6 +16323,19 @@ def _apply_cleanup_mask(current_bgr, original_bgr, group, cleanup_mask, strategy
                         accepted_candidate=None):
     group.fill_alternatives = []
     group._fill_source_bgr = original_bgr
+    if (isinstance(accepted_candidate, np.ndarray)
+            and accepted_candidate.shape == current_bgr.shape
+            and accepted_candidate.dtype == current_bgr.dtype):
+        # Final CLEAN composition must preserve the candidate that passed the
+        # reconstruction/source-removal gates. Re-running a fill here both costs
+        # another inference and would commit pixels that those gates never saw.
+        result = current_bgr.copy()
+        inside = np.asarray(cleanup_mask) > 0
+        result[inside] = accepted_candidate[inside]
+        return result
+    if strategy == "caption_effect":
+        return _apply_cleanup_mask_fill(current_bgr, original_bgr, group,
+                                        cleanup_mask, strategy=strategy)
     if (not hasattr(group, "structure_continuations") and strategy != "lama_large"
             and getattr(group, "lines", None)):
         # A mask handed in ready-made (not built by _remove_text_for_group) never
@@ -16166,6 +16799,9 @@ def _grown_fill_mask(group, cleanup_mask):
     nothing). Protected structure and the outside of a known balloon are never
     grown into.
     """
+    layers = getattr(group, "_caption_effect_layers", None)
+    if layers is not None and np.array_equal(np.asarray(cleanup_mask), layers.authorized):
+        return (layers.authorized > 0).astype(np.uint8)
     mask_u8 = (np.asarray(cleanup_mask) > 0).astype(np.uint8)
     grown = cv2.dilate(mask_u8, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5)))
     residue = _outline_residue_mask(group, mask_u8)
@@ -16452,6 +17088,12 @@ def _apply_cleanup_mask_fill(current_bgr, original_bgr, group, cleanup_mask, str
     result = current_bgr.copy()
     if cleanup_mask is None or not np.any(cleanup_mask):
         return result
+    if strategy == "caption_effect":
+        cached = getattr(group, "_caption_effect_result", None)
+        if not cached or not cached.get("accepted") or not np.array_equal(cleanup_mask, cached["mask"]):
+            raise ValueError("caption_effect_candidate_missing_or_changed")
+        result[cleanup_mask > 0] = cached["pixels"]
+        return result
     if strategy == "lama_large":
         if (isinstance(accepted_candidate, np.ndarray)
                 and accepted_candidate.shape == current_bgr.shape
@@ -16526,6 +17168,13 @@ def _apply_cleanup_mask_fill(current_bgr, original_bgr, group, cleanup_mask, str
         group.background_metrics["cleanup_fill_source"] = "local_ring_median"
         return result
     if local_background_class == "gradient":
+        # Spatial evidence distinguishes a smooth gradient from laser/speed-line
+        # artwork with a gradient. Reuse LaMa for the latter, with the same gates.
+        if spatial_class == "STRUCTURED_OR_TEXTURED":
+            learned = _learned_texture_fill(current_bgr, group, cleanup_mask, strategy)
+            if learned is not None:
+                group.background_metrics["cleanup_fill_source"] = "learned_textured_gradient"
+                return learned
         # Preserve a spatially varying backdrop with bounded local inpainting.
         # A gradient is intentionally not flattened to its ring median.
         repaired = cv2.inpaint(
@@ -18034,6 +18683,12 @@ def _uncovered_source_text_evidence(original_bgr, rendered_bgr, group, cleanup_m
     uncovered_lines = []
     unmeasured_lines = []
     measured = False
+    sfx_ref_mask = None
+    if str(getattr(group, "classification", "") or "").lower() == "sfx":
+        try:
+            sfx_ref_mask, _ = _sfx_glyph_halo_mask(original_bgr, group, erode_outer=True)
+        except Exception:
+            sfx_ref_mask = None
     for line in _cleanup_lines_for_group(group):
         line_id = str((getattr(line, "metadata", None) or {}).get("ocr_line_id") or "")
         x, y, w, h = [int(value) for value in line.box]
@@ -18064,6 +18719,8 @@ def _uncovered_source_text_evidence(original_bgr, rendered_bgr, group, cleanup_m
             foreground = (blackhat >= 12) | (tophat >= 12)
         foreground &= ~_box_crossing_foreground(
             original_gray, (x1, y1, x2, y2), median, contrast)
+        if sfx_ref_mask is not None and np.any(sfx_ref_mask[y1:y2, x1:x2]):
+            foreground = sfx_ref_mask[y1:y2, x1:x2] > 0
         protected = getattr(group, "structure_protect_mask", None)
         if isinstance(protected, np.ndarray) and protected.shape == original_gray.shape:
             # Art deliberately kept through the lettering is not leftover source.
@@ -19015,6 +19672,20 @@ def extract_original_lettering_profile(img_bgr, group, box):
     elif color_family == "red" and (halo_red >= 0.08 or red_ratio >= 0.10):
         glow_strength = 4
         glow_color = (146, 22, 32)
+    measured_neutral_glow = False
+    if color_family == "white" and float(np.percentile(border, 95)) <= 20:
+        # A uniformly black surround excludes coloured scenery. Measure only
+        # the chromatic ring coupled to bright glyph cores, including purple.
+        core = ((gray >= 190) & (val >= 220)).astype(np.uint8)
+        outer = (cv2.dilate(core, np.ones((13, 13), np.uint8)) > 0) & ~(core > 0)
+        colored = outer & (sat >= 65) & (val >= 45) & (val <= 230)
+        if (np.count_nonzero(core) >= 80 and np.count_nonzero(colored) >= 80
+                and np.count_nonzero(colored) / max(1, np.count_nonzero(outer)) >= .30):
+            bgr = np.median(roi[colored], axis=0)
+            glow_color = tuple(int(v) for v in bgr[::-1])
+            line_heights = [line.box[3] for line in (getattr(group, "lines", None) or [])]
+            glow_strength = max(2, min(6, round(float(np.median(line_heights or [h])) * .10)))
+            measured_neutral_glow = True
     confidence = min(1.0, 0.45 + glyph_ratio * 8.0 + max(red_ratio, blue_ratio, white_ratio, dark_ratio) * 0.35)
     return {
         "confidence": round(float(confidence), 4),
@@ -19032,6 +19703,7 @@ def extract_original_lettering_profile(img_bgr, group, box):
         "stroke_confidence": float(stroke_confidence),
         "glow_strength": int(glow_strength),
         "glow_color": glow_color,
+        "measured_neutral_glow": measured_neutral_glow,
         "background_brightness": round(bg_gray, 3),
     }
 
@@ -19159,9 +19831,9 @@ def _source_ink_cap_height(img_bgr, group):
     return float(np.median(heights)) if heights else 0.0
 
 
-def _glyph_ink_mask(img_bgr, box):
+def _glyph_ink_mask(img_bgr, box, *, padding=6, dark_core=False):
     """Binary ink mask for one region, polarity-robust (dark-on-light or light-on-dark)."""
-    x, y, w, h = _expanded_box(box, img_bgr.shape, 6)
+    x, y, w, h = _expanded_box(box, img_bgr.shape, padding)
     roi = img_bgr[y : y + h, x : x + w]
     if roi.size == 0 or roi.shape[0] < 6 or roi.shape[1] < 6:
         return None, None
@@ -19173,6 +19845,29 @@ def _glyph_ink_mask(img_bgr, box):
         gray[:, -max(1, min(3, gray.shape[1])) :].ravel(),
     ])
     bg = float(np.median(border))
+    # Keep glyph cores separate from glow and the opposite side of a coloured
+    # background. Absolute contrast mixed purple glow with black serif strokes.
+    candidates = []
+    thresholds = [gray <= min(bg - 20.0, float(np.percentile(gray, 2)) + (12.0 if dark_core else 18.0))]
+    if not dark_core:
+        thresholds.append(gray >= max(bg + 30.0, float(np.percentile(gray, 98)) * 0.60))
+    for threshold_mask in thresholds:
+        count, labels, stats, _ = cv2.connectedComponentsWithStats(threshold_mask.astype(np.uint8), 8)
+        ids = [i for i in range(1, count)
+               if stats[i, cv2.CC_STAT_AREA] >= max(6, box[3] * 0.25)
+               and box[3] * 0.35 <= stats[i, cv2.CC_STAT_HEIGHT] <= box[3] * 1.10
+               and stats[i, cv2.CC_STAT_WIDTH] <= box[3] * 1.7
+               and stats[i, cv2.CC_STAT_LEFT] > 0
+               and stats[i, cv2.CC_STAT_TOP] > 0
+               and stats[i, cv2.CC_STAT_LEFT] + stats[i, cv2.CC_STAT_WIDTH] < w
+               and stats[i, cv2.CC_STAT_TOP] + stats[i, cv2.CC_STAT_HEIGHT] < h]
+        if len(ids) >= 2:
+            core = np.isin(labels, ids).astype(np.uint8)
+            candidates.append((int(core.sum()), core))
+    if candidates:
+        return max(candidates, key=lambda item: item[0])[1], gray
+    if dark_core:
+        return None, gray
     ink = (np.abs(gray.astype(np.float32) - bg) >= 40).astype(np.uint8)
     if float(ink.mean()) > 0.5:  # ink should be the minority foreground
         ink = 1 - ink
@@ -19290,6 +19985,21 @@ def extract_glyph_style_profile(img_bgr, group, box):
     # Per-glyph aspect (width/height) from connected components of a plausible size.
     _, _, stats, _ = cv2.connectedComponentsWithStats(mask, 8)
     comps = [s for s in stats[1:] if s[4] >= height * height * 0.01 and s[3] >= height * 0.25]
+    if len(getattr(group, "lines", None) or []) > 1:
+        line_comps, line_fills = [], []
+        for line in group.lines:
+            line_mask, _ = _glyph_ink_mask(img_bgr, line.box)
+            if line_mask is None or not line_mask.any():
+                continue
+            ys, xs = np.nonzero(line_mask)
+            line_mask = line_mask[ys.min():ys.max()+1, xs.min():xs.max()+1]
+            lh = line_mask.shape[0]
+            line_fills.append(float(line_mask.mean()))
+            _, _, line_stats, _ = cv2.connectedComponentsWithStats(line_mask, 8)
+            line_comps.extend(s for s in line_stats[1:] if s[4] >= lh*lh*0.01 and s[3] >= lh*0.25)
+        if line_comps:
+            comps = line_comps
+            fill_ratio = float(np.median(line_fills))
     aspect = float(np.median([s[2] / max(1, s[3]) for s in comps])) if comps else 0.0
     line_slants, line_contrasts, line_weights = _per_line_glyph_measures(img_bgr, group)
     if line_weights:
@@ -19609,6 +20319,14 @@ def typography_profile_for_region(img_bgr, group, box, *, style=None):
             # The preset glow belongs to the preset palette; follow the outline.
             profile["glow_color"] = profile["stroke_color"]
 
+    if lettering.get("measured_neutral_glow"):
+        profile["glow_color"] = tuple(lettering["glow_color"])
+        profile["glow_strength"] = int(lettering["glow_strength"])
+        profile["source_glow_confident"] = True
+        profile["stroke_color"] = tuple(profile["fill_color"])
+        profile["stroke_width"] = 0
+        profile["shadow_color"] = None
+
     # --- MIXED_STYLE: divergent per-line source styles (detection + telemetry) -----
     # Only real, already-segmented OCR lines are used - never invented word spans.
     # The translated string is a single reflow that does not align 1:1 to source
@@ -19767,6 +20485,7 @@ def _typography_profile_for_region(img_bgr, group, box, *, style=None):
         if (
             open_caption
             and color_family in {"black", "white"}
+            and not lettering.get("measured_neutral_glow")
             and float(lettering.get("glyph_occupancy") or 0.0) >= 0.08
         ):
             # High-contrast display lettering directly over art: comic ink in
@@ -19884,7 +20603,7 @@ def _text_style_from_typography_profile(style, profile):
         style,
         fill=tuple(profile.get("fill_color") or style.fill),
         stroke_fill=tuple(profile.get("stroke_color") or style.stroke_fill),
-        stroke_width=int(profile.get("stroke_width") or style.stroke_width),
+        stroke_width=int(profile.get("stroke_width", style.stroke_width)),
         shadow_fill=(
             tuple(profile.get("shadow_color"))
             if profile.get("shadow_color") is not None
@@ -20494,6 +21213,7 @@ def _debug_payload(image_path, raw_lines, candidates, groups):
                 "background_metrics": dict(group.background_metrics),
                 "classification": group.classification,
                 "classification_reason": group.classification_reason,
+                "story_display_promoted": bool(group.story_display_promoted),
                 "classification_confidence": round(
                     group.classification_confidence,
                     4,

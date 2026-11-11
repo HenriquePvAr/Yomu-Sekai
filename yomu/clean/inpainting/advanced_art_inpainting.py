@@ -209,6 +209,7 @@ class AdvancedArtInpainter:
         pred_rgb = np.clip(pred_rgb * 255, 0, 255).astype(np.uint8)
         pred_rgb = pred_rgb[:original_h, :original_w]
         pred_bgr = cv2.cvtColor(pred_rgb, cv2.COLOR_RGB2BGR)
+        pred_bgr = _match_luminance_and_feather_crop(crop_bgr, pred_bgr, crop_mask)
         composited = image_bgr.copy()
         target_crop = composited[y : y + h, x : x + w]
         target_crop[crop_mask > 0] = pred_bgr[crop_mask > 0]
@@ -298,3 +299,74 @@ def _context_crop(mask: np.ndarray, image_shape) -> tuple[int, int, int, int, in
     x1 = min(width, x1 + margin)
     y1 = min(height, y1 + margin)
     return x0, y0, x1 - x0, y1 - y0, margin
+
+
+def _match_luminance_and_feather_crop(
+    crop_bgr: np.ndarray,
+    pred_bgr: np.ndarray,
+    crop_mask: np.ndarray,
+) -> np.ndarray:
+    """Correct LAB chroma/luminance drift and feather the inner mask edge.
+
+    Ported and adapted from meangrinch/MangaTranslator's post-inpainting
+    boundary normalization:
+    - Neutralizes warm/greenish chroma tint (A/B channels) when the surrounding
+      12 px ring is monochrome grayscale (a_dev < 3.0 and b_dev < 3.0).
+    - Shifts local L along the 3 px inner/outer boundary ring when a uniform
+      offset is present, avoiding hard step contours.
+    - Blends the 1..2 px inner edge of the mask using a Euclidean distance
+      transform strictly inside ``crop_mask > 0`` so zero pixels outside the
+      mask are modified.
+    """
+    inside = crop_mask > 0
+    if not np.any(inside) or crop_bgr.shape != pred_bgr.shape:
+        return pred_bgr
+    result = pred_bgr.copy()
+    mask_u8 = inside.astype(np.uint8)
+    kernel_ring = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (25, 25))
+    outer_ring = (cv2.dilate(mask_u8, kernel_ring) > 0) & ~inside
+    if int(np.count_nonzero(outer_ring)) >= 32:
+        orig_lab = cv2.cvtColor(crop_bgr, cv2.COLOR_BGR2LAB).astype(np.float32)
+        pred_lab = cv2.cvtColor(result, cv2.COLOR_BGR2LAB).astype(np.float32)
+        a_dev = float(np.mean(np.abs(orig_lab[:, :, 1][outer_ring] - 128.0)))
+        b_dev = float(np.mean(np.abs(orig_lab[:, :, 2][outer_ring] - 128.0)))
+        lab_modified = False
+        if a_dev < 3.0 and b_dev < 3.0:
+            pred_a_dev = float(np.mean(np.abs(pred_lab[:, :, 1][inside] - 128.0)))
+            pred_b_dev = float(np.mean(np.abs(pred_lab[:, :, 2][inside] - 128.0)))
+            if pred_a_dev > a_dev + 1.0 or pred_b_dev > b_dev + 1.0:
+                pred_lab[:, :, 1][inside] = 128.0
+                pred_lab[:, :, 2][inside] = 128.0
+                lab_modified = True
+        near_outer = (cv2.dilate(mask_u8, np.ones((7, 7), np.uint8)) > 0) & ~inside
+        near_inner = inside & ~(cv2.erode(mask_u8, np.ones((7, 7), np.uint8)) > 0)
+        if int(np.count_nonzero(near_outer)) >= 24 and int(np.count_nonzero(near_inner)) >= 24:
+            outer_f = near_outer.astype(np.float32)
+            inner_f = near_inner.astype(np.float32)
+            outer_sup = cv2.blur(outer_f, (15, 15))
+            inner_sup = cv2.blur(inner_f, (15, 15))
+            paired = near_inner & (outer_sup > 0.05) & (inner_sup > 0.05)
+            if int(np.count_nonzero(paired)) >= 24:
+                out_l = cv2.blur(orig_lab[:, :, 0] * outer_f, (15, 15)) / np.maximum(outer_sup, 1e-3)
+                in_l = cv2.blur(pred_lab[:, :, 0] * inner_f, (15, 15)) / np.maximum(inner_sup, 1e-3)
+                l_diff = float(np.median((out_l - in_l)[paired]))
+                if 1.0 <= abs(l_diff) <= 18.0:
+                    pred_lab[:, :, 0][inside] = np.clip(pred_lab[:, :, 0][inside] + l_diff, 0.0, 255.0)
+                    lab_modified = True
+        if lab_modified:
+            result = cv2.cvtColor(np.clip(pred_lab, 0, 255).astype(np.uint8), cv2.COLOR_LAB2BGR)
+
+    dist_in = cv2.distanceTransform(mask_u8, cv2.DIST_L2, 3)
+    feather_px = 2.0
+    edge_band = inside & (dist_in > 0) & (dist_in < feather_px)
+    if np.any(edge_band):
+        diff = np.max(np.abs(crop_bgr.astype(np.float32) - result.astype(np.float32)), axis=2)
+        safe_edge = edge_band & (diff <= 28.0)
+        if np.any(safe_edge):
+            alpha = np.clip(dist_in[safe_edge] / feather_px, 0.35, 1.0)[:, None]
+            blended = (
+                result[safe_edge].astype(np.float32) * alpha
+                + crop_bgr[safe_edge].astype(np.float32) * (1.0 - alpha)
+            )
+            result[safe_edge] = np.clip(np.rint(blended), 0, 255).astype(np.uint8)
+    return result

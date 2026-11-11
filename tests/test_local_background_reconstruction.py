@@ -125,13 +125,11 @@ def test_spatial_gate_fallback_is_diagnostic_and_never_promoted_to_clean_safe(mo
         "local_background_sample_count": 128,
     }
     monkeypatch.setattr(ob.config, "CLEAN_HARMONIC_FILL", True)
-    monkeypatch.setattr(
-        ob,
-        "_remove_text_for_group",
-        lambda current, original, _group, strategy="primary": (
-            current.copy(), mask.copy(), {"mask_valid": True, "strategy": strategy}
-        ),
-    )
+    def refused_fill(current, original, _group, strategy="primary"):
+        candidate = ob._apply_cleanup_mask(current, original, _group, mask, strategy=strategy)
+        return candidate, mask.copy(), {"mask_valid": True, "strategy": strategy}
+
+    monkeypatch.setattr(ob, "_remove_text_for_group", refused_fill)
     monkeypatch.setattr(
         ob,
         "_uncovered_source_text_evidence",

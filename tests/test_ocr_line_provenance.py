@@ -56,6 +56,38 @@ class FakeGroup:
         return (x0, y0, x1 - x0, y1 - y0)
 
 
+def test_page_fork_keeps_source_evidence_isolated_and_merges_only_new_records():
+    from yomu.ocr import source_completeness
+    previous = provenance.active()
+    parent = provenance.activate()
+    member = make_line("SOURCE WORDS", (10,10,90,20), page=2)
+    group = FakeGroup("g", [member])
+    try:
+        with provenance.page(2):
+            provenance.record_input_lines([member])
+            provenance.record_group(group)
+        with provenance.page(3):
+            provenance.record_input_lines([make_line("OTHER PAGE", (10,10,80,20), page=3)])
+        original_events = len(parent.pages[2]["events"])
+        original_raw = len(parent.pages[2]["raw_lines"])
+        child = parent.fork_page(2)
+        assert set(child.pages) == {2}
+        provenance.activate(child)
+        with provenance.page(2):
+            assert source_completeness.check_live_group(group, render_lines=[member])["status"] == "pass"
+            provenance.record_render_input(group, lines=[member])
+        child.pages[2]["raw_lines"][0]["text"] = "CHILD ONLY"
+        assert parent.pages[2]["raw_lines"][0]["text"] == "SOURCE WORDS"
+        parent.merge_from(child)
+        assert len(parent.pages[2]["raw_lines"]) == original_raw
+        assert len(parent.pages[2]["render_inputs"]) == 1
+        assert len(parent.pages[2]["events"]) > original_events
+        assert parent.pages[2]["raw_lines"][0]["text"] == "SOURCE WORDS"
+    finally:
+        if previous is None: provenance.deactivate()
+        else: provenance.activate(previous)
+
+
 class LineIdentityTest(unittest.TestCase):
     def test_identity_is_deterministic_and_not_index_based(self):
         first = make_line("THAT I LOST CONTROL", (260, 2075, 376, 33))

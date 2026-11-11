@@ -6,7 +6,7 @@ import yomu.runtime.version as app_version
 def test_canonical_versions_are_current():
     assert app_version.PRODUCT_VERSION == "0.9.0"
     assert app_version.BUILD_VERSION == "0.9.1-beta.18"
-    assert app_version.DISPLAY_VERSION == "Yomu Sekai 0.9.1 Beta 18"
+    assert app_version.DISPLAY_VERSION == "Komyst 0.9.1 Beta 18"
 
 
 def test_installer_uses_release_define_not_stale_beta20():
@@ -17,7 +17,7 @@ def test_installer_uses_release_define_not_stale_beta20():
 
 def test_installer_declares_windows_uninstall_icon_and_shortcut_icon():
     script = Path("packaging/TradutorIA.iss").read_text(encoding="utf-8")
-    icon_path = r"{app}\_internal\assets\branding\generated\yomu-sekai.ico"
+    icon_path = r"{app}\_internal\assets\branding\generated\komyst.ico"
     assert f"UninstallDisplayIcon={icon_path}" in script
     assert script.count(f'IconFilename: "{icon_path}"') == 2
 
@@ -25,9 +25,9 @@ def test_installer_declares_windows_uninstall_icon_and_shortcut_icon():
 def test_installer_icon_file_is_staged_by_the_canonical_pyinstaller_spec():
     script = Path("packaging/TradutorIA.iss").read_text(encoding="utf-8")
     spec = Path("packaging/tradutor_ia.spec").read_text(encoding="utf-8")
-    assert "SetupIconFile=" in script and "assets\\branding\\generated\\yomu-sekai.ico" in script
+    assert "SetupIconFile=" in script and "assets\\branding\\generated\\komyst.ico" in script
     assert '(str(ROOT / "assets" / "branding"), "assets/branding")' in spec
-    assert 'icon=str(ROOT / "assets" / "branding" / "generated" / "yomu-sekai.ico")' in spec
+    assert 'icon=str(ROOT / "assets" / "branding" / "generated" / "komyst.ico")' in spec
 
 
 def test_update_manifest_defaults_to_canonical_product_version():

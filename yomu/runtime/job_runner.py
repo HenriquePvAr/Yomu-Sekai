@@ -680,7 +680,7 @@ def _safe_manifest_configuration(configuration: object) -> dict:
         "job_type", "mode", "full", "max_images", "use_cache", "force",
         "use_context", "chapter_name", "open_output", "create_source_profile",
         "translation_provider", "translation_request_id", "download_only",
-        "output_format", "output_profile",
+        "output_format", "output_profile", "translate_sfx",
     }
     safe = {key: configuration[key] for key in allowed if key in configuration}
     if "create_source_profile" in safe:
@@ -950,6 +950,8 @@ def run_job(job_id: str, db_path: str, worker_id: str, log_path: str) -> int:
         env["TRADUTOR_JOB_OUTPUT_DIR"] = str(output_dir.resolve())
         configuration = job.get("configuration") if isinstance(job.get("configuration"), dict) else {}
         _set_output_profile_environment(env, configuration)
+        if "translate_sfx" in configuration:
+            env["TRANSLATE_SFX"] = "True" if configuration["translate_sfx"] is True else "False"
         # SAFE CLEAN is unavailable by default in user jobs. Enabling it requires
         # an explicit persisted runtime opt-in and an independently verified
         # worker schema; an ambient machine environment variable cannot turn it

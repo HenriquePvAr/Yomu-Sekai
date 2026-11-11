@@ -3679,6 +3679,7 @@ class ChapterQualityRevision:
             group.sent_to_translation = bool(item.get("sent_to_nvidia") or item.get("sent_to_translation"))
             group.review_translate_override = str(item.get("review_translate_override") or "auto")
             group.classification = str(item.get("classification") or "unknown")
+            group.story_display_promoted = bool(item.get("story_display_promoted", False))
             group.region_id = str(item.get("region_id") or "")
             group.source_engine = str(item.get("source_engine") or item.get("engine") or "")
             group.background_type = str(item.get("background_type") or "unknown")

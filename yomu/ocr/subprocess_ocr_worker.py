@@ -62,7 +62,8 @@ def _detections(image_bgr: np.ndarray) -> list[dict]:
                 entry = boxes[index]
                 raw = [int(round(float(v))) for v in list(entry)[:4]] if hasattr(entry, "__len__") else []
                 if len(raw) == 4:
-                    box = raw
+                    x1, y1, x2, y2 = raw
+                    box = [x1, y1, max(1, x2 - x1), max(1, y2 - y1)]
             detections.append({
                 "text": text,
                 "confidence": scores[index] if index < len(scores) else 0.0,
@@ -72,6 +73,8 @@ def _detections(image_bgr: np.ndarray) -> list[dict]:
 
 
 def main() -> int:
+    from yomu.runtime.process_options import configure_headless_subprocesses
+    configure_headless_subprocesses()
     for line in sys.stdin:
         line = line.strip()
         if not line:

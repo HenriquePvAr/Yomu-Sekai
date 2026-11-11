@@ -160,6 +160,61 @@ class SpeechContainerReocrSerializationTests(unittest.TestCase):
         self.assertEqual(report["pages"][0]["speech_container_reocr"], [])
         self.assertEqual(report["totals"]["speech_container_reocr"]["containers_evaluated"], 0)
 
+    def test_inpaint_measurements_are_kept_per_page(self):
+        state = _state()
+        state["debug_data"]["items"] = [{
+            "id": "region-1",
+            "classification": "sfx",
+            "background_type": "textured_art",
+            "redrawn": False,
+            "mask_metrics": {
+                "mask_pixels": 120,
+                "mask_page_area_pixels": 10000,
+                "mask_page_area_ratio": 0.012,
+                "mask_to_text_area_ratio": 1.8,
+                "fill_mask_pixels": 150,
+                "fill_mask_page_area_ratio": 0.015,
+                "fill_mask_to_text_area_ratio": 2.0,
+                "fill_mask_expansion_pixels": 30,
+                "fill_mask_expansion_ratio": 0.25,
+                "mask_refine_reduction_ratio": 0.25,
+                "changed_pixels_in_mask": 100,
+                "changed_pixels_outside_mask": 0,
+                "changed_fraction_in_mask": 0.8333,
+                "changed_pixels_inside_fill_mask": 105,
+                "changed_pixels_outside_fill_mask": 0,
+                "changed_pixels_in_fill_halo": 5,
+                "inpaint_method": "lama_large",
+                "reason": "visible_reconstruction_seam_at_mask_boundary",
+            },
+            "visual_attempts": [{
+                "strategy": "source_scoped",
+                "mask_pixels": 120,
+                "fill_mask_pixels": 150,
+                "mask_to_text_area_ratio": 1.8,
+                "fill_mask_page_area_ratio": 0.015,
+                "changed_pixels_inside_fill_mask": 105,
+                "changed_pixels_outside_fill_mask": 0,
+                "visual_validation_passed": False,
+                "reason": "visible_reconstruction_seam_at_mask_boundary",
+            }],
+            "visual_validation": {"visual_validation_passed": False},
+            "art_reconstruction_reason": "visible_reconstruction_seam_at_mask_boundary",
+        }]
+
+        report = _build_quality_report({}, [state], [])
+        region = report["pages"][0]["inpaint_summary"]["regions"][0]
+
+        self.assertEqual(region["mask_pixels"], 120)
+        self.assertEqual(region["mask_page_area_ratio"], 0.012)
+        self.assertEqual(region["method"], "lama_large")
+        self.assertEqual(region["decision"], "rejected_or_preserved")
+        self.assertEqual(region["reason"], "visible_reconstruction_seam_at_mask_boundary")
+        self.assertEqual(report["totals"]["inpaint_mask_pixels_sum"], 120)
+        self.assertEqual(region["fill_mask_pixels"], 150)
+        self.assertEqual(report["totals"]["inpaint_fill_mask_pixels_sum"], 150)
+        json.dumps(report)
+
 
 def _split(page, safe_band=True, height=1800):
     record = {

@@ -14,6 +14,7 @@ import contextlib
 import threading
 import queue
 import tempfile
+from dataclasses import replace
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from pathlib import Path
@@ -26,7 +27,7 @@ from PIL import Image, ImageDraw, ImageFont, ImageOps
 import yomu.config.settings as config
 import yomu.runtime.artifact_contract as ac
 import yomu.export.editable_psd_writer as editable_psd_writer
-from yomu.ocr.residual_sweep import sweep_page_residuals
+from yomu.ocr.residual_sweep import sweep_page_residuals, synthetic_sfx_lines
 import yomu.review.region_taxonomy as region_taxonomy
 from yomu.ocr.classification_profiler import (
     ClassificationProfiler,
@@ -210,6 +211,142 @@ def _pipeline_page_workers():
     return value
 
 
+def _residual_sweep_known_boxes(state):
+    """Hide established readings, never a region rejected as uncertain OCR.
+
+    Masking a rejected page-sized OCR box erased its contents before the
+    independent detector could re-read them. Intentional names/credits remain
+    hidden; only retryable detection/quality refusals are exposed again.
+    """
+    retryable = {"box_too_large", "group_too_large", "weak_unknown_text",
+                 "low_confidence", "ocr_not_reliable", "too_few_useful_chars",
+                 "noise_like_text", "noise_like_group"}
+    def source_refs(line):
+        metadata = getattr(line, "metadata", None) or {}
+        return {metadata.get("ocr_line_id") or id(line),
+                *(str(value) for value in metadata.get("ocr_line_parent_ids", []))}
+    rejected_lines = {
+        ref for candidate in (state.get("candidates", []) or [])
+        if getattr(candidate, "ignored", False)
+        and getattr(candidate, "ignore_reason", "") in retryable
+        for ref in source_refs(candidate.line)
+    }
+    rejected_groups = set()
+    for group in state.get("groups", []) or []:
+        unreliable_sound = (
+            getattr(group, "classification", "") == "sfx"
+            and not getattr(group, "preserve_as_name", False)
+            and (getattr(group, "ocr_quality_blocked", False)
+                 or float(getattr(group, "confidence", 1.0)) < max(
+                     .55, float(getattr(config, "RAPIDOCR_MIN_CONFIDENCE", .55))))
+        )
+        if unreliable_sound or (getattr(group, "ignored", False)
+                               and getattr(group, "ignore_reason", "") in retryable):
+            rejected_groups.add(id(group))
+            rejected_lines.update(ref for line in
+                list(getattr(group, "lines", [])) + list(getattr(group, "cleanup_lines", []))
+                for ref in source_refs(line))
+    boxes = []
+    for line in state.get("raw_lines", []) or []:
+        if (source_refs(line) & rejected_lines
+                or float(getattr(line, "confidence", 1.0)) < max(
+                    .55, float(getattr(config, "RAPIDOCR_MIN_CONFIDENCE", .55)))):
+            continue
+        box = getattr(line, "box", None)
+        if box and len(box) >= 4:
+            boxes.append(tuple(box[:4]))
+    for group in state.get("groups", []) or []:
+        if id(group) in rejected_groups:
+            continue
+        box = getattr(group, "box", None)
+        if box and len(box) >= 4:
+            boxes.append(tuple(box[:4]))
+    return boxes
+
+
+def _auto_fix_residual_sfx(page_result, page_state):
+    """Inject short sweep reads only after normal visual SFX classification."""
+    residual_started = time.perf_counter()
+    groups = page_state.get("groups", []) or []
+    original = page_state.get("original_bgr")
+    if not isinstance(original, np.ndarray) or original.size == 0:
+        return page_result
+    detections = sweep_page_residuals(
+        original, _residual_sweep_known_boxes(page_state),
+        page_index=int(page_state.get("index") or 0),
+    )
+    page_state["residual_sweep"] = detections
+    if not getattr(config, "OCR_RESIDUAL_AUTO_FIX", True):
+        page_state["residual_sweep_auto_fix"] = {
+            "detected": len(detections), "synthetic_candidates": 0, "accepted": 0,
+        }
+        return replace(
+            page_result, page_state=dict(page_state),
+            timings={**dict(page_result.timings), "residual_sweep": time.perf_counter() - residual_started},
+        )
+    lines = synthetic_sfx_lines(
+        detections, page_index=int(page_state.get("index") or 0),
+        image_shape=original.shape, image_bgr=original,
+    )
+    result = {"detected": len(detections), "synthetic_candidates": len(lines), "accepted": 0}
+    if not lines:
+        page_state["residual_sweep_auto_fix"] = result
+        return replace(
+            page_result, page_state=dict(page_state),
+            timings={**dict(page_result.timings), "residual_sweep": time.perf_counter() - residual_started},
+        )
+
+    stamp_initial_ocr_provenance(lines)
+    with ocr_line_provenance.page(int(page_state.get("index") or 0)):
+        ocr_line_provenance.record_input_lines(
+            lines, origin="paddle_residual_sweep", reason="auto_fix_visual_sfx",
+        )
+    _candidates, recovered_groups = analyze_image_array(
+        original, lines, page_index=int(page_state.get("index") or 0),
+    )
+    accepted_groups = []
+    accepted_line_ids = set()
+    for group in recovered_groups:
+        # Detection is not enough: the standard visual classifier must agree
+        # that this is display SFX before it can reach the provider.
+        if str(getattr(group, "classification", "")).lower() != "sfx":
+            continue
+        box = tuple(int(v) for v in (getattr(group, "box", ()) or (0, 0, 0, 0)))
+        group.group_id = f"SWEEP_P{int(page_state.get('index') or 0)}_{box[0]}_{box[1]}"
+        group.region_id = group.group_id
+        group.source_engine = "paddle_residual_sweep"
+        group.ocr_provenance_engines = ("paddle_residual_sweep",)
+        group.classification_evidence = {
+            **(getattr(group, "classification_evidence", {}) or {}),
+            "residual_sweep_recovered": True,
+        }
+        with ocr_line_provenance.page(int(page_state.get("index") or 0)):
+            # analyze_image_array used a local BALAO id which may already
+            # belong to another region. Bind the final unique sweep id to
+            # its actual source lines before any completeness gate sees it.
+            ocr_line_provenance.record_group(group)
+        accepted_groups.append(group)
+        accepted_line_ids.update(id(line) for line in (getattr(group, "lines", []) or []))
+
+    translation_items = list(page_result.translation_items)
+    if accepted_groups:
+        accepted_lines = [line for line in lines if id(line) in accepted_line_ids]
+        page_state.setdefault("raw_lines", []).extend(accepted_lines)
+        groups.extend(accepted_groups)
+        page_state["groups"] = groups
+        page_state["translatable_groups"] = get_translatable_groups(groups)
+        translation_items.extend(get_translatable_groups(accepted_groups))
+    result["accepted"] = len(accepted_groups)
+    page_state["residual_sweep_auto_fix"] = result
+    return replace(
+        page_result,
+        groups=tuple(page_state.get("groups", []) or []),
+        translation_items=tuple(translation_items),
+        page_state=dict(page_state),
+        timings={**dict(page_result.timings), "residual_sweep": time.perf_counter() - residual_started},
+    )
+
+
 def process_pre_translation_pages(
     page_states,
     *,
@@ -218,6 +355,7 @@ def process_pre_translation_pages(
     fast_ocr_budget,
     errors_folder,
     progress_callback=None,
+    include_residual_sweep=False,
 ):
     """Run page-local pre-translation work with a bounded executor.
 
@@ -241,6 +379,16 @@ def process_pre_translation_pages(
             fast_ocr_budget=fast_ocr_budget,
             errors_folder=errors_folder,
         )
+        if include_residual_sweep and result.analyzable:
+            previous_recorder = ocr_line_provenance.active()
+            ocr_line_provenance.activate(result.page_recorder)
+            try:
+                result = _auto_fix_residual_sfx(result, dict(result.page_state))
+            finally:
+                ocr_line_provenance.activate(previous_recorder)
+            if result.page_recorder is not None:
+                result = replace(result, ocr_line_provenance=tuple(
+                    result.page_recorder.to_dict().get("pages", [])))
         perf_end = _perf_offset_ns()
         if isinstance(result.page_state, dict):
             result.page_state.setdefault("_performance_events", []).append({
@@ -1340,13 +1488,15 @@ def _export_editable_psds(output_root, completed_states, total_pages, clean_page
 
 def process_post_translation_page(state, *, diagnostic_folder=None, targeted_regression=False,
                                   translator=None, translation_retry_records=None,
-                                  force=False, retry_lock=None, job_id: str = ""):
+                                    force=False, retry_lock=None, job_id: str = "", source_recorder=None):
     """Render and save one page, returning only page-owned state."""
     local = dict(state)
     timings = {}
     perf_start = _perf_offset_ns()
     previous_recorder = ocr_line_provenance.active()
-    page_recorder = ocr_line_provenance.ProvenanceRecorder()
+    analysis_recorder = source_recorder or previous_recorder
+    page_recorder = (analysis_recorder.fork_page(local["index"]) if analysis_recorder is not None
+                     else ocr_line_provenance.ProvenanceRecorder())
     ocr_line_provenance.activate(page_recorder)
     try:
         debug_folder = None
@@ -1446,12 +1596,14 @@ def process_post_translation_pages(page_states, *, diagnostic_folder=None, targe
                                    translator=None, translation_retry_records=None,
                                    force=False, retry_lock=None, job_id: str = ""):
     workers = _pipeline_page_workers()
+    source_recorder = ocr_line_provenance.active()
     if workers == 1:
         return [process_post_translation_page(state, diagnostic_folder=diagnostic_folder,
                                                targeted_regression=targeted_regression,
                                                translator=translator,
                                                translation_retry_records=translation_retry_records,
-                                                force=force, retry_lock=retry_lock, job_id=job_id)
+                                                force=force, retry_lock=retry_lock, job_id=job_id,
+                                                source_recorder=source_recorder)
                 for state in page_states]
     with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="post-page") as executor:
         futures = [executor.submit(process_post_translation_page, state,
@@ -1459,7 +1611,8 @@ def process_post_translation_pages(page_states, *, diagnostic_folder=None, targe
                                    targeted_regression=targeted_regression,
                                    translator=translator,
                                    translation_retry_records=translation_retry_records,
-                                    force=force, retry_lock=retry_lock, job_id=job_id)
+                                    force=force, retry_lock=retry_lock, job_id=job_id,
+                                    source_recorder=source_recorder)
                    for state in page_states]
         return sorted((future.result() for future in as_completed(futures)), key=lambda result: result.page_index)
 from yomu.export.output_manifest import (
@@ -3365,9 +3518,18 @@ def run_benchmark(args):
         fast_ocr_budget=fast_ocr_budget,
         errors_folder=errors_folder,
         progress_callback=_emit_classification_progress,
+        include_residual_sweep=True,
     )
     pre_translation_wall_seconds = time.perf_counter() - pre_translation_wall_started
     stage_seconds["pre_translation"] = pre_translation_wall_seconds
+    # All page-analysis/sweep futures have joined. The isolated Paddle worker
+    # otherwise retains its model/oneDNN caches through FLUX and rendering
+    # despite having no requests left in this phase. Late selective reads can
+    # still create a new gateway lazily; no OCR evidence or result is discarded.
+    from yomu.ocr.subprocess_ocr import shutdown_subprocess_ocr
+    heavy_ocr_release_started = time.perf_counter()
+    shutdown_subprocess_ocr()
+    stage_seconds["heavy_ocr_release"] = time.perf_counter() - heavy_ocr_release_started
     _record_perf_event("pre_translation", "pre", int((pre_translation_wall_started - started) * 1_000_000_000), int((time.perf_counter() - started) * 1_000_000_000))
     for page_result in page_results:
         global_page_state = page_state_by_index[page_result.page_index]
@@ -3487,13 +3649,15 @@ def run_benchmark(args):
     else:
         if cancel_event.is_set():
             raise PipelineCancelled("user_cancelled")
-        # Sound effects and *action* labels get their pt-BR onomatopoeia from the
-        # glossary. A sound it does not know keeps its source text (an echo, so the
-        # original lettering stays): a provider read "PRESS" as a noun
-        # ("IMPRENSA") and a misread "BOOM" ("hoog") as Dutch ("alto").
+        # Known SFX use the glossary. Unknown sweep-derived display tokens may
+        # try the provider after visual SFX classification; ordinary unknown SFX
+        # still preserve their source lettering.
         from yomu.translation.sfx_glossary import translate_sfx_fuzzy
         local = [(
-            (translate_sfx_fuzzy(group.text) or group.text)
+            (translate_sfx_fuzzy(group.text)
+             or (None if (getattr(group, "classification_evidence", {}) or {}).get(
+                 "residual_sweep_recovered"
+             ) else group.text))
             if group.classification == "sfx"
             else known_sound_translation_target(group)
         ) for group in translation_targets]
@@ -3622,6 +3786,7 @@ def run_benchmark(args):
     # job.  Running this dry render pass before settlement keeps one valid
     # reservation available to every bounded retry and prevents a consumed
     # reservation from being mistaken for dozens of independent bad regions.
+    layout_preflight_wall_seconds = 0.0
     if translation_enabled and translator is not None:
         layout_started = time.perf_counter()
         try:
@@ -3639,6 +3804,9 @@ def run_benchmark(args):
             if callable(commit_translation):
                 commit_translation()
             raise
+        layout_preflight_wall_seconds = time.perf_counter() - layout_started
+        _record_perf_event("layout_preflight", "render", int((layout_started-started)*1e9),
+                           int((time.perf_counter()-started)*1e9))
         translator_stats["pre_settlement_layout_retries"] = layout_retry_count
         stage_seconds["translation"] += sum(
             float(s.pop("_preflight_translation_retry_seconds", 0.0) or 0.0)
@@ -3745,6 +3913,7 @@ def run_benchmark(args):
         stage_id="rendering", phase="render", status="running",
         stage_current=len(rendered_page_ids), stage_total=len(image_paths),
     )
+    post_translation_wall_started = time.perf_counter()
     post_parallel_results = None
     if _pipeline_page_workers() > 1:
         overflow_retry_lock = threading.Lock()
@@ -3960,6 +4129,9 @@ def run_benchmark(args):
         if aggregate_state is not None:
             aggregate_state.update(local_state)
 
+    post_translation_wall_seconds = time.perf_counter() - post_translation_wall_started
+    _record_perf_event("post_translation", "render", int((post_translation_wall_started-started)*1e9),
+                       int((time.perf_counter()-started)*1e9))
     completed_states = [
         state
         for state in sorted(page_states, key=lambda item: item["index"])
@@ -4490,7 +4662,10 @@ def run_benchmark(args):
         ),
         "pipeline_page_workers": configured_page_workers,
         "pre_translation_parallel": configured_page_workers > 1,
+        "pre_translation_includes_residual_sweep": True,
         "pre_translation_wall_seconds": round(pre_translation_wall_seconds, 6),
+        "layout_preflight_wall_seconds": round(layout_preflight_wall_seconds, 6),
+        "post_translation_wall_seconds": round(post_translation_wall_seconds, 6),
         "page_timings": page_timings,
         "performance_events": list(_PERF_EVENTS),
         "stage_seconds": {
@@ -5085,7 +5260,8 @@ def _resolve_layout_overflow_before_settlement(
     def preflight_in_thread(state):
         # Provenance is thread-local: each page records into its own recorder,
         # merged in page order below, as the post-translation pages do.
-        recorder = ocr_line_provenance.ProvenanceRecorder()
+        recorder = (run_recorder.fork_page(state["index"]) if run_recorder is not None
+                    else ocr_line_provenance.ProvenanceRecorder())
         ocr_line_provenance.activate(recorder)
         try:
             return preflight(state), recorder
@@ -6370,6 +6546,13 @@ def _build_quality_report(report, states, translation_retry_records):
         "seam_suspected": 0,
         "rectangular_line_mask_rejections": 0,
         "background_type_counts": {},
+        "residual_sweep_auto_fix_groups": 0,
+        "inpaint_regions_measured": 0,
+        "inpaint_regions_accepted": 0,
+        "inpaint_regions_accepted_with_review": 0,
+        "inpaint_regions_rejected_or_reviewed": 0,
+        "inpaint_mask_pixels_sum": 0,
+        "inpaint_fill_mask_pixels_sum": 0,
         "translation_accounting": translation_accounting,
         "clean_quality": clean_accounting,
         "translation_quality_applicable": translation_applicable,
@@ -6422,8 +6605,99 @@ def _build_quality_report(report, states, translation_retry_records):
     }
 
     for state in sorted(states, key=lambda item: item["index"]):
+        auto_fix = dict(state.get("residual_sweep_auto_fix") or {})
+        totals["residual_sweep_auto_fix_groups"] += int(auto_fix.get("accepted", 0) or 0)
         debug = state.get("debug_data", {})
         items = debug.get("items", [])
+        inpaint_regions = []
+        for item in items:
+            metrics = dict(item.get("mask_metrics") or {})
+            attempts = list(item.get("visual_attempts") or [])
+            attempt_metrics = [
+                {
+                    "method": attempt.get("inpaint_method") or attempt.get("strategy"),
+                    "mask_pixels": attempt.get("mask_pixels"),
+                    "mask_page_area_ratio": attempt.get("mask_page_area_ratio"),
+                    "fill_mask_pixels": attempt.get("fill_mask_pixels"),
+                    "fill_mask_page_area_ratio": attempt.get("fill_mask_page_area_ratio"),
+                    "mask_to_text_area_ratio": attempt.get("mask_to_text_area_ratio"),
+                    "changed_pixels_in_mask": attempt.get("changed_pixels_in_mask"),
+                    "changed_pixels_outside_mask": attempt.get("changed_pixels_outside_mask"),
+                    "changed_pixels_inside_fill_mask": attempt.get("changed_pixels_inside_fill_mask"),
+                    "changed_pixels_outside_fill_mask": attempt.get("changed_pixels_outside_fill_mask"),
+                    "changed_fraction_in_fill_mask": attempt.get("changed_fraction_in_fill_mask"),
+                    "changed_fraction_in_mask": attempt.get("changed_fraction_in_mask"),
+                    "visual_validation_passed": attempt.get("visual_validation_passed"),
+                    "reason": attempt.get("reason") or attempt.get("reconstruction_gate_failure"),
+                }
+                for attempt in attempts
+            ]
+            measured_pixels = int(metrics.get("mask_pixels") or 0)
+            measured_fill_pixels = int(metrics.get("fill_mask_pixels") or 0)
+            if not measured_pixels and not measured_fill_pixels:
+                measured_pixels = max((int(a.get("mask_pixels") or 0) for a in attempt_metrics), default=0)
+                measured_fill_pixels = max(
+                    (int(a.get("fill_mask_pixels") or a.get("mask_pixels") or 0) for a in attempt_metrics),
+                    default=0,
+                )
+            if not measured_pixels and not measured_fill_pixels:
+                continue
+            visual = dict(item.get("visual_validation") or {})
+            rendered = bool(item.get("redrawn") and visual.get("visual_validation_passed"))
+            art_status = str(item.get("art_reconstruction_status") or "")
+            decision = (
+                "accepted" if rendered and art_status == "clean"
+                else "accepted_with_review" if rendered
+                else "rejected_or_preserved"
+            )
+            decision_reason = (
+                item.get("art_reconstruction_reason")
+                or visual.get("reason")
+                or metrics.get("reason")
+                or decision
+            )
+            inpaint_regions.append({
+                "id": item.get("id") or item.get("region_id"),
+                "background_type": metrics.get("background_type") or item.get("background_type"),
+                "mask_pixels": measured_pixels,
+                "mask_page_area_pixels": metrics.get("mask_page_area_pixels"),
+                "mask_page_area_ratio": metrics.get("mask_page_area_ratio"),
+                "mask_to_text_area_ratio": metrics.get("mask_to_text_area_ratio"),
+                "fill_mask_pixels": measured_fill_pixels,
+                "fill_mask_page_area_ratio": metrics.get("fill_mask_page_area_ratio"),
+                "fill_mask_to_text_area_ratio": metrics.get("fill_mask_to_text_area_ratio"),
+                "fill_mask_expansion_pixels": metrics.get("fill_mask_expansion_pixels"),
+                "fill_mask_expansion_ratio": metrics.get("fill_mask_expansion_ratio"),
+                "mask_refine_reduction_ratio": metrics.get("mask_refine_reduction_ratio"),
+                "mask_area_change_ratio": metrics.get("mask_area_change_ratio"),
+                "changed_pixels_in_mask": metrics.get("changed_pixels_in_mask"),
+                "changed_pixels_outside_mask": metrics.get("changed_pixels_outside_mask"),
+                "changed_fraction_in_mask": metrics.get("changed_fraction_in_mask"),
+                "changed_pixels_inside_fill_mask": metrics.get("changed_pixels_inside_fill_mask"),
+                "changed_pixels_outside_fill_mask": metrics.get("changed_pixels_outside_fill_mask"),
+                "changed_pixels_in_fill_halo": metrics.get("changed_pixels_in_fill_halo"),
+                "changed_fraction_in_fill_mask": metrics.get("changed_fraction_in_fill_mask"),
+                "method": metrics.get("inpaint_method") or metrics.get("strategy") or visual.get("strategy"),
+                "decision": decision,
+                "reason": decision_reason,
+                "attempts": attempt_metrics,
+            })
+        totals["inpaint_regions_measured"] += len(inpaint_regions)
+        totals["inpaint_regions_accepted"] += sum(
+            1 for region in inpaint_regions if region["decision"] == "accepted"
+        )
+        totals["inpaint_regions_accepted_with_review"] += sum(
+            1 for region in inpaint_regions if region["decision"] == "accepted_with_review"
+        )
+        totals["inpaint_regions_rejected_or_reviewed"] += sum(
+            1 for region in inpaint_regions if region["decision"] == "rejected_or_preserved"
+        )
+        totals["inpaint_mask_pixels_sum"] += sum(
+            int(region.get("mask_pixels") or 0) for region in inpaint_regions
+        )
+        totals["inpaint_fill_mask_pixels_sum"] += sum(
+            int(region.get("fill_mask_pixels") or 0) for region in inpaint_regions
+        )
         fallback_records = debug.get("selective_ocr_fallbacks", [])
         rapidocr_records = debug.get("rapidocr_region_recovery", [])
         suspicious = [
@@ -6609,19 +6883,14 @@ def _build_quality_report(report, states, translation_retry_records):
                 "text_overflow_items": [_quality_item_summary(item) for item in overflow],
                 "narrations_translated": [_quality_item_summary(item) for item in narrations],
                 "sfx_preserved": [_quality_item_summary(item) for item in sfx],
-                "residual_sweep": (
-                    sweep_page_residuals(
-                        state.get("original_bgr"),
-                        [tuple(getattr(group, "box", ()) or ()) for group in state.get("groups", []) if getattr(group, "box", None)],
-                        page_index=state["index"],
-                    )
-                    if any(
-                        str(getattr(group, "classification", "") or "") == "sfx"
-                        for group in state.get("groups", [])
-                    )
-                    and state.get("original_bgr") is not None
-                    else []
-                ),
+                "residual_sweep": list(state.get("residual_sweep") or []),
+                "residual_sweep_auto_fix": auto_fix,
+                "inpaint_summary": {
+                    "regions_measured": len(inpaint_regions),
+                    "mask_pixels_sum": sum(int(region.get("mask_pixels") or 0) for region in inpaint_regions),
+                    "fill_mask_pixels_sum": sum(int(region.get("fill_mask_pixels") or 0) for region in inpaint_regions),
+                    "regions": inpaint_regions,
+                },
                 "visual_validation_failures": [
                     _quality_item_summary(item) for item in visual_failures
                 ],
@@ -6722,6 +6991,7 @@ def _quality_item_summary(item):
         "visual_validation": item.get("visual_validation"),
         "visual_attempts": item.get("visual_attempts"),
         "mask_metrics": item.get("mask_metrics"),
+        "redrawn": item.get("redrawn"),
         "manual_review_required": item.get("manual_review_required"),
         "art_reconstruction_status": item.get("art_reconstruction_status"),
         "art_reconstruction_reason": item.get("art_reconstruction_reason"),

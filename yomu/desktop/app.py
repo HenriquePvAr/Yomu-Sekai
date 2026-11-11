@@ -1,4 +1,4 @@
-"""Yomu Sekai desktop shell backed by the local NiceGUI server.
+"""Komyst desktop shell backed by the local NiceGUI server.
 
 This is a development foundation for the future frozen/installer entrypoint.  It
 keeps the existing HTTP app intact and hosts it in Microsoft Edge WebView2 via
@@ -31,7 +31,7 @@ from pathlib import Path
 from yomu.runtime.paths import REPO_ROOT
 
 ROOT = REPO_ROOT
-APP_ICON_PATH = ROOT / "assets" / "branding" / "generated" / "yomu-sekai.ico"
+APP_ICON_PATH = ROOT / "assets" / "branding" / "generated" / "komyst.ico"
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = int(os.getenv("TRADUTOR_UI_PORT", "8080"))
 _LOCAL_MEDIA_IPC_SECRET = ""
@@ -71,7 +71,7 @@ def _persistent_webview_profile_dir() -> Path:
 
 
 def _webview_start_options() -> dict[str, object]:
-    """Persist WebView2 cookies/storage under this Windows user's Yomu profile."""
+    """Persist WebView2 cookies/storage under this Windows user's Komyst profile."""
     return {"private_mode": False,
             "storage_path": str(_persistent_webview_profile_dir())}
 
@@ -144,7 +144,7 @@ def export_diagnostics(destination: str) -> Path:
     )
     with zipfile.ZipFile(requested, "w", compression=zipfile.ZIP_DEFLATED) as bundle:
         manifest = {
-            "product": "Yomu Sekai", "format": 1,
+            "product": "Komyst", "format": 1,
             "diagnostics_schema_version": 2,
             "app_version": os.getenv("TRADUTOR_APP_VERSION", getattr(app_version, "BUILD_VERSION", app_version.PRODUCT_VERSION)),
             "frozen": bool(getattr(sys, "frozen", False)),
@@ -404,7 +404,7 @@ class DesktopApi:
 
         The page passes only an opaque key ("webtoon"/"comix"/"vortex"); the URL is a
         server-side constant, so a compromised page cannot open an arbitrary destination.
-        webbrowser.open launches the OS default browser, leaving the Yomu window open.
+        webbrowser.open launches the OS default browser, leaving the Komyst window open.
         """
         url = SUPPORTED_SOURCE_URLS.get(str(key or "").strip().lower())
         if not url:
@@ -853,7 +853,7 @@ class NativeAdSurface:
             _runtime_log("CORE_INIT_FAILURE", surface_generation=id(self))
 
     def _on_new_window(self, sender, args):
-        # Keep the main Yomu surface intact; provider clicks may open externally.
+        # Keep the main Komyst surface intact; provider clicks may open externally.
         try:
             import webbrowser
             webbrowser.open(str(args.Uri))
@@ -1227,7 +1227,7 @@ def _set_windows_app_user_model_id() -> None:
     try:
         import ctypes
         ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(
-            "YomuSekai.Desktop"
+            "Komyst.Desktop"
         )
     except (AttributeError, OSError):
         # Taskbar identity is an enhancement; the shell remains functional if the
@@ -1260,7 +1260,7 @@ def run(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT, *, lifecycle_selftes
         native_ads = os.name == "nt" and not direct_ads
         diagnostic_api = AdsDiagnosticsApi() if ads_diagnostic_mode else None
         target_url = "https://henriquepvar.github.io/ad/banner-728x90.html" if direct_ads else _desktop_url(host, port)
-        window_title = "Yomu Sekai - Ads Diagnostic" if ads_diagnostic_mode else "Yomu Sekai"
+        window_title = "Komyst - Ads Diagnostic" if ads_diagnostic_mode else "Komyst"
         window = webview.create_window(
             window_title, target_url,
             width=900 if direct_ads else 1440, height=240 if direct_ads else 900,
@@ -1401,7 +1401,7 @@ def run(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT, *, lifecycle_selftes
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Yomu Sekai WebView2 desktop shell")
+    parser = argparse.ArgumentParser(description="Komyst WebView2 desktop shell")
     args = list(sys.argv[1:] if argv is None else argv)
     _runtime_log("PROCESS_START", pid=os.getpid(), parent_pid=os.getppid(), entrypoint=str(Path(sys.argv[0]).name))
     if _env_flag("YOMU_ADS_NATIVE_POC"):

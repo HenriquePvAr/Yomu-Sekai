@@ -13,6 +13,7 @@ and never feeds anything back into a pipeline decision.
 from __future__ import annotations
 
 import hashlib
+import copy
 import json
 import threading
 from contextlib import contextmanager
@@ -120,15 +121,33 @@ class ProvenanceRecorder:
     def __init__(self):
         self.pages = {}
         self._current = None
+        self._fork_offsets = {}
+
+    def fork_page(self, index):
+        """Isolate one page for a render worker without losing its OCR evidence.
+
+        Remember the copied prefix so merging the worker later adds only new
+        records, rather than duplicating the complete analysis history.
+        """
+        child = ProvenanceRecorder()
+        key = int(index) if index is not None else 0
+        if key in self.pages:
+            child.pages[key] = copy.deepcopy(self.pages[key])
+            page = child.pages[key]
+            child._fork_offsets[key] = {
+                field: len(page.get(field, []))
+                for field in ("raw_lines", "events", "render_inputs")
+            }
+        return child
 
     def merge_from(self, other: "ProvenanceRecorder"):
         """Merge a completed page-scoped recorder into this run recorder."""
         for index in sorted(other.pages):
             source = other.pages[index]
             target = self._page(index)
-            target["raw_lines"].extend(source.get("raw_lines", []))
-            target["events"].extend(source.get("events", []))
-            target["render_inputs"].extend(source.get("render_inputs", []))
+            offsets = getattr(other, "_fork_offsets", {}).get(index, {})
+            for field in ("raw_lines", "events", "render_inputs"):
+                target[field].extend(source.get(field, [])[offsets.get(field, 0):])
             target["_seen"].update(source.get("_seen", set()))
             target["_pass"] = max(target.get("_pass", 0), source.get("_pass", 0))
             for group_id, group in source.get("groups", {}).items():

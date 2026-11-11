@@ -33,7 +33,7 @@ def test_installer_version_matches_single_beta_version_source():
     script = ISS.read_text(encoding="utf-8")
     assert "#ifndef ProductVersion" in script
     assert "AppVersion={#ProductVersion}" in script
-    assert "OutputBaseFilename=YomuSekai-{#ProductVersion}-Setup-x64" in script
+    assert "OutputBaseFilename=Komyst-{#ProductVersion}-Setup-x64" in script
 
 
 def test_installer_copies_onedir_contents_to_app_root():

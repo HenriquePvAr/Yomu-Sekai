@@ -103,14 +103,18 @@ OCR_LEGACY_PADDLE_FALLBACK = _env_bool("OCR_LEGACY_PADDLE_FALLBACK", False)
 # opt-in because it loads ~0.7 GB of models per process (~12 s, prewarmable).
 OCR_SFX_REGION_REOCR = _env_bool("OCR_SFX_REGION_REOCR", True)
 OCR_SFX_PADDLE_ESCALATION = _env_bool("OCR_SFX_PADDLE_ESCALATION", False)
-# Post-render page sweep with the isolated Paddle worker: reports source text
-# the primary OCR never detected (ghost lettering) on SFX-bearing pages.
+# Page-level sweep with isolated Paddle: reports text the primary OCR missed and
+# can inject visually classified SFX before the translation barrier.
 OCR_RESIDUAL_SWEEP = _env_bool("OCR_RESIDUAL_SWEEP", True)
+# Only glossary-backed, short display SFX from the residual sweep may enter the
+# normal classifier/translation path automatically. Unknown readings stay review.
+OCR_RESIDUAL_AUTO_FIX = _env_bool("OCR_RESIDUAL_AUTO_FIX", True)
 # Generative inpainting for the hardest art-reconstruction regions via
 # stable-diffusion.cpp (FLUX.2 klein) in a Vulkan subprocess. Opt-in: needs
 # sd-cli.exe + flux-2-klein-4b-Q4_0.gguf + flux2-vae.safetensors +
 # qwen3-4b-q4_k_m.gguf under GENERATIVE_INPAINT_MODEL_DIR.
 GENERATIVE_INPAINT_ENABLED = _env_bool("GENERATIVE_INPAINT_ENABLED", False)
+GENERATIVE_CAPTION_REPAIR_ENABLED = _env_bool("GENERATIVE_CAPTION_REPAIR_ENABLED", False)
 GENERATIVE_INPAINT_MODEL_DIR = _env_str("GENERATIVE_INPAINT_MODEL_DIR", "")
 RAPIDOCR_ENABLED = _env_bool("RAPIDOCR_ENABLED", True)
 RAPIDOCR_MIN_CONFIDENCE = _env_float("RAPIDOCR_MIN_CONFIDENCE", 0.55)
@@ -159,8 +163,9 @@ FAST_OCR_TOTAL_FALLBACK_BUDGET_SECONDS = min(
     max(0.0, _env_float("FAST_OCR_TOTAL_FALLBACK_BUDGET_SECONDS", 60.0)),
 )
 # Sound effects are translated (pt-BR onomatopoeia from assets/lexicon/sfx_en_pt.json,
-# the provider for the rest); TRANSLATE_SFX=0 keeps them in the source language.
-TRANSLATE_SFX = _env_bool("TRANSLATE_SFX", True)
+# Unknown SFX may use the provider when enabled; disabled mode preserves the
+# original lettering and skips SFX cleanup/redraw work.
+TRANSLATE_SFX = _env_bool("TRANSLATE_SFX", False)
 PRIORITIZE_ENCLOSED_TEXT = _env_bool("PRIORITIZE_ENCLOSED_TEXT", True)
 
 

@@ -98,7 +98,7 @@ def test_desktop_callback_completes_server_side_without_external_pkce():
     source = Path("yomu/ui/app.py").read_text(encoding="utf-8")
     assert "desktop = params.get(\"desktop\") == \"1\"" in source
     assert "Solicitação recebida" in source
-    assert "Você pode voltar ao Yomu Sekai" in source
+    assert "Você pode voltar ao Komyst" in source
     callback = Path("ui/auth_callback.html").read_text(encoding="utf-8")
     assert "desktopHandoff" in callback
 
@@ -130,11 +130,11 @@ def test_recovery_password_render_reenables_shared_submit_button():
 
 
 def test_official_branding_assets_are_preserved_and_ready_for_packaging():
-    source = Path("assets/branding/yomu-sekai-logo.png")
-    ico = Path("assets/branding/generated/yomu-sekai.ico")
+    source = Path("assets/branding/komyst-logo.png")
+    ico = Path("assets/branding/generated/komyst.ico")
     assert source.exists()
     assert ico.exists()
-    assert source.stat().st_size > 1_000_000
+    assert source.stat().st_size > 500_000
     assert ico.stat().st_size > 10_000
 
 
@@ -149,16 +149,17 @@ def test_login_background_assets_are_versioned_and_packaged_with_static_files():
 
 def test_desktop_uses_stable_windows_app_user_model_id():
     source = Path("yomu/desktop/app.py").read_text(encoding="utf-8")
-    assert "YomuSekai.Desktop" in source
+    assert "Komyst.Desktop" in source
 
 
-def test_favicon_and_packaging_reference_yomu_sekai_icon():
+def test_favicon_and_packaging_reference_komyst_icon():
     app_source = Path("yomu/ui/app.py").read_text(encoding="utf-8")
     spec = Path("packaging/tradutor_ia.spec").read_text(encoding="utf-8")
     iss = Path("packaging/TradutorIA.iss").read_text(encoding="utf-8")
-    assert "yomu-sekai.ico" in app_source
-    assert "yomu-sekai.ico" in spec
-    assert "SetupIconFile" in iss and "yomu-sekai.ico" in iss
+    assert "komyst.ico" in app_source
+    assert "komyst.ico" in spec
+    assert "SetupIconFile" in iss and "komyst.ico" in iss
+    assert Path("static/assets/branding/komyst.ico").is_file()
 
 
 def test_desktop_rejects_non_loopback_cli():

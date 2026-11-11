@@ -147,7 +147,8 @@ PROCESSING_SURFACE_ASSET = ROOT / "static" / "processing_surface.js"
 SOCIAL_COMMUNITY_ASSET = ROOT / "static" / "social_community.js"
 SERVICE_HEALTH_ASSET = ROOT / "static" / "service_health.js"
 CHAPTER_READER_ASSET = ROOT / "static" / "chapter_reader.js"
-FAVICON_ASSET = ROOT / "static" / "assets" / "branding" / "yomu-sekai.ico"
+FAVICON_ASSET = ROOT / "static" / "assets" / "branding" / "komyst-favicon.png"
+DESKTOP_APP_ICON_ASSET = ROOT / "static" / "assets" / "branding" / "komyst.ico"
 I18N_ASSETS = [
     ROOT / "static" / "i18n" / "pt-BR.js",
     ROOT / "static" / "i18n" / "en-US.js",
@@ -3415,7 +3416,8 @@ def index() -> None:
     # page perform an unexpected external request on every reload.
     ui.add_head_html(f'<link rel="stylesheet" href="{_asset_url(TRADUTOR_CSS_ASSET)}">')
     ui.add_head_html(f'<link rel="stylesheet" href="{_asset_url(LOADING_SURFACE_CSS_ASSET)}">')
-    ui.add_head_html(f'<link rel="icon" type="image/x-icon" href="{_asset_url(FAVICON_ASSET)}">')
+    ui.add_head_html(f'<link rel="icon" type="image/png" href="{_asset_url(FAVICON_ASSET)}">')
+    ui.add_head_html(f'<link rel="apple-touch-icon" href="{_asset_url(FAVICON_ASSET)}">')
     ui.add_body_html(shell)
     ui.add_body_html(
         "<script>"
@@ -3493,8 +3495,9 @@ def main() -> int:
     ui.run(
         host=bind_host,
         port=APP_PORT,
-        title="Tradutor.Ia · Painel local",
+        title="Komyst · Painel local",
         dark=True,
+        favicon=FAVICON_ASSET,
         language="pt-BR",
         show=False,
         reload=False,

@@ -321,9 +321,11 @@ def _duration(job: dict[str, Any] | None, *, live: bool = False) -> float | None
 
 
 def _run_git(*args: str) -> str:
+    from yomu.runtime.process_options import hidden_console_options
     try:
         result = subprocess.run(
-            ["git", *args], cwd=str(REPO_ROOT), capture_output=True, text=True, timeout=5
+            ["git", *args], cwd=str(REPO_ROOT), capture_output=True, text=True, timeout=5,
+            **hidden_console_options(),
         )
         return result.stdout.strip() if result.returncode == 0 else ""
     except (OSError, subprocess.SubprocessError):
@@ -5137,7 +5139,7 @@ class UiBridge:
             "ocr_parallel": os.getenv("OCR_PARALLEL") or values.get("OCR_PARALLEL", "False"),
             "ocr_text_repair_mode": os.getenv("OCR_TEXT_REPAIR_MODE")
             or values.get("OCR_TEXT_REPAIR_MODE", "conservative"),
-            "translate_sfx": os.getenv("TRANSLATE_SFX") or values.get("TRANSLATE_SFX", "True"),
+            "translate_sfx": os.getenv("TRANSLATE_SFX") or values.get("TRANSLATE_SFX", "False"),
             "prioritize_enclosed_text": os.getenv("PRIORITIZE_ENCLOSED_TEXT")
             or values.get("PRIORITIZE_ENCLOSED_TEXT", "True"),
             "rapidocr_available": bool(
@@ -5502,6 +5504,7 @@ class UiBridge:
         # "translation_enabled": normalized["translation_enabled"]
         provider = str(normalized.get("translation_provider") or "").strip().lower()
         return {
+            "translate_sfx": normalized.get("translate_sfx") is True,
             "provider_provenance": {
                 "provider_requested": provider,
                 "provider_command_initial": provider,
@@ -6154,6 +6157,7 @@ class UiBridge:
             "create_source_profile": False,
             "translation_provider": translation_provider,
             "translation_enabled": translation_enabled,
+            "translate_sfx": payload.get("translate_sfx") is True,
             "translation_policy_source": (
                 "control_plane_snapshot"
                 if "translation_enabled" in payload else "fail_closed_default"
@@ -7337,9 +7341,19 @@ class UiBridge:
 
         try:
             import ctypes
+            from ctypes import wintypes
             import time
 
             user32 = ctypes.windll.user32
+            user32.GetForegroundWindow.restype = wintypes.HWND
+            user32.GetWindowThreadProcessId.argtypes = [wintypes.HWND, ctypes.c_void_p]
+            user32.ShowWindow.argtypes = [wintypes.HWND, ctypes.c_int]
+            user32.BringWindowToTop.argtypes = [wintypes.HWND]
+            user32.SetForegroundWindow.argtypes = [wintypes.HWND]
+            user32.SetActiveWindow.argtypes = [wintypes.HWND]
+            user32.IsWindowVisible.argtypes = [wintypes.HWND]
+            user32.GetWindowTextLengthW.argtypes = [wintypes.HWND]
+            user32.GetWindowTextW.argtypes = [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int]
             matches: list[int] = []
 
             def enum_proc(hwnd: int, _lparam: int) -> bool:
@@ -7376,6 +7390,7 @@ class UiBridge:
             # flash the taskbar icon.
             attached = bool(user32.AttachThreadInput(current_thread, foreground_thread, True))
             try:
+                user32.ShowWindow(target, 9)  # SW_RESTORE, including a minimized Explorer.
                 user32.BringWindowToTop(target)
                 user32.SetForegroundWindow(target)
                 user32.SetActiveWindow(target)
@@ -7395,7 +7410,9 @@ class UiBridge:
         if os.name == "nt":
             try:
                 if path.is_dir():
-                    subprocess.Popen(["explorer.exe", str(path)])
+                    # Invoke the registered shell folder action in the desktop
+                    # session; spawning Explorer can hand off and silently exit.
+                    os.startfile(str(path), "explore")  # type: ignore[attr-defined]
                     self._focus_explorer_window(path.name)
                 elif select and path.is_file():
                     subprocess.Popen(["explorer.exe", "/select,", str(path)])
@@ -7913,6 +7930,7 @@ class UiBridge:
             "output_format": output_format,
             "output_profile": output_profile,
             "source_lang": source_lang,
+            "translate_sfx": payload.get("translate_sfx") is True,
             "name_glossary": self._name_glossary(payload),
             # Output-plan provenance: what the user asked to produce vs what will run.
             # Present for every job (inferred for legacy payloads) so the manifest and

@@ -13,6 +13,7 @@ import json
 import subprocess
 import sys
 import threading
+from yomu.runtime.process_options import build_background_process_options
 
 _REQUEST_TIMEOUT_SECONDS = 45.0
 _RESTART_BUDGET = 1
@@ -35,10 +36,9 @@ class SubprocessOcrGateway:
         try:
             self._process = subprocess.Popen(
                 self._worker_cmd,
-                stdin=subprocess.PIPE,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.DEVNULL,
-                cwd=None,
+                **build_background_process_options(
+                    stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                    stderr=subprocess.DEVNULL),
             )
             return True
         except OSError as exc:
