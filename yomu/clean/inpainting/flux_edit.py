@@ -78,6 +78,7 @@ def flux_reference_edit(
     timeout_seconds: float = 240.0,
     purpose: str = "general",
     telemetry: dict | None = None,
+    diagnostic_path: str | Path | None = None,
 ) -> np.ndarray | None:
     """Edit an aligned reference crop; callers must authorize/composite its pixels.
 
@@ -119,7 +120,10 @@ def flux_reference_edit(
         gpu_queued = time.perf_counter()
         with DIRECTML_LOCK:
             metrics["gpu_queue_seconds"] = round(time.perf_counter()-gpu_queued, 6)
-            generated = _run_reference_edit(source, directory, prompt, steps, timeout_seconds, metrics)
+            generated = _run_reference_edit(
+                source, directory, prompt, steps, timeout_seconds, metrics,
+                diagnostic_path=diagnostic_path,
+            )
         metrics.update({"cache_hit": False, "wall_seconds": round(time.perf_counter()-started, 6)})
         if generated is not None:
             _EDIT_CACHE[key] = generated.copy()
@@ -128,7 +132,37 @@ def flux_reference_edit(
         return generated
 
 
-def _run_reference_edit(source, directory, prompt, steps, timeout_seconds, metrics):
+def _stderr_tail(path: Path, *, lines: int = 40) -> str:
+    """Read only the final stderr lines without loading an unbounded log."""
+    with path.open("rb") as stream:
+        stream.seek(0, os.SEEK_END)
+        end = stream.tell()
+        start = end
+        data = b""
+        while start > 0 and data.count(b"\n") <= lines:
+            amount = min(8192, start)
+            start -= amount
+            stream.seek(start)
+            data = stream.read(amount) + data
+    tail = data.splitlines()[-lines:]
+    return b"\n".join(tail).decode("utf8", errors="replace")
+
+
+def _persist_process_failure(stderr_path: Path, metrics: dict, diagnostic_path) -> None:
+    if diagnostic_path is None:
+        return
+    destination = Path(diagnostic_path)
+    try:
+        tail = _stderr_tail(stderr_path)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_text(tail + ("\n" if tail else ""), encoding="utf8")
+        metrics["diagnostic_log_path"] = str(destination)
+    except OSError as exc:
+        metrics["diagnostic_log_error"] = type(exc).__name__
+
+
+def _run_reference_edit(source, directory, prompt, steps, timeout_seconds, metrics,
+                        *, diagnostic_path=None):
     height, width = source.shape[:2]
     padded = cv2.copyMakeBorder(source, 0, (-height) % 32, 0, (-width) % 32, cv2.BORDER_REFLECT_101)
     if padded.shape[0]*padded.shape[1] > 1_048_576:
@@ -169,6 +203,7 @@ def _run_reference_edit(source, directory, prompt, steps, timeout_seconds, metri
                 )
         except (OSError, subprocess.TimeoutExpired):
             metrics["reason"] = "generative_process_failed_or_timed_out"
+            _persist_process_failure(tmp_path / "stderr.log", metrics, diagnostic_path)
             return None
         if result.returncode != 0 or not output_path.is_file():
             metrics["reason"] = "generative_output_missing"
@@ -182,6 +217,7 @@ def _run_reference_edit(source, directory, prompt, steps, timeout_seconds, metri
                     "device_memory" if any(word in tail for word in
                         ("out of memory", "out_of_device_memory", "failed to allocate"))
                     else "device_lost" if "device_lost" in tail else "output_or_process_failure")
+            _persist_process_failure(error_path, metrics, diagnostic_path)
             return None
         generated = cv2.imread(str(output_path))
         if generated is None:

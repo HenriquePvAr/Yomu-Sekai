@@ -1552,6 +1552,7 @@ def process_post_translation_page(state, *, diagnostic_folder=None, targeted_reg
                 local["groups"], font_path=config.FONT_PATH, debug_folder=debug_folder,
                 page_index=local["index"], image_path=local["image_path"], stage_timings=timings,
                 capture=cleaned_capture, typeset=_want_typeset,
+                flux_error_dir=str(Path(local["output_path"]).parent.parent / "errors"),
             )
             overflow_groups = [
                 group for group in local["groups"]
@@ -4013,6 +4014,7 @@ def run_benchmark(args):
                     stage_timings=render_timings,
                     capture=cleaned_capture,
                     typeset=_pipeline_flags["want_typeset"],
+                    flux_error_dir=str(Path(state["output_path"]).parent.parent / "errors"),
                 )
                 overflow_groups = [
                     group
@@ -5284,6 +5286,7 @@ def _resolve_layout_overflow_before_settlement(
                 image_path=state["image_path"],
                 stage_timings=preflight_timings,
                 capture=preflight_capture,
+                flux_error_dir=str(Path(state["output_path"]).parent.parent / "errors"),
             )
             state["_preflight_render"] = {
                 "signature": _translation_render_signature(state["groups"]),

@@ -1,4 +1,6 @@
 import difflib
+import contextvars
+import contextlib
 import json
 import hashlib
 import math
@@ -8,6 +10,7 @@ import threading
 import time
 import unicodedata
 from dataclasses import dataclass, field, replace
+from pathlib import Path
 
 import cv2
 import numpy as np
@@ -76,6 +79,24 @@ SHORT_REAL_TEXTS = {
     "HA",
     "HA!",
 }
+
+_FLUX_FAILURE_CONTEXT = contextvars.ContextVar("flux_failure_context", default=None)
+
+
+@contextlib.contextmanager
+def flux_failure_diagnostic_context(errors_dir=None, page_index=None):
+    """Attach a per-page error destination to FLUX cleanup in this render."""
+    value = None
+    if errors_dir:
+        try:
+            value = (Path(errors_dir), int(page_index or 0))
+        except (TypeError, ValueError):
+            value = None
+    token = _FLUX_FAILURE_CONTEXT.set(value)
+    try:
+        yield
+    finally:
+        _FLUX_FAILURE_CONTEXT.reset(token)
 
 SFX_WORDS = {
     "BANG",
@@ -2405,6 +2426,37 @@ def _cleanup_strategies(group):
     return strategies
 
 
+def _caption_effect_flux_edit(image, *, prompt, group):
+    from yomu.clean.inpainting import flux_edit
+
+    diagnostic_path = None
+    context = _FLUX_FAILURE_CONTEXT.get()
+    if context:
+        errors_dir, page_index = context
+        raw_region = str(getattr(group, "region_id", "") or getattr(group, "group_id", "region"))
+        safe_region = re.sub(r"[^A-Za-z0-9_.-]+", "_", raw_region).strip("._-") or "region"
+        diagnostic_path = errors_dir / f"flux_{page_index:03}_{safe_region}.log"
+
+    attempts = []
+    telemetry = {}
+    edited = flux_edit.flux_reference_edit(
+        image, prompt=prompt, purpose="caption_effect", telemetry=telemetry,
+        diagnostic_path=diagnostic_path,
+    )
+    attempts.append(dict(telemetry))
+    if (edited is None
+            and telemetry.get("process_failure_category") == "output_or_process_failure"):
+        retry_telemetry = {}
+        edited = flux_edit.flux_reference_edit(
+            image, prompt=prompt, purpose="caption_effect", telemetry=retry_telemetry,
+            diagnostic_path=diagnostic_path,
+        )
+        attempts.append(dict(retry_telemetry))
+        telemetry = retry_telemetry
+    telemetry["attempts"] = attempts
+    return edited, telemetry
+
+
 def _caption_effect_cleanup(current_bgr, original_bgr, group):
     """Reconstruct a proven chromatic caption effect through the normal gates."""
     from yomu.clean.inpainting import flux_edit
@@ -2414,9 +2466,10 @@ def _caption_effect_cleanup(current_bgr, original_bgr, group):
     refused = {"mask_valid": False, "reason": "caption_effect_not_eligible"}
     if (str(getattr(group, "classification", "")).lower() in {"sfx", "logo", "credit", "decorative"}
             or getattr(group, "preserve_as_name", False) or getattr(group, "ignored", False)
-            or getattr(group, "ocr_quality_blocked", False)
-            or not flux_edit.available(purpose="caption_effect")):
+            or getattr(group, "ocr_quality_blocked", False)):
         return current_bgr.copy(), empty, refused
+    if not flux_edit.available(purpose="caption_effect"):
+        return current_bgr.copy(), empty, {**refused, "reason": "caption_effect_model_unavailable"}
     lines = _cleanup_lines_for_group(group)
     if (not lines or max(line.box[3] for line in lines) < 36
             or min(line.confidence for line in lines) < .8
@@ -2483,13 +2536,15 @@ def _caption_effect_cleanup(current_bgr, original_bgr, group):
     prompt = (f"Remove all printed typography from the image. Erase the black text and all {glow} shaped like letters. "
               f"Fill the erased areas with the surrounding {surface} and continue the {lines_and_effects}. "
               "Preserve the camera angle, colors and objects. The result contains no text, letters, words, symbols or caption boxes.")
-    edited = flux_edit.flux_reference_edit(original_bgr[y:y+h, x:x+w], prompt=prompt,
-                                          purpose="caption_effect", telemetry=telemetry)
+    edited, telemetry = _caption_effect_flux_edit(
+        original_bgr[y:y+h, x:x+w], prompt=prompt, group=group,
+    )
     metrics = {"strategy": "caption_effect", "background_type": background,
                "inpaint_method": "flux2_klein_reference", "effect_profile": layers.profile,
                "generative_telemetry": telemetry, "glyphs_verified": total_letters}
     if edited is None:
-        return reject({**metrics, "mask_valid": False, "reason": "caption_effect_model_unavailable"})
+        return reject({**metrics, "mask_valid": False,
+                       "reason": str(telemetry.get("reason") or "generative_edit_failed")})
     generated = original_bgr.copy()
     generated[y:y+h, x:x+w] = edited
     cleaned = effects.composite_effect(original_bgr, generated, layers)
@@ -2879,8 +2934,9 @@ def render_analyzed_image(
     forensic_capture_root=None,
     capture=None,
     typeset=True,
+    flux_error_dir=None,
 ):
-    with ocr_line_provenance.page(page_index):
+    with flux_failure_diagnostic_context(flux_error_dir, page_index), ocr_line_provenance.page(page_index):
         return _render_analyzed_image(
             original_bgr,
             raw_lines,

@@ -46,6 +46,29 @@ def test_reference_edit_refuses_changed_geometry(tmp_path, monkeypatch):
     assert metrics["reason"] == "generative_output_geometry_mismatch"
 
 
+def test_process_failure_persists_final_stderr_lines_and_telemetry_path(tmp_path, monkeypatch):
+    import subprocess
+    from types import SimpleNamespace
+    from yomu.clean.inpainting import flux_edit as fe
+
+    def run(_command, **kwargs):
+        kwargs["stderr"].write("\n".join(f"diagnostic-{i}" for i in range(45)).encode())
+        return SimpleNamespace(returncode=1)
+
+    monkeypatch.setattr(fe.subprocess, "run", run)
+    image = np.full((32, 32, 3), 20, np.uint8)
+    log_path = tmp_path / "errors" / "flux_023_REGION_001.log"
+    telemetry = {}
+    assert fe._run_reference_edit(
+        image, tmp_path, "restore", 4, 30, telemetry, diagnostic_path=log_path,
+    ) is None
+    lines = log_path.read_text(encoding="utf8").splitlines()
+    assert lines == [f"diagnostic-{i}" for i in range(5, 45)]
+    assert telemetry["reason"] == "generative_output_missing"
+    assert telemetry["process_failure_category"] == "output_or_process_failure"
+    assert telemetry["diagnostic_log_path"] == str(log_path)
+
+
 def test_general_adapter_preserves_every_pixel_outside_mask(monkeypatch):
     from yomu.clean.inpainting import flux_edit as fe
     image = np.full((300, 300, 3), 28, np.uint8)
@@ -85,7 +108,7 @@ def test_native_edit_uses_shared_ocr_lama_gpu_lock_and_returns_owned_cache(tmp_p
     fe._EDIT_CACHE.clear()
     calls = []
 
-    def run(source, *args):
+    def run(source, *args, **kwargs):
         assert DIRECTML_LOCK.locked()
         assert not DIRECTML_LOCK.acquire(blocking=False)
         calls.append(1)

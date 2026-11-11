@@ -116,6 +116,152 @@ def test_sfx_never_uses_caption_glow_repair(monkeypatch):
     assert "caption_effect" not in ob._cleanup_strategies(group)
 
 
+def test_caption_flux_retries_output_failure_once_then_accepts_success(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from yomu.clean.inpainting import flux_edit as fe
+
+    for name in ("sd-cli.exe", "flux-2-klein-4b-Q4_0.gguf", "flux2-vae.safetensors", "qwen3-4b-q4_k_m.gguf"):
+        (tmp_path / name).touch()
+    monkeypatch.setattr(fe, "_model_dir", lambda: tmp_path)
+    monkeypatch.setattr(fe.settings, "GENERATIVE_CAPTION_REPAIR_ENABLED", True)
+    fe._EDIT_CACHE.clear()
+    calls = []
+
+    def run(command, **kwargs):
+        calls.append(1)
+        if len(calls) == 1:
+            kwargs["stderr"].write(b"simulated process failure\n")
+            return SimpleNamespace(returncode=1)
+        import cv2
+        source = cv2.imread(command[command.index("-r") + 1])
+        cv2.imwrite(command[command.index("-o") + 1], np.full_like(source, 90))
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(fe.subprocess, "run", run)
+    source = np.full((100, 100, 3), 20, np.uint8)
+    authorized = np.zeros((100, 100), np.uint8)
+    authorized[10:42, 10:42] = 255
+    layers = SimpleNamespace(
+        profile={"halo_hue": 145}, crop_box=(10, 10, 32, 32),
+        protected=np.zeros_like(authorized), authorized=authorized,
+    )
+    line = SimpleNamespace(text="ABCDEFGH", box=(20, 20, 32, 49), confidence=.99,
+                           metadata={"ocr_line_id": "line-1"})
+    group = SimpleNamespace(
+        region_id="REGION_001", group_id="BALAO_1", lines=[line], text="ABCDEFGH",
+        box=(20, 20, 32, 49), classification="narration", background_metrics={},
+    )
+    monkeypatch.setattr(ob, "_cleanup_lines_for_group", lambda _group: [line])
+    monkeypatch.setattr(ob.source_completeness, "check_live_group", lambda *a, **k: {"status": "pass"})
+    monkeypatch.setattr(ob, "_classify_background_region", lambda *a: ("speed_lines", {}))
+    monkeypatch.setattr(ob, "extract_glyph_style_profile", lambda *a: {"confidence": .95, "family_class": "sans"})
+    def glyph_mask(_image, _box, *, padding, dark_core):
+        mask = np.zeros((49 + padding * 2, 32 + padding * 2), np.uint8)
+        for i in range(8):
+            mask[padding:padding + 26, padding + 1 + i * 6:padding + 3 + i * 6] = 255
+        return mask, {}
+    monkeypatch.setattr(ob, "_glyph_ink_mask", glyph_mask)
+    monkeypatch.setattr(ob, "_expanded_box", lambda _box, _shape, padding: (10, 10, 32 + 2*padding, 49 + 2*padding))
+    monkeypatch.setattr(le, "build_effect_layers", lambda *a, **k: layers)
+    def composite(_original, generated, _layers):
+        result = source.copy()
+        result[authorized > 0] = generated[10:42, 10:42][authorized[10:42, 10:42] > 0]
+        return result
+    monkeypatch.setattr(le, "composite_effect", composite)
+    monkeypatch.setattr(ob, "_reconstruction_gate_failure", lambda *a, **k: None)
+    monkeypatch.setattr(ob, "_inpaint_change_metrics", lambda *a, **k: {
+        "changed_pixels_outside_mask": 0, "changed_pixels_in_mask": int(authorized.sum()),
+    })
+    monkeypatch.setattr(ob, "_legible_source_residual", lambda *a, **k: {"status": "not_legible"})
+    with ob.flux_failure_diagnostic_context(tmp_path / "errors", 23):
+        cleaned, mask, metrics = ob._caption_effect_cleanup(source.copy(), source, group)
+    assert metrics["mask_valid"] and metrics["reason"] == "ok", metrics
+    assert mask.any() and np.any(cleaned != source)
+    assert len(calls) == 2
+    assert [item.get("reason") for item in metrics["generative_telemetry"]["attempts"]] == [
+        "generative_output_missing", "ok",
+    ]
+    assert metrics["generative_telemetry"]["attempts"][0]["diagnostic_log_path"].endswith(
+        "errors\\flux_023_REGION_001.log")
+    fe._EDIT_CACHE.clear()
+
+
+def test_caption_flux_does_not_retry_device_memory_and_two_process_failures_are_reported(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from yomu.clean.inpainting import flux_edit as fe
+
+    for name in ("sd-cli.exe", "flux-2-klein-4b-Q4_0.gguf", "flux2-vae.safetensors", "qwen3-4b-q4_k_m.gguf"):
+        (tmp_path / name).touch()
+    monkeypatch.setattr(fe, "_model_dir", lambda: tmp_path)
+    monkeypatch.setattr(fe.settings, "GENERATIVE_CAPTION_REPAIR_ENABLED", True)
+    fe._EDIT_CACHE.clear()
+    calls = []
+
+    def run(_command, **kwargs):
+        calls.append(1)
+        kwargs["stderr"].write(b"out of memory\n")
+        return SimpleNamespace(returncode=1)
+
+    monkeypatch.setattr(fe.subprocess, "run", run)
+    group = SimpleNamespace(region_id="REGION_002", group_id="BALAO_2")
+    with ob.flux_failure_diagnostic_context(tmp_path / "errors", 23):
+        result, memory_telemetry = ob._caption_effect_flux_edit(
+            np.full((32, 32, 3), 20, np.uint8), prompt="restore", group=group,
+        )
+    assert result is None and len(calls) == 1
+    assert memory_telemetry["process_failure_category"] == "device_memory"
+
+    calls.clear()
+    def process_failure(_command, **kwargs):
+        calls.append(1)
+        kwargs["stderr"].write(b"generic renderer failure\n")
+        return SimpleNamespace(returncode=1)
+    monkeypatch.setattr(fe.subprocess, "run", process_failure)
+    with ob.flux_failure_diagnostic_context(tmp_path / "errors", 23):
+        result, failure_telemetry = ob._caption_effect_flux_edit(
+            np.full((32, 32, 3), 20, np.uint8), prompt="restore", group=group,
+        )
+    assert result is None and len(calls) == 2
+    assert [item.get("reason") for item in failure_telemetry["attempts"]] == [
+        "generative_output_missing", "generative_output_missing",
+    ]
+    assert failure_telemetry["reason"] == "generative_output_missing"
+    fe._EDIT_CACHE.clear()
+
+
+def test_caption_process_failure_keeps_existing_learned_fallback(monkeypatch):
+    from types import SimpleNamespace
+
+    source = np.full((24, 24, 3), 10, np.uint8)
+    mask = np.zeros((24, 24), np.uint8)
+    mask[8:16, 8:16] = 255
+    group = SimpleNamespace(text="A STORY", classification="narration", background_type="speed_lines",
+                            visual_attempts=[])
+    learned_calls = []
+    monkeypatch.setattr(ob, "_cleanup_strategies", lambda _group: ("caption_effect", "source_scoped"))
+    def remove(_current, _original, _group, *, strategy):
+        if strategy == "caption_effect":
+            return source.copy(), None, {"mask_valid": False, "reason": "generative_output_missing"}
+        return source.copy(), mask.copy(), {
+            "mask_valid": False, "reason": "GLYPH_ART_BOUNDARY_UNCERTAIN",
+        }
+    monkeypatch.setattr(ob, "_remove_text_for_group", remove)
+    monkeypatch.setattr(ob, "_uncovered_source_text_evidence", lambda *a: {"status": "verified"})
+    monkeypatch.setattr(ob, "_source_removal_incomplete", lambda *a: False)
+    monkeypatch.setattr(ob, "_legible_source_residual", lambda *a: {"status": "not_legible"})
+    monkeypatch.setattr(ob, "_last_resort_allowed", lambda _group: True)
+    def learned(_current, _original, _group, _mask):
+        learned_calls.append(1)
+        return {"cleaned": np.full_like(source, 30), "attempt": {"art_fidelity_uncertain": True}}
+    monkeypatch.setattr(ob, "_learned_last_resort_clean", learned)
+
+    cleaned, used_mask, strategy, accepted = ob._clean_source_for_clean_artifact(
+        source.copy(), source, group,
+    )
+    assert accepted and strategy == "learned_last_resort"
+    assert len(learned_calls) == 1 and np.all(cleaned == 30) and used_mask.any()
+
+
 def test_cached_pixels_cannot_bypass_current_source_completeness(monkeypatch):
     from yomu.clean.inpainting import flux_edit
     from yomu.ocr.ocr_engine import OCRLine
