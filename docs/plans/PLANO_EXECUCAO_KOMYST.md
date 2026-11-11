@@ -289,11 +289,11 @@ Objetivo: nenhum job morre por causa de disco, de uma regra de SFX ou de um subp
 1. Mude o padrão para `True`.
 2. Confirme que `psutil` está em `requirements/*.txt`; se não estiver, acrescente.
 3. Garanta que o resumo (pico de RSS do processo e filhos, pico de RAM do sistema, pico de swap) vai para `timing_report.json` em `resource_monitoring`. Não gere o relatório HTML por padrão (só JSON e CSV); HTML fica opt-in.
-4. Meça o custo: o job não pode ficar mais de 2% mais lento. O intervalo inicial é 5 segundos; se o custo exceder 2%, aumente o intervalo e repita a comparação.
+4. Meça o custo diretamente como `resource_monitor_sampling_seconds / total_seconds`. O intervalo inicial foi 5 segundos; se o custo exceder 2%, aumente o intervalo e repita o Apenas Clean. Foi medido 2,13% a 5 s e 1,07% a 10 s em REF-A; 10 s passa a ser o padrão versionado. A instalação local ainda declara 5 s em `.env`; ela não foi alterada.
 
 **Teste.** Ajuste os testes que assumem o padrão desligado.
 
-**Aceite.** `tools/audit/job_metrics.py` mostra pico de RAM em REF-A e REF-B; custo de tempo medido nos dois jobs físicos da PAUSA 0 e mantido em até 2% (ajustar o intervalo se exceder).
+**Aceite.** `tools/audit/job_metrics.py` mostra pico de RAM em REF-A e REF-B; medição direta em REF-A manteve o custo de amostragem em 1,07% a cada 10 s. Confirmar no job de interface qual intervalo foi efetivado pela configuração local.
 
 ### F0.7 Dispositivo de inferência observável e alerta de perda da GPU
 
@@ -324,6 +324,8 @@ Objetivo: nenhum job morre por causa de disco, de uma regra de SFX ou de um subp
 **Teste.** Simular o subprocesso: falha grava o arquivo e a telemetria mantém o motivo; falha seguida de sucesso retorna a imagem para os validadores normais; duas falhas param após a segunda tentativa e deixam o fluxo de reconstrução LaMa prosseguir.
 
 **Aceite físico.** Fazer REF-A `Apenas Clean` por linha de comando, conferir 65 imagens e calcular segundos de amostragem / tempo total; após o dono iniciar REF-A `Tradução pronta`, verificar a página 23. Se o FLUX falhar, o artefato em `errors/` deve conter o stderr diagnóstico. Rodar a suíte completa e parar na PAUSA 0 sem push.
+
+**Resultado parcial (2026-11-11).** REF-A Apenas Clean CLI em DirectML produziu 65 PNGs em 384,82 s; 64 certificados passaram e a página 10 ficou `REVIEW_REQUIRED` por `unresolved_clean_regions`. As imagens finais foram pixel a pixel idênticas às da rodada anterior a 5 s, que teve a mesma distribuição de certificados. Custo de amostragem a 10 s: 4,12 s (1,07%). A verificação pela interface e a rodada paga Tradução pronta ainda dependem de validação específica; consulte `reports/fase_0_f09_validacao_20261111.md`.
 
 ### ⏸ PAUSA 0
 

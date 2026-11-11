@@ -34,14 +34,14 @@ window.BOARD = {
       "column": "blocked",
       "env": "local",
       "updated": "2026-11-11",
-      "summary": "F0.1–F0.8 implementadas localmente; F0.9 instrumenta falhas do FLUX e tenta novamente uma vez apenas em output_or_process_failure. REF-A c034a1cf e REF-B 432b35af mantêm os resultados físicos já medidos; REF-A p023 falhou no sd-cli com código 1 em 7,2 s, enquanto a base terminou FLUX em 21 s/ok. A rodada nova e a suíte completa seguem pendentes.",
-      "risk": "45 testes focados passaram. F0.8 aceita página uniforme somente com certificado e identidade de pixels; estado terminal do log acompanha relatório. F0.9 salva stderr (40 linhas finais) por página/região, preserva o motivo real, não repete device_memory e deixa o fallback LaMa ativo após falha. A validação de produção ainda depende dos jobs autorizados.",
-      "blockedBy": "Rodar REF-A Apenas Clean por CLI, verificar 65 imagens/certificados e calcular resource_monitor_sampling_seconds / tempo total. Aguardar o dono iniciar REF-A pago em Tradução pronta e revisar p023/log. Rodar suíte completa; quatro falhas preexistentes de máscara/reconstrução permanecem conhecidas.",
+      "summary": "F0.1–F0.9 implementadas localmente. REF-A Apenas Clean CLI em DirectML produziu 65 imagens em 384,82 s; 64 certificadas, p010 em REVIEW_REQUIRED. Monitor: 1,07% a 10 s. Suíte completa: 6497 passaram; somente as 4 falhas antigas de máscara/reconstrução.",
+      "risk": "Imagens Clean da rodada 10 s são pixel a pixel idênticas à rodada anterior de 5 s, com os mesmos 64 PASS e p010 em revisão. O padrão versionado agora é 10 s, mas o .env local ainda fixa 5 s e não foi alterado. REF-A pago Tradução pronta e verificação de p023 ainda dependem do dono iniciar o job; interface Clean não foi fisicamente revalidada nesta rodada.",
+      "blockedBy": "Aguardar o dono atualizar o .env local para RESOURCE_MONITOR_INTERVAL_SECONDS=10 e iniciar REF-A pago em Tradução pronta pela interface. Depois conferir (GPU DirectML), página 23 e eventual errors/flux_*.log. F0.8 pela interface permanece pendente.",
       "delivered": [
         "Portão SFX só reprova itens que foram enviados ao provedor, coberto por testes offline; falhar rápido por disco; retenção protege histórico e publicações",
         "Timeout real do subprocesso Paddle com reinício dentro do limite existente",
         "Diagnóstico F0.4 documenta que psd/ e result_path têm conteúdo próprio e ambos são preservados",
-        "Monitor psutil ligado por padrão com amostragem a cada 5 s; timing_report registra pico de árvore RSS, RAM do sistema, swap e intervalo; JSON/CSV padrão, HTML opt-in",
+        "Monitor psutil ligado por padrão com amostragem a cada 10 s; timing_report registra pico de árvore RSS, RAM do sistema, swap e intervalo; JSON/CSV padrão, HTML opt-in",
         "Alerta em GPU_INFERENCE=auto sem DirectML; timing_report e job_metrics exibem dispositivos efetivos de OCR e LaMa",
         "F0.8: exceção certificada para página uniforme no modo sem typeset; log terminal coerente com status do relatório; monitor grava segundos e contagem de amostragem no timing_report; 24 testes focados passaram",
           "F0.9: stderr final preservado em errors/flux_<página>_<região>.log; motivo da falha real na telemetria; retry único para output_or_process_failure e nenhum retry para device_memory; testes de subprocesso simulados",
@@ -51,10 +51,13 @@ window.BOARD = {
         "Job REF-A encerrou review_required/REVIEW: itens de revisão manual/qualidade e um item de revisão semântica; outputs e PDF produzidos",
         "REF-B 432b35af em Completo/SFX off/DirectML: 169/177 traduzidas, 69/85 certificados, 7 resíduos; review_required, contra failed na base",
         "Diagnóstico F0.8: p034 contém dois textos sobre fundo preto e a limpeza correta deixa pixels uniformes; a regra genérica de variância reprovava a saída sem conferir o certificado",
-          "A automação não será usada para iniciar tradução paga; Apenas Clean por CLI autorizado ainda precisa rodar. A revisão física de p023 depende do dono iniciar REF-A Tradução pronta"
+        "REF-A Apenas Clean CLI: DirectML confirmado; 65 PNGs; 64 certificados PASS, p010 REVIEW_REQUIRED; 384.82 s total; amostragem 4.116566 s/38 amostras = 1.07%; pico árvore RSS 8447.20 MB",
+        "Suíte completa após o padrão de 10 s: 6497 passed, 4 falhas antigas, 141 skipped, 1 xfailed, 8 warnings e 787 subtests; 1015.71 s",
+        "As 65 imagens finais da rodada a 10 s são pixel a pixel idênticas às da execução a 5 s; ambas têm 64 certificados PASS e p010 REVIEW_REQUIRED",
+        "A instalação .env local ainda define intervalo 5 s; não foi modificada. REF-A pago Tradução pronta e F0.8 pela interface ainda precisam de evidência física"
       ],
       "pending": [
-          "Executar REF-A Apenas Clean por CLI, aferir custo do monitor e conferir 65 imagens/certificados",
+          "Atualizar .env local para RESOURCE_MONITOR_INTERVAL_SECONDS=10 e reiniciar o app/worker, se o dono quiser aplicar o padrão medido",
           "Aguardar REF-A Tradução pronta iniciado pelo dono; revisar página 23 e log FLUX, se houver nova falha",
           "Rodar suíte completa e tratar as quatro falhas preexistentes sem misturá-las aos commits F0.8/F0.9"
       ],
