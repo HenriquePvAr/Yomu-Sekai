@@ -38,7 +38,7 @@ window.BOARD = {
       "risk": "TESTED_OFFLINE. Monitor ligado no .env local e em settings; pico físico, comparação do custo ≤2%, jobs REF-A/REF-B e qualidade ainda não verificados nesta branch.",
       "blockedBy": "Precisa de: HenriquePvAr entrar no painel local (sem compartilhar senha) para iniciar e acompanhar REF-A/REF-B até a PAUSA 0; medir custo do monitor e conferir métricas/qualidade.",
       "delivered": [
-        "Portão SFX validado por envio real ao provedor; falhar rápido por disco; retenção protege histórico e publicações",
+        "Portão SFX só reprova itens que foram enviados ao provedor, coberto por testes offline; falhar rápido por disco; retenção protege histórico e publicações",
         "Timeout real do subprocesso Paddle com reinício dentro do limite existente",
         "Diagnóstico F0.4 documenta que psd/ e result_path têm conteúdo próprio e ambos são preservados",
         "Monitor psutil ligado por padrão; timing_report recebe pico de árvore RSS, RAM do sistema e swap; JSON/CSV padrão, HTML opt-in",
