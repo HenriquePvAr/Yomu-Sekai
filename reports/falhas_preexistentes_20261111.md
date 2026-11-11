@@ -17,3 +17,14 @@ Estas sete falhas já ocorriam no ponto de backup `cda3f90` e, portanto, não fo
 Os três casos de `download_gate` constroem caminhos sintéticos com pai `C:\tmp`. O teste usa `canonical_local_path` e `path`, habilitando a inspeção do diretório real; `_build_download_gate` lista todos os `*.png` nesse pai e compara com os caminhos canônicos do relatório. Na máquina havia um arquivo não referenciado, `C:\tmp\selo-raw.png` (40.590 bytes, modificado em 2026-11-06), confirmando que essas três falhas são contaminação do ambiente de teste, não uma regressão do gate.
 
 Nenhum desses sete casos foi corrigido nesta etapa.
+
+## Falhas ambientais adicionais encontradas na suíte completa
+
+Além das sete falhas do baseline isolado, a suíte completa encontrou dois testes de ordenação com a mesma causa ambiental (`unreferenced_png_included`). Eles também usam caminhos sintéticos sem caminho local; o gate resolve o diretório como a raiz do repositório e encontra PNGs sem relação com o fixture.
+
+| Teste | Mensagem observada | Arquivo externo encontrado |
+|---|---|---|
+| `tests/test_download_gate_ordering.py::DownloadGateOrderingTest::test_complete_in_order_passes` | `AssertionError: False is not true : ['unreferenced_png_included']` | `C:\Projetos\Yomu-Sekai\dbg_hur_2x.png` e `C:\Projetos\Yomu-Sekai\flux_p9_test.png` |
+| `tests/test_download_gate_ordering.py::DownloadGateOrderingTest::test_sorting_by_order_makes_complete_download_pass` | `AssertionError: False is not true : ['unreferenced_png_included']` | Os mesmos dois PNGs na raiz do repositório. |
+
+Os três testes de seleção parcial listados acima usam `C:\tmp` e são contaminados por `C:\tmp\selo-raw.png`; estes dois testes de ordenação usam o diretório corrente e são contaminados pelos PNGs locais listados nesta tabela. Nenhum dos cinco falha por páginas ausentes ou por ordenação incorreta.
