@@ -43,3 +43,28 @@ A suíte completa nesta checkout em Python 3.11/OpenCV 4.10.0/NumPy 2.3.5 deu 6.
 - O dono confirma que três falhas antigas passam com OpenCV 5.0.0 e uma falha real continua para F3.0. A sessão não instalou/removeu pacotes; a decisão de corrigir o ambiente global continua do dono.
 - As medições de limpeza por CLI desta sessão rodaram pelo Python311/OpenCV 4.10.0 e devem ser tratadas como feitas no runtime divergente.
 - Não há dúvida técnica pendente para concluir a Fase 0: o único passo externo é aguardar aprovação explícita antes de qualquer merge em `dev`. Não houve merge ou push.
+
+## Ambiente OpenCV corrigido e revalidação (2026-11-11, noite)
+
+Causa: a pasta global do Python tinha `opencv-contrib-python` 4.10.0 por cima do `opencv-python` 5.0.0, e a pasta do usuário tinha `opencv-python-headless` 5.0.0. Sessões com a pasta do usuário carregavam 5.0.0; sessões sem ela (Codex, e o app iniciado a partir dela) carregavam 4.10.0. É o caso `OPENCV-VARIANT-SHADOWING-001`.
+
+Correção aplicada com autorização do dono, no Python global:
+
+1. `pip uninstall -y opencv-contrib-python opencv-python-headless`
+2. `pip install --no-deps opencv-contrib-python==4.10.0.84` (o Paddle recusa iniciar sem esse pacote registrado)
+3. `pip install --force-reinstall --no-deps opencv-python==5.0.0.93` (por último, para o `cv2` efetivo ser 5.0.0)
+
+Conferido: `cv2` 5.0.0 com e sem a pasta do usuário; `DmlExecutionProvider` disponível; `easyocr` reclama a falta do headless no `pip check` (não é usado no perfil atual). A ordem dos passos 2 e 3 importa: qualquer reinstalação do contrib volta o `cv2` para 4.10.0. Lista de pacotes anterior salva fora do repositório.
+
+Revalidação do REF-A pelo painel, commit `286d588`, OpenCV 5.0.0 gravado no `timing_report.json`, DirectML:
+
+| Job | Modo | Tempo | Resultado |
+|---|---|---:|---|
+| `c3c75411b8c24333b442c6fbff74cca3` | Apenas Clean | 288,69 s (suíte rodando em paralelo) | `review_required`, 65/65 imagens limpas, 63 certificados `verified`, monitor 0,98% |
+| `72e75ab5c514472bb11d78618066a0d2` | Tradução pronta | 278,16 s (máquina livre) | `review_required`, 57/58 traduzidos, gate físico aprovado com 0 resíduos, 61 certificados `verified`, monitor 0,75% |
+
+Abertos para a Fase 3:
+
+- Tradução pronta ficou com 61 certificados contra 62 da base: uma página saiu com `source_completeness_unproven`. Não investigado.
+- Suíte completa com OpenCV 5.0.0: 6.501 passaram, 2 falharam. Uma era o Paddle sem o contrib (corrigida no passo 2, teste passa); resta `test_text_touching_a_balloon_border_is_cleaned_without_erasing_the_border`. A suíte completa não foi repetida depois do passo 2.
+- Todas as medições feitas hoje com OpenCV 4.10.0 (jobs `5731a21a`, `abee1571`, `5dae49f7` e as execuções por linha de comando) não servem de comparação com as desta seção.
