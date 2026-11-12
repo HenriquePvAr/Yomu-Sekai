@@ -8,6 +8,7 @@ import random
 import re
 import shutil
 import subprocess
+import sys
 import time
 import traceback
 import contextlib
@@ -4812,6 +4813,13 @@ def run_benchmark(args):
         "structural_fingerprint": structural_fingerprint,
         "gpu_diagnostics": gpu_diagnostics,
         "inference_devices": inference_devices,
+        "runtime_environment": {
+            "python_executable": sys.executable,
+            "opencv": {
+                "version": str(getattr(cv2, "__version__", "")),
+                "module_path": str(getattr(cv2, "__file__", "") or ""),
+            },
+        },
         "session_context": {
             "enabled": bool(session_context is not None),
             **(session_context.summary() if session_context is not None else {}),

@@ -152,6 +152,7 @@ def collect_metrics(run_dir: str | Path) -> dict[str, Any]:
         "megabytes_per_page": round(total_bytes / (1024 * 1024) / pages, 4) if pages else None,
         "resource_monitoring": _resource_monitoring(root, [timing, manifest, quality_report]),
         "inference_devices": timing.get("inference_devices"),
+        "runtime_environment": timing.get("runtime_environment"),
     }
 
 
@@ -171,6 +172,7 @@ def render_table(metrics: dict[str, Any]) -> str:
         ("Pastas (bytes)", json.dumps(metrics["bytes_by_subfolder"], ensure_ascii=False)),
         ("Monitor de recursos", json.dumps(metrics["resource_monitoring"], ensure_ascii=False)),
         ("Dispositivos de inferência", json.dumps(metrics["inference_devices"], ensure_ascii=False)),
+        ("Ambiente de execução", json.dumps(metrics["runtime_environment"], ensure_ascii=False)),
     ]
     width = max(len(label) for label, _ in rows)
     return "\n".join(f"{label:<{width}} | {value}" for label, value in rows)

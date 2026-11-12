@@ -18,6 +18,10 @@ def test_collect_metrics_reads_minimal_run_and_excludes_cleaned_pages(tmp_path):
             "ocr_effective_device": "directml",
             "lama_effective_device": "cpu",
         },
+        "runtime_environment": {
+            "python_executable": "python.exe",
+            "opencv": {"version": "5.0.0", "module_path": "site-packages/cv2/__init__.py"},
+        },
     }), encoding="utf-8")
     (tmp_path / "artifact_manifest.json").write_text(json.dumps({
         "provenance": {
@@ -50,6 +54,8 @@ def test_collect_metrics_reads_minimal_run_and_excludes_cleaned_pages(tmp_path):
     assert result["stage_seconds"] == {"ocr": 2.0, "render": 3.5}
     assert result["inference_devices"]["ocr_effective_device"] == "directml"
     assert result["inference_devices"]["lama_effective_device"] == "cpu"
+    assert result["runtime_environment"]["opencv"]["version"] == "5.0.0"
+    assert result["runtime_environment"]["opencv"]["module_path"].endswith("cv2/__init__.py")
     assert result["clean_certificate_reason_counts_by_page"] == {"no_text": 1, "verified": 1}
     assert result["translation_accounting"] == {"translated": 3}
     assert result["severity"] == "PASS"
@@ -64,6 +70,7 @@ def test_collect_metrics_reads_minimal_run_and_excludes_cleaned_pages(tmp_path):
     assert result["total_bytes"] >= 10
     assert result["resource_monitoring"] is None
     assert "Dispositivos de inferência" in job_metrics.render_table(result)
+    assert "Ambiente de execução" in job_metrics.render_table(result)
 
 
 def test_compare_reports_difference():
