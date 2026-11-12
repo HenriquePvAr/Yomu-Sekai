@@ -67,20 +67,29 @@ Os testes simulados de F0.9 confirmam a gravação das últimas 40 linhas do std
 |---|---:|---:|---:|---:|---|---|
 | REF-A base `f181a17e` (valores históricos da seção 2; diretório de saída não está mais presente) | 535,00 s | 57 / 58 | 62 / 65 | não medido por job | passou / 0 | `review_required` |
 | REF-A Fase 0, job `abee1571` (medidor lido agora) | 377,904 s | 57 / 58 | 62 / 65 | 8.901,411 MB | passou / 0 | `review_required` |
+| REF-A Apenas Clean, job final `5dae49f7` (`8791609`) | 477,645 s | não se aplica | 64 / 65 | 8.461,906 MB | não se aplica | `review_required`, 65/65 PNGs |
 | REF-B base `278c2486` (medidor) | 641,260 s | 169 / 177 | 70 / 85 | não medido | reprovou / 7 | `failed` (`translation_policy_violation`) |
 | REF-B Fase 0, job `432b35af` (medidor) | 599,511 s | 169 / 177 | 70 / 85 | 3.230,395 MB | reprovou / 7 | `review_required` |
+
+No job Clean `5dae49f7`, `timing_report.json` registra 46 amostras, intervalo de 10,0 s e 23,600 s dentro do monitor (4,94% do tempo total). O pico de RSS da árvore foi 8.461,906 MB. Essa medição observada fica acima da comparação anterior de 1,07%; preservo ambos os resultados conforme cada execução, sem atribuir a diferença a uma mudança de código.
 
 O REF-A manteve cobertura, certificados e gate físico e reduziu o tempo reportado de 535 s para 377,90 s. O artefato de saída da base `f181a17e` não existe mais no caminho registrado pelo banco; para o “antes”, os números de qualidade/tempo são os da linha de base previamente documentada, não uma nova comparação direta do medidor. O REF-B preservou as contagens reais: `job_metrics.py --compare` mediu 70/85 certificados nos dois artefatos e os mesmos 7 resíduos; a gravidade melhorou de `ERROR` para `REVIEW`, e o tempo caiu 41,75 s. Relatos anteriores neste repositório de 69 certificados no REF-B estavam incorretos; prevalece a contagem auditada no `timing_report.json`/`artifact_manifest.json` e pelo medidor.
 
 ### F0.8 — resultado pelo painel e proveniência do código
 
-O job `5731a21a89184e07b319041f1ee46aa2` (`run_id=65c904fa-250b-4bb8-830f-f033c2ea7c19`) entregou 65/65 imagens limpas, `review_required`, cartão “concluído — revisão recomendada”, DirectML e 4,35 s de amostragem em 404,26 s (1,08%). Porém, o banco de jobs e o `run_manifest.json` identificam esse job com o commit **`bc02f38`**, anterior à correção `6c4734b`. Portanto ele comprova o resultado desse run, mas não é validação física da correção unificada final. A exceção F0.8 passa a ser usada por todos os sete pontos via `_page_output_is_valid`; os testes focados adicionados cobrem a ordem do worker e a centralização. Falta um Apenas Clean físico no painel cuja proveniência seja `6c4734b` ou descendente para fechar esse aceite estritamente no snapshot final.
+O job anterior `5731a21a…` (`bc02f38`) não provava o snapshot final. Essa lacuna foi fechada pelo job `5dae49f7326b4c56b0c0e0731ec6b253`, executado no painel com commit `8791609`: `review_required`, 65/65 imagens limpas entregues, DirectML. O worker registrado foi PID `36048`, executável `C:\Users\henri\AppData\Local\Programs\Python\Python311\pythonw.exe`. O `timing_report.json` histórico não continha ainda o campo `runtime_environment`; a versão importada nessa execução é atribuída ao mesmo interpretador Python 3.11, cuja resolução atual foi conferida como OpenCV 4.10.0 no caminho global abaixo. A telemetria adicionada agora passa a registrar versão e caminho em novos relatórios. Isto fecha a prova física da F0.8 no código final.
 
 O job pago REF-A `abee15719bd346bc86197faaf9307d43` tem proveniência `6c4734b`, terminou `review_required` em 377,904 s, com 57/58 traduzidas, 62/65 certificados e gate físico aprovado, zero resíduos. Página 23: FLUX `ok` em 20,45 s, uma tentativa, sem log de falha. Ele valida o caminho Tradução pronta; não exercita a exceção de Apenas Clean.
 
 ### Fase 0 — suíte e falhas antigas
 
-A suíte completa recém-executada nesta checkout importou `yomu` de `C:\Projetos\Yomu-Sekai\yomu` usando Python 3.11, OpenCV 4.10.0 e NumPy 2.3.5: **6.499 passed, 4 failed, 141 skipped, 1 xfailed, 8 warnings e 787 subtests passed**, em 917,27 s. Os quatro testes listados em `reports/falhas_preexistentes_20261111.md` falharam também ao rodar individualmente. Eles usam fixtures sintéticos e não leem PNGs soltos; a execução isolada exclui ordem da suíte. Os arquivos de máscara/testes são idênticos em `bc02f38` e no HEAD. Assim, não confirmamos o resumo externo (6.502/1) nem a afirmação de que três passam em `bc02f38`; diferença de ambiente/importação é hipótese, não causa demonstrada. A F3.0 continua necessária.
+A suíte completa local anterior importou `yomu` deste repositório em Python 3.11/OpenCV 4.10.0/NumPy 2.3.5 e deu 6.499 passed, 4 failed, 141 skipped, 1 xfailed, 8 warnings e 787 subtests. O dono confirmou que, com OpenCV 5.0.0 do ambiente de referência, três falhas de máscara passam e resta uma falha real. Portanto as medições locais de suíte e os testes individuais que usaram OpenCV 4.10.0 devem ser lidos como resultados do ambiente divergente, não como quatro falhas de código. A lista e a classificação atualizadas estão em `reports/falhas_preexistentes_20261111.md`; a F3.0 mantém uma falha real para bisectar/corrigir.
+
+### Versão do OpenCV no runtime
+
+Os comandos `python -c "import cv2;print(cv2.__version__, cv2.__file__)"` e `python -s -c ...` retornaram ambos `4.10.0 C:\Users\henri\AppData\Local\Programs\Python\Python311\Lib\site-packages\cv2\__init__.py`. O worker do job `5dae49f7` era `pythonw.exe` do mesmo diretório Python311 (PID 36048), então sua resolução de pacotes corresponde a esse ambiente; o artefato antigo não gravou `cv2` diretamente, logo essa identificação é inferida pelo executável e pela instalação atual, não lida do log do job. Para fechar essa lacuna futura, o timing report agora registra executável Python, versão e caminho de `cv2`, e `job_metrics.py` exibe os dados. Não foi instalado nem removido pacote.
+
+As rodadas por CLI deste relatório — REF-A Fase 0 (`384,824 s`), controle `dev` (`341,192 s`) e medições de inpainting/certificados/pixels associadas — foram executadas pelo Python 3.11 global e usaram OpenCV 4.10.0. Estão marcadas como runtime divergente; não usar esses números para comparar velocidade ou atribuir qualidade entre branches até reexecutar sob OpenCV 5.0.0. Os artefatos físicos de painel não são medições CLI e permanecem evidência própria; o job `5dae49f7` tem OpenCV inferido pelo executável do worker, sem registro direto no timing report antigo.
 
 ### Estado dos critérios da pausa
 
@@ -89,14 +98,14 @@ A suíte completa recém-executada nesta checkout importou `yomu` de `C:\Projeto
 | REF-B não termina `failed` | `review_required`; mesmos 169/177, 70/85, 7 resíduos | Atendido |
 | Pico de RAM registrado nos dois capítulos | Medidor contém recursos nos jobs de referência Fase 0 | Atendido |
 | Qualidade igual ou melhor | REF-A igual; REF-B mesmas contagens auditadas, sem mudança nos resíduos | Atendido, observada a discrepância histórica de contagem 69/70 resolvida pelo artefato |
-| F0.8 físico no código final | Job Clean bem sucedido, mas manifestado em `bc02f38`, não `6c4734b` | Não comprovado no snapshot final |
-| Suíte completa verde | 4 falhas reproduzidas nesta execução | Não atendido |
+| F0.8 físico no código final | Job `5dae49f7`, commit `8791609`, painel, 65/65 imagens, DirectML | Atendido |
+| Suíte completa no runtime OpenCV de referência | Dono confirma três testes passam com OpenCV 5.0.0; uma falha real permanece para F3.0 | Fase 0 pronta; suíte completa verde segue como aceite da Fase 3 |
 
-A PAUSA 0 está documentada, mas não considero os gates de merge atendidos: a suíte está vermelha nesta checkout e o job Clean do painel não traz a correção `6c4734b`. Não fiz merge nem push. Após a decisão do dono, a F3.0 continua sendo o próximo trabalho de código previsto; não iniciar antes da aprovação do merge.
+A PAUSA 0 está documentada e a Fase 0 está pronta para revisão/merge em `dev`, conforme a decisão do dono. Uma falha real preexistente de máscara segue para F3.0; os três resultados extras locais são dependentes do OpenCV 4.10.0 divergente. Nenhum merge ou push foi feito; aguardo aprovação explícita.
 
 ## DOCUMENTATION IMPACT
 
 - Atualizados plano de execução, relatório da Fase 0, registro das falhas antigas, quadro e notas Obsidian de Status/Qualidade.
-- O relatório diferencia `PHYSICALLY_VERIFIED` no job REF-A Tradução pronta de `TESTED_OFFLINE` para a exceção F0.8; o job Clean disponível é anterior ao commit `6c4734b`.
+- F0.8 é `PHYSICALLY_VERIFIED` no job REF-A Apenas Clean `5dae49f7` em `8791609`; REF-A Tradução pronta também é `PHYSICALLY_VERIFIED` no job `abee1571`.
 - Base `f181a17e` não está no disco no caminho registrado; comparação REF-A antes usa a linha de base documentada. REF-B foi reextraído diretamente dos dois artefatos com `job_metrics.py`.
-- Fase 3/F3.0 e aceite físico Clean no hash final permanecem abertos. Nenhum merge, push, mudança em `.env` ou alteração de comportamento adicional foi realizado.
+- F3.0 permanece aberta para a única falha real. Nenhum merge, push, mudança em `.env` ou instalação/remoção de pacote foi realizado.

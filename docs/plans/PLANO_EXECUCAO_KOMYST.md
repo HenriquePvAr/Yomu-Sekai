@@ -325,11 +325,11 @@ Objetivo: nenhum job morre por causa de disco, de uma regra de SFX ou de um subp
 
 **Aceite físico.** Fazer REF-A `Apenas Clean` por linha de comando, conferir 65 imagens e calcular segundos de amostragem / tempo total; após o dono iniciar REF-A `Tradução pronta`, verificar a página 23. Se o FLUX falhar, o artefato em `errors/` deve conter o stderr diagnóstico. Rodar a suíte completa e parar na PAUSA 0 sem push.
 
-**Resultado físico consolidado (2026-11-11).** REF-A Apenas Clean CLI em DirectML produziu 65 PNGs em 384,82 s; 64 certificados passaram e a página 10 ficou `REVIEW_REQUIRED` por `unresolved_clean_regions`. A base `dev` `7879bad`, com as mesmas opções, também reprovou p010 pelo mesmo motivo e pixels idênticos: preexistente, para Fase 3. A interface registrou Clean `5731a21a…` com 65/65 imagens e `review_required`, monitor 4,35/404,26 s (1,08%), mas o banco e o manifesto identificam o código como `bc02f38`, anterior a `6c4734b`; não fecha a validação física do fix F0.8 no snapshot final. REF-A Tradução pronta `abee1571…`, em `6c4734b`, teve 57/58 traduzidas, 62/65 certificados, gate físico aprovado com zero resíduos; p023 usou FLUX com sucesso em 20,45 s. REF-B base `278c2486` contra `432b35af`: `job_metrics.py` confirma 169/177 traduzidas, 70/85 certificados e 7 resíduos nos dois; tempo 641,260→599,511 s; `failed`→`review_required`. A contagem auditada é 70 em ambos; relatórios anteriores que diziam 69 estavam incorretos. A comparação REF-A usa linha de base documentada porque o diretório de saída `f181a17e` não está mais no caminho registrado pelo banco. Consulte `reports/fase_0_f09_validacao_20261111.md` para a tabela e limitações.
+**Resultado físico consolidado (2026-11-11).** REF-A Apenas Clean pela interface, job `5dae49f7326b4c56b0c0e0731ec6b253` no commit `8791609`, terminou `review_required` e entregou 65/65 imagens; OCR e LaMa usaram DirectML. Isso fecha a validação física de F0.8 no código final. O `timing_report.json` registra 46 amostras, 23,600 s de amostragem em 477,645 s (4,94%) e pico da árvore de processos de 8.461,906 MB. O worker era PID 36048, `pythonw.exe` do Python311. REF-A Tradução pronta `abee1571…`, em `6c4734b`, teve 57/58 traduzidas, 62/65 certificados, gate físico aprovado com zero resíduos; p023 usou FLUX com sucesso em 20,45 s. REF-B base `278c2486` contra `432b35af`: `job_metrics.py` confirma 169/177 traduzidas, 70/85 certificados e 7 resíduos nos dois; tempo 641,260→599,511 s; `failed`→`review_required`. A contagem auditada é 70 em ambos; relatórios anteriores que diziam 69 estavam incorretos. A comparação REF-A usa linha de base documentada porque o diretório da base `f181a17e` não está mais no caminho registrado. Consulte `reports/fase_0_f09_validacao_20261111.md` para a tabela e limitações.
 
-**Suíte (11/11, checkout e runtime identificados).** A execução completa deu 6.499 pass, 4 falhas antigas de máscara/reconstrução, 141 skipped, 1 xfailed, 8 warnings e 787 subtests, em 917,27 s. Cada uma das quatro falhou isoladamente também. Os fixtures são sintéticos; não são afetados pelos PNGs de `download_gate` nem pela ordem da suíte. O relatório externo de 6.502/1 e a alegação de que três passam em `bc02f38` não foram reproduzidos; versões atuais são Python 3.11, OpenCV 4.10.0 e NumPy 2.3.5. Os arquivos de máscara/teste são idênticos entre `bc02f38` e HEAD, portanto ambiente/import diferente é hipótese sem prova. F3.0 segue aberta.
+**Suíte e ambiente (11/11).** A suíte local anterior deu 6.499 pass, 4 falhas, 141 skipped, 1 xfailed, 8 warnings e 787 subtests em Python 3.11/OpenCV 4.10.0/NumPy 2.3.5. O dono confirmou que, sob OpenCV 5.0.0 do ambiente de referência, três falhas passam e resta uma falha real para F3.0. `python` e `python -s` desta sessão carregam 4.10.0 do caminho global; o worker do job `5dae49f7` usou o mesmo Python311. A versão e o caminho do OpenCV agora são gravados em `timing_report.json` e exibidos pelo medidor nos novos jobs. As medições CLI feitas nesta sessão com 4.10.0 estão marcadas como não comparáveis ao ambiente fixado no relatório; nenhum pacote foi instalado/removido.
 
-**PAUSA 0.** Resultados físicos e métricas estão registrados; o merge aguarda aprovação do dono. A suíte não está verde nesta checkout e F0.8 ainda precisa de Clean físico cuja proveniência seja `6c4734b` ou descendente.
+**PAUSA 0.** Evidência física REF-A/REF-B e F0.8 registrada. Fase 0 pronta para revisão do merge em `dev`, aguardando aprovação explícita do dono. A falha real antiga de máscara segue para F3.0. Nenhum merge ou push foi feito.
 
 ### ⏸ PAUSA 0
 
@@ -339,8 +339,8 @@ Rodar REF-A e REF-B (REF-B em modo Completo). Critérios de aceite da fase:
 - [ ] Nenhum job fica mais de 10 s rodando depois de um erro de disco.
 - [x] Pico de RAM aparece no relatório de tempo dos dois capítulos (REF-A `abee1571`, REF-B `432b35af`).
 - [x] Qualidade: REF-A manteve 57/58, 62/65 e gate aprovado; REF-B manteve 169/177, 70/85 e 7 resíduos conforme os artefatos auditados.
-- [ ] F0.8 físico executado pelo painel com código `6c4734b` ou descendente (o run Clean disponível está em `bc02f38`).
-- [ ] Suíte completa verde (6.499 pass e 4 falhas reproduzidas nesta checkout).
+- [x] F0.8 físico executado pelo painel no código final `8791609`: job `5dae49f7`, 65/65 imagens e DirectML.
+- [x] Falhas de teste classificadas pelo OpenCV efetivo: três dependem de 4.10.0 vs 5.0.0; uma falha real segue para F3.0. Nenhuma correção de ambiente global foi feita.
 
 ---
 
@@ -515,9 +515,9 @@ Critérios de aceite:
 
 Objetivo em REF-B: regiões traduzidas ≥ 174/177; páginas certificadas ≥ 78/85; portão físico passa. Em REF-A nada regride.
 
-### F3.0 Zerar as 4 falhas antigas de máscara e reconstrução
+### F3.0 Confirmar 3 testes dependentes do OpenCV e corrigir a falha real de máscara
 
-As quatro falhas estão listadas em `reports/falhas_preexistentes_20261111.md`.
+O dono informou que três dos quatro testes antigos passam com OpenCV 5.0.0; a sessão de Fase 0 executou em OpenCV 4.10.0 e não deve classificar esses três como regressões de código. Reexecutar os três no runtime de referência e, para o teste restante `test_text_touching_a_balloon_border_is_cleaned_without_erasing_the_border`, fazer bisect entre `d819f0e` e `cda3f90`, classificar regressão ou contrato de teste, e corrigir. Lista e mensagens: `reports/falhas_preexistentes_20261111.md`. Aceite da F3.0: suíte completa verde no runtime fixado, zero falhas.
 
 Para cada teste:
 

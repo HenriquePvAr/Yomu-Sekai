@@ -33,7 +33,7 @@ A suíte completa foi executada novamente em 2026-11-11, depois das alterações
 787 subtests passed in 942.84s
 ```
 
-As quatro falhas foram as antigas de máscara/reconstrução já registradas em `reports/falhas_preexistentes_20261111.md`: pontuação fora do polígono (`GLYPH_ART_BOUNDARY_UNCERTAIN`), linha de arte cruzando glifos, componente unido `MW` classificado como fundo e texto tocando borda do balão. Nenhuma falha nova atribuível à integração foi identificada. A suíte não está verde.
+Na execução daquela data, quatro falhas aparentavam ser antigas de máscara/reconstrução (classificação depois corrigida: três dependentes do OpenCV e uma real) e estão registradas em `reports/falhas_preexistentes_20261111.md`: pontuação fora do polígono (`GLYPH_ART_BOUNDARY_UNCERTAIN`), linha de arte cruzando glifos, componente unido `MW` classificado como fundo e texto tocando borda do balão. Nenhuma falha nova atribuível à integração foi identificada. A suíte não está verde.
 
 ## Evidência física — REF-A, 2026-11-11
 
@@ -135,7 +135,7 @@ tests/test_run_webtoon_terminal_status.py
 - Se a página 34 ou qualquer outra continuar falhando, preservar o log/manifesto e corrigir a causa estrutural antes de declarar F0.8 aceito.
 - Reproduzir a página 23 em REF-A `Tradução pronta` após o dono iniciar o job pago; conferir dispositivo DirectML e, se FLUX falhar, ler o novo log em `errors/`.
 - Corrigir os 7 resíduos/falhas de qualidade do REF-B sem enfraquecer o portão físico; revisar os itens de REF-A em `review_required`.
-- As quatro falhas preexistentes de máscara/reconstrução continuam documentadas em `reports/falhas_preexistentes_20261111.md`.
+- A classificação final é três resultados dependentes de OpenCV 4.10.0/5.0.0 e uma falha real; detalhe e testes em `reports/falhas_preexistentes_20261111.md`.
 
 ## Implementação F0.9 — falha de FLUX rastreável (2026-11-11)
 
@@ -144,4 +144,8 @@ tests/test_run_webtoon_terminal_status.py
 - O contexto do render fornece pasta `errors` e índice da página; o identificador da região é sanitizado antes de formar o nome do arquivo.
 - Testes simulam stderr de subprocesso (incluindo cauda de 40 linhas), falha seguida de sucesso aceito pelos validadores, não-retry para memória do dispositivo, duas falhas sem terceira tentativa e continuidade do fallback aprendido existente.
 - Validação focada atual: sete arquivos de teste da Fase 0 — 45 passed em 54,09 s.
-- Ainda pendentes: REF-A Apenas Clean CLI para os 65 artefatos e razão do monitor; REF-A pago Tradução pronta, iniciado pelo dono, para revalidar p023; suíte completa.
+- No checkpoint original ainda estavam pendentes Clean pelo painel no hash final e REF-A pago para p023. Esses gates foram fechados depois: ver a reconciliação final em `reports/fase_0_f09_validacao_20261111.md`.
+
+## Retificação do runtime OpenCV — 2026-11-11
+
+As medições e comparações de REF-A executadas por linha de comando neste relatório (incluindo Fase 0 `384,824 s / 221,516 s` e o controle em worktree `dev` `341,192 s / 222,401 s`) foram disparadas com o Python 3.11 global e portanto usaram OpenCV 4.10.0, conforme `python -c ...` e `python -s -c ...` nesta sessão. Marcar esses tempos, certificados e comparação de pixels como medidos em runtime divergente; não usar para atribuir desempenho/qualidade ao código até repetir com OpenCV 5.0.0. O job de painel `5dae49f7` é prova física do F0.8 no commit `8791609`, mas seu timing report anterior à instrumentação não gravou o campo OpenCV; o worker PID 36048 usou `pythonw.exe` da mesma instalação Python311, então 4.10.0 é inferência pelo executável e resolução de pacotes, não dado lido do job. Nenhum pacote foi instalado ou removido. O proprietário informou que três dos quatro testes passam em OpenCV 5.0.0; uma falha de máscara/reconstrução real continua para F3.0. Veja `reports/falhas_preexistentes_20261111.md`.

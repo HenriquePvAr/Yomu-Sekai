@@ -1,6 +1,6 @@
 # Falhas preexistentes — 2026-11-11
 
-As sete falhas da tabela já ocorriam no ponto de backup `cda3f90` e na `origin/dev`; nenhuma foi introduzida pelos ajustes desta sequência. Foram verificadas na execução isolada registrada em `%TEMP%\komyst-isolated-backup.log`. Depois da verificação ambiental abaixo, restam quatro falhas reais de código em máscara e reconstrução de arte.
+As sete falhas da tabela já ocorriam no ponto de backup `cda3f90` e na `origin/dev`; nenhuma foi introduzida pelos ajustes desta sequência. Foram verificadas na execução isolada registrada em `%TEMP%\komyst-isolated-backup.log`. **Classificação atualizada em 11/11:** três dos quatro testes de máscara são dependentes da versão OpenCV (o dono confirma que passam no ambiente 5.0.0); resta uma falha real de código. A classificação detalhada ao final supersede a leitura inicial deste parágrafo.
 
 | Teste | Mensagem observada | Diagnóstico |
 |---|---|---|
@@ -52,4 +52,23 @@ Na suíte completa executada nesta checkout (`C:\Projetos\Yomu-Sekai`, `fase-0-j
 
 Esta evidência **não reproduz** o resumo externo de 6.502 aprovados/1 falho nem a alegação de que três dos quatro testes passaram isoladamente em `bc02f38`. Não é efeito da ordem: os quatro falham tanto isolados quanto na suíte completa. Não é contaminação pelos PNGs: os quatro fixtures que falham são sintéticos e não leem `dbg_hur_2x.png`, `flux_p9_test.png` ou `C:\tmp\selo-raw.png`. Também não há diferenças nos arquivos de máscara e nesses testes entre `bc02f38` e o HEAD atual (`git diff` vazio). A origem da divergência restante é compatível com ambiente/importação diferente no relatório externo, mas **não está comprovada** porque não veio acompanhado do executável Python, versões de NumPy/OpenCV e `yomu.__file__` usados naquele teste. Não registrar os três como resolvidos até repetir com esses dados.
 
-Os quatro casos seguem para F3.0: descobrir por bisect a introdução e classificar cada falha; não alterar seus resultados por ajuste de teste sem evidência de contrato desatualizado.
+Na F3.0, confirmar os três casos dependentes sob o runtime OpenCV 5.0.0 e bisectar a única falha real; não alterar resultados por ajuste de teste sem evidência de contrato desatualizado.
+
+## Classificação após confirmar o OpenCV efetivo — 2026-11-11 (atualização conclusiva)
+
+O dono confirmou que, usando OpenCV 5.0.0 do ambiente com `opencv-python-headless`, os três primeiros testes abaixo passam e resta uma falha real. Nesta sessão não foi instalado nem removido pacote. O comando solicitado retornou, tanto com `python` quanto com `python -s`:
+
+```text
+4.10.0 C:\Users\henri\AppData\Local\Programs\Python\Python311\Lib\site-packages\cv2\__init__.py
+```
+
+O executável da sessão é Python 3.11. A pasta `Roaming\Python311\site-packages` não contém `cv2`; os metadados globais desta sessão mostram `opencv-python 5.0.0.93` e `opencv-contrib-python 4.10.0.84` instalados lado a lado no mesmo `site-packages`, enquanto `opencv-python-headless` não está instalado aqui. O módulo efetivamente importado é 4.10.0. Isso confirma um conflito local entre distribuições que compartilham o diretório top-level `cv2`. A sessão não trocou nem removeu pacotes; a instalação/correção do ambiente aguarda decisão do dono. O resultado com OpenCV 5.0.0 citado abaixo é evidência fornecida pelo dono, não foi reproduzido nesta sessão.
+
+| Teste | Resultado efetivo nesta sessão com OpenCV 4.10.0 | Classificação para F3.0 |
+|---|---|---|
+| `GlyphFootprintCoverage::test_punctuation_outside_the_polygon_is_still_covered` | Falha: `GLYPH_ART_BOUNDARY_UNCERTAIN`; reprovou no `python` normal e em `python -s` | Dependente do OpenCV; dono reporta que passa com 5.0.0. Não corrigir código antes de validar no runtime fixado. |
+| `MaskGeometryDiagnostics::test_crossing_line_art_overlap_is_measured_for_follow_up` | Falha: esperava `mask_valid=False`, recebeu `True`; reprovou normal e `-s` | Dependente do OpenCV; dono reporta que passa com 5.0.0. Não corrigir código antes de validar no runtime fixado. |
+| `test_large_glyph_components_are_kept_and_background_shapes_dropped` | Falha: componente `MW` classificado como forma de fundo; reprovou normal e `-s` | Dependente do OpenCV; dono reporta que passa com 5.0.0. Não corrigir código antes de validar no runtime fixado. |
+| `test_text_touching_a_balloon_border_is_cleaned_without_erasing_the_border` | Falha: `residual_source_text_after_cleanup`/máscara toca a borda; o dono reporta que é a única falha restante com OpenCV 5.0.0 | Falha real de código a bisectar e corrigir em F3.0. |
+
+Com esta classificação, três falhas são dependentes da versão do OpenCV e uma é falha real de código. A antiga interpretação de “quatro falhas de código” e os quatro resultados locais sob OpenCV 4.10.0 ficam supersedidos: medições de teste executadas nesta sessão com esse módulo não representam o ambiente fixado de 5.0.0. A F3.0 deve confirmar as três no runtime correto e bisectar/corrigir a quarta; aceite final continua sendo a suíte verde nesse ambiente.
