@@ -2,12 +2,12 @@
 
 > **Base verificada:** `5f482ce1` (branch `main`) · **Revisado em:** 2026-10-24
 >
-> Código: `UniversalChapterAdapter` em `yomu/download/sources/chapter_source.py`; coleta,
+> Código: `UniversalChapterAdapter` em `komyst/download/sources/chapter_source.py`; coleta,
 > clusterização e limiares (`HIGH_CONFIDENCE = 0.85`, `MEDIUM_CONFIDENCE = 0.60`,
 > `MAX_AUTOMATIC_PAGES = 400`, `MAX_CANVAS_CAPTURE_BYTES`) em
-> `yomu/download/sources/universal_chapter_adapter.py`; paginação limitada
+> `komyst/download/sources/universal_chapter_adapter.py`; paginação limitada
 > (`MAX_PAGINATED_READER_FOLLOWS = 24`, `MAX_PAGINATED_READER_SECONDS = 45`) em
-> `yomu/download/down.py`; perfis em `yomu/download/sources/source_profile.py`.
+> `komyst/download/down.py`; perfis em `komyst/download/sources/source_profile.py`.
 
 ## Objetivo e escopo
 
@@ -107,8 +107,8 @@ do scroll, a fase de fonte termina como `incomplete_source_coverage`; nunca se a
 subconjunto como um capítulo completo.
 
 No Webtoons, que é um adapter específico de reader-container, placeholders 1x1 são tratados como
-slots `pending_lazy`, não como páginas nem como host de recurso. `yomu/download/webtoons_reader_bridge.py`
-conecta o driver Selenium já aberto a `yomu.download.lazy_slot_resolver.resolve_lazy_reader_slots`: ele relê
+slots `pending_lazy`, não como páginas nem como host de recurso. `komyst/download/webtoons_reader_bridge.py`
+conecta o driver Selenium já aberto a `komyst.download.lazy_slot_resolver.resolve_lazy_reader_slots`: ele relê
 apenas `#_imageList`/`img._images`, rola dentro dos bounds do reader e preserva a ordem DOM. Se
 todos os slots resolvem, a seleção contém somente páginas reais; se sobram pendentes, ocorre
 timeout ou o DOM muda, o runner não inicia e os índices pendentes ficam no diagnóstico público.
@@ -184,7 +184,7 @@ pelo downloader. Elas **não** transformam o Chrome em um sandbox completo de to
 subrecursos que uma página pode pedir durante sua renderização: uma página pública pode
 solicitar um subrecurso antes da validação posterior ao carregamento. Os transportes
 `requests` fixam o socket TCP na resposta DNS pública validada
-(`yomu/download/pinned_requests.py`), mas o navegador não passa por esse pinning. Sem
+(`komyst/download/pinned_requests.py`), mas o navegador não passa por esse pinning. Sem
 proxy/firewall de egress ou interceptação de rede no navegador, isso não é uma garantia de
 SSRF de produção para URLs arbitrárias não confiáveis. Iframes de outra
 origem não são atravessados; a URL deve ser submetida apenas para fontes confiáveis e

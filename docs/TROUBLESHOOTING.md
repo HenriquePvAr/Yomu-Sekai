@@ -49,7 +49,7 @@ Confirme o ambiente e consulte a ajuda dos entrypoints:
 ```powershell
 python --version
 python run_webtoon.py --help
-python -m yomu.runtime.process_launcher --help
+python -m komyst.runtime.process_launcher --help
 python start_tradutor.py status
 git status --short
 ```
@@ -63,7 +63,7 @@ Depois, procure os artefatos do output ativo:
 - `download_report.html` para coleta e teardown;
 - stdout/stderr do launcher para falhas de processo.
 
-Não apague o cache (`%LOCALAPPDATA%\TradutorIA\cache`, ou `CACHE_ROOT`) nem a saída (`%LOCALAPPDATA%\TradutorIA\output`, ou `TRADUTOR_OUTPUT_ROOT`) como primeira tentativa. Eles contêm evidências úteis e podem permitir resume seguro.
+Não apague o cache (`%LOCALAPPDATA%\Komyst\cache`, ou `CACHE_ROOT`) nem a saída (`%LOCALAPPDATA%\Komyst\output`, ou `KOMYST_OUTPUT_ROOT`) como primeira tentativa. Eles contêm evidências úteis e podem permitir resume seguro.
 
 ## O ambiente virtual não ativa
 
@@ -128,19 +128,19 @@ python -c "from rapidocr_onnxruntime import RapidOCR; print('RapidOCR: OK')"
 ```
 
 Sem RapidOCR o run falha fechado antes do download (`require_available_engine`). Não há
-outro engine suportado no Beta: `TRADUTOR_OCR_ENGINE_OVERRIDE` só aceita `rapidocr`, e Paddle
+outro engine suportado no Beta: `KOMYST_OCR_ENGINE_OVERRIDE` só aceita `rapidocr`, e Paddle
 nunca substitui silenciosamente o OCR primário.
 
 ## A tradução falha ou não inicia
 
-Todo job com tradução habilitada passa pelo provider interno `yomu_backend`, que exige sessão
+Todo job com tradução habilitada passa pelo provider interno `komyst_backend`, que exige sessão
 autenticada e licença Beta válida e chama o motor DeepL no servidor (Edge Function
 `supabase/functions/translation-execute`). O cliente não usa `DEEPL_API_KEY` nem
 `NVIDIA_API_KEY` para isso. Verifique:
 
 - se você está logado e a licença está ativa (o gate de licença bloqueia **Iniciar tradução** e **Retomar**);
-- se `.env` tem `SUPABASE_URL` e `SUPABASE_PUBLISHABLE_KEY` (sem imprimir valores) — `YOMU_BACKEND_URL`, quando definida, substitui `SUPABASE_URL` como base do backend;
-- o motivo no log/`timing_report.json`: `yomu_backend_provider_unavailable` (backend não
+- se `.env` tem `SUPABASE_URL` e `SUPABASE_PUBLISHABLE_KEY` (sem imprimir valores) — `KOMYST_BACKEND_URL`, quando definida, substitui `SUPABASE_URL` como base do backend;
+- o motivo no log/`timing_report.json`: `komyst_backend_provider_unavailable` (backend não
   construído), `provider_mismatch` (um provider diferente de DeepL, como `riva`/`nemotron`, foi
   pedido para um job habilitado) ou falhas sistêmicas do backend (por exemplo
   `reservation_missing`).
@@ -261,7 +261,7 @@ Confirme a dependência e a porta:
 
 ```powershell
 python -c "import nicegui; print(nicegui.__version__)"
-$env:TRADUTOR_UI_PORT = "8080"
+$env:KOMYST_UI_PORT = "8080"
 python app_ui.py
 ```
 
@@ -271,7 +271,7 @@ O servidor não abre o navegador sozinho: acesse `http://127.0.0.1:8080` manualm
 
 ## O login falha ou volta para a tela de entrada
 
-Confirme que a barra de endereço mostra **`http://127.0.0.1:8080`** e não `localhost`: o projeto Supabase Auth só permite a origem `127.0.0.1` (`SUPABASE_SITE_URL` e `SUPABASE_REDIRECT_URL` do template usam esse host). Se você mudou `TRADUTOR_UI_PORT`, a nova origem também precisa estar permitida no projeto. Use o shell desktop (`python desktop_app.py`), que já abre em `127.0.0.1`.
+Confirme que a barra de endereço mostra **`http://127.0.0.1:8080`** e não `localhost`: o projeto Supabase Auth só permite a origem `127.0.0.1` (`SUPABASE_SITE_URL` e `SUPABASE_REDIRECT_URL` do template usam esse host). Se você mudou `KOMYST_UI_PORT`, a nova origem também precisa estar permitida no projeto. Use o shell desktop (`python desktop_app.py`), que já abre em `127.0.0.1`.
 
 ## O que anexar a um relatório de bug
 

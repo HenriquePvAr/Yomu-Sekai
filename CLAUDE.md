@@ -12,7 +12,7 @@ repositório.
 
 ## Sobre o projeto
 
-**Tradutor IA** — aplicação local (Windows, Python 3.11) que traduz capítulos ilustrados do
+**Komyst** — aplicação local (Windows, Python 3.11) que traduz capítulos ilustrados do
 inglês para português do Brasil: download, OCR, tradução, reconstrução visual, PDF e gates
 de qualidade.
 
@@ -20,7 +20,7 @@ de qualidade.
 
 - A `main` local é a fonte oficial do código concluído; confira `origin/main` antes de preparar uma integração. Uma branch de consolidação não é release nem prova de publicação.
 - Mudanças de risco podem usar branch temporária baseada na `main`; depois de testar, documentar e atualizar o board, prepare integração normal e não mantenha uma linha paralela permanente.
-- Neste snapshot, `yomu/` é o runtime modular canônico onde callers e testes confirmarem a migração. Entry points e módulos da raiz permanecem como compatibilidade enquanto consumidores não forem auditados; não duplique pipeline, provider, máscara, worker ou contrato de artefatos.
+- Neste snapshot, `komyst/` é o runtime modular canônico onde callers e testes confirmarem a migração. Entry points e módulos da raiz permanecem como compatibilidade enquanto consumidores não forem auditados; não duplique pipeline, provider, máscara, worker ou contrato de artefatos.
 - Preserve branches, worktrees, arquivos não rastreados e alterações de outros agentes. Não use reset/clean/restore em massa para resolver divergências. Classifique mudanças não integradas na matriz de reconciliação.
 - Diferencie `IMPLEMENTED`, `INTEGRATED`, `TESTED_OFFLINE`, `TESTED_FROZEN`, `PHYSICALLY_VERIFIED`, `EXTERNAL_GATE` e `DEFERRED`; código ou mocks não autorizam status físico.
 - Supabase permanece autoridade de persistência/licença; nunca embuta credenciais administrativas. Não execute Gemini/DeepL pago, consuma YK ou altere produção sem autorização explícita.
@@ -111,8 +111,8 @@ commit**.
 
 Nada entra na documentação sem verificação contra o repositório: comandos devem ser
 executados (ao menos `--help`), caminhos de módulo devem existir no índice do Git, estados
-devem ser lidos de `yomu/runtime/job_store.py` (`JobStatus`), variáveis devem estar em `.env.example` e no consumidor
-(ajustes finos de CLEAN/render, como `RENDER_FIT_BALLOON_SHAPE`, existem só em `yomu/config/settings.py` por decisão),
+devem ser lidos de `komyst/runtime/job_store.py` (`JobStatus`), variáveis devem estar em `.env.example` e no consumidor
+(ajustes finos de CLEAN/render, como `RENDER_FIT_BALLOON_SHAPE`, existem só em `komyst/config/settings.py` por decisão),
 rótulos de UI devem ser lidos de `ui/ui_shell.html` ou `static/*.js`. Um comando que o
 repositório não suporta mais **não pode** aparecer na documentação.
 
@@ -148,7 +148,7 @@ WHY: <motivo — ex.: refatoração interna sem mudança de comportamento, API, 
   mínima, substituição atômica, rollback e estados de falha; o guia do usuário cobre apenas
   como a atualização aparece, o que clicar e o que fazer se falhar. A publicação do manifest
   no canal continua gate externo.
-- `Setup.exe`: o script Inno Setup (`packaging/TradutorIA.iss`) e `tools/build_installer.py`
+- `Setup.exe`: o script Inno Setup (`packaging/Komyst.iss`) e `tools/build_installer.py`
   existem, mas nenhum instalador foi gerado/validado nem é versionado; a obrigação acima
   dispara quando houver instalador distribuído.
 - Quando o licenciamento de tester existir: doc técnica ganha arquitetura, fronteira de
@@ -164,17 +164,17 @@ código. Ela envelhece: confira o código antes de assumir que um valor não mud
 
 | Recurso | Estado verificado |
 | --- | --- |
-| Tradução | **IMPLEMENTADO** — todo job habilitado usa `yomu_backend` (`yomu/translation/providers/yomu_backend_provider.py`, `benchmark_pipeline._resolve_translation_runtime`), motor remoto DeepL na Edge Function `supabase/functions/translation-execute`. O cliente nunca chama a DeepL; `--translation-provider` é metadado/guard; `riva`/`nemotron` num job habilitado → `provider_mismatch`. `ui_helpers.DEFAULT_TRANSLATION_PROVIDER = "deepl"` é só rótulo; o seletor de provider da UI está oculto |
+| Tradução | **IMPLEMENTADO** — todo job habilitado usa `komyst_backend` (`komyst/translation/providers/komyst_backend_provider.py`, `benchmark_pipeline._resolve_translation_runtime`), motor remoto DeepL na Edge Function `supabase/functions/translation-execute`. O cliente nunca chama a DeepL; `--translation-provider` é metadado/guard; `riva`/`nemotron` num job habilitado → `provider_mismatch`. `ui_helpers.DEFAULT_TRANSLATION_PROVIDER = "deepl"` é só rótulo; o seletor de provider da UI está oculto |
 | Provider de auth padrão | **supabase** no código (`community_auth.build_auth_provider`); o `.env.example` traz `local` para desenvolvimento. Este snapshot **não** afirma que o projeto Supabase remoto está acessível (problema operacional, não de código) |
-| Estados de job | 15 em `yomu/runtime/job_store.py` `JobStatus.ALL`; terminais `finished`, `review_required`, `failed`, `cancelled` |
-| Supervisão do worker | implementada em `yomu/runtime/worker_supervisor.py`: 2s/5s/15s, 3 tentativas, `degraded`, reset em 120s |
-| Retomada de job interrompido na UI | **implementada** — `#interruptedJobsPanel` + botão `Retomar` em `static/tradutor_ui.js`, exibido só com `can_resume` |
-| SFX e tipografia | `TRANSLATE_SFX=False` por padrão (SFX preservados no original); `RENDER_FIT_BALLOON_SHAPE` e `RENDER_MATCH_SOURCE_SLANT` padrão `True`, só em `yomu/config/settings.py` |
-| Updater | **IMPLEMENTADO** (código + UI): `yomu/runtime/update_manifest.py` (Ed25519 + SHA-256, chave `beta-2026-10`), `update_transport.py`, `update_installer.py`, `installer_update.py`, `update_bootstrap.py` (`DEFAULT_MANIFEST_URL` configurada), aba **Atualizações** e rotas `/api/update/*` em `yomu/ui/app.py`. Manifest publicado no canal: `EXTERNAL_GATE` |
-| Instalador | **PARCIAL** — `packaging/tradutor_ia.spec`, `packaging/TradutorIA.iss`, `tools/build_installer.py`; nenhum `Setup.exe` versionado/validado |
-| Licença de tester Beta | **PARCIAL** — `yomu/auth/beta_license.py`; gate em `UiBridge.start()`/`resume()`; `_build_ui_beta_access_authorizer` (`yomu/ui/ui_bridge.py`): dev → local; empacotado sem provider → `production` → `RemoteBetaLicenseConfigError` (fail-closed); `supabase` → authorizer remoto com fingerprint. Nenhum entitlement real validado |
+| Estados de job | 15 em `komyst/runtime/job_store.py` `JobStatus.ALL`; terminais `finished`, `review_required`, `failed`, `cancelled` |
+| Supervisão do worker | implementada em `komyst/runtime/worker_supervisor.py`: 2s/5s/15s, 3 tentativas, `degraded`, reset em 120s |
+| Retomada de job interrompido na UI | **implementada** — `#interruptedJobsPanel` + botão `Retomar` em `static/komyst_ui.js`, exibido só com `can_resume` |
+| SFX e tipografia | `TRANSLATE_SFX=False` por padrão (SFX preservados no original); `RENDER_FIT_BALLOON_SHAPE` e `RENDER_MATCH_SOURCE_SLANT` padrão `True`, só em `komyst/config/settings.py` |
+| Updater | **IMPLEMENTADO** (código + UI): `komyst/runtime/update_manifest.py` (Ed25519 + SHA-256, chave `beta-2026-10`), `update_transport.py`, `update_installer.py`, `installer_update.py`, `update_bootstrap.py` (`DEFAULT_MANIFEST_URL` configurada), aba **Atualizações** e rotas `/api/update/*` em `komyst/ui/app.py`. Manifest publicado no canal: `EXTERNAL_GATE` |
+| Instalador | **PARCIAL** — `packaging/komyst.spec`, `packaging/Komyst.iss`, `tools/build_installer.py`; nenhum `Setup.exe` versionado/validado |
+| Licença de tester Beta | **PARCIAL** — `komyst/auth/beta_license.py`; gate em `UiBridge.start()`/`resume()`; `_build_ui_beta_access_authorizer` (`komyst/ui/ui_bridge.py`): dev → local; empacotado sem provider → `production` → `RemoteBetaLicenseConfigError` (fail-closed); `supabase` → authorizer remoto com fingerprint. Nenhum entitlement real validado |
 | Instalação limpa em Windows | **não provada** (`CLEAN-INSTALL-NOT-YET-PROVEN`) |
-| CF clearance (comix.to) | o persistidor `_save_comix_cf_clearance` do branch `feat/comix-cloudflare-clearance-v1` **não está** na `main`; só o posicionamento oculto do CloakBrowser existe (`yomu/download/readers/scrapling_reader_resolver.py`) |
+| CF clearance (comix.to) | o persistidor `_save_comix_cf_clearance` do branch `feat/comix-cloudflare-clearance-v1` **não está** na `main`; só o posicionamento oculto do CloakBrowser existe (`komyst/download/readers/scrapling_reader_resolver.py`) |
 | Requisitos | `requirements.txt` na raiz; perfis em `requirements/` (`requirements-beta.txt` inclui `-r ../requirements.txt`) |
 | Suíte hermética | `python -m pytest -q`: ~6160 passed, 0 failed (~10 min) |
 

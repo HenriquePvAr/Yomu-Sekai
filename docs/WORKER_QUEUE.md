@@ -7,21 +7,21 @@ Fechar ou reiniciar a UI não interrompe um capítulo em andamento.
 
 ## Processos
 
-- `app_ui.py` (shim de `yomu.ui.app`, bridge em `yomu/ui/ui_bridge.py`) — interface e API.
+- `app_ui.py` (shim de `komyst.ui.app`, bridge em `komyst/ui/ui_bridge.py`) — interface e API.
   Cria/consulta/cancela/retoma jobs. **Não** executa o pipeline.
-- `worker_service.py` (shim de `yomu.runtime.worker_service`) — worker independente. Reclama
+- `worker_service.py` (shim de `komyst.runtime.worker_service`) — worker independente. Reclama
   um job por vez (concorrência 1), inicia um runner isolado, mantém heartbeat/lease e recupera
   jobs abandonados.
-- `yomu/runtime/job_runner.py` — executa **um** capítulo: escreve manifest inicial, roda o
+- `komyst/runtime/job_runner.py` — executa **um** capítulo: escreve manifest inicial, roda o
   pipeline (`run_webtoon.py` como subprocesso), emite progresso/checkpoints e encerra com exit
   code confiável. Não há shim na raiz: o worker o inicia como `python -u -m
-  yomu.runtime.job_runner` (no executável congelado, `--internal-child job-runner`). Outros tipos
-  de job usam runners próprios: `yomu.community.community_publish_runner`,
-  `yomu.review.workflows.review_rerun_runner` e `yomu.review.workflows.review_reexport_runner`.
+  komyst.runtime.job_runner` (no executável congelado, `--internal-child job-runner`). Outros tipos
+  de job usam runners próprios: `komyst.community.community_publish_runner`,
+  `komyst.review.workflows.review_rerun_runner` e `komyst.review.workflows.review_reexport_runner`.
 
 Fonte de verdade do estado dos jobs: `jobs.sqlite3` (SQLite, WAL) no runtime root
-(`yomu.runtime.runtime_paths.runtime_root()`: padrão `%LOCALAPPDATA%\TradutorIA\runtime\`,
-sobrescrito por `TRADUTOR_RUNTIME_ROOT`). Logs por job: `<runtime_root>/logs/<job_id>.log`.
+(`komyst.runtime.runtime_paths.runtime_root()`: padrão `%LOCALAPPDATA%\Komyst\runtime\`,
+sobrescrito por `KOMYST_RUNTIME_ROOT`). Logs por job: `<runtime_root>/logs/<job_id>.log`.
 Nada disso fica no repositório.
 
 ## Como iniciar
@@ -38,7 +38,7 @@ No Windows há também `start_tradutor.bat`. `stop` e `stop-worker` são o mesmo
 
 ## Supervisão do worker
 
-`all` **supervisiona** o worker que ele mesmo iniciou (`yomu/runtime/worker_supervisor.py`): se aquele
+`all` **supervisiona** o worker que ele mesmo iniciou (`komyst/runtime/worker_supervisor.py`): se aquele
 processo morre inesperadamente, um substituto é criado sob política limitada — backoff de
 `2s`, `5s`, `15s`, no máximo `3` reinícios, e depois o launcher fica `degraded` em vez de
 respawnar indefinidamente. Um worker que fica de pé por `120s` recupera o orçamento de
@@ -58,7 +58,7 @@ das páginas encontradas e o job então segue para `queued`; também pode ser ca
 
 Depois da confirmação, o fluxo é `queued → claiming → starting → running → finished |
 review_required`, com `cancelling → cancelled`, `interrupted → resumable` e `failed`.
-Transições fora de `ALLOWED_TRANSITIONS` (`yomu/runtime/job_store.py`) são rejeitadas
+Transições fora de `ALLOWED_TRANSITIONS` (`komyst/runtime/job_store.py`) são rejeitadas
 (fail-closed).
 
 A taxonomia completa tem **15 estados**: os acima mais `staging` (job sendo montado antes de
@@ -193,7 +193,7 @@ de `output/`. Nada é migrado automaticamente.
   **Retomar**; caso contrário (`recoverable=0`) reenviar o capítulo é o caminho prático —
   os artefatos anteriores e o cache são preservados.
 - **Worker duplicado** → o segundo sai limpo; verifique com `status`.
-- **Porta 8080 ocupada** → outra UI já está rodando (ou use `TRADUTOR_UI_PORT`).
+- **Porta 8080 ocupada** → outra UI já está rodando (ou use `KOMYST_UI_PORT`).
 - **Banco bloqueado** → operação concorrente momentânea; o WAL + busy_timeout resolvem;
   não apague o banco.
 - **Processo órfão após crash** → inicie um worker; ele reconcilia e encerra a árvore

@@ -5,7 +5,7 @@
 > interior do balão); o fluxo atual está em [Clean strategy](architecture/clean_strategy.md)
 > e na [Documentação Técnica §16](technical/DOCUMENTACAO_TECNICA.md#16-limpeza-inpainting-e-renderização).
 > A ordem reserva/retry e `clean_artifact_validation` descritas aqui continuam no código
-> (`yomu/translation/providers/yomu_backend_provider.py`, `yomu/clean/disposition.py`).
+> (`komyst/translation/providers/komyst_backend_provider.py`, `komyst/clean/disposition.py`).
 > Nota sobre SFX: desde 2026-10-24 `TRANSLATE_SFX=True` por padrão, então SFX conhecidos pelo
 > glossário são traduzidos e limpos; "does not erase SFX" abaixo vale para `TRANSLATE_SFX=False`. **Revisado em:** 2026-10-24 · **Base verificada:** `5f482ce1`
 

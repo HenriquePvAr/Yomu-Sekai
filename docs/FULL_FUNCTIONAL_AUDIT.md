@@ -1,11 +1,11 @@
 # Auditoria funcional — fontes de capítulo e submissão de jobs
 
-> **Revisado em:** 2026-10-24 · **Base verificada:** `5f482ce1` · Documento vivo (auditoria
-> documental; nenhuma fonte externa foi executada). Módulos citados: `yomu/download/sources/chapter_source.py`
-> (registro `ADAPTERS`/`select_adapter`), `yomu/download/sources/universal_chapter_adapter.py`,
-> `yomu/download/down.py`, `yomu/ui/ui_bridge.py`, `yomu/runtime/job_store.py`,
-> `yomu/runtime/job_runner.py`, `yomu/export/output_manifest.py`; `app_ui.py` (→ `yomu/ui/app.py`),
-> `run_webtoon.py` e `run_local_folder.py` (→ `yomu/commands/`) existem na raiz como entry
+> **Registro histórico:** auditoria documental de 2026-10-24 sobre `5f482ce1`. Não é documento vivo;
+> não executou fontes externas. Módulos citados naquela revisão: `komyst/download/sources/chapter_source.py`
+> (registro `ADAPTERS`/`select_adapter`), `komyst/download/sources/universal_chapter_adapter.py`,
+> `komyst/download/down.py`, `komyst/ui/ui_bridge.py`, `komyst/runtime/job_store.py`,
+> `komyst/runtime/job_runner.py`, `komyst/export/output_manifest.py`; `app_ui.py` (→ `komyst/ui/app.py`),
+> `run_webtoon.py` e `run_local_folder.py` (→ `komyst/commands/`) existem na raiz como entry
 > points de compatibilidade.
 
 ## Escopo e método

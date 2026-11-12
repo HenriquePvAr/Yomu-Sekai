@@ -2,10 +2,10 @@
 
 > **Base verificada:** `5f482ce1` (branch `main`) · **Revisado em:** 2026-10-24
 >
-> Código: `yomu/download/download_transport.py` (transportes, `DownloadLimits`,
-> `build_transports`), `yomu/download/pinned_requests.py` (pinning de destino),
-> `yomu/download/image_validation.py` (validação por bytes, `DuplicateTracker`) e
-> `yomu/download/comix_session.py` (clearance Comix). Este documento nasceu como registro do
+> Código: `komyst/download/download_transport.py` (transportes, `DownloadLimits`,
+> `build_transports`), `komyst/download/pinned_requests.py` (pinning de destino),
+> `komyst/download/image_validation.py` (validação por bytes, `DuplicateTracker`) e
+> `komyst/download/comix_session.py` (clearance Comix). Este documento nasceu como registro do
 > fechamento de duas lacunas (abstração de transporte e validação por bytes); a seção abaixo é
 > o histórico do problema.
 
@@ -89,7 +89,7 @@ Quando o `BrowserSessionTransport` é usado, os cookies do Selenium são copiado
 
 Exceção específica do Comix: para o adapter `comix`, `RequestsTransport` carrega o
 `cf_clearance` e o User-Agent que o **dono** obteve ao concluir uma verificação legítima, lidos
-de `%LOCALAPPDATA%\YomuSekai\comix_cf_cookie.json` (`yomu.download.comix_session`), e os aplica
+de `%LOCALAPPDATA%\Komyst\comix_cf_cookie.json` (`komyst.download.comix_session`), e os aplica
 só ao domínio `.comix.to`. O valor nunca é registrado. Veja
 [Comix: fluxo com challenge](operations/comix_source_challenge.md).
 

@@ -6,7 +6,7 @@
 
 O runtime local do Komyst usa o projeto **Komyst** (`<projeto-supabase-ativo>`)
 em `https://<projeto-supabase-ativo>.supabase.co`, com publishable key pública. O projeto
-**Tradutor IA Community** (`<projeto-supabase-legado>`) permanece intacto como rollback
+**Komyst Community** (`<projeto-supabase-legado>`) permanece intacto como rollback
 temporário até sua aposentadoria formal; não é o destino de novas sessões. Signup,
 confirmação de e-mail, login, logout e recuperação/alteração de senha foram validados
 fisicamente no projeto novo.
@@ -17,7 +17,7 @@ legado continua preservado como rollback; nenhuma remoção foi feita nele.
 
 Os provedores de autenticação são selecionados por `AUTH_PROVIDER` (tem precedência; lido
 pelo código, não listado em `.env.example`) ou `COMMUNITY_AUTH_PROVIDER`, resolvidos em
-`yomu/community/community_auth.py::build_auth_provider` (sem valor → `supabase`):
+`komyst/community/community_auth.py::build_auth_provider` (sem valor → `supabase`):
 
 - `supabase` — **padrão**; JWT de usuário verificado criptograficamente por JWKS;
 - `local` — sessão de operador em loopback, sem dependência de rede;
@@ -53,7 +53,7 @@ Você precisa ter feito no painel (não é automatizado por este projeto):
     SUPABASE_SITE_URL=http://127.0.0.1:8080
     SUPABASE_REDIRECT_URL=http://127.0.0.1:8080/auth/callback
 
-- No runtime desktop/empacotado, `yomu/desktop/app.py` lê `config/public-runtime.json`
+- No runtime desktop/empacotado, `komyst/desktop/app.py` lê `config/public-runtime.json`
   (apenas `supabase_url` e `publishable_key`) e injeta `SUPABASE_URL`,
   `SUPABASE_PUBLISHABLE_KEY`, `SUPABASE_EXPECTED_AUDIENCE=authenticated` e
   `BETA_LICENSE_PROVIDER=supabase` no ambiente do processo filho da UI, sem sobrescrever
@@ -70,7 +70,7 @@ Você precisa ter feito no painel (não é automatizado por este projeto):
 
 `SupabaseAuthProvider` recebe `Authorization: Bearer <access token>` e:
 
-Implementação: `yomu/auth/supabase_auth.py` (`SupabaseAuthConfig`, `SupabaseAuthProvider`).
+Implementação: `komyst/auth/supabase_auth.py` (`SupabaseAuthConfig`, `SupabaseAuthProvider`).
 
 1. faz o parsing estrito do header (um único Bearer, formato JWS compacto, tamanho
    limitado);
@@ -137,5 +137,5 @@ de JWKS **falha fechado**: a requisição fica não autenticada, nunca aceita.
 ## Bind de rede
 
 `SupabaseAuthProvider` declara `supports_external_bind = True`. Ainda assim, bind externo
-continua exigindo o opt-in explícito `TRADUTOR_ALLOW_EXTERNAL_BIND=1`; o provedor local
+continua exigindo o opt-in explícito `KOMYST_ALLOW_EXTERNAL_BIND=1`; o provedor local
 nunca satisfaz esse requisito e permanece restrito a loopback.

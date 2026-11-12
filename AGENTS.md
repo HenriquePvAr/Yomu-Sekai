@@ -5,7 +5,7 @@
 - `main` is the canonical source branch for completed product code. A local integration branch is not a release or remote merge.
 - Base new work on the current `main`. Use a temporary branch for risky work, then test, document, update the board and prepare a normal integration to `main`.
 - Keep unrelated work isolated; do not leave parallel implementation branches indefinitely. Never discard worktree changes, untracked files, evidence or another agent's work without an explicit disposition.
-- Treat package modules under `yomu/` as canonical where the current code and tests establish that migration. Root compatibility launchers/shims remain until their consumers are audited.
+- Treat package modules under `komyst/` as canonical where the current code and tests establish that migration. Root compatibility launchers/shims remain until their consumers are audited.
 - Do not duplicate providers, pipeline, mask, or artifact implementations. Reuse the canonical contract or document why a legacy boundary remains.
 
 ## Safety and evidence

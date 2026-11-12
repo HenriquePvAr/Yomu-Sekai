@@ -6,20 +6,20 @@ webhook URL.
 
 ## Configuration
 
-The dispatcher reads `YOMU_DISCORD_WEBHOOK_URL` from:
+The dispatcher reads `KOMYST_DISCORD_WEBHOOK_URL` from:
 
-`/home/ubuntu/yomu/.secrets/discord.env`
+`/home/ubuntu/komyst/.secrets/discord.env`
 
 The file must be owned by the worker account and mode `600`; the directory must be
 mode `700`. Add the real value directly on the VPS, never in chat, Git, the EXE, or a
 report:
 
 ```bash
-install -d -m 700 /home/ubuntu/yomu/.secrets
-install -m 600 /dev/null /home/ubuntu/yomu/.secrets/discord.env
-${EDITOR:-vi} /home/ubuntu/yomu/.secrets/discord.env
-# add only: YOMU_DISCORD_WEBHOOK_URL=<owner-managed-secret>
-chmod 600 /home/ubuntu/yomu/.secrets/discord.env
+install -d -m 700 /home/ubuntu/komyst/.secrets
+install -m 600 /dev/null /home/ubuntu/komyst/.secrets/discord.env
+${EDITOR:-vi} /home/ubuntu/komyst/.secrets/discord.env
+# add only: KOMYST_DISCORD_WEBHOOK_URL=<owner-managed-secret>
+chmod 600 /home/ubuntu/komyst/.secrets/discord.env
 ```
 
 Do not print the file. Verify only the configured flag:
@@ -41,6 +41,6 @@ change. Rotation means replacing the value in this VPS-only file and checking he
 5. For HTTP 429/5xx or timeout, use the bounded transport test; observability must
    remain best-effort and must not fail a job.
 
-The current dispatcher is loopback-only. `YOMU_DISCORD_ENABLED` may be used by a
+The current dispatcher is loopback-only. `KOMYST_DISCORD_ENABLED` may be used by a
 future service wrapper to disable delivery; absence of a configured URL is already a
 safe no-op. Chat reuse and concurrency are intentionally not part of this mission.

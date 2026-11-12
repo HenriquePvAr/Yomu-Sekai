@@ -2,7 +2,7 @@
 
 > **Revisado em:** 2026-10-25 · **Base verificada:** `fb8875e`.
 
-Este documento descreve as fronteiras implementadas no Tradutor.IA e, igualmente importante,
+Este documento descreve as fronteiras implementadas no Komyst e, igualmente importante,
 o que elas **não** garantem. O projeto lida com URLs, páginas renderizadas, imagens e pastas
 locais; nenhuma dessas entradas deve ser considerada confiável só porque veio de uma UI local ou
 de um host público.
@@ -79,12 +79,12 @@ como confiável e autorizada.
 
 ## Adapters de fonte
 
-`yomu/download/sources/chapter_source.py` resolve primeiro adapters registrados e só então usa o fallback universal.
+`komyst/download/sources/chapter_source.py` resolve primeiro adapters registrados e só então usa o fallback universal.
 
 | Fonte | Fronteira |
 | --- | --- |
 | Webtoons | adapter específico com hosts e seletores próprios |
-| Comix | adapter específico com hosts próprios; pode reutilizar o clearance Cloudflare obtido pelo usuário, guardado só localmente em `%LOCALAPPDATA%\YomuSekai\` |
+| Comix | adapter específico com hosts próprios; pode reutilizar o clearance Cloudflare obtido pelo usuário, guardado só localmente em `%LOCALAPPDATA%\Komyst\` |
 | VortexScans | host literal `vortexscans.org` e path de capítulo restrito; instância nova por execução para que autorizações de recursos não vazem entre jobs |
 | Universal | fallback para URL pública não reclamada; exige evidência agrupada e completa antes de download |
 | Pasta local | fonte distinta, sem URL, com política de caminhos e snapshot interno |
@@ -127,7 +127,7 @@ existir).
 
 A política recusa caminhos relativos, traversal, UNC/dispositivos, `file:`, symlinks e junctions.
 Ela inspeciona somente arquivos diretos, valida bytes de imagem e limita tamanho/quantidade. Um
-snapshot de nomes gerados é criado em `local_sources/` da raiz de runtime (`%LOCALAPPDATA%\TradutorIA\runtime` por padrão), fora da pasta de instalação; jobs, manifests de saída e
+snapshot de nomes gerados é criado em `local_sources/` da raiz de runtime (`%LOCALAPPDATA%\Komyst\runtime` por padrão), fora da pasta de instalação; jobs, manifests de saída e
 a UI recebem fingerprint, contagens e referência opaca, não o caminho original. A materialização
 posterior revalida o snapshot e não limpa uma saída não marcada como pertencente ao pipeline.
 
@@ -142,7 +142,7 @@ Os transportes compartilham orçamento de capítulo: timeout, redirects, bytes p
 totais, quantidade de arquivos e duração. Cada resposta é validada por tipo e bytes; páginas HTML,
 desafios e dados que não decodificam como imagem não entram como páginas.
 
-`BrowserSessionTransport` (`yomu/download/download_transport.py`) pode copiar cookies do domínio literal do leitor para memória durante a
+`BrowserSessionTransport` (`komyst/download/download_transport.py`) pode copiar cookies do domínio literal do leitor para memória durante a
 mesma execução. Eles não são gravados em banco ou relatório e são limpos no fechamento.
 `CloudscraperTransport` é opcional, exige exatamente `ENABLE_CLOUDSCRAPER_TRANSPORT=1`, usa os
 mesmos limites e não altera a política de challenge. Ele não é um mecanismo de evasão e uma flag

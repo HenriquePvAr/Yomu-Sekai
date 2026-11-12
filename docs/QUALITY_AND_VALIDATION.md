@@ -15,7 +15,7 @@ PDF disponível e completo, mas com regiões que exigem inspeção humana; pode 
 tester quando a revisão for opcional e o artefato estiver íntegro. Resultado deve ser bloqueado
 quando houver `failed`, `REVIEW_UNUSABLE`, página ausente, provenance inválida ou PDF incompleto.
 
-Este documento descreve como o Tradutor.IA decide entre aceitar um resultado, tentar outra estratégia ou solicitar revisão humana.
+Este documento descreve como o Komyst decide entre aceitar um resultado, tentar outra estratégia ou solicitar revisão humana.
 
 > [Voltar ao README](../README.md)
 
@@ -78,7 +78,7 @@ Cada linha de OCR carrega texto, confidence, caixa, engine e metadados. Depois d
 RapidOCR é o engine primário e também o de recovery regional. A releitura seletiva
 (linhas fracas, continuações, redescoberta na página mascarada — `OCR_MASKED_REDISCOVERY`,
 divisão em bordas cruzadas — `OCR_SPLIT_AT_CROSSING_BORDERS` e glifo cortado na borda —
-`OCR_EXTEND_CLIPPED_EDGE_GLYPHS`, todos default `True` em `yomu/config/settings.py`) está
+`OCR_EXTEND_CLIPPED_EDGE_GLYPHS`, todos default `True` em `komyst/config/settings.py`) está
 descrita em [Clean strategy](architecture/clean_strategy.md). O fallback para Paddle
 (página inteira ou regional) só existe como compatibilidade legacy, opt-in por
 `OCR_LEGACY_PADDLE_FALLBACK` (default `False`); ver a política Beta em
@@ -106,7 +106,7 @@ O reparo em modo `conservative` trata padrões estruturais limitados, como junç
 
 Os grupos recebem classe, confidence, motivo e evidências. As classes principais são fala, narração, SFX, decorative e unknown.
 
-A decisão usa texto, geometria, proximidade, orientação e características do container. Isso evita regras simplistas como “todo texto curto é SFX”. O default atual é `TRANSLATE_SFX=False` (`yomu/config/settings.py`), que preserva todos os SFX confirmados e pula sua limpeza/redraw. Com `True`, sons conhecidos usam o glossário local `yomu/translation/sfx_glossary.py` (`assets/lexicon/sfx_en_pt.json`); alguns SFX de sweep que não constam no glossário podem seguir ao provider. A suíte hermética fixa `TRANSLATE_SFX=0` no `conftest.py` raiz.
+A decisão usa texto, geometria, proximidade, orientação e características do container. Isso evita regras simplistas como “todo texto curto é SFX”. O default atual é `TRANSLATE_SFX=False` (`komyst/config/settings.py`), que preserva todos os SFX confirmados e pula sua limpeza/redraw. Com `True`, sons conhecidos usam o glossário local `komyst/translation/sfx_glossary.py` (`assets/lexicon/sfx_en_pt.json`); alguns SFX de sweep que não constam no glossário podem seguir ao provider. A suíte hermética fixa `TRANSLATE_SFX=0` no `conftest.py` raiz.
 
 Elementos decorativos também podem ser ignorados. Fala, narração, texto de sistema e
 `unknown` com evidência semântica de história seguem para tradução; logos, créditos,
@@ -154,7 +154,7 @@ Os registros incluem candidate, razão, tentativa e resultado. Eles alimentam o 
 ### Decisão de render por região
 
 Tradução, remoção da fonte e reconstrução da arte são eixos separados. A decisão final é de
-`render_disposition()` (`yomu/ocr/ocr_balloon.py`):
+`render_disposition()` (`komyst/ocr/ocr_balloon.py`):
 
 ```mermaid
 flowchart TD
@@ -789,7 +789,7 @@ Arquivos legados ausentes, vazios ou inválidos são lidos como código desconhe
   rotas respondiam `401 authentication_required`, código ausente de `ERROR_MESSAGES`, que caía
   na mensagem genérica — escondendo a causa real.
   **Correção (#84F8):** o leitor passa a usar o mesmo token canônico do resto do app
-  (`__tradutorGetCanonicalAccessToken`) via `readerRequestInit`, e páginas, miniaturas e o PDF
+  (`__komystGetCanonicalAccessToken`) via `readerRequestInit`, e páginas, miniaturas e o PDF
   do fallback são **buscados** e entregues aos elementos como object URLs, revogadas ao trocar
   de página ou fechar. Nenhuma dependência nova de PDF, nenhum token em URL, nenhuma
   credencial exclusiva do leitor: job_id opaco, validação de dono em SQL, vínculo exato de

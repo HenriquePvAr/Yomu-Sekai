@@ -1,16 +1,16 @@
-# Tradutor IA — Documentação Técnica
+# Komyst - Documentação Técnica
 
 > **Base verificada:** `b990cc8` (branch `main`) em 2026-10-26 (passos 15–16 de §29); `d14edac` para os diagramas Mermaid de §15
 > (validação/retries/liquidação), §16 (três candidatos de preenchimento, escolha e portões,
-> tipografia) e §25 (paralelismo por página) conferidos contra `yomu/ocr/ocr_balloon.py`,
-> `yomu/pipeline/benchmark_pipeline.py` e `yomu/clean/ownership/font_fidelity.py`. O restante do
+> tipografia) e §25 (paralelismo por página) conferidos contra `komyst/ocr/ocr_balloon.py`,
+> `komyst/pipeline/benchmark_pipeline.py` e `komyst/clean/ownership/font_fidelity.py`. O restante do
 > documento foi verificado sobre `5f482ce1` (2026-10-24); §16 e §25 antes sobre `c994426f`.
 > Seções marcadas como *snapshot histórico* (§28.1, §29, parte da §30) não foram revalidadas.
 > Multi-idioma OCR (§14) reverificado sobre `dev` em 2026-11-03; glossário de nomes (§15)
 > verificado sobre `22f595d` (feat/GLOSSARY-01), integrado em `dev`/`main`.
 > §17, "Auditoria linguística e taxonomia semântica", item 5 (retry pelo backend) verificado sobre `885a237` (branch `dev`) em 2026-11-03.
 > **Última revisão:** 2026-11-05 (base verificada `fe8d28f`, branch `main`)
-> **Público:** desenvolvedores, mantenedores, suporte técnico e agentes automatizados.
+> **Público:** desenvolvedores, mantenedores e suporte técnico.
 
 Documentos irmãos: [Guia do Usuário](../user/GUIA_DO_USUARIO.md) ·
 [Política de Documentação](../DOCUMENTATION_POLICY.md) · [Índice da documentação](../README.md)
@@ -19,14 +19,13 @@ Documentos irmãos: [Guia do Usuário](../user/GUIA_DO_USUARIO.md) ·
 
 ## Como ler este documento
 
-Cada afirmação aqui foi conferida contra o código, os testes e a configuração do commit
-base. Recursos que ainda não existem aparecem marcados explicitamente:
+Os marcadores distinguem o que existe no código do que está disponível no produto:
 
 | Marcador | Significado |
 | --- | --- |
 | **IMPLEMENTADO** | Existe no código do commit base e é alcançável em execução normal. |
 | **PARCIAL** | Existe no backend/núcleo, mas não está completo ou não está exposto ao usuário. |
-| **PLANEJADO** | Não existe no repositório. Não documentar como disponível. |
+| **PLANEJADO** | Ainda não existe no repositório e não está disponível no produto. |
 | **DEPRECIADO** | Existe por compatibilidade, mas não é o caminho recomendado. |
 
 ---
@@ -70,7 +69,7 @@ base. Recursos que ainda não existem aparecem marcados explicitamente:
 
 ## 1. Visão geral do projeto
 
-O Tradutor IA é uma **aplicação local** que transforma um capítulo ilustrado
+O Komyst é uma **aplicação local** que transforma um capítulo ilustrado
 (webtoon/manhwa/mangá em inglês) numa versão traduzida para português do Brasil, com PDF
 final e relatórios de qualidade.
 
@@ -101,10 +100,10 @@ O produto caminha para a **primeira beta externa com Scans**. Estado por área:
 | Qualidade semântica/natural PT-BR | **REVISÃO** — TDD #82 separou confiança na fonte OCR, fidelidade de significado e naturalidade PT-BR em três severidades (`blocked`/`verify`/`review`). Replay offline sobre 542 regiões reais persistidas: 531 limpas, 8 em revisão por fonte OCR suspeita, 3 bloqueadas por divergência semântica. Regiões sem candidato alternativo persistido dependem de um E2E real com provedor |
 | Leitor PDF integrado | **IMPLEMENTADO** — TDD #83: **LER** é a ação primária do card do Histórico e abre o capítulo na aba **Leitor**, dentro do shell, com paginação, zoom, ajuste à largura/página, miniaturas preguiçosas, teclado e tela cheia. Sem dependência nova: as páginas são os JPEGs já contidos no PDF da execução. Abrir externamente permanece como ação secundária |
 | Comunidade social (Supabase + Drive) | **PARCIAL** — rotas de backend existem (fail-closed se não configurado), mas a UI está desligada no cliente (`COMMUNITY_ENABLED = false` em `static/social_community.js`; a aba aparece como "EM BREVE"/"EM DESENVOLVIMENTO") |
-| Tradução no cliente | **IMPLEMENTADO** — todo job com tradução habilitada usa o provider interno autenticado `yomu_backend` (Edge Function `translation-execute`); providers locais DeepL/NVIDIA/NLLB só no pipeline legado (§15) |
+| Tradução no cliente | **IMPLEMENTADO** — todo job com tradução habilitada usa o provider interno autenticado `komyst_backend` (Edge Function `translation-execute`); providers locais DeepL/NVIDIA/NLLB só no pipeline legado (§15) |
 | Licenciamento / expiração de tester | **SCHEMA/RPC REMOTOS IMPLEMENTADOS** — TDD #78 aplica Supabase schema/RLS/RPC atômica, nega usuário sem entitlement e mantém primeiro grant real pendente |
-| Retomada de job interrompido | **IMPLEMENTADO** — TDD #56: `POST /api/ui/resume` mais o painel `#interruptedJobsPanel` e o botão `Retomar`, renderizado apenas para os jobs que o backend marca `can_resume` (`static/tradutor_ui.js`, `tests/test_interrupted_job_resume_ui.py`/`.mjs`) |
-| Instalador para usuário final (Setup) | **PARCIAL** — plumbing de build existe (`packaging/tradutor_ia.spec` → `YomuSekai.exe` a partir de `desktop_app.py`, `packaging/TradutorIA.iss`, `tools/build_installer.py`); nenhum instalador validado/publicado para usuário final consta do repositório |
+| Retomada de job interrompido | **IMPLEMENTADO** — TDD #56: `POST /api/ui/resume` mais o painel `#interruptedJobsPanel` e o botão `Retomar`, renderizado apenas para os jobs que o backend marca `can_resume` (`static/komyst_ui.js`, `tests/test_interrupted_job_resume_ui.py`/`.mjs`) |
+| Instalador para usuário final (Setup) | **PARCIAL** — plumbing de build existe (`packaging/komyst.spec` → `Komyst.exe` a partir de `desktop_app.py`, `packaging/Komyst.iss`, `tools/build_installer.py`); nenhum instalador validado/publicado para usuário final consta do repositório |
 | Atualizador automático assinado | **PARCIAL** — núcleo de confiança, transporte, chave pública `beta-2026-10` e URL de manifest padrão configurados; a aba **Atualizações** e as rotas `/api/update/*` existem; fluxo ponta a ponta não foi verificado nesta revisão (§23) |
 | Validação em VM Windows limpa | **PLANEJADO** (não provada) |
 
@@ -113,26 +112,26 @@ O produto caminha para a **primeira beta externa com Scans**. Estado por área:
 
 ## 3. Arquitetura de repositório e mapa de componentes
 
-O código vive no pacote **`yomu/`** (≈220 módulos em subpacotes por domínio). Os `*.py`
+O código vive no pacote **`komyst/`** (≈220 módulos em subpacotes por domínio). Os `*.py`
 da raiz são **shims de compatibilidade** de poucas linhas: cada um importa o módulo real e
-se substitui em `sys.modules` (por exemplo `app_ui.py` → `yomu.ui.app`, `start_tradutor.py`
-→ `yomu.commands.start_tradutor`). Não há pacote instalável; os entrypoints são executados
+se substitui em `sys.modules` (por exemplo `app_ui.py` → `komyst.ui.app`, `start_tradutor.py`
+→ `komyst.commands.start_tradutor`). Não há pacote instalável; os entrypoints são executados
 a partir da raiz. Testes ficam em `tests/` (419 arquivos `test_*.py` versionados) e os
 helpers de teste em `test_support/`.
 
 ```text
 <repo>/
-├── start_tradutor.py   → yomu.commands.start_tradutor   # launcher canônico (worker + UI + supervisão)
+├── start_tradutor.py   → komyst.commands.start_tradutor   # launcher canônico (worker + UI + supervisão)
 ├── start_tradutor.bat                                   # atalho Windows para o launcher
-├── desktop_app.py      → yomu.desktop.app               # shell WebView2 (entry do build YomuSekai.exe)
-├── app_ui.py           → yomu.ui.app                    # servidor NiceGUI/FastAPI + rotas HTTP
-├── worker_service.py   → yomu.runtime.worker_service    # worker independente que drena a fila
-├── run_webtoon.py      → yomu.commands.run_webtoon      # CLI de capítulo
-├── run_local_folder.py → yomu.commands.run_local_folder # CLI de snapshot local
-├── main.py             → yomu.commands.legacy_gui       # GUI/pipeline legado
-├── down.py             → yomu.download.down             # shim de import do downloader
+├── desktop_app.py      → komyst.desktop.app               # shell WebView2 (entry do build Komyst.exe)
+├── app_ui.py           → komyst.ui.app                    # servidor NiceGUI/FastAPI + rotas HTTP
+├── worker_service.py   → komyst.runtime.worker_service    # worker independente que drena a fila
+├── run_webtoon.py      → komyst.commands.run_webtoon      # CLI de capítulo
+├── run_local_folder.py → komyst.commands.run_local_folder # CLI de snapshot local
+├── main.py             → komyst.commands.legacy_gui       # GUI/pipeline legado
+├── down.py             → komyst.download.down             # shim de import do downloader
 ├── conftest.py, sitecustomize.py                        # bootstrap hermético de testes
-├── yomu/               # código de produção (ver mapa abaixo)
+├── komyst/               # código de produção (ver mapa abaixo)
 ├── ui/                 # ui_shell.html, auth_callback.html
 ├── static/             # JS/CSS do frontend + catálogos i18n
 ├── tests/  test_support/
@@ -147,7 +146,7 @@ helpers de teste em `test_support/`.
 
 ### Mapa de componentes por domínio
 
-| Domínio | Módulos principais (caminho a partir de `yomu/`) |
+| Domínio | Módulos principais (caminho a partir de `komyst/`) |
 | --- | --- |
 | Launcher / processos | `commands/start_tradutor.py`, `runtime/worker_supervisor.py`, `runtime/process_launcher.py`, `runtime/process_tree.py`, `runtime/process_options.py`, `desktop/app.py` |
 | UI | `ui/app.py`, `ui/ui_bridge.py`, `ui/ui_helpers.py`, `ui/ui_history.py`, `ui/progress.py`, `ui/local_media_registry.py` + `ui/`, `static/` na raiz |
@@ -155,7 +154,7 @@ helpers de teste em `test_support/`.
 | Fonte de capítulo | `download/sources/chapter_source.py`, `download/sources/universal_chapter_adapter.py`, `download/sources/source_profile.py`, `download/sources/canonical_source_identity.py`, `review/source_analysis_phase.py`, `review/source_readiness.py`, `review/source_support_report.py`, `download/webtoons_reader_bridge.py`, `download/lazy_slot_resolver.py`, `download/readers/*`, `download/local/*` |
 | Download | `download/down.py`, `download/download_transport.py`, `download/browser_runtime.py`, `download/image_validation.py`, `download/comix_session.py`, `download/pinned_requests.py` |
 | OCR | `ocr/ocr_engine.py`, `ocr/ocr_balloon.py`, `ocr/ocr_parallel.py`, `ocr/ocr_memory_policy.py`, `ocr/fast_ocr_policy.py`, `ocr/ocr_line_provenance.py`, `ocr/source_completeness.py`, `ocr/splitting/smart_split_incremental.py` |
-| Tradução | `translation/providers/yomu_backend_provider.py`, `translation/providers/translator_deepl.py`, `translation/providers/translator_nvidia.py`, `translation/providers/translator_nllb.py`, `translation/providers/provider_execution.py`, `translation/providers/provider_transport.py`, `pipeline/session_context.py`, `translation/natural_ptbr_refinement.py`, `translation/sfx_glossary.py` |
+| Tradução | `translation/providers/komyst_backend_provider.py`, `translation/providers/translator_deepl.py`, `translation/providers/translator_nvidia.py`, `translation/providers/translator_nllb.py`, `translation/providers/provider_execution.py`, `translation/providers/provider_transport.py`, `pipeline/session_context.py`, `translation/natural_ptbr_refinement.py`, `translation/sfx_glossary.py` |
 | Limpeza / reconstrução | `clean/orchestrator.py`, `clean/inpainting/*`, `clean/reconstruction/*`, `clean/ownership/*` (inclui `font_fidelity.py`, `source_glyph_envelope.py`), `clean/gemini_fallback/*` |
 | Qualidade / revisão | `review/chapter_quality_revision.py`, `review/preview_gates.py`, `review/region_taxonomy.py`, `review/review_item.py`, `review/review_manifest.py`, `review/workflows/*`, `translation/semantic_fidelity.py`, `translation/linguistic_audit.py` |
 | Saída | `export/pdf.py`, `export/pdf_naming.py`, `export/pdf_reader.py`, `export/output_manifest.py`, `export/editable_psd_writer.py`, `export/professional_psd.py`, `runtime/artifact_contract.py` |
@@ -185,34 +184,34 @@ reconexão, sem voltar a `boot_failed`. Evidências, limites e falha real por
 espaço estão no [relatório do job 457d265b](../../reports/job_457d265b_runtime_20261108.md).
 
 Três processos independentes, mais um subprocesso por job. Em execução por código-fonte o
-launcher é `start_tradutor.py`; no build congelado (`YomuSekai.exe`, entry `desktop_app.py`) os
-mesmos papéis rodam como `YomuSekai.exe --internal-child <papel>`
+launcher é `start_tradutor.py`; no build congelado (`Komyst.exe`, entry `desktop_app.py`) os
+mesmos papéis rodam como `Komyst.exe --internal-child <papel>`
 (`worker`, `ui`, `job-runner`, `community-publish-runner`, `review-rerun-runner`,
 `review-reexport-runner`, `dynamic-resolver`, `comix-cf-capture`).
 
 ```mermaid
 flowchart TD
-    U([Usuário]) --> L["start_tradutor.py all<br/>(yomu.commands.start_tradutor)"]
+    U([Usuário]) --> L["start_tradutor.py all<br/>(komyst.commands.start_tradutor)"]
     U --> D["desktop_app.py<br/>shell WebView2"]
     L -->|"1. update_bootstrap.check_before_start"| UPD[(manifest assinado)]
-    L -->|"2. spawn detached + supervisão"| W["worker_service.py<br/>(yomu.runtime.worker_service)"]
-    L -->|"3. spawn e espera"| UI["app_ui.py<br/>(yomu.ui.app) NiceGUI + FastAPI"]
+    L -->|"2. spawn detached + supervisão"| W["worker_service.py<br/>(komyst.runtime.worker_service)"]
+    L -->|"3. spawn e espera"| UI["app_ui.py<br/>(komyst.ui.app) NiceGUI + FastAPI"]
     D -->|spawn| UI
     U -->|"http://127.0.0.1:8080"| UI
-    UI --> B["yomu.ui.ui_bridge"]
+    UI --> B["komyst.ui.ui_bridge"]
     B -->|"ensure_worker() se não houver worker saudável"| W
     B --> DB[("&lt;runtime&gt;/jobs.sqlite3")]
     W --> DB
-    W -->|"spawn 1 por job: python -u -m yomu.runtime.job_runner"| R[job_runner]
-    R --> P["yomu.pipeline.benchmark_pipeline"]
+    W -->|"spawn 1 por job: python -u -m komyst.runtime.job_runner"| R[job_runner]
+    R --> P["komyst.pipeline.benchmark_pipeline"]
     P --> O[("&lt;output&gt;/&lt;slug&gt;/&lt;run_id&gt;/")]
-    P -->|"tradução: yomu_backend"| SB[(Supabase Edge Functions)]
+    P -->|"tradução: komyst_backend"| SB[(Supabase Edge Functions)]
     R --> DB
 ```
 
-`<runtime>` e `<output>` são resolvidos por `yomu/runtime/runtime_paths.py` (§10): por padrão
-`%LOCALAPPDATA%\TradutorIA
-untime` e `%LOCALAPPDATA%\TradutorIA\output`.
+`<runtime>` e `<output>` são resolvidos por `komyst/runtime/runtime_paths.py` (§10): por padrão
+`%LOCALAPPDATA%\Komyst
+untime` e `%LOCALAPPDATA%\Komyst\output`.
 
 Pontos de contrato:
 
@@ -229,7 +228,7 @@ Pontos de contrato:
 
 ## 5. Ciclo de vida do launcher e supervisão do worker
 
-`start_tradutor.py` (implementação em `yomu/commands/start_tradutor.py`) aceita estes
+`start_tradutor.py` (implementação em `komyst/commands/start_tradutor.py`) aceita estes
 comandos posicionais — não há `--help`; um comando desconhecido imprime `unknown command` e sai
 com código `2`:
 
@@ -256,7 +255,7 @@ flowchart TD
     E -->|não| X2[exit 2: configuration_error]
     E -->|sim| C[update_bootstrap.check_before_start]
     C -->|"can_launch = false"| X3[exit 3: update_required]
-    C -->|"payload novo ativado"| H["handoff: start_tradutor.py all<br/>do novo payload (TRADUTOR_IA_UPDATE_CHECKED=1)"]
+    C -->|"payload novo ativado"| H["handoff: start_tradutor.py all<br/>do novo payload (KOMYST_UPDATE_CHECKED=1)"]
     C -->|"not_configured / up_to_date"| HW{worker saudável<br/>já registrado?}
     HW -->|sim| UI[start_ui: filho app_ui, espera]
     HW -->|não| SW[spawn_worker_process detached] --> SUP[WorkerSupervisor em thread daemon] --> UI
@@ -319,7 +318,7 @@ o exercita.
 
 ## 6. Ciclo de vida da UI
 
-`app_ui.py` (shim de `yomu/ui/app.py`) sobe um app FastAPI/NiceGUI:
+`app_ui.py` (shim de `komyst/ui/app.py`) sobe um app FastAPI/NiceGUI:
 
 - **Fila (`/api/ui/queue/add`)** passa pelo mesmo portão do formulário principal
   (`UiBridge._authorize_translation_start`: dispositivo comercial ou licença Beta), sela o
@@ -337,8 +336,8 @@ o exercita.
 - **Fontes:** sem a ponte `pywebview` (UI aberta num navegador) o botão abre a URL fixa numa
   nova aba; na janela desktop continua indo pela ponte para o navegador do sistema.
 
-- Porta: `TRADUTOR_UI_PORT` (padrão `8080`; lida em `yomu/ui/app.py` e `yomu/desktop/app.py`,
-  ausente do `.env.example`); host: `community_auth.configured_bind_host()` (`TRADUTOR_UI_HOST`,
+- Porta: `KOMYST_UI_PORT` (padrão `8080`; lida em `komyst/ui/app.py` e `komyst/desktop/app.py`,
+  ausente do `.env.example`); host: `community_auth.configured_bind_host()` (`KOMYST_UI_HOST`,
   padrão loopback).
 - **Origem canônica: `http://127.0.0.1:8080`.** O frontend monta os redirects de auth
   (confirmação de cadastro, recuperação de senha, callback) a partir de `window.location.origin`
@@ -349,7 +348,7 @@ o exercita.
   `SUPABASE_REDIRECT_URL=http://127.0.0.1:8080/auth/callback` como referência para configurar o
   projeto (nenhum módulo Python as lê). O shell desktop usa `127.0.0.1` e a porta 8080 por
   padrão e só aceita loopback (`--host`).
-- Bind externo exige o opt-in explícito `TRADUTOR_ALLOW_EXTERNAL_BIND=1` **e** um provider
+- Bind externo exige o opt-in explícito `KOMYST_ALLOW_EXTERNAL_BIND=1` **e** um provider
   de auth que declare `supports_external_bind`. O provider local nunca satisfaz isso.
 - A porta é verificada antes do `ui.run` (`_assert_startup_port_available`).
 - Página única em `/`, servindo `ui/ui_shell.html` + `static/`.
@@ -398,7 +397,7 @@ caminho paralelo. As camadas, da mais superficial para a autoritativa:
 | Camada | Onde | O que garante |
 | --- | --- | --- |
 | Rótulo/`disabled` do botão | `setRunControls`, `dataset.busy` | UX: o usuário vê que já clicou |
-| Single-flight | `startInFlight` em `tradutor_ui.js` | uma rajada de cliques compartilha **uma** operação |
+| Single-flight | `startInFlight` em `komyst_ui.js` | uma rajada de cliques compartilha **uma** operação |
 | Dedupe de fila | `_pending_duplicate()` em `ui_bridge.py` | resposta amigável `duplicate: true` para reenvio sequencial |
 | Índice único parcial | `uq_jobs_active_owner_chapter` | **a garantia real**: o banco recusa a segunda linha |
 
@@ -428,7 +427,7 @@ O ETA usa contadores canônicos da etapa e suspende a estimativa após 120 segun
 heartbeat do runner não renova artificialmente a data de progresso.
 
 `GET /api/ui/sources/preview/{source_key}` exige o principal da UI e aceita somente as três
-chaves de `SUPPORTED_SOURCE_URLS`. `yomu.ui.source_previews` mantém cache local com TTL de
+chaves de `SUPPORTED_SOURCE_URLS`. `komyst.ui.source_previews` mantém cache local com TTL de
 60 segundos, uma captura por chave em voo e um único navegador de captura por vez. Reutiliza
 o browser runtime e o teardown limitado existentes, com perfil temporário sem autenticação.
 A UI consulta somente enquanto Fontes estiver visível. Falhas preservam a captura anterior e
@@ -455,7 +454,7 @@ produção atuais — `source_analysis`, `awaiting_source_review`, `waiting_sour
 
 ## 7. Ciclo de vida do worker e do runner
 
-`worker_service.py` (`yomu/runtime/worker_service.py`) roda um laço:
+`worker_service.py` (`komyst/runtime/worker_service.py`) roda um laço:
 
 | Constante | Valor |
 | --- | --- |
@@ -475,10 +474,10 @@ Sequência por ciclo:
 3. Reivindica **um** job `queued` com UPDATE guardado por `status='queued'`.
 4. Para fonte por URL, roda a fase de análise (`_prepare_source` →
    `source_analysis_phase`) enquanto segura o claim.
-5. Cria o runner conforme o tipo do job (`translation` → `yomu.runtime.job_runner`,
+5. Cria o runner conforme o tipo do job (`translation` → `komyst.runtime.job_runner`,
    `community_publish`, `review_rerun`, `review_reexport` → seus runners):
-   `python -u -m yomu.runtime.job_runner --job-id ... --db ... --worker-id ... --log ... --start-gate ...`
-   (no build congelado: `YomuSekai.exe --internal-child job-runner ...`).
+   `python -u -m komyst.runtime.job_runner --job-id ... --db ... --worker-id ... --log ... --start-gate ...`
+   (no build congelado: `Komyst.exe --internal-child job-runner ...`).
 6. Acompanha o runner, honra cancelamento cooperativo e reconcilia a saída
    (`_reconcile_runner_exit`).
 
@@ -533,7 +532,7 @@ sequenceDiagram
 
 Etapas na ordem em que `benchmark_pipeline.run_benchmark` as executa (nomes de estágio de
 `resource_monitor.set_stage`); detalhes nas §11–§18. `--download-only` é tratado antes, em
-`yomu/commands/run_webtoon.py`, e para depois da validação das imagens.
+`komyst/commands/run_webtoon.py`, e para depois da validação das imagens.
 
 ```mermaid
 flowchart LR
@@ -545,7 +544,7 @@ flowchart LR
     VA -->|download-only| DO([fim: só imagens])
     VA --> SS["smart_split<br/>(§13)"] --> PC[precheck sem texto]
     PC --> OCR["ocr + classification<br/>(§14)"]
-    OCR --> TR["translation<br/>yomu_backend (§15)"]
+    OCR --> TR["translation<br/>komyst_backend (§15)"]
     TR --> RE["rendering: limpeza +<br/>diagramação (§16)"]
     RE --> PDF["pdf (§18)"]
     PDF --> REP["reports + quality gate (§17)<br/>PNG/PSD/QC conforme perfil (§26)"]
@@ -557,7 +556,7 @@ flowchart LR
 
 ## 8. Máquina de estados do job
 
-`yomu/runtime/job_store.py` — `JobStatus` define **15 estados**. Transições não listadas em
+`komyst/runtime/job_store.py` — `JobStatus` define **15 estados**. Transições não listadas em
 `ALLOWED_TRANSITIONS` são rejeitadas com `TransitionError` (fail-closed).
 
 | Estado | Classe | Significado |
@@ -711,7 +710,7 @@ em cada entrada de `runtime_state()["resumable"]`. `already_resumed` não é err
 devolve `{"ok": true, "job_id": <sucessor>, "already_resumed": true}` — a operação é
 idempotente e um duplo clique nunca enfileira o capítulo duas vezes.
 
-**Frontend.** `renderResumableJobs()` em `static/tradutor_ui.js` renderiza
+**Frontend.** `renderResumableJobs()` em `static/komyst_ui.js` renderiza
 `#interruptedJobsPanel` (`ui/ui_shell.html`) a partir de `runtime.resumable`, filtrando por
 `can_resume === true` — nunca por comparação de status em JavaScript. Cada linha tem um
 `<button>` real com `aria-label`, `dataset.jobId` com o identificador canônico vindo do
@@ -727,7 +726,7 @@ clique real, duplo clique, rejeição do backend, exclusão mútua com **Cancela
 
 ## 10. Job store (SQLite) e sistema de arquivos de runtime
 
-`yomu/runtime/job_store.py` — `SCHEMA_VERSION = 17`, SQLite em modo WAL com `busy_timeout`.
+`komyst/runtime/job_store.py` — `SCHEMA_VERSION = 17`, SQLite em modo WAL com `busy_timeout`.
 
 Índices únicos parciais impõem, no próprio banco, invariantes que código de aplicação não
 consegue garantir sob concorrência:
@@ -778,15 +777,15 @@ canvas. Análise de fonte é sanitizada antes de persistir.
 
 ### Estrutura de runtime
 
-Os caminhos vêm de `yomu/runtime/runtime_paths.py`. A raiz gravável por usuário é
-`%LOCALAPPDATA%\TradutorIA` (fallback `XDG_STATE_HOME/TradutorIA` ou `~/.tradutoria`),
-sobrescrevível por `TRADUTOR_USER_DATA_ROOT`; cada sub-raiz também tem override próprio
-(`TRADUTOR_RUNTIME_ROOT`, `TRADUTOR_OUTPUT_ROOT`, `CACHE_ROOT`, `TEMP_FOLDER`, `TEMP_OUT`).
+Os caminhos vêm de `komyst/runtime/runtime_paths.py`. A raiz gravável por usuário é
+`%LOCALAPPDATA%\Komyst` (fallback `XDG_STATE_HOME/Komyst` ou `~/.komyst`),
+sobrescrevível por `KOMYST_USER_DATA_ROOT`; cada sub-raiz também tem override próprio
+(`KOMYST_RUNTIME_ROOT`, `KOMYST_OUTPUT_ROOT`, `CACHE_ROOT`, `TEMP_FOLDER`, `TEMP_OUT`).
 Um build instalado pode viver em local somente leitura, por isso nada mutável fica ao lado do
 código.
 
 ```text
-%LOCALAPPDATA%\TradutorIA├── runtime/                  # TRADUTOR_RUNTIME_ROOT
+%LOCALAPPDATA%\Komyst├── runtime/                  # KOMYST_RUNTIME_ROOT
 │   ├── jobs.sqlite3          # fila e leases (WAL)
 │   ├── logs/<job_id>.log     # log por job
 │   ├── ui.log                # stdout/stderr da UI
@@ -794,7 +793,7 @@ código.
 │   └── diagnostics/          # trilhas JSONL (transições de job, rotas, app)
 ├── cache/                    # CACHE_ROOT — caches de pipeline
 ├── temp/input, temp/output   # TEMP_FOLDER / TEMP_OUT
-└── output/<slug>/<run_id>/   # TRADUTOR_OUTPUT_ROOT
+└── output/<slug>/<run_id>/   # KOMYST_OUTPUT_ROOT
     ├── input/                # imagens de origem ativas
     ├── pages/                # páginas finais renderizadas
     ├── run_manifest.json     # manifest autodescritivo da execução
@@ -834,7 +833,7 @@ Falham fechados, antes de qualquer OCR: cobertura incompleta (`incomplete_downlo
 autenticação exigida, challenge interativo, conteúdo protegido, leitor não observável,
 mais de 400 páginas, paginação ambígua (`pagination_incomplete`).
 
-Leitor do Webtoons (`yomu/download/webtoons_reader_bridge.py`): toda tag de página traz a URL
+Leitor do Webtoons (`komyst/download/webtoons_reader_bridge.py`): toda tag de página traz a URL
 real em `data-url` e o tamanho em `width`/`height`; só o placeholder transparente do `src`
 espera a rolagem. Com esses valores declarados o slot já é resolvido (`source:
 "data-url-declared"`), sem rolar o leitor inteiro (~1 s por página: 87 s num episódio de 111
@@ -875,9 +874,9 @@ a loopback (`_local_folder_submit_allowed`).
 
 ## 12. Download de imagens
 
-`yomu/download/down.py` usa Selenium com um navegador Chromium local resolvido por
+`komyst/download/down.py` usa Selenium com um navegador Chromium local resolvido por
 `browser_runtime.BrowserRuntimeResolver` (configurado → gerenciado → do sistema, sem download
-de driver salvo `TRADUTOR_ALLOW_DRIVER_DOWNLOAD=1`; headless por padrão,
+de driver salvo `KOMYST_ALLOW_DRIVER_DOWNLOAD=1`; headless por padrão,
 `SOURCE_BROWSER_HEADLESS`). Fontes com leitor dinâmico (ex.: Comix) passam pelo resolver
 isolado em `download/readers/` (§29, "Resolver dinâmico Comix"). O downloader deduplica URLs preservando a ordem
 observada, valida os bytes das imagens (`image_validation.py`), compara o conjunto esperado
@@ -894,8 +893,8 @@ Detalhes em [`docs/DOWNLOAD_TRANSPORTS.md`](../DOWNLOAD_TRANSPORTS.md).
 ## 13. Smart Split e páginas lógicas
 
 Webtoons entregam fatias muito altas ou com divisões inadequadas para OCR e PDF.
-`yomu/export/pdf.py` implementa o **smart split** (com o agendamento incremental de
-`yomu/ocr/splitting/smart_split_incremental.py` usado pelo pipeline), que reconstrói páginas lógicas com limites configuráveis
+`komyst/export/pdf.py` implementa o **smart split** (com o agendamento incremental de
+`komyst/ocr/splitting/smart_split_incremental.py` usado pelo pipeline), que reconstrói páginas lógicas com limites configuráveis
 (`SMART_PDF_TARGET_HEIGHT`, `SMART_PDF_MIN_HEIGHT`, `SMART_PDF_MAX_HEIGHT`) e preserva um
 relatório das fronteiras escolhidas. Ocorre **antes** do OCR quando
 `SMART_WEBTOON_PDF_SPLIT=True` (padrão) e o relatório de download indica
@@ -957,7 +956,7 @@ afirmar um motor que o run não vai usar.
 **Proveniência efetiva do OCR (TDD #84F19).** O processo da UI não lê mais
 `config.OCR_ENGINE` como fonte de verdade para o painel de configuração: esse valor pode ser
 apenas o default do processo e não o motor efetivo da beta. `ui_bridge` passa a reportar
-`settings.ocr_engine` por `config.effective_ocr_engine()` (`config` = `yomu/config/settings.py`;
+`settings.ocr_engine` por `config.effective_ocr_engine()` (`config` = `komyst/config/settings.py`;
 o default é `OCR_ENGINE=rapidocr`), o mesmo resolvedor usado antes de
 iniciar um run. Com o default canônico da beta, a UI mostra `RapidOCR · Ativo`; um override
 explícito e suportado continua sendo reportado pelo próprio id. O campo segue informativo:
@@ -1007,30 +1006,30 @@ origem não poderia ser reconstruído depois. O módulo **apenas observa**.
 
 **Entrada.** Seletor `#langSelect` em `ui/ui_shell.html` (valores `3` Inglês, `1` Japonês,
 `2` Coreano, `zh` Chinês simplificado, `ru` Russo/Cirílico, `es` Espanhol/Latino) → campo
-`source_lang` do payload → `UiBridge` valida contra `_VALID_SOURCE_LANGS` (`yomu/ui/ui_bridge.py`,
-padrão `3`) → `--source-lang` da CLI (`yomu/commands/run_webtoon.py`, padrão `3`) →
-`_resolve_translation_runtime(source_lang=…)` em `yomu/pipeline/benchmark_pipeline.py`, que
+`source_lang` do payload → `UiBridge` valida contra `_VALID_SOURCE_LANGS` (`komyst/ui/ui_bridge.py`,
+padrão `3`) → `--source-lang` da CLI (`komyst/commands/run_webtoon.py`, padrão `3`) →
+`_resolve_translation_runtime(source_lang=…)` em `komyst/pipeline/benchmark_pipeline.py`, que
 deriva o código de OCR por `ocr_code_for_choice()` (`translator_nllb.py`) e passa o idioma ao
 tradutor.
 
 **O que funciona (IMPLEMENTADO):**
 
-- `score_group_ocr_quality()` (`yomu/ocr/ocr_balloon.py`): texto majoritariamente CJK, Hangul,
+- `score_group_ocr_quality()` (`komyst/ocr/ocr_balloon.py`): texto majoritariamente CJK, Hangul,
   cirílico ou árabe recebe score neutro (`0.9`, `0.8` com linha ignorada dentro da região) e o
   motivo `non_latin_script`. Antes de 2026-11-03 cada letra caía em `non_ascii_ocr_artifact`
   (motivo de "corrupção"), a região era relida e bloqueada — nenhum texto não latino chegava
   à tradução.
-- `weak_label_semantic_promotion_allowed(…, source_lang=…)` (`yomu/review/region_taxonomy.py`):
+- `weak_label_semantic_promotion_allowed(…, source_lang=…)` (`komyst/review/region_taxonomy.py`):
   para idioma não inglês, qualquer texto com 4+ caracteres conta como conteúdo semântico.
-- `use_cls=False` no RapidOCR (`yomu/ocr/ocr_engine.py`) evita classificar texto rodado,
+- `use_cls=False` no RapidOCR (`komyst/ocr/ocr_engine.py`) evita classificar texto rodado,
   necessário para a leitura vertical; o seletor de idioma não altera isso.
 - `split_glued_source_words()` não precisa de exceção: só reescreve tokens `[A-Za-z]`
   (`re.sub` final da função), então texto CJK, Hangul e cirílico passa intacto.
 
 **O que falta (PLANEJADO):**
 
-- `yomu/ocr/ocr_models.py` tem o catálogo por idioma (`rec_model_for`, `model_path`,
-  `ensure_model`; diretório em `TRADUTOR_OCR_MODELS_DIR`, padrão `%APPDATA%/yomu_ocr_models`),
+- `komyst/ocr/ocr_models.py` tem o catálogo por idioma (`rec_model_for`, `model_path`,
+  `ensure_model`; diretório em `KOMYST_OCR_MODELS_DIR`, padrão `%APPDATA%/komyst_ocr_models`),
   mas **nenhum código de produção chama `ensure_model`**, e o `OCREngine` inicializa o RapidOCR
   sempre com o modelo padrão (`RapidOCR()`), sem `rec_model_path`. A qualidade de leitura de
   japonês, coreano e cirílico com o modelo padrão **não foi medida**.
@@ -1041,12 +1040,12 @@ tradutor.
 
 ### Resolução do provider
 
-**Caminho de produção — `yomu_backend` (IMPLEMENTADO).** Todo job com tradução habilitada usa
-o provider interno autenticado `yomu_backend`, independentemente do rótulo pedido.
-`benchmark_pipeline._resolve_translation_runtime()` constrói `YomuBackendTranslationProvider`
-(`yomu/translation/providers/yomu_backend_provider.py`) e o injeta em `get_translator()`; os
+**Caminho de produção — `komyst_backend` (IMPLEMENTADO).** Todo job com tradução habilitada usa
+o provider interno autenticado `komyst_backend`, independentemente do rótulo pedido.
+`benchmark_pipeline._resolve_translation_runtime()` constrói `KomystBackendTranslationProvider`
+(`komyst/translation/providers/komyst_backend_provider.py`) e o injeta em `get_translator()`; os
 rótulos `deepl`/`nemotron`/`riva` que chegam pela CLI ou pelo job viram apenas metadado. A
-validação de proveniência (`normalize_translation_provider_provenance`) aceita `deepl → yomu_backend` (o "motor" exibido ao usuário é a
+validação de proveniência (`normalize_translation_provider_provenance`) aceita `deepl → komyst_backend` (o "motor" exibido ao usuário é a
 DeepL, executada do lado do servidor) e falha com `provider_mismatch` para qualquer outra
 combinação. Jobs sem tradução (`download_only`, saída sem tradução) não constroem provider.
 
@@ -1055,7 +1054,7 @@ sequenceDiagram
     autonumber
     participant UI as UiBridge.start()
     participant R as job_runner
-    participant P as pipeline (YomuBackendTranslationProvider)
+    participant P as pipeline (KomystBackendTranslationProvider)
     participant EF as Supabase Edge Functions
     participant DL as DeepL (servidor)
     UI->>UI: principal autenticado + licença Beta ACTIVE
@@ -1069,24 +1068,24 @@ sequenceDiagram
     R->>EF: wallet-settle-job / wallet-finalize (consumo ou liberação do YK)
 ```
 
-A URL base é `YOMU_BACKEND_URL` ou, na ausência dela, `SUPABASE_URL`. Em `YOMU_ENV=local|test`
-o pipeline usa `MockBackendClient` (padrão `YOMU_TEST_BACKEND=mock`). O token do usuário nunca
+A URL base é `KOMYST_BACKEND_URL` ou, na ausência dela, `SUPABASE_URL`. Em `KOMYST_ENV=local|test`
+o pipeline usa `MockBackendClient` (padrão `KOMYST_TEST_BACKEND=mock`). O token do usuário nunca
 entra em linha de comando, ambiente, log ou metadado de job: vai cifrado com DPAPI num
 envelope por job. Falhas de reserva, auth, transporte ou settlement são
 `SystemicTranslationFailure` (job inteiro), nunca achado por região.
 
 **Fábrica legada — `translator_nllb.get_translator()` (DEPRECIADO para jobs).** Só é usada
-sem provider injetado pelo pipeline da GUI legada (`main.py` → `yomu/pipeline/legacy_gui_pipeline.py`).
+sem provider injetado pelo pipeline da GUI legada (`main.py` → `komyst/pipeline/legacy_gui_pipeline.py`).
 Dois eixos ortogonais:
 
 - `TRANSLATION_MODE` (padrão `nvidia`) — eixo **antigo**, seleciona a família
   local/Google/NVIDIA.
 - `ui_helpers.DEFAULT_TRANSLATION_PROVIDER` (**`deepl`**); `TRANSLATION_PROVIDERS =
-  {"deepl", "nemotron", "riva"}` e `INTERNAL_TRANSLATION_PROVIDERS = {"yomu_backend"}`.
+  {"deepl", "nemotron", "riva"}` e `INTERNAL_TRANSLATION_PROVIDERS = {"komyst_backend"}`.
 
 Regra: provider explícito vence; ausente **e** `TRANSLATION_MODE == "nvidia"` →
 `DEFAULT_TRANSLATION_PROVIDER`; `deepl` é resolvido antes de `TRANSLATION_MODE`; pedir
-`yomu_backend` sem instância injetada levanta `yomu_backend_provider_requires_injected_instance`.
+`komyst_backend` sem instância injetada levanta `komyst_backend_provider_requires_injected_instance`.
 Nunca há fallback silencioso entre providers.
 
 ### DeepL local (`translator_deepl.py`) — DEPRECIADO no cliente
@@ -1115,13 +1114,13 @@ Com contexto habilitado, `session_context.py` mantém informações do capítulo
 desativa; `--delete-context-after` remove o arquivo somente após a geração bem-sucedida do
 PDF.
 
-### Glossário de nomes por série — PARCIAL (feat/GLOSSARY-01, aguarda merge)
+### Glossário de nomes por série — IMPLEMENTADO
 
-> **Estado em `22f595d` (feat/GLOSSARY-01):** implementado e testado; não está em `main`.
+> **Estado atual:** integrado em `dev` e `main`; a UI envia o glossário no job e o runner aplica as substituições.
 
 Permite ao usuário definir substituições de nomes por série, por exemplo `Sunless = Sunny`,
 persistidas no `localStorage` do browser por URL de série e enviadas ao pipeline via variável
-de ambiente `YOMU_NAME_GLOSSARY`.
+de ambiente `KOMYST_NAME_GLOSSARY`.
 
 **Fluxo de ponta a ponta:**
 
@@ -1131,13 +1130,13 @@ UI textarea (#nameGlossaryInput)
   → payload.name_glossary (array de pares)
   → UiBridge._name_glossary() — valida, limita a 50 pares, rejeita src/tgt vazios
   → job_config["name_glossary"]
-  → job_runner.py — serializa como JSON em YOMU_NAME_GLOSSARY
+  → job_runner.py — serializa como JSON em KOMYST_NAME_GLOSSARY
   → benchmark_pipeline._resolve_translation_runtime()
   → translator.set_name_overrides(pairs)
 ```
 
 **`set_name_overrides(pairs)`** existe em `translator_deepl.py` e
-`yomu_backend_provider.py`. Além de armazenar os pares, registra as fontes com
+`komyst_backend_provider.py`. Além de armazenar os pares, registra as fontes com
 comprimento ≥ 3 como nomes protegidos (`_protected_names`), forçando a DeepL a mantê-las
 literais na saída — tornando a substituição determinística.
 
@@ -1147,7 +1146,7 @@ literais na saída — tornando a substituição determinística.
 **Limites:** máximo de 50 pares; fonte e destino devem ter pelo menos 1 caractere após
 trim. Fonte ou destino vazios são descartados silenciosamente pela validação em `UiBridge`.
 
-**Variável de ambiente:** `YOMU_NAME_GLOSSARY` — JSON array de arrays `[["Src","Tgt"],…]`;
+**Variável de ambiente:** `KOMYST_NAME_GLOSSARY` — JSON array de arrays `[["Src","Tgt"],…]`;
 consumida por `benchmark_pipeline._resolve_translation_runtime()` via `os.environ.get`.
 
 ### Proveniência de provider
@@ -1158,8 +1157,8 @@ efetivo é registrado, não presumido.
 
 ### Validação, retries e liquidação (fluxo atual)
 
-Ordem real em `yomu/pipeline/benchmark_pipeline.py` (função principal do pipeline) e
-`yomu/ocr/ocr_balloon.py`. As chamadas ao provider só acontecem **antes** da liquidação; a
+Ordem real em `komyst/pipeline/benchmark_pipeline.py` (função principal do pipeline) e
+`komyst/ocr/ocr_balloon.py`. As chamadas ao provider só acontecem **antes** da liquidação; a
 renderização final recebe `translator=None`.
 
 ```mermaid
@@ -1414,7 +1413,7 @@ em [`clean_strategy.md`](../architecture/clean_strategy.md#current-behaviour-202
 Segunda passada (mesma data, **IMPLEMENTADO**; detalhes e números em `clean_strategy.md`,
 seção "Mask, boundary and validation fixes"):
 
-- `CLEAN_FRINGE_EVIDENCE` (padrão `True`, lido em `yomu/config/settings.py`; como as demais
+- `CLEAN_FRINGE_EVIDENCE` (padrão `True`, lido em `komyst/config/settings.py`; como as demais
   flags de ajuste do Clean, não está no `.env.example`): `_antialias_fringe_mask` acrescenta à
   máscara a franja antialiasada e o contorno de polaridade oposta medidos por alfa, sem
   dilatação global; `_telea_source_without_fringe` impede o Telea de espalhar sobras do anel.
@@ -1454,7 +1453,7 @@ Terceira passada (páginas de fronteira, mesma data, **IMPLEMENTADO**; detalhes 
 - `apply_speech_container_reocr` ganha o gatilho `lettering_continuation_uncovered_text`
   (`_lettering_continuation_boxes`): linhas curtas não lidas abaixo/acima de uma linha confiante,
   com a mesma assinatura de letreiro, são relidas; o recorte de re-OCR recebe margem replicada.
-- `CLEAN_STRUCTURE_CONTINUATION` (padrão `True`, `yomu/config/settings.py`, fora do
+- `CLEAN_STRUCTURE_CONTINUATION` (padrão `True`, `komyst/config/settings.py`, fora do
   `.env.example` como as demais flags de ajuste do Clean): conflito de fronteira formado só por
   segmentos retos protege a linha e a redesenha entre os pontos onde ela é vista, em vez de
   recusar a região; curvas continuam em revisão.
@@ -1463,7 +1462,7 @@ Reconstrução com textura (item 5, **IMPLEMENTADO**):
 
 - `CLEAN_LEARNED_TEXTURE_FILL` (padrão `True`): em fundo `textured_art` /
   `STRUCTURED_OR_TEXTURED`, `_apply_cleanup_mask` usa o modelo LaMa local já existente
-  (`yomu/clean/inpainting/advanced_art_inpainting.py`, arquivo externo verificado por SHA-256
+  (`komyst/clean/inpainting/advanced_art_inpainting.py`, arquivo externo verificado por SHA-256
   em `ADVANCED_ART_INPAINT_MODEL_PATH`) em vez do Telea; sem o modelo, cai no preenchimento
   clássico e registra `group.learned_texture_fill`. Os portões existentes continuam valendo.
   Custo ~1 s por região texturizada em CPU. O cache guarda só os pixels reconstruídos dentro
@@ -1526,7 +1525,7 @@ Quinta passada (escolha da reconstrução e fantasmas, **IMPLEMENTADO**; detalhe
 - `_component_continues_beyond_line` segue o componente no nível da própria tinta: linha de
   arte cinza encostando em letra branca não transforma a letra em arte.
 - `OCR_SPLIT_AT_CROSSING_BORDERS` e `OCR_EXTEND_CLIPPED_EDGE_GLYPHS` (padrão `True`,
-  `yomu/config/settings.py`): linha que atravessa borda de painel/balão é dividida e relida;
+  `komyst/config/settings.py`): linha que atravessa borda de painel/balão é dividida e relida;
   glifo cortado na ponta da linha estende a caixa quando a releitura confirma.
 - `CLEAN_LEARNED_LAST_RESORT` (padrão `True`; `0` no `conftest.py`): depois de todas as
   estratégias recusarem, prosa de fala/narração/pensamento é reconstruída pelo LaMa e aceita só
@@ -1552,7 +1551,7 @@ Sexta passada (**IMPLEMENTADO**; detalhes em `clean_strategy.md`, "Five follow-u
 - O último recurso passa pelos mesmos portões de reconstrução e só é marcado para revisão quando
   algum dispara; o contorno do letreiro é medido nas duas polaridades.
 - Linha de OCR majoritariamente numérica com palavra do dicionário ("56,984 Won") não é descartada.
-- `RENDER_FIT_BALLOON_SHAPE` (padrão `True`, `yomu/config/settings.py`): dentro de balão fechado a
+- `RENDER_FIT_BALLOON_SHAPE` (padrão `True`, `komyst/config/settings.py`): dentro de balão fechado a
   tradução é quebrada na forma do balão (linhas mais largas no meio), nunca com fonte menor que a do
   encaixe retangular, respeitando a margem do letrista e os outros textos da página.
 
@@ -1561,8 +1560,8 @@ Sétima passada (2026-10-24, **IMPLEMENTADO**):
 - Marcação `art_fidelity_uncertain` pela textura típica (mediana) do entorno, com o anel começando
   3 px fora da máscara (`flat_patch_typical_ratio`); o portão de rejeição continua pela média.
 - Termo de tom da escolha de preenchimento julgado só onde o entorno é uniforme.
-- `TRANSLATE_SFX` passa a `True` por padrão (`yomu/config/settings.py`, `.env.example`; `0` no
-  `conftest.py`). `yomu/translation/sfx_glossary.py` + `assets/lexicon/sfx_en_pt.json` dão a
+- `TRANSLATE_SFX` passa a `True` por padrão (`komyst/config/settings.py`, `.env.example`; `0` no
+  `conftest.py`). `komyst/translation/sfx_glossary.py` + `assets/lexicon/sfx_en_pt.json` dão a
   onomatopeia pt-BR; SFX fora do glossário mantém o texto original e não é enviado ao provider (`sfx_glossary_translations`).
 - `RENDER_MATCH_SOURCE_SLANT` (padrão `True`): `_match_source_slant` inclina a tradução desenhada
   como o letreiro original quando a fonte escolhida é reta (diferença ≥ 4°), dentro da área segura.
@@ -1712,14 +1711,14 @@ Décima primeira passada (reconstrução e regiões restantes, 2026-10-25, **IMP
   Um nome logo após um tratamento abreviado (MR, MRS, MS, DR, PROF) é nome próprio mesmo
   sendo palavra inglesa ("MS. GO"; `honorific_addressed_names`, só no próprio grupo); o
   DeepL o recebe em `<x>` com `tag_handling=xml` e `ignore_tags=["x"]`
-  (`yomu/translation/honorific_names.py`), e só os lotes com um nome assim mudam de formato.
+  (`komyst/translation/honorific_names.py`), e só os lotes com um nome assim mudam de formato.
   ep33, 33 páginas: 106 → 108 traduzidos, mesmas falhas visuais.
 - Tradução (passo 13): `split_glued_source_words` passou a reparar também um nome do capítulo
   grudado no fim de um token ("GWANG-ILJEON" → GWANG-IL JEON, `chapter_names`) e uma letra lida
   errado (`_misread_correction`: "HIPES" → HIDES quando o capítulo escreve HIDES em outro balão,
   "PLRCHASED" → PURCHASED, "COLLDN'T" → COULDN'T; sem prova, só uma palavra comum dominante,
   Zipf ≥ 3 e um ponto acima da rival). Uma tradução válida com palavra que o português não
-  tem ("ESTOVA", "CURTIRE"; `yomu/translation/portuguese_words.py`, tabela
+  tem ("ESTOVA", "CURTIRE"; `komyst/translation/portuguese_words.py`, tabela
   `assets/lexicon/portuguese_freq.tsv.gz`) ganha uma tentativa `translate_strict`
   (`_retry_unknown_target_words`), adotada só se for válida e tiver menos palavras desconhecidas;
   senão a região fica exatamente como estava. O piso da fonte por balão acompanha o letreiro
@@ -1782,7 +1781,7 @@ Décima primeira passada (reconstrução e regiões restantes, 2026-10-25, **IMP
   roda em `_authorize_translation_start`, antes de existir job (HTTP 401 `auth_refresh_required`),
   e `getCanonicalAccessToken` (`static/supabase_auth.js`) renova a sessão quando faltam < 11 min,
   com uma renovação compartilhada; `api()` usa sempre esse getter. UI: confirmações usam
-  `yomuConfirm` (modal do app) em vez de `window.confirm`; a autorização das fontes é pedida no
+  `komystConfirm` (modal do app) em vez de `window.confirm`; a autorização das fontes é pedida no
   **Iniciar tradução** (mesmo `/api/ui/source-policy`); Configurações ficou com Anúncios e
   Feedback, e o painel do updater assinado (`updaterPanel`) foi para a aba Atualizações; Fontes
   perdeu o status "Atualizando prévia…" e ganhou **Solicitar fonte**. Contato: a Edge Function
@@ -1809,18 +1808,18 @@ Décima primeira passada (reconstrução e regiões restantes, 2026-10-25, **IMP
   só refatia tiras: imagens com formato de página (altura < 2× largura, `_images_are_page_shaped`)
   não são mais recombinadas (22 páginas de mangá viravam 13). A sessão DirectML do LaMa (~12 s de
   compilação) é criada em segundo plano logo após o OCR das páginas (`_prewarm_learned_inpainter`,
-  `YOMU_LAMA_PREWARM=0` desliga); durante o download ela deixava o leitor do Comix 32 s mais lento
+  `KOMYST_LAMA_PREWARM=0` desliga); durante o download ela deixava o leitor do Comix 32 s mais lento
   (A/B 48,8/47,8 s × 16,4/16,4 s). Medido e mantido: a releitura de lacunas dos balões (~25 s/capítulo)
   — filtro só-reconhecimento perdia falas manuscritas reais, e mosaico de recortes (10× mais rápido)
   lia pior; CPU paralela é mais lenta que a GPU. Logs: `WALLET_RESERVE_RESULT` e
   `TRANSLATION_EXECUTE_HTTP_RESULT` com `duration_ms` (backend 0,3–2,4 s por chamada).
 - Desempenho (passo 3, GPU): com `GPU_INFERENCE=auto` e `onnxruntime-directml`, o RapidOCR roda
-  com `det/cls/rec_use_dml` e o LaMa por uma sessão ONNX DirectML (`yomu/clean/inpainting/lama_onnx.py`).
+  com `det/cls/rec_use_dml` e o LaMa por uma sessão ONNX DirectML (`komyst/clean/inpainting/lama_onnx.py`).
   O exportador não tem forma ONNX das FFTs reais 2-D das Fourier units, então `rfftn`/`irfftn`
   viram produtos por matrizes de DFT montadas no grafo para o tamanho real (mesma conta;
   diferença máxima de 0,002/255 contra o TorchScript). A exportação é derivada do `.pt`
   verificado e cacheada com sidecar de SHA-256; falha de exportação ou de sessão volta ao
-  PyTorch na CPU. Todas as sessões DirectML rodam sob uma trava única (`yomu.core.gpu.DIRECTML_LOCK`):
+  PyTorch na CPU. Todas as sessões DirectML rodam sob uma trava única (`komyst.core.gpu.DIRECTML_LOCK`):
   RapidOCR e LaMa ao mesmo tempo derrubam o processo com access violation. A trava cobre só o
   `session.run` (o pré e pós-processamento do RapidOCR seguem em paralelo), e com DirectML a
   trava de página `_RAPIDOCR_INFERENCE_LOCK` é dispensada (`_rapidocr_section`). Medidos e
@@ -1843,7 +1842,7 @@ Décima primeira passada (reconstrução e regiões restantes, 2026-10-25, **IMP
   Completo (PDF + PSD).
 
 Escolha entre os três candidatos de preenchimento (`_apply_cleanup_mask`, `_remove_text_for_group`
-e `_enforce_visual_bounds` em `yomu/ocr/ocr_balloon.py`). O `learned` só existe com
+e `_enforce_visual_bounds` em `komyst/ocr/ocr_balloon.py`). O `learned` só existe com
 `CLEAN_LEARNED_TEXTURE_FILL` e modelo local disponível; o `surface` só com `CLEAN_SURFACE_FILL`
 (padrão `True`), fora da estratégia `lama_large`, e quando o anel prova um fundo suave. A pontuação
 soma os termos de `_fill_consistency_parts` exceto o degrau de borda (`step`), que só é reportado.
@@ -2151,7 +2150,7 @@ primeiro deles nunca chegou ao validador semântico:
    validador o rejeita de novo. O orçamento continua de **uma** chamada extra por região,
    tanto em `ocr_balloon` quanto em `provider_execution`.
 5. **O retry pelo backend quebrava em silêncio (corrigido em 2026-11-03).** No caminho de
-   produção o tradutor efetivo é `YomuBackendTranslationProvider`, cujo `translate_strict`
+   produção o tradutor efetivo é `KomystBackendTranslationProvider`, cujo `translate_strict`
    aceitava só `previous_translation`/`validation_reason`/`force`. Os três retries de
    `ocr_balloon.py` (terminologia, palavra-alvo desconhecida e retry de qualidade/isolado)
    passam também `allow_proper_names`, `proper_names`, `retry_origin`, `retry_attempt` e
@@ -2455,7 +2454,7 @@ o arquivo onde vive; nenhum depende de texto ou página específica.
 | Divisão de palavras coladas não termina em "A" isolado | `region_taxonomy.py` (`segment_words`) | Evita "NOVA ERA A". |
 | Pronome "one" ("that one", "the only one who") não é quantidade | `semantic_fidelity.py` (`_one_is_pronoun`) | Evita rejeição por `quantity_changed`. |
 | Estimativa de tempo: contador cheio mostra "Finalizando esta etapa…"; contador parado em 0 mostra "Etapa em andamento há X…" | `ui_bridge.py` | A tela repetia "Calculando estimativa…" até o fim do job. |
-| `translate_strict` do backend aceita os mesmos parâmetros do DeepL | `yomu_backend_provider.py` | Os retries quebravam em silêncio com `TypeError` e viravam candidato vazio. |
+| `translate_strict` do backend aceita os mesmos parâmetros do DeepL | `komyst_backend_provider.py` | Os retries quebravam em silêncio com `TypeError` e viravam candidato vazio. |
 
 **Pendente (PLANEJADO, medido, não corrigido):**
 
@@ -2601,7 +2600,7 @@ houve corrida de finalização; `review_required` é um estado **com** artefato 
 
 ### Leitor de capítulos embutido (TDD #83)
 
-Ler um capítulo traduzido não exige mais sair do Tradutor IA. O card do Histórico
+Ler um capítulo traduzido não exige mais sair do Komyst. O card do Histórico
 tem **LER** como ação primária; `ABRIR EXTERNAMENTE` continua existindo como ação
 secundária sobre o mesmo `/api/ui/open` de sempre.
 
@@ -2640,7 +2639,7 @@ nativo).
 qualquer outra, e sob o provider real da beta a sessão é um **Bearer em cabeçalho**.
 Um `<img src>`/`<iframe src>` não consegue enviar cabeçalho, então todo byte que o
 leitor mostra é **buscado** por `fetch` com o mesmo token canônico do resto do app
-(`window.__tradutorGetCanonicalAccessToken`, via `readerRequestInit`) e entregue ao
+(`window.__komystGetCanonicalAccessToken`, via `readerRequestInit`) e entregue ao
 elemento como object URL, revogada ao trocar de página ou fechar. `credentials:
 'same-origin'` continua enviado, de modo que os providers baseados em cookie
 funcionam sem caminho alternativo. **O token nunca aparece em URL**, não existe
@@ -2679,7 +2678,7 @@ artefato. O arquivo é aberto em modo binário de leitura e lido por offset.
 
 ## 19. Autenticação e autorização
 
-`community_auth.build_auth_provider()` (`yomu/community/community_auth.py`) — **o default é
+`community_auth.build_auth_provider()` (`komyst/community/community_auth.py`) — **o default é
 `supabase`**. O nome vem de `AUTH_PROVIDER` (alias com precedência, ausente do `.env.example`)
 ou `COMMUNITY_AUTH_PROVIDER`. Providers suportados:
 
@@ -2702,7 +2701,7 @@ sequenceDiagram
     autonumber
     participant B as Navegador / WebView2 em http://127.0.0.1:8080
     participant SA as Supabase Auth
-    participant API as yomu.ui.app (FastAPI)
+    participant API as komyst.ui.app (FastAPI)
     participant V as SupabaseAuthProvider
     participant L as Autorizador Beta (beta_license)
     B->>SA: login (supabase-js), redirect = window.location.origin + /auth/callback
@@ -2773,8 +2772,8 @@ política atual, reinstalar pode consumir novo slot se a identidade de instalaç
 
 O gate autoritativo local fica antes da criação/retomada de jobs em `UiBridge.start()` e
 `UiBridge.resume()`. O autorizador é composto por `_build_ui_beta_access_authorizer`
-(`yomu/ui/ui_bridge.py`): checkout de desenvolvimento sem `BETA_LICENSE_PROVIDER` usa o
-autorizador local de desenvolvimento; build congelado ou `TRADUTOR_RUNTIME_MODE=desktop` sem
+(`komyst/ui/ui_bridge.py`): checkout de desenvolvimento sem `BETA_LICENSE_PROVIDER` usa o
+autorizador local de desenvolvimento; build congelado ou `KOMYST_RUNTIME_MODE=desktop` sem
 provider força `production` e falha fechado se a configuração faltar (nunca rebaixa em
 silêncio); os demais modos recebem fingerprint estável de instalação. A UI é apenas camada de experiência; segurança não depende de botão
 desabilitado. O runner tem defesa em profundidade:
@@ -2787,7 +2786,7 @@ O contrato remoto está nas migrations:
 - `20260824130000_beta_tester_authorization_rpc.sql`
 - `20260824140000_beta_tester_grants_hardening.sql`
 
-No Supabase remoto `Tradutor IA Community` (`<projeto-supabase-legado>` — hoje o projeto legado
+No Supabase remoto `Komyst Community` (`<projeto-supabase-legado>` — hoje o projeto legado
 mantido como rollback, ver §26; o registro abaixo não foi revalidado no backend ativo), o
 conector registrou:
 
@@ -2895,24 +2894,24 @@ de download, OCR, tradução e renderização; **não apaga** o cache global.
 ## 22. Configuração e variáveis de ambiente
 
 `.env` (não versionado) na raiz do repositório; `.env.local` (também ignorado) refina toggles
-de desenvolvimento local. `yomu/runtime/local_environment.py` carrega ambos de forma
-determinística e a configuração tipada vive em `yomu/config/settings.py`:
+de desenvolvimento local. `komyst/runtime/local_environment.py` carrega ambos de forma
+determinística e a configuração tipada vive em `komyst/config/settings.py`:
 
 - O `.env` base é conservador e **nunca substitui** valores já presentes no processo.
 - O `.env.local` pode sobrescrever, mas valores que existiam antes do loader rodar
   permanecem autoritativos.
 - Arquivo malformado **falha fechado**, com erro que nunca inclui conteúdo nem caminho
   absoluto.
-- `TRADUTOR_IA_HERMETIC_TEST_ENV=1` impede o carregamento — usado pelo runtime de testes.
+- `KOMYST_HERMETIC_TEST_ENV=1` impede o carregamento — usado pelo runtime de testes.
 
 `.env.example` documenta ~160 variáveis. Algumas variáveis lidas pelo código **não** estão
-no `.env.example`: `TRADUTOR_UI_PORT`, `AUTH_PROVIDER`, `NVIDIA_TRANSLATION_PROVIDER`,
-`LOCAL_INPUT_ROOTS`, `YOMU_BACKEND_URL`, `YOMU_ENV`, `YOMU_TEST_BACKEND`,
-`TRADUTOR_IA_UPDATE_MANIFEST_URL`, `TRADUTOR_IA_INSTALL_ROOT`. As categorias principais:
+no `.env.example`: `KOMYST_UI_PORT`, `AUTH_PROVIDER`, `NVIDIA_TRANSLATION_PROVIDER`,
+`LOCAL_INPUT_ROOTS`, `KOMYST_BACKEND_URL`, `KOMYST_ENV`, `KOMYST_TEST_BACKEND`,
+`KOMYST_UPDATE_MANIFEST_URL`, `KOMYST_INSTALL_ROOT`. As categorias principais:
 
 | Grupo | Exemplos | Obrigatório? |
 | --- | --- | --- |
-| Backend de tradução | `YOMU_BACKEND_URL` (fallback `SUPABASE_URL`), `YOMU_ENV`, `YOMU_TEST_BACKEND` | A URL do Supabase basta no caminho padrão |
+| Backend de tradução | `KOMYST_BACKEND_URL` (fallback `SUPABASE_URL`), `KOMYST_ENV`, `KOMYST_TEST_BACKEND` | A URL do Supabase basta no caminho padrão |
 | Tradução DeepL local (legado) | `DEEPL_API_KEY`, `DEEPL_API_BASE_URL`, `DEEPL_MODEL_TYPE` | **Não** no fluxo atual — a DeepL roda na Edge Function com a chave do servidor (§15) |
 | Tradução NVIDIA (legado) | `NVIDIA_API_KEY`, `NVIDIA_BASE_URL`, `NVIDIA_TRANSLATION_MODEL`, `NVIDIA_TRANSLATION_BATCH_SIZE`, `NVIDIA_MAX_REQUESTS_PER_MINUTE`, `NVIDIA_TRANSLATION_PROVIDER` | Só no pipeline legado |
 | OCR NVIDIA | `NVIDIA_OCR_*` | Opcional, desligado por padrão |
@@ -2927,9 +2926,9 @@ no `.env.example`: `TRADUTOR_UI_PORT`, `AUTH_PROVIDER`, `NVIDIA_TRANSLATION_PROV
 | Auth | `COMMUNITY_AUTH_PROVIDER`, `SUPABASE_URL`, `SUPABASE_PUBLISHABLE_KEY`, `SUPABASE_SECRET_KEY`, `SUPABASE_JWKS_URL`, `SUPABASE_EXPECTED_ISSUER`, `SUPABASE_EXPECTED_AUDIENCE`, `SUPABASE_SITE_URL`, `SUPABASE_REDIRECT_URL` | Obrigatório para login (`SUPABASE_SITE_URL`/`SUPABASE_REDIRECT_URL` são referência para o projeto Supabase — origem `http://127.0.0.1:8080` —, não lidas pelo Python) |
 | Comunidade | `COMMUNITY_SOCIAL_PROVIDER`, `COMMUNITY_STORAGE_PROVIDER`, `COMMUNITY_DRIVE_ROOT_FOLDER_ID`, `COMMUNITY_LOCAL_*` | Só para comunidade |
 | Google Drive | `GOOGLE_OAUTH_CLIENT_ID`, `GOOGLE_OAUTH_CLIENT_SECRET`, `GOOGLE_OAUTH_TOKEN_PATH`, `GOOGLE_OAUTH_SCOPES` | Só com storage Drive |
-| Rede / UI | `TRADUTOR_UI_HOST`, `TRADUTOR_UI_PORT`, `TRADUTOR_ALLOW_EXTERNAL_BIND` | Opcional (mudar host/porta quebra o login: §6) |
-| Caminhos | `TRADUTOR_USER_DATA_ROOT`, `TRADUTOR_RUNTIME_ROOT`, `TRADUTOR_OUTPUT_ROOT`, `CACHE_ROOT`, `TEMP_FOLDER`, `TEMP_OUT` | Opcional (§10) |
-| Navegador | `SOURCE_BROWSER_ENGINE`, `SOURCE_BROWSER_EXECUTABLE`, `SOURCE_BROWSER_HEADLESS`, `SOURCE_BROWSER_STARTUP_TIMEOUT`, `SOURCE_BROWSER_NAVIGATION_TIMEOUT`, `SOURCE_BROWSER_PROFILE_MODE`, `TRADUTOR_ALLOW_DRIVER_DOWNLOAD` | Opcional |
+| Rede / UI | `KOMYST_UI_HOST`, `KOMYST_UI_PORT`, `KOMYST_ALLOW_EXTERNAL_BIND` | Opcional (mudar host/porta quebra o login: §6) |
+| Caminhos | `KOMYST_USER_DATA_ROOT`, `KOMYST_RUNTIME_ROOT`, `KOMYST_OUTPUT_ROOT`, `CACHE_ROOT`, `TEMP_FOLDER`, `TEMP_OUT` | Opcional (§10) |
+| Navegador | `SOURCE_BROWSER_ENGINE`, `SOURCE_BROWSER_EXECUTABLE`, `SOURCE_BROWSER_HEADLESS`, `SOURCE_BROWSER_STARTUP_TIMEOUT`, `SOURCE_BROWSER_NAVIGATION_TIMEOUT`, `SOURCE_BROWSER_PROFILE_MODE`, `KOMYST_ALLOW_DRIVER_DOWNLOAD` | Opcional |
 | Selenium | `SELENIUM_QUIT_TIMEOUT_SECONDS`, `SELENIUM_CLEANUP_TIMEOUT_SECONDS` | Opcional |
 | Debug | `DEBUG_VISUAL`, `SAVE_FULL_DEBUG`, `SAVE_COMPARE_SAMPLES`, `SAVE_DEBUG_ONLY_ERRORS`, `CLASSIFICATION_PROFILING`, `POST_RENDER_OCR_VALIDATION` | Opcional |
 
@@ -2963,7 +2962,7 @@ Fronteiras implementadas — e o que elas **não** garantem
   quando presentes no `.env`, são lidas em processo e **mascaradas antes de qualquer log chegar
   à interface** (`ui_helpers.sanitize_diagnostic_text`).
 - O token do usuário usado pelo runner viaja num envelope DPAPI por job
-  (`yomu/auth/secure_auth_context.py`), nunca em argv, ambiente, log ou banco.
+  (`komyst/auth/secure_auth_context.py`), nunca em argv, ambiente, log ou banco.
 - Token OAuth do Drive fica no caminho indicado por `GOOGLE_OAUTH_TOKEN_PATH`, fora do Git.
   Nunca é enviado ao browser nem persistido no banco de jobs.
 - Diagnósticos persistidos em `jobs.sqlite3` são sanitizados: sem URL completa, query
@@ -2971,7 +2970,7 @@ Fronteiras implementadas — e o que elas **não** garantem
 
 ### Rede
 
-- O servidor liga em loopback por padrão. Bind externo exige `TRADUTOR_ALLOW_EXTERNAL_BIND=1`
+- O servidor liga em loopback por padrão. Bind externo exige `KOMYST_ALLOW_EXTERNAL_BIND=1`
   **e** um provider de auth que suporte, e é validado no startup (`validate_bind_security`).
 - Submissão de pasta local pela UI só é aceita em servidor loopback.
 - A validação protege a navegação e as imagens selecionadas, mas **não é um sandbox** de
@@ -2988,7 +2987,7 @@ Fronteiras implementadas — e o que elas **não** garantem
 
 **O que existe:** o núcleo de confiança e instalação (`tests/test_signed_update.py`) e a
 integração remota de startup (`tests/test_remote_update.py`): versão canônica do produto
-(`yomu/runtime/version.py`: `PRODUCT_VERSION = "0.9.0"`, `BUILD_VERSION = "0.9.1-beta.18"`),
+(`komyst/runtime/version.py`: `PRODUCT_VERSION = "0.9.0"`, `BUILD_VERSION = "0.9.1-beta.18"`),
 transporte HTTPS delimitado, fetch de manifest, download de pacote, verificação por
 assinatura/SHA, staging, ativação atômica, health-check do payload, rollback e handoff pelo
 launcher antes de worker/UI. Desde então também existem:
@@ -2996,15 +2995,15 @@ launcher antes de worker/UI. Desde então também existem:
 - **Raiz de confiança populada**: `update_manifest.TRUSTED_PUBLIC_KEYS` contém a chave pública
   `beta-2026-10` (a privada fica fora do repositório).
 - **Canal padrão configurado**: `update_bootstrap.DEFAULT_MANIFEST_URL` aponta para o manifest
-  beta em um repositório GitHub de releases (`.../YomuSekai-Releases/main/updates/beta/latest.json`);
-  `TRADUTOR_IA_UPDATE_MANIFEST_URL` sobrescreve.
+  beta em um repositório GitHub de releases (`.../Komyst-Releases/main/updates/beta/latest.json`);
+  `KOMYST_UPDATE_MANIFEST_URL` sobrescreve.
 - **Dois tipos de artefato** no manifest: `zip` (payload versionado, aplicado pelo bootstrap
   do launcher) e `windows-installer` (Setup `*-Setup-x64.exe`, aplicado por
-  `yomu/runtime/installer_update.py`).
+  `komyst/runtime/installer_update.py`).
 - **Superfície de UI**: aba **Atualizações** (`ui/ui_shell.html`: "Verificar atualizações",
   "Baixar e instalar", selo "↑ Atualizar"), servida pelas rotas `GET /api/update/manifest`,
   `POST /api/update/download`, `GET /api/update/download/status`,
-  `POST /api/update/download/cancel` e `POST /api/update/install` em `yomu/ui/app.py`. A
+  `POST /api/update/download/cancel` e `POST /api/update/install` em `komyst/ui/app.py`. A
   instalação só executa o instalador previamente baixado e verificado (token de handoff), depois
   que os processos do app saem.
 
@@ -3063,13 +3062,13 @@ definidos e o formato não seja circular:
 {
   "payload": {
     "schema_version": 1,
-    "app_id": "tradutor-ia",
+    "app_id": "komyst",
     "version": "1.1.0",
     "minimum_version": "1.0.0",
     "published_at": "2026-08-20T12:00:00+00:00",
     "package": {
-      "filename": "tradutor-ia-1.1.0.zip",
-      "url": "https://<host>/tradutor-ia-1.1.0.zip",
+      "filename": "komyst-1.1.0.zip",
+      "url": "https://<host>/komyst-1.1.0.zip",
       "sha256": "<64 hex minúsculos>",
       "size": 41234567
     }
@@ -3097,7 +3096,7 @@ assinados — logo, não podem ser injetados sem invalidar a assinatura.
 2. raiz de confiança presente (senão `UpdateTrustNotConfigured`);
 3. `key_id` conhecido e **assinatura válida** sobre os bytes canônicos;
 4. `schema_version` suportado (desconhecido ⇒ recusa, nunca interpretação por adivinhação);
-5. `app_id` igual a `tradutor-ia`;
+5. `app_id` igual a `komyst`;
 6. versões válidas e `minimum_version <= version`;
 7. `published_at` ISO-8601 válido; `package.url` HTTPS; `sha256` com 64 hex; `size > 0`;
 8. só então a política de versão e, depois, o pacote.
@@ -3127,7 +3126,7 @@ Formato: `MAJOR.MINOR.PATCH` estrito, convertido para tupla de inteiros — `1.1
 Downgrade remoto ≠ rollback local: o rollback opera sobre uma release **já instalada e já
 verificada** localmente, nunca sobre uma versão antiga rebaixada.
 
-A versão autoritativa do produto é `yomu/runtime/version.py` (`PRODUCT_VERSION`, `MAJOR.MINOR.PATCH`);
+A versão autoritativa do produto é `komyst/runtime/version.py` (`PRODUCT_VERSION`, `MAJOR.MINOR.PATCH`);
 a superfície de UI compara o manifest com `BUILD_VERSION` (linha beta ordenada).
 Constantes `*_SCHEMA_VERSION` continuam sendo versões de formatos de dados, não do produto.
 O campo opcional assinado `minimum_bootstrap_version` permite que uma release recuse launchers
@@ -3191,12 +3190,12 @@ ou UI. Em clone de desenvolvimento ou sem canal configurado, o check retorna
 Após ativação, o bootstrap executa `start_tradutor.py selftest` dentro do payload novo para
 provar que a release importa o runtime básico sem iniciar worker, UI, jobs ou banco real. Se o
 selftest falhar, faz rollback para a versão anterior. Se passar, o launcher antigo faz handoff
-para o `start_tradutor.py` da nova versão com `TRADUTOR_IA_UPDATE_CHECKED=1`, evitando loop e
+para o `start_tradutor.py` da nova versão com `KOMYST_UPDATE_CHECKED=1`, evitando loop e
 mantendo exatamente um dono da supervisão do worker.
 
 ```mermaid
 flowchart TD
-    S["check_before_start(payload_dir)"] --> H{"TRADUTOR_IA_UPDATE_CHECKED=1?"}
+    S["check_before_start(payload_dir)"] --> H{"KOMYST_UPDATE_CHECKED=1?"}
     H -->|sim| SK[skipped]
     H -->|não| R{"layout instalado?<br/>versions/ + current.json"}
     R -->|"não (clone)"| NC[not_configured]
@@ -3274,10 +3273,12 @@ Eventos estruturados já emitidos (nunca com chave, token ou URL com segredo):
 
 ## 24. Arquitetura de testes
 
-419 arquivos `test_*.py` versionados em `tests/` (mais dois em `experiments/`, também em
-`testpaths`) + 18 arquivos `test_*.mjs` de frontend (testes Node) + testes SQL em
+466 arquivos `test_*.py` versionados em `tests/` (mais dois em `experiments/`, também em
+`testpaths`) + 19 arquivos `test_*.mjs` de frontend (testes Node) + testes SQL em
 `supabase/tests/` + a suíte TypeScript de `apps/auth-service/`. Última execução completa
-registrada da suíte hermética: **~6160 passed / 0 failed / 141 skipped**.
+registrada da suíte hermética: 2026-11-11; após separar falhas ambientais, permaneceram
+quatro falhas de asserção em testes de máscara e reconstrução. Consulte
+[Testes](../TESTING.md) e o [relatório completo](../../reports/falhas_preexistentes_20261111.md).
 
 `pytest.ini`:
 
@@ -3294,7 +3295,7 @@ Testes de rede e smokes manuais são **excluídos por padrão** e exigem opt-in 
 
 ### Isolamento hermético (TDD #51, ampliado no TDD #55, `hermetic_runtime.py`)
 
-O estado real do projeto vive em `%LOCALAPPDATA%\TradutorIA` (e, em clones antigos, em
+O estado real do projeto vive em `%LOCALAPPDATA%\Komyst` (e, em clones antigos, em
 `<repo>/.cache/runtime`). Antes do guard, código de teste que construísse um componente de
 runtime sem raiz explícita caía exatamente nesse diretório — um `python -m unittest discover` podia abrir a fila real, mutar linhas de job
 reais e lançar o worker real.
@@ -3311,7 +3312,7 @@ efeito colateral. Ele intercepta `sqlite3.connect`, `open`, `mkdir`, `unlink`, `
 | `<repo>/.cache/runtime/**` (fila, leases, logs) | `sqlite3.connect`, `open`, `mkdir`, `unlink`, `rename`, spawn | `REAL_RUNTIME_ROOT` |
 | `<repo>/output/**` (capítulos traduzidos do usuário) | `open`, `mkdir`, `unlink`, `rename`, `scandir`/`listdir` | `REAL_OUTPUT_ROOT` |
 | `<repo>/.cache/ui_history.json`, `ui_hidden_history.json` | `open`, `unlink`, `rename` | `REAL_UI_HISTORY_PATHS` |
-| `%LOCALAPPDATA%\TradutorIA` (dados do Beta instalado) | idem | `REAL_BETA_USER_ROOT` |
+| `%LOCALAPPDATA%\Komyst` (dados do Beta instalado) | idem | `REAL_BETA_USER_ROOT` |
 
 **Normalização de caminho.** A comparação é canônica: caminhos relativos, separadores
 mistos, maiúsculas/minúsculas de volume Windows e junções normalizam para a mesma forma.
@@ -3324,7 +3325,7 @@ URI apontando a um banco temporário isolado.
 
 **Isolamento do histórico da UI.** `UIHistoryStore(path, hidden_path, output_root=…)`
 resolve `ui_helpers.OUTPUT_ROOT` por default (produção inalterada) e recebe a raiz isolada
-do `UiBridge` quando `TRADUTOR_TEST_RUNTIME_ROOT` está definido, de modo que
+do `UiBridge` quando `KOMYST_TEST_RUNTIME_ROOT` está definido, de modo que
 `discover_outputs()` nunca enumera o `output/` real dentro da suíte. A coleta do pytest
 também não desce em `output/` nem `.cache/` (`norecursedirs` em `pytest.ini`).
 
@@ -3364,7 +3365,7 @@ terminação forçada parecem para o banco.
 Beta, ex.: conflito de OpenCV), **confirmar que os opt-ins de smoke de rede estão desligados**
 (`ALLOW_NETWORK_TESTS`, `ALLOW_WEBTOON_SMOKE`, `ALLOW_NVIDIA_SMOKE`), coletar e rodar pytest
 (JUnit enviado como artifact), `node --check` nos JS principais e de i18n, typecheck/test/build
-do serviço Better Auth, e `python -m compileall` sobre `yomu`, `test_support` e os shims da
+do serviço Better Auth, e `python -m compileall` sobre `komyst`, `test_support` e os shims da
 raiz. As suítes `.mjs` não rodam na CI.
 
 Detalhes em [`docs/TESTING.md`](../TESTING.md).
@@ -3393,7 +3394,7 @@ relevantes tendem a vir daí, não da orquestração Python.
 
 ### Paralelismo por página (estado atual)
 
-`PIPELINE_PAGE_WORKERS` (`yomu/config/settings.py`, padrão `auto`) decide quantas páginas rodam
+`PIPELINE_PAGE_WORKERS` (`komyst/config/settings.py`, padrão `auto`) decide quantas páginas rodam
 ao mesmo tempo. `auto` usa `_auto_page_workers`: um terço dos núcleos lógicos e uma página por
 ~3 GB de memória livre, entre 1 e 4 (`MAX_PIPELINE_PAGE_WORKERS`); valor explícito fora de 1–4
 falha com `ValueError`.
@@ -3433,7 +3434,7 @@ Todo texto que chega à interface passa por `sanitize_diagnostic_text`. `request
 e `job_failure_diagnostic.py` normalizam diagnóstico de falha em códigos fechados.
 
 Os fluxos `*_current.jsonl` são append-only e agora têm rotação por tamanho
-(`_append_diagnostic_log` em `yomu/ui/app.py`): ao passar de 16 MiB o arquivo vira
+(`_append_diagnostic_log` em `komyst/ui/app.py`): ao passar de 16 MiB o arquivo vira
 `<nome>.previous.jsonl` e um novo `current` continua a escrita — teto de 16 MiB por
 fluxo mais uma cópia anterior, espelhando a rotação de `runtime.log`. A falha de rotação
 é best-effort e nunca interrompe a gravação do diagnóstico (antes eram ilimitados: uma
@@ -3599,7 +3600,7 @@ incluindo as calhas em branco 118/143/207).
 **Perfil de saída (Missão 11).** O grupo de radios acessível da Nova tradução envia o enum
 canônico `automatic` ou `professional_qc`; `UiBridge` valida e persiste `output_profile` na
 configuração do job. O `job_runner` passa o valor validado ao processo do pipeline por
-`YOMU_OUTPUT_PROFILE`, e `_resolve_output_profile(args)` conserva a precedência programática
+`KOMYST_OUTPUT_PROFILE`, e `_resolve_output_profile(args)` conserva a precedência programática
 `args.output_profile` → env → `AUTOMATIC`. Request legado sem perfil usa `AUTOMATIC`; uma
 seleção PSD explícita de cliente legado sem o novo campo é mapeada a `PROFESSIONAL_QC`.
 `download_only` força `AUTOMATIC` e não executa artifacts de tradução/QC. Reexecução herda o
@@ -3683,8 +3684,8 @@ Os comandos abaixo foram validados contra `5f482ce1` (CLIs com `--help`; o launc
 ### Instalação
 
 ```powershell
-git clone https://github.com/HenriquePvAr/Tradutor.Ia.git
-cd Tradutor.Ia
+git clone --branch dev https://github.com/HenriquePvAr/Komyst.git
+cd Komyst
 
 py -3.11 -m venv .venv
 .\.venv\Scripts\Activate.ps1
@@ -3744,8 +3745,8 @@ Flags reais (`--help`): `--local-folder`, `--mode {fast,quality}`, `--cache | --
 `--output`, `--output-format {pdf,png,psd,translation}`, `--typesetting-mode {on,off}`,
 `--no-context`, `--keep-context`, `--delete-context-after`, `--open-output`, `--max-images`,
 `--download-only`, `--source-candidate-id`,
-`--translation-provider {deepl,nemotron,riva,yomu_backend}`. Com tradução habilitada, a execução
-usa sempre `yomu_backend` (§15), portanto exige sessão/licença válidas.
+`--translation-provider {deepl,nemotron,riva,komyst_backend}`. Com tradução habilitada, a execução
+usa sempre `komyst_backend` (§15), portanto exige sessão/licença válidas.
 `run_local_folder.py --snapshot-ref <ref> --output <pasta>` processa um snapshot local já criado
 pelo aplicativo (uso interno).
 
@@ -3766,7 +3767,7 @@ python -m pytest -q                       # suíte hermética completa
 python -m pytest --collect-only -q        # apenas coleta
 python -m pytest -q tests/test_worker_supervision.py tests/test_launcher.py
 python -m pytest -q tests/test_deepl_translation_provider.py
-node --check static/tradutor_ui.js
+node --check static/komyst_ui.js
 ```
 
 ```powershell
@@ -3794,7 +3795,7 @@ npm run typecheck; npm test; npm run build
 | Processo órfão após crash | Runner sobreviveu ao worker | Iniciar um worker; ele reconcilia e encerra a árvore validada |
 | Falha em `test_worker_process_loss` | Interpretador *trampoline* | Usar o Python do venv do projeto (ver §24) |
 | `ModuleNotFoundError` (ex.: `psycopg`, `scrapling`) na coleta | Venv sem o perfil Beta completo | `pip install -r requirements/requirements-beta.txt` |
-| Login redireciona para página inválida / Supabase recusa o redirect | UI aberta por origem diferente de `http://127.0.0.1:8080` (ex.: `localhost`, outra porta) | Abrir exatamente `http://127.0.0.1:8080`; não mudar `TRADUTOR_UI_HOST`/`TRADUTOR_UI_PORT` |
+| Login redireciona para página inválida / Supabase recusa o redirect | UI aberta por origem diferente de `http://127.0.0.1:8080` (ex.: `localhost`, outra porta) | Abrir exatamente `http://127.0.0.1:8080`; não mudar `KOMYST_UI_HOST`/`KOMYST_UI_PORT` |
 | Job em `waiting_source_verification` | A fonte exige verificação humana no navegador (`challenge_required`) | Concluir a verificação indicada pela UI; não há solver automático |
 
 Guia mais amplo: [`docs/TROUBLESHOOTING.md`](../TROUBLESHOOTING.md).
@@ -3811,7 +3812,7 @@ Não usar este snapshot como status atual.
 
 - **R1**: DTO da Review com identidade de página (`index` sobre `sequence_index`), `bounding_box`
   no item, ordenação física canônica (`page_index → bbox.y → bbox.x → region_id`) e preview de
-  página com estados explícitos. `ui_bridge.py`, `app_ui.py`, `static/tradutor_ui.js`.
+  página com estados explícitos. `ui_bridge.py`, `app_ui.py`, `static/komyst_ui.js`.
 - **R2**: edição persistente de source (OCR) e target (tradução) como camada de override,
   versionada (conflito otimista), originais preservados. Coluna `source_text` em
   `quality_review_item_revisions` (schema v13). Sem provider.
@@ -3887,8 +3888,8 @@ limpa/updater · `YK_POSTGRES_VALIDATION`.
 > `beta-2026-10` está em `TRUSTED_PUBLIC_KEYS`); a parte "canal" e "UI" de
 > `UPDATER-RELEASE-CHANNEL-PENDING` (URL de manifest padrão e aba **Atualizações** existem —
 > §23); `UI-COPY-NAMES-NVIDIA` e `PROVIDER-HTTP-TELEMETRY-GAP` não foram reconferidos. A
-> evidência `config.py` dos itens abaixo corresponde hoje a `yomu/config/settings.py`; os
-> demais módulos citados vivem sob `yomu/` (§3).
+> evidência `config.py` dos itens abaixo corresponde hoje a `komyst/config/settings.py`; os
+> demais módulos citados vivem sob `komyst/` (§3).
 
 Esta lista foi auditada contra um commit anterior às missões M16/M17. Ela é mantida para
 histórico, não constitui inventário atual de blockers. Em especial, status de Auth/licença,
@@ -3897,7 +3898,7 @@ documentação de produto, mas não executou auditoria de release nem nova regre
 
 | ID | Severidade | Descrição | Evidência | Encaminhamento sugerido |
 | --- | --- | --- | --- | --- |
-| `UI-COPY-NAMES-NVIDIA` | Baixa | A mensagem `environment_not_configured` no frontend diz "Configure o arquivo .env e a `NVIDIA_API_KEY`", mas o provider padrão é DeepL. Copy desatualizada visível ao usuário. | `static/tradutor_ui.js` (`reasonMessages`) | TDD futuro: mensagem neutra de provider |
+| `UI-COPY-NAMES-NVIDIA` | Baixa | A mensagem `environment_not_configured` no frontend diz "Configure o arquivo .env e a `NVIDIA_API_KEY`", mas o provider padrão é DeepL. Copy desatualizada visível ao usuário. | `static/komyst_ui.js` (`reasonMessages`) | TDD futuro: mensagem neutra de provider |
 | `PROVIDER-HTTP-TELEMETRY-GAP` | Baixa | Não há telemetria HTTP unificada entre providers (latência, taxa de erro, retries) — cada provider mantém suas próprias `stats`. | `translator_deepl.py`, `translator_nvidia.py` | TDD futuro, se a Beta exigir observabilidade de provider |
 | `INSTALLER-FINAL-PENDING` | Alta (bloqueia Beta externa) | Spec PyInstaller, perfil de produção e plumbing do Inno Setup existem; installer final assinado e validado ainda não foram gerados. | `packaging/`, specs e `tools/build_installer.py` | Finalizar signing, installer e E2E em VM limpa |
 | `UPDATER-RELEASE-CHANNEL-PENDING` | Alta (bloqueia Beta externa) | Transporte HTTPS, verificação remota e seam do launcher existem, mas ainda não há hospedagem/canal de release, chave pública de produção embutida nem UI. | `update_transport.py`, `update_bootstrap.py`, `start_tradutor.py`, `update_manifest.py` | Definir junto com Setup/release operacional |
@@ -3911,8 +3912,8 @@ documentação de produto, mas não executou auditoria de release nem nova regre
 | `PASSIVE-ADS-UI-PLACEHOLDER` | Média | `#passiveAdsSettings` é um placeholder "Em breve"; o backend já tem `set_passive_ads_enabled`, mas nenhuma tela liga/desliga a preferência. | `ui/ui_shell.html`, §31 | TDD de UI após a migration ser aplicada |
 | `ADS-INVENTORY-BLOCKER` | Alta (bloqueia monetização por anúncios) | Pesquisa concluída: nenhum provider entrega anúncio passivo verificável neste runtime (Win32 + WebView local, sem domínio). AdSense/Ad Manager proíbem desktop apps por política; Microsoft e AdDuplex estão mortos; Pubfinity/PubMatic são UWP; AdsJumbo é .NET sem rewarded nem SSV. Único viável: offerwall web com postback HMAC — produto diferente de "assistir anúncio". | `docs/technical/ADS_PROVIDER_RESEARCH.md`, §31 | Decisão comercial do owner: offerwall, beta sem anúncios passivos, ou monetização fora do escopo da beta |
 | `CI-JS-SUITES-NOT-RUN` | Média | A CI roda apenas `node --check` sobre `static/*.js`; as 14 suítes `.mjs` (que exigem `--experimental-vm-modules`) não são executadas em nenhum job. Regressão de frontend só é detectada localmente. | `.github/workflows/tests.yml`, `docs/DEVELOPMENT.md#ci` | Adicionar um step que itere `test_*.mjs` com a flag; barato e sem impacto no comportamento de produção |
-| `YK-POSTGRES-RUNTIME-VALIDATION` | Alta (bloqueia deploy YK) | O comportamento local de YK (reserva/settlement/recovery) passa em 70/70 unit/mock e a auditoria estática é forte (transação, advisory lock, row locks, estado terminal, idempotency key parcial única, chave de settlement determinística), mas **não houve prova em PostgreSQL real** (Docker indisponível). Sem validação de concorrência/atomicidade no runtime Postgres. | `yk_reservation.py`, `yomu_backend_provider.py`, `supabase/functions/wallet-settle-job/`, migration `20260926175232` | Validar em Postgres quando Docker estiver disponível; **não** deployar migration/functions remotas antes disso e sem autorização explícita |
-| `COMIX-DYNAMIC-DEP-PROVISIONING` | Média | A descoberta dinâmica do Comix exige `scrapling[fetchers]==0.4.15` (declarado em `requirements/requirements-beta.txt` e empacotado pelo spec). Um venv/ambiente que **não** instale as requirements-beta faz o Comix falhar fechado com `capability_unavailable` (fail-closed correto, sem output falso). | `scrapling_reader_resolver.py`, `requirements/requirements-beta.txt`, `packaging/tradutor_ia.spec` | Garantir que qualquer ambiente/venv de execução instale `requirements/requirements-beta.txt`; coberto por `tests/test_beta_packaging_requirements.py` |
+| `YK-POSTGRES-RUNTIME-VALIDATION` | Alta (bloqueia deploy YK) | O comportamento local de YK (reserva/settlement/recovery) passa em 70/70 unit/mock e a auditoria estática é forte (transação, advisory lock, row locks, estado terminal, idempotency key parcial única, chave de settlement determinística), mas **não houve prova em PostgreSQL real** (Docker indisponível). Sem validação de concorrência/atomicidade no runtime Postgres. | `yk_reservation.py`, `komyst_backend_provider.py`, `supabase/functions/wallet-settle-job/`, migration `20260926175232` | Validar em Postgres quando Docker estiver disponível; **não** deployar migration/functions remotas antes disso e sem autorização explícita |
+| `COMIX-DYNAMIC-DEP-PROVISIONING` | Média | A descoberta dinâmica do Comix exige `scrapling[fetchers]==0.4.15` (declarado em `requirements/requirements-beta.txt` e empacotado pelo spec). Um venv/ambiente que **não** instale as requirements-beta faz o Comix falhar fechado com `capability_unavailable` (fail-closed correto, sem output falso). | `scrapling_reader_resolver.py`, `requirements/requirements-beta.txt`, `packaging/komyst.spec` | Garantir que qualquer ambiente/venv de execução instale `requirements/requirements-beta.txt`; coberto por `tests/test_beta_packaging_requirements.py` |
 
 ### Limitações conhecidas do produto
 
@@ -3927,7 +3928,7 @@ documentação de produto, mas não executou auditoria de release nem nova regre
 ### Consolidação de runtime e resolver Comix (2026-09-25)
 
 **Sessão desktop persistente.** O WebView2 do desktop usa agora um perfil **persistente por
-usuário** em `%LOCALAPPDATA%\YomuSekai\webview-profile` (`desktop_app._persistent_webview_profile_dir`,
+usuário** em `%LOCALAPPDATA%\Komyst\webview-profile` (`desktop_app._persistent_webview_profile_dir`,
 passado via `storage_path`/`private_mode=False` em `webview.start`). A sessão Supabase
 sobrevive a reinícios do app — não há novo login manual a cada abertura (validado
 fisicamente: reabrir o mesmo build reautenticou sem digitar credenciais, bootstrap `200`,
@@ -3959,11 +3960,11 @@ leituras redundantes **sem perder cobertura** (só descarta o que a promoção r
 **Clearance Cloudflare — owner-assisted, sem solver automático.** Quando o Comix mantém um
 challenge visível, o processo UI pode abrir Chrome real com perfil dedicado e o owner pode
 concluir a verificação. A captura CDP salva apenas localmente, fora do Git, o
-`cf_clearance` e o User-Agent em `%LOCALAPPDATA%\YomuSekai\comix_cf_cookie.json`; o valor nunca
+`cf_clearance` e o User-Agent em `%LOCALAPPDATA%\Komyst\comix_cf_cookie.json`; o valor nunca
 vai para logs, reports ou Discord. Em tentativas posteriores, o resolver pode reutilizar esse
 clearance através do `StealthyFetcher` com `solve_cloudflare=False`. Não há solver automático,
-spoofing de fingerprint ou bypass de CAPTCHA. `YOMU_COMIX_CF_AUTOCAPTURE=1` é habilitado apenas
-no processo UI; `YOMU_DISABLE_COMIX_CF_PROFILE=1` desabilita a reutilização. Expiração retorna ao
+spoofing de fingerprint ou bypass de CAPTCHA. `KOMYST_COMIX_CF_AUTOCAPTURE=1` é habilitado apenas
+no processo UI; `KOMYST_DISABLE_COMIX_CF_PROFILE=1` desabilita a reutilização. Expiração retorna ao
 estado recuperável `waiting_source_verification`.
 
 **Gate de isolamento no retry automático.** `discover_chapter_source` dispara a captura
@@ -3976,7 +3977,7 @@ CF e não devem disparar a captura.
 **Causa raiz histórica — `NotADirectoryError` / WinError 267.** Em builds PyInstaller onedir
 (`COLLECT`), os módulos Python do bundle são empacotados em `_internal/base_library.zip`.
 O `__file__` de `scrapling_reader_resolver.py` no EXE congelado apontava para dentro desse
-zip (e.g. `…\_internal\base_library.zip\yomu\download\readers\scrapling_reader_resolver.py`).
+zip (e.g. `…\_internal\base_library.zip\komyst\download\readers\scrapling_reader_resolver.py`).
 O `subprocess.Popen` usava `cwd=str(Path(__file__).resolve().parent)`, que passava pelo
 arquivo zip como se fosse um diretório — Windows retornava `ERROR_DIRECTORY` (WinError 267),
 levantando `NotADirectoryError` → `dynamic_resolver_isolation_unavailable`. Corrigido
@@ -4001,10 +4002,10 @@ precisam de verificação própria antes de qualquer decisão operacional.
 
 ### Empacotamento — PARCIAL
 
-O plumbing existe: `packaging/tradutor_ia.spec` (PyInstaller onedir, executável `YomuSekai`
+O plumbing existe: `packaging/komyst.spec` (PyInstaller onedir, executável `Komyst`
 a partir de `desktop_app.py`), perfis `packaging/runtime_profile_*.py`, script Inno Setup
-`packaging/TradutorIA.iss` (instala por usuário em `{localappdata}\Programs\YomuSekai`, saída
-`YomuSekai-<versão>-Setup-x64`) e `tools/build_installer.py`. Nenhum instalador validado em VM
+`packaging/Komyst.iss` (instala por usuário em `{localappdata}\Programs\Komyst`, saída
+`Komyst-<versão>-Setup-x64`) e `tools/build_installer.py`. Nenhum instalador validado em VM
 limpa nem artefato publicado consta do repositório; para desenvolvimento a distribuição continua
 sendo clone + venv + `.env`.
 
@@ -4136,7 +4137,7 @@ verificado por `tests/test_yk_ads_foundation.py`.
 | **Job / Trabalho** | Uma unidade de trabalho persistida no banco: um capítulo (ou uma publicação de comunidade) do início ao estado terminal |
 | **Worker** | Processo independente que drena a fila; um por instalação, concorrência 1 |
 | **Runner** | Subprocesso criado pelo worker para executar exatamente um job |
-| **Launcher** | `start_tradutor.py` (`yomu.commands.start_tradutor`); checa update, inicia worker + UI e supervisiona o worker que criou |
+| **Launcher** | `start_tradutor.py` (`komyst.commands.start_tradutor`); checa update, inicia worker + UI e supervisiona o worker que criou |
 | **Supervisor** | `worker_supervisor.WorkerSupervisor`; reinicia o worker sob política limitada |
 | **Lease** | Linha em `workers` com `worker_id`, PID e `create_time`, provando posse do processo |
 | **Attempt** | Nova tentativa de um job interrompido, reusando o mesmo diretório de saída |
@@ -4146,8 +4147,8 @@ verificado por `tests/test_yk_ads_foundation.py`.
 | **`review_required`** | Terminal: PDF existe, mas há itens pendentes de revisão |
 | **`awaiting_source_review`** | Pausa antes do OCR: usuário confirma as páginas encontradas |
 | **`waiting_source_verification`** | Pausa antes do download: a fonte exige verificação humana no navegador |
-| **`yomu_backend`** | Provider interno autenticado que leva toda tradução às Edge Functions do Supabase (§15) |
-| **Shim** | Arquivo `*.py` da raiz que apenas reexporta o módulo real em `yomu/` |
+| **`komyst_backend`** | Provider interno autenticado que leva toda tradução às Edge Functions do Supabase (§15) |
+| **Shim** | Arquivo `*.py` da raiz que apenas reexporta o módulo real em `komyst/` |
 | **Smart Split** | Reconstrução de páginas lógicas a partir das fatias do webtoon |
 | **Proveniência** | Cadeia de evidência que liga o pixel de origem ao texto final renderizado |
 | **Fail-closed** | Diante de evidência insuficiente, recusar em vez de prosseguir |
@@ -4159,7 +4160,7 @@ verificado por `tests/test_yk_ads_foundation.py`.
 
 ## Ver também
 
-- [Guia do Usuário](../user/GUIA_DO_USUARIO.md) — como usar o Tradutor IA
+- [Guia do Usuário](../user/GUIA_DO_USUARIO.md) — como usar o Komyst
 - [Política de Documentação](../DOCUMENTATION_POLICY.md) — quando e como atualizar estes documentos
 - [Auditoria de Documentação](../DOCUMENTATION_AUDIT.md) — o que foi verificado e o que ficou em aberto
 - [Índice completo da documentação](../README.md)

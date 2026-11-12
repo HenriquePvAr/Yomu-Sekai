@@ -13,9 +13,9 @@
 
 - `.env` real, tokens, OAuth/Kaggle/Modal/OCI credentials, cookies, chaves privadas e certificados.
 - Páginas de terceiros ou de usuários, datasets completos, crops de revisão, máscaras massivas e outputs de inferência.
-- Pesos de modelos, PDFs/PSDs gerados em massa, caches OCR, logs de execução, `build/`, `dist/`, virtualenvs e `node_modules/`. Exemplo: o checkpoint LaMa usado pela limpeza local é procurado por padrão em `%LOCALAPPDATA%\TradutorIA\models\` (`ADVANCED_ART_INPAINT_MODEL_PATH` em `yomu/config/settings.py`) e nunca é versionado (`.gitignore` cobre `models/` e `*.pt`).
+- Pesos de modelos, PDFs/PSDs gerados em massa, caches OCR, logs de execução, `build/`, `dist/`, virtualenvs e `node_modules/`. Exemplo: o checkpoint LaMa usado pela limpeza local é procurado por padrão em `%LOCALAPPDATA%\Komyst\models\` (`ADVANCED_ART_INPAINT_MODEL_PATH` em `komyst/config/settings.py`) e nunca é versionado (`.gitignore` cobre `models/` e `*.pt`).
 
-Armazene esses arquivos em uma área de artefatos local ou remota com acesso apropriado — por exemplo, sob `<pasta-de-experimentos>\YomuExperimental\` na máquina DEV ou `~/yomu/experimental/` em worker R&D. Esses exemplos não são paths de runtime e nunca devem ser hardcoded no produto.
+Armazene esses arquivos em uma área de artefatos local ou remota com acesso apropriado — por exemplo, sob `<pasta-de-experimentos>\KomystExperimental\` na máquina DEV ou `~/komyst/experimental/` em worker R&D. Esses exemplos não são paths de runtime e nunca devem ser hardcoded no produto.
 
 Para artefatos externos necessários a uma conclusão, mantenha um manifesto pequeno com caminho lógico, tamanho, SHA-256, finalidade e identidade do experimento; não copie o conteúdo para `reports/`.
 

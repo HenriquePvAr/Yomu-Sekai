@@ -19,7 +19,7 @@
 
 - [ ] Canal updater e chave pública *(código: chave `beta-2026-10` em `TRUSTED_PUBLIC_KEYS` e `DEFAULT_MANIFEST_URL` configurada; publicação/validação do manifest no canal pendente)*
 - [ ] Code signing Authenticode
-- [ ] Installer final *(script `packaging/TradutorIA.iss` + `tools/build_installer.py` existem; build final não validada)*
+- [ ] Installer final *(script `packaging/Komyst.iss` + `tools/build_installer.py` existem; build final não validada)*
 - [ ] Licensing/device operacional
 - [ ] Clean-VM E2E
 - [ ] Secret/privacy scan final

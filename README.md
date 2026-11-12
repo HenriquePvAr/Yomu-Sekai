@@ -1,525 +1,95 @@
 # Komyst
 
-**Pipeline local para transformar capítulos ilustrados em versões traduzidas para PT-BR, com OCR híbrido, validação de qualidade e geração de PDF.**
+Pipeline local para traduzir capítulos ilustrados para português brasileiro. O Komyst coleta
+as páginas, reconhece e classifica o texto, solicita a tradução ao backend autenticado,
+reconstrói as imagens e gera um PDF. Regiões com qualidade incerta podem exigir revisão.
 
-![Python 3.11](https://img.shields.io/badge/Python-3.11-3776AB?logo=python&logoColor=white)
-![Plataforma auditada: Windows](https://img.shields.io/badge/plataforma%20auditada-Windows-0078D4?logo=windows11&logoColor=white)
-![Status: beta técnica](https://img.shields.io/badge/status-beta%20t%C3%A9cnica-D97706)
+> Beta técnica. O ambiente documentado é Windows 64 bits com Python 3.11. Os requisitos
+> mínimos ainda não foram homologados. Veja [limitações e estado do produto](docs/KNOWN_ISSUES.md)
+> antes de usar.
 
-> **Base verificada:** `ee846921` (branch `main`) · **Revisado em:** 2026-10-25
+## Começar
 
-Komyst organiza em um único fluxo a coleta de páginas, o reconhecimento de texto, a classificação semântica, a tradução, a reconstrução visual e a geração do PDF. O projeto preserva evidências de cada etapa e encaminha resultados duvidosos para revisão, em vez de tratá-los silenciosamente como corretos.
-
-O fluxo principal atual é voltado a capítulos web com texto-fonte em inglês e tradução para português brasileiro. Ele pode ser operado por uma interface local ou pela linha de comando.
-
-**Hardware:** há um [perfil medido de RAM, VRAM e tempo](docs/HARDWARE_PROFILE.md)
-em Ryzen 5 5600GT, 32 GB de RAM e RX 6600 de 8 GB. É uma configuração de
-referência testada; os requisitos mínimos de hardware ainda não estão homologados.
-
-## Demonstração visual
-
-Interface local do Komyst (`http://127.0.0.1:8080`), versão 0.9.1-beta.18,
-com o tema **Lua Rubra**. Capturas e vídeo atualizados em 29/10/2026.
-
-### Tela de entrada
-
-![Demonstração animada da tela de entrada com o tema Lua Rubra](docs/assets/videos/login-lua-rubra.gif)
-
-[Vídeo original em MP4](docs/assets/videos/login-lua-rubra.mp4)
-
-| Início | Nova tradução |
-| --- | --- |
-| ![Início](docs/assets/screenshots/inicio.png) | ![Nova tradução](docs/assets/screenshots/nova_traducao.png) |
-| **Fontes** | **Fila** |
-| ![Fontes](docs/assets/screenshots/fontes.png) | ![Fila](docs/assets/screenshots/fila.png) |
-| **Capítulos traduzidos** | **Leitor** |
-| ![Capítulos traduzidos](docs/assets/screenshots/capitulos.png) | ![Leitor](docs/assets/screenshots/leitor.png) |
-| **Recompensas** | **Scan Studio** |
-| ![Recompensas](docs/assets/screenshots/recompensas.png) | ![Scan Studio](docs/assets/screenshots/scans.png) |
-| **Comunidade** | **Atualizações** |
-| ![Comunidade](docs/assets/screenshots/comunidade.png) | ![Atualizações](docs/assets/screenshots/atualizacoes.png) |
-
-![Configurações e seleção de temas](docs/assets/screenshots/configuracoes.png)
-
-## Principais recursos
-
-- **Aquisição HTTP-first:** para fontes cujo leitor é servido no HTML inicial, a descoberta de páginas usa um GET limitado e sem cookies; Chrome/Selenium só entra como fallback quando esse caminho não se aplica ou não conclui.
-- **Análise de fonte controlada:** adapters específicos têm prioridade; uma URL pública sem adapter pode ser analisada por evidências e, conforme o score, seguir, pedir confirmação das páginas ou falhar fechada.
-- **OCR RapidOCR:** RapidOCR é o engine primário da configuração Beta, com recuperação regional limitada. PaddleOCR é compatibilidade legacy, desligada por padrão.
-- **Classificação contextual:** diferencia fala, narração, SFX e elementos decorativos antes de decidir o que deve ser traduzido.
-- **Tradução em lote via backend autenticado:** todo job com tradução habilitada passa pelo provider interno `yomu_backend`, que chama o motor remoto **DeepL** no servidor (Edge Function `supabase/functions/translation-execute`). O cliente nunca chama a DeepL diretamente; `--translation-provider` é metadado/guard. Riva e Nemotron são rótulos legados: pedi-los num job habilitado falha fechado (`provider_mismatch`). Não há fallback silencioso entre providers.
-- **Memória de capítulo:** um ledger de terminologia e um registro de personagens preservam nomes próprios e formas canônicas ao longo do capítulo; um candidato que contradiz uma entidade já estabelecida é rejeitado ou marcado para revisão.
-- **Validação multilíngue:** procura texto-fonte residual, traduções parciais e outros sinais de mistura de idiomas sem reescrever a resposta do modelo.
-- **Reconstrução protegida:** aplica máscaras, inpainting, ajuste de fonte e verificações visuais para limitar alterações fora da área de texto.
-- **Artefatos de revisão:** produz PDF, relatórios JSON/HTML, progresso persistido, métricas e um quality gate com estados explícitos.
-- **Fila persistente:** o pipeline roda num worker independente da UI; fechar o navegador não interrompe um capítulo.
-- **Execução supervisionada:** o launcher canônico reinicia o worker que ele criou sob política limitada (2s/5s/15s, 3 tentativas, depois degradado) e persiste o exit code real controlando a árvore de processos no Windows.
-
-Os perfis de saída e caminhos dos arquivos estão em [Saídas e artefatos](docs/OUTPUT_ARTIFACTS.md).
-Em resumo: **Automático** entrega PDF e imagens traduzidas; **QC Profissional** também entrega
-imagens limpas, PSD editável, relatório de qualidade e lista de revisão.
-
-## Como funciona
-
-```mermaid
-flowchart LR
-    A[URL do capítulo] --> B[Descoberta de fonte HTTP-first]
-    B --> C[Download e validação]
-    C --> D[OCR RapidOCR e recuperação]
-    D --> E[Classificação de regiões]
-    E --> F[Tradução em lote]
-    F --> G[Validação semântica, terminologia e resíduo]
-    G --> H[Reconstrução de arte e tipografia]
-    H --> I[Validação pós-render]
-    I --> J[PDF e relatórios]
-    J --> K{Quality gate}
-    K -->|Aprovado| L[finished]
-    K -->|Revisão necessária| M[review_required]
-    L --> N[Leitor e Histórico]
-    M --> N
-```
-
-### Como o aplicativo roda
-
-O launcher canônico verifica atualização, sobe o worker supervisionado e a UI; a UI só cria
-jobs no JobStore, e o worker executa cada job num processo próprio:
-
-```mermaid
-flowchart TD
-    L["python start_tradutor.py (comando all)"] --> U["update_bootstrap.check_before_start"]
-    U -->|can_launch| W["Worker supervisionado<br/>worker_supervisor: 2s/5s/15s, depois degraded"]
-    U -->|can_launch| UI["UI local<br/>yomu/ui/app.py em 127.0.0.1:8080"]
-    UI -->|cria job| DB[("JobStore<br/>jobs.sqlite3")]
-    W -->|claim| DB
-    W --> R["job_runner<br/>um processo por job"]
-    R --> P["Pipeline<br/>download, OCR, CLEAN, render, PDF"]
-    P --> T["yomu_backend autenticado<br/>DeepL no servidor"]
-    R -->|progresso e estado terminal| DB
-    DB -->|status| UI
-```
-
-A ordem detalhada, com os módulos reais de cada etapa, está em
-[Arquitetura](docs/ARCHITECTURE.md).
-
-O pipeline mantém o texto reconhecido, os candidatos de OCR, as decisões de fallback, os motivos de validação e as métricas visuais nos artefatos de execução. Assim, uma conclusão técnica pode gerar um PDF e ainda terminar como `review_required` quando houver itens que mereçam inspeção humana.
-
-## Início rápido
-
-O ambiente auditado usa **Windows 64 bits e Python 3.11**. São necessários Git e uma conta Komyst (login Supabase com licença Beta) para jobs com tradução: a chave da DeepL fica no backend, não no cliente. Google Chrome é opcional: ele só é usado quando a descoberta HTTP não se aplica à fonte.
-
-O passo a passo completo de ambiente, comandos e testes está em
-[Desenvolvimento](docs/DEVELOPMENT.md).
+Para instalar e executar o aplicativo, siga o [guia de instalação](docs/INSTALLATION.md). Em
+resumo, o fluxo de desenvolvimento no Windows é:
 
 ```powershell
-git clone https://github.com/HenriquePvAr/Tradutor.Ia.git
-cd Tradutor.Ia
-
+git clone --branch dev https://github.com/HenriquePvAr/Komyst.git
+cd Komyst
 py -3.11 -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install --upgrade pip
-python -s -m pip install -r requirements/requirements-beta.txt   # perfil Beta (inclui requirements.txt e RapidOCR)
-python -s scripts/check_runtime_profile.py
-
+python -s -m pip install -r requirements/requirements-beta.txt
 Copy-Item .env.example .env
 ```
 
-Edite `.env` e preencha as variáveis públicas do Supabase (`SUPABASE_URL`, `SUPABASE_PUBLISHABLE_KEY`), que o login e o backend de tradução exigem. `DEEPL_API_KEY` é segredo do servidor (Edge Function) e não é usada por jobs habilitados do cliente. As demais opções possuem defaults conservadores. Nunca versione valores reais de chave.
-
-Para iniciar o sistema local (worker supervisionado + interface):
-
-```powershell
-python start_tradutor.py            # canônico: worker + UI
-python start_tradutor.py status     # saúde do worker e da fila
-python start_tradutor.py stop       # parada graciosa do worker
-```
-
-No Windows há também `start_tradutor.bat`. A aplicação escuta por padrão em `http://127.0.0.1:8080`
-(`TRADUTOR_UI_HOST`/`TRADUTOR_UI_PORT`). Abra sempre **`http://127.0.0.1:8080`**, não `http://localhost:8080`: a origem permitida no projeto Supabase Auth (`SUPABASE_SITE_URL`/`SUPABASE_REDIRECT_URL`) é `127.0.0.1`, e o login pode falhar em outra origem. O servidor da UI não abre navegador nem imprime a URL (`ui.run(show=False)` em `yomu/ui/app.py`); o shell desktop (`python desktop_app.py`) já abre a janela em `http://127.0.0.1:<porta>/`.
-
-> `python app_ui.py` sobe apenas a interface, sem worker; nesse caso os capítulos ficam `queued` até que um worker seja iniciado.
-
-Para executar pela CLI:
+Configure `SUPABASE_URL` e `SUPABASE_PUBLISHABLE_KEY` no `.env` para autenticação e tradução.
+Não coloque segredos de servidor nesse arquivo. Depois, inicie worker e interface juntos:
 
 ```powershell
-python run_webtoon.py "<URL_DO_CAPITULO>" --mode quality --no-context
+python start_tradutor.py
 ```
 
-O cache é reutilizado por padrão. Use `--force` somente quando quiser reprocessar download, OCR, tradução e renderização. Consulte o [guia de instalação](docs/INSTALLATION.md) antes da primeira execução completa e a [referência de configuração](docs/CONFIGURATION.md) para ajustar recursos e qualidade.
+Abra `http://127.0.0.1:8080`. O login está configurado para essa origem. A [instalação](docs/INSTALLATION.md)
+e a [configuração](docs/CONFIGURATION.md) têm os detalhes e os problemas conhecidos.
 
-Uma URL HTTP(S) pública sem adapter específico pode passar pela análise universal, mas isso
-não significa que o site seja suportado. O sistema só continua quando encontra evidência
-suficiente **e completa dentro dos limites** para o conjunto de páginas; em confiança média,
-a UI pede confirmação antes do OCR. Cobertura incompleta, autenticação, challenges, conteúdo
-protegido e leitores não observáveis falham fechados. Consulte as limitações de segurança e
-de formatos em [Adaptador universal de capítulos](docs/UNIVERSAL_CHAPTER_ADAPTER.md) antes de
-usar esse fallback.
+## O que o aplicativo oferece
 
-## Modos e perfis de saída
+- Entrada por URL de fontes com adapter e por pasta local. A análise universal de uma URL não
+  garante que o site seja compatível.
+- OCR, tradução autenticada via backend e validações de texto e imagem.
+- Modos **Qualidade** e **Download-only** na interface.
+- Saídas **Tradução pronta**, **Apenas Clean**, **Completo**, **Apenas tradução**,
+  **Tradução + Clean** e opções personalizadas. **Apenas download** fica no modo de
+  processamento. Os detalhes de cada escolha estão em [Modos de saída](docs/product/output_modes.md).
+- Fila local persistente e histórico de execuções.
 
-Na interface do Komyst há dois modos de processamento: **Qualidade** e **Download-only**.
-`fast` continua aceito pela CLI para execuções técnicas/compatibilidade, mas não é opção da
-interface. Download-only apenas coleta e valida páginas: não executa OCR, provider de tradução
-nem consome YK.
+Uma execução marcada `review_required` pode ter PDF pronto, mas contém pontos que precisam de
+inspeção. Isso não equivale a uma tradução aprovada nem a uma falha técnica. Consulte
+[Saídas e artefatos](docs/OUTPUT_ARTIFACTS.md) e [Qualidade e validação](docs/QUALITY_AND_VALIDATION.md).
 
-O perfil de saída é separado do modo:
+## Estados do job
 
-| Perfil | Resultado |
+| Estado terminal | Significado |
 | --- | --- |
-| **Automático** | PDF traduzido e imagens traduzidas — pronto para ler/publicar. |
-| **QC Profissional** | Tudo do Automático, mais imagens limpas, PSD editável com Type Layers, Quality Report e Review Manifest — pronto para revisar e finalizar. |
-
-Quality chama o backend de tradução autenticado (`yomu_backend`). O consumo de 1 YK ocorre somente depois de sucesso do
-provider e persistência válida da tradução. Uma falha posterior ao gerar arquivos não devolve
-automaticamente esse YK. Retry/re-export reutiliza tradução válida persistida, sem novo provider
-ou cobrança.
-
-Fontes disponíveis na interface: Webtoon, Comix e Vortex Scans por URL, além de uma pasta local
-de capítulo. A análise universal de uma URL não significa suporte homologado ao site. Scrapling,
-DynamicFetcher e Selenium são detalhes internos de aquisição, não fontes escolhidas pelo usuário.
-
-Consulte [Adapters de fonte](docs/SOURCE_ADAPTERS.md), [Saídas e artefatos](docs/OUTPUT_ARTIFACTS.md),
-o [contrato PSD](docs/PSD_COMPATIBILITY_MATRIX.md) e o [relatório de performance PSD M17](docs/PSD_PERFORMANCE_REPORT.md).
-
-### Modos da CLI
-
-Em ambos os modos o engine primário é **RapidOCR** (`yomu.config.settings.BETA_OCR_ENGINE`). O modo não
-troca o engine; ele decide quanto esforço de recuperação é permitido.
-
-| Modo | Estratégia | Indicação |
-| --- | --- | --- |
-| `fast` | RapidOCR com fallbacks pesados desativados por padrão; uma leitura duvidosa vira revisão em vez de bloquear o capítulo | CLI técnica/compatibilidade; não aparece na UI |
-| `quality` | RapidOCR com os caminhos de recuperação e validação mais caros habilitados, incluindo validação de OCR pós-render | Comparações conservadoras e diagnóstico |
-
-PaddleOCR não é dependência obrigatória de nenhum dos modos: é compatibilidade legacy
-explicitamente opt-in (`OCR_LEGACY_PADDLE_FALLBACK`, desligado por padrão).
-
-Exemplos:
-
-```powershell
-# CLI: modo técnico rápido com cache (não aparece na UI)
-python run_webtoon.py "<URL_DO_CAPITULO>" --mode fast
-
-# Modo quality com saída nomeada
-python run_webtoon.py "<URL_DO_CAPITULO>" --mode quality --output "meu_capitulo"
-
-# Apenas coleta e auditoria do download
-python run_webtoon.py "<URL_DO_CAPITULO>" --download-only
-```
-
-A referência completa das flags está disponível em `python run_webtoon.py --help`.
-
-## Arquitetura em poucas linhas
-
-| Área | Responsabilidade principal |
-| --- | --- |
-| `yomu/commands/`, `yomu/runtime/` | Launcher, worker supervisionado, fila e execução isolada; comandos históricos são shims na raiz |
-| `yomu/ui/`, `yomu/desktop/` | Interface local, bridge, progresso, revisão e shell desktop |
-| `yomu/pipeline/` | Orquestração do fluxo ponta a ponta e contexto do capítulo |
-| `yomu/download/` | Adapters de fonte, intake local, transportes e coleta |
-| `yomu/ocr/` | Engines, políticas, streaming e divisão de páginas |
-| `yomu/clean/` | Ownership, masks, inpainting e reconstrução de arte |
-| `yomu/translation/` | Decisões semânticas/linguísticas e adaptadores de providers |
-| `yomu/export/` | PDF, PNG, PSD e manifests de saída |
-| `yomu/community/`, `yomu/auth/` | Storage/publicação comunitária, identidade e licenciamento |
-| `tests/`, `test_support/` | Suíte e suporte hermético de teste |
-| `tools/`, `experiments/`, `research/` | Auditorias, harnesses e R&D fora do runtime principal |
-| `yomu/pipeline/pipeline_cache.py`, `yomu/runtime/resource_monitor.py` | Cache versionado, persistência atômica e métricas de recursos |
-| `yomu/export/pdf.py`, `pdf_naming.py`, `pdf_reader.py` | Páginas lógicas, geração, nomeação e leitura do PDF |
-| `yomu/runtime/process_launcher.py` | Execução supervisionada de um processo e persistência do exit code |
-
-O desenho completo está em [Documentação Técnica](docs/technical/DOCUMENTACAO_TECNICA.md); a visão por módulos do pipeline continua em [Arquitetura](docs/ARCHITECTURE.md).
-
-## Filosofia de qualidade
-
-O princípio central do pipeline é **fail-closed**: quando ele não consegue *provar* que uma
-alteração é segura, ele prefere sinalizar dúvida a produzir um resultado plausível.
-
-Na prática, diante de evidência insuficiente o sistema escolhe uma destas saídas:
-
-- marcar a região como `review_required`, ou
-- preservar os pixels de origem.
-
-E nunca:
-
-- inventa uma tradução para preencher a lacuna;
-- apaga texto da origem sem ter um substituto válido para colocar no lugar;
-- aceita um candidato semanticamente duvidoso só porque é gramatical.
-
-**`review_required` não significa job quebrado.** Uma execução pode terminar com PDF válido,
-completo e legível e ainda assim carregar regiões marcadas para inspeção humana. O estado
-separa *sucesso técnico* de *aprovação de qualidade*; `failed` é que indica falha técnica ou
-artefato essencial ausente.
-
-Quando a evidência é não apenas incerta mas inutilizável, a região recebe `REVIEW_UNUSABLE`
-e **não renderiza**: os pixels de origem permanecem. É preferível uma página com o texto
-original visível a uma página com texto errado apresentado como correto.
-
-O mesmo vale para a reconstrução de arte: se o modelo local de reconstrução não estiver
-disponível ou não passar na verificação, o resultado é indisponibilidade/revisão, nunca um
-render forçado.
-
-## Qualidade e execução segura
-
-O sistema combina verificações em vários níveis:
-
-- score de qualidade do OCR e comparação entre engines para regiões suspeitas;
-- SFX preservados no idioma original por padrão (`TRANSLATE_SFX=False`); ao habilitar a opção, o glossário pt-BR de onomatopeias fica em `assets/lexicon/sfx_en_pt.json` e sons desconhecidos mantêm o lettering original;
-- validação de resíduos em inglês ou espanhol e de fragmentos parcialmente traduzidos;
-- retries controlados, rejeição do candidato inválido e marcação para revisão manual;
-- validação de overflow, bordas, mudanças fora da máscara e páginas inválidas;
-- consistência de terminologia e de nome próprio ao longo do capítulo;
-- escrita atômica dos principais JSONs e do exit code do launcher;
-- teardown limitado do navegador e controle da árvore de processos no Windows.
-
-Os estados terminais têm significados distintos:
-
-| Estado | Significado |
-| --- | --- |
-| `finished` | Execução técnica concluída e quality gate aprovado |
-| `review_required` | Execução concluída, com PDF disponível, mas há revisão de qualidade pendente |
+| `finished` | Execução concluída e aprovada no quality gate |
+| `review_required` | Concluída, com PDF disponível, mas com revisão de qualidade pendente |
 | `failed` | Falha técnica ou artefato essencial ausente (exibido como "erro" na interface) |
 | `cancelled` | Cancelamento explícito |
 
-A taxonomia completa (15 estados em `yomu/runtime/job_store.py` `JobStatus.ALL`, incluindo `staging`, `claiming`, `starting`, `cancelling`, `awaiting_source_review`, `waiting_source_verification`, `source_analysis_ready`, `interrupted` e `resumable`) está em [Documentação Técnica §8](docs/technical/DOCUMENTACAO_TECNICA.md#8-máquina-de-estados-do-job).
-
-Esses mecanismos reduzem falsos positivos, mas não garantem tradução perfeita. Veja [Qualidade e validação](docs/QUALITY_AND_VALIDATION.md) para o contrato completo.
-
-## Produto atual — resumo M18
-
-| Área | Estado atual confirmado |
-| --- | --- |
-| Modos na interface | Qualidade e Download-only; `fast` continua somente na CLI. |
-| Fontes | Webtoon, Comix e Vortex Scans por URL; pasta local também é entrada suportada. |
-| Saída Automático | PDF e imagens traduzidas. |
-| Saída QC Profissional | Automático + imagens limpas, PSD editável com Type Layers, Quality Report e Review Manifest. |
-| Review | QC linguístico; `review_required` significa concluído com revisão recomendada, não falha automática. |
-| PSD | `editable_psd_writer.py`; M15 validou edição física no Photoshop 2025 e Photopea. Cross-editor round-trip direto não foi executado. |
-| Auth/backend | Projeto ativo Komyst: `<projeto-supabase-ativo>`; fluxo signup/confirmar/login e recovery validados fisicamente. |
-| Profile Media | Removida do produto ativo. |
-| Tradução | **IMPLEMENTADO** — jobs habilitados sempre via `yomu_backend` autenticado (motor remoto DeepL no servidor); seletor de provider oculto na UI. |
-| SFX | **IMPLEMENTADO** — preservados no original por padrão (`TRANSLATE_SFX=False`); tradução pelo glossário pt-BR pode ser habilitada; tipografia ajustada ao formato do balão e à inclinação da fonte original (`RENDER_FIT_BALLOON_SHAPE`, `RENDER_MATCH_SOURCE_SLANT`, padrão `True`). |
-| Updater | **IMPLEMENTADO** no código e na UI (aba **Atualizações**, botões **Verificar atualizações** / **Baixar e instalar**); canal assinado publicado é gate externo. Ver [Update e signing](docs/UPDATE_AND_SIGNING.md). |
-| Instalador | **PARCIAL** — script Inno Setup (`packaging/TradutorIA.iss`) e `tools/build_installer.py` existem; nenhum `Setup.exe` versionado; instalação limpa **não provada**. |
-| Licença Beta | **PARCIAL** — gate fail-closed em `yomu/auth/beta_license.py`; nenhum entitlement real de tester validado. |
-| Custo PSD | Medições M17 e estimativas separadas em [PSD_PERFORMANCE_REPORT.md](docs/PSD_PERFORMANCE_REPORT.md). |
-
-Este resumo não substitui uma auditoria de release/packaging. Consulte
-[Saídas e artefatos](docs/OUTPUT_ARTIFACTS.md), [Adapters](docs/SOURCE_ADAPTERS.md) e os
-documentos especializados vinculados.
-
-## Status de projeto legado — snapshot histórico
-
-> A tabela abaixo é preservada de uma avaliação anterior e não foi revalidada como estado atual
-> na M18. As linhas **Instalador**, **Updater** e **Tradução — DeepL** estão superadas pelo
-> [resumo do produto atual](#produto-atual--resumo-m18) (revisado em 2026-10-24). Em particular, licenciamento, instalador, updater e distribuição não devem ser usados
-> como gate atual; consulte os documentos operacionais próprios. A M18 não executou auditoria de
-> release nem alterou esses sistemas.
-
-O Tradutor.IA está em **beta técnica**. O pipeline principal está sob
-**[Quality Freeze](docs/QUALITY_FREEZE.md)**: comportamento de produção, dependências
-pinadas e evidência de qualidade são tratados como um contrato único, e nenhum dos três muda
-sem novo E2E real.
-
-| Área | Estado |
-| --- | --- |
-| Pipeline ponta a ponta | Funcional, sob Quality Freeze |
-| Descoberta de fonte HTTP | Funcional para as fontes cujo adapter a suporta |
-| Fallback de navegador | Disponível para as demais fontes |
-| OCR — RapidOCR | Engine primário |
-| OCR — PaddleOCR | Desligado por padrão (compatibilidade legacy opt-in) |
-| Tradução — DeepL | Provider padrão |
-| Reconstrução visual | Funcional; fidelidade em regiões texturizadas continua um eixo aberto |
-| PDF final | Funcional |
-| Leitor interno | Implementado (aba **Leitor**, ação **LER** no Histórico) |
-| Histórico | Implementado |
-| Comunidade (Supabase + Drive) | Implementado; fail-closed quando não configurado |
-| Refinamento natural PT-BR (Nemotron) | **Não automático** — sugestão manual, explicitamente autorizada, na revisão; nunca aplica tradução sozinha |
-| Retomada de job interrompido pela UI | Implementada — botão **Retomar** exibido para os jobs que o backend marca `can_resume` |
-| Instalador para usuário final | **Não existe** |
-| Instalação limpa em Windows | **Não provada** |
-| Updater | Parcial — staging, ativação atômica e rollback existem; canal assinado e UI pendentes |
-| Distribuição Beta | Em preparação |
-
-Nada nesta tabela deve ser lido a partir do roadmap: um item só aparece como implementado
-quando há código correspondente no repositório.
-
-A revisão humana continua importante. SFX com tipografia complexa, texto decorativo,
-naturalidade do PT-BR, fontes incomuns e páginas visualmente densas podem exigir ajuste ou
-inspeção. O suporte end-to-end foi auditado no Windows; outros sistemas não fazem parte do
-contrato validado atual. Use apenas conteúdo que você tenha autorização para processar.
-
-## Empacotamento e distribuição — snapshot histórico
-
-> Os estados e planos descritos nesta seção foram registrados antes da Beta 17 e não foram
-> revalidados na M18. Não os use como status atual de installer/updater/clean-install; a M18
-> atualizou orientação textual e não executou gates de distribuição.
-
-A baseline de empacotamento está pronta — pipeline congelado, manifests pinados e evidência
-de E2E registrada. **A instalação limpa ainda não foi provada:** não existe validação em uma
-máquina Windows limpa, nem instalador no repositório.
-
-A próxima fase planejada inclui distribuição única de OpenCV, runtime empacotado,
-instalador, teste em Windows limpo, updater e distribuição Beta controlada. Detalhes e
-estado por item em [Desenvolvimento](docs/DEVELOPMENT.md#empacotamento-e-distribuição).
-
-## Riscos conhecidos — snapshot técnico anterior
-
-> Esta lista inclui findings antigos de ambiente/runtime. Confirme-os em
-> [Desenvolvimento](docs/DEVELOPMENT.md#riscos-conhecidos) antes de tratá-los como abertos no
-> estado atual; a M18 não executou regressão nem auditoria de release.
-
-Riscos técnicos abertos e formalmente registrados, com detalhe em
-[Desenvolvimento](docs/DEVELOPMENT.md#riscos-conhecidos):
-
-- `OPENCV-THRESHOLD-SENSITIVITY-001` — limiares de pixel calibrados contra o `cv2`
-  congelado; trocar versão ou variante exige reexecutar o E2E de qualidade.
-- `OPENCV-VARIANT-SHADOWING-001` — três variantes de OpenCV coexistem no ambiente de
-  desenvolvimento e o `cv2` efetivamente importado vem da variante `-headless`, não da
-  declarada como contratual. **Aberto e não resolvido.**
-- `CLEAN-INSTALL-NOT-YET-PROVEN` — nenhuma instalação limpa em Windows foi validada.
-- Chrome/Selenium pode falhar ao iniciar em máquinas afetadas por problemas de Microsoft
-  Platform Crypto Provider / TPM, inutilizando o fallback de navegador. A descoberta HTTP
-  evita essa dependência para as fontes que a suportam.
-- Reconstrução de arte em textura e naturalidade semântica PT-BR permanecem eixos abertos.
-
-## Documentação
-
-Página inicial da documentação: **[docs/README.md](docs/README.md)**.
-
-- [Guia do Usuário](docs/user/GUIA_DO_USUARIO.md) — para Scans, tradutores e testadores da Beta.
-- [Documentação Técnica](docs/technical/DOCUMENTACAO_TECNICA.md) — arquitetura, processos, estados, segurança, testes e dívida técnica.
-- [Política de Documentação](docs/DOCUMENTATION_POLICY.md) — regras de sincronização entre código e documentação.
-- [Arquitetura](docs/ARCHITECTURE.md) — detalhe técnico do pipeline e das fronteiras entre componentes.
-- [Desenvolvimento](docs/DEVELOPMENT.md) — setup, execução, testes, dependências externas, empacotamento e riscos conhecidos.
-- [Estrutura do projeto](docs/architecture/REPOSITORY_STRUCTURE.md) — política da raiz, runtime, testes, ferramentas, pesquisa e relatórios.
-- [Política de artefatos](docs/ARTIFACT_POLICY.md) — o que pertence ao Git e o que deve permanecer externo.
-- [Contribuindo](CONTRIBUTING.md) — convenções, verificações locais e commits.
-- [Qualidade e validação](docs/QUALITY_AND_VALIDATION.md) — gates, estados terminais e limites conhecidos.
-- [Quality Freeze](docs/QUALITY_FREEZE.md) — o que está congelado, a evidência e como sair do freeze.
-- [Instalação](docs/INSTALLATION.md) · [Configuração](docs/CONFIGURATION.md) · [Testes](docs/TESTING.md) · [Adaptador universal](docs/UNIVERSAL_CHAPTER_ADAPTER.md) · [Segurança](docs/SECURITY.md) · [Troubleshooting](docs/TROUBLESHOOTING.md).
+Há 15 estados ao todo em `komyst/runtime/job_store.py` (`JobStatus.ALL`), entre eles os
+intermediários `staging`, `claiming`, `starting`, `interrupted` e `resumable`. A máquina de
+estados completa está em [Documentação Técnica §8](docs/technical/DOCUMENTACAO_TECNICA.md#8-máquina-de-estados-do-job).
 
 ## Desempenho medido
 
-Capítulo completo de referência (128 imagens originais que viram 65 páginas lógicas), modo
-**Qualidade**, tradução paga, forçar ligado e cache desligado. Uma execução por coluna, na mesma
-máquina e com o mesmo código; tempos em segundos, do relatório de cada job.
+Números físicos (CPU, RAM, GPU e tempo por etapa) de uma execução de referência estão em
+[Perfil de hardware medido](docs/HARDWARE_PROFILE.md) — são medições de uma máquina e um
+capítulo, não requisitos mínimos homologados.
 
-| Etapa | Em paralelo com um jogo pesado | Máquina ociosa |
-| --- | ---: | ---: |
-| Download das 128 imagens | 53,9 | 44,7 |
-| Corte inteligente (128 → 65 páginas) | 37,4 | 25,2 |
-| OCR | 34,1 | 21,4 |
-| OCR seletivo | 60,7 | 68,4 |
-| Classificação e agrupamento | 112,8 | 139,6 |
-| Pré-tradução | 62,4 | 38,3 |
-| Tradução | 152,7 | 51,9 |
-| Salvar imagens | 32,4 | 3,3 |
-| PDF | 3,2 | 2,0 |
-| **Total do job** | **428** | **219** |
+## Limites conhecidos
 
-- Com o jogo aberto a CPU média foi de 70% (pico 93%) e a memória média de 82%; ociosa, 33% (pico
-  78%) e 50%.
-- O corte inteligente, o OCR e principalmente salvar imagens sentem a disputa por CPU e disco.
-  Download, pré-tradução e tradução dependem da rede do site e do serviço de tradução, então
-  variam por motivos que não são processamento local; leia-os à parte.
-- A classificação variou entre execuções (93 s, 113 s e 140 s) sem relação com a carga e é a maior
-  etapa isolada. Com a CPU em média a 33%, ela é o próximo alvo de otimização.
-- O download usa conexões simultâneas (`DOWNLOAD_WORKERS`, padrão 4). Antes, com o navegador
-  configurado só como reserva, as 128 imagens baixavam uma por vez (259 s no mesmo capítulo).
-- São medições de um único capítulo e de uma única máquina, não uma garantia.
+- A Beta é voltada ao Windows; outros sistemas não fazem parte do ambiente validado.
+- Tradução exige conta Komyst e conexão com os serviços configurados. A chave do DeepL fica no
+  servidor; o aplicativo a acessa pelo backend autenticado.
+- O resultado pode conter texto ou reconstrução visual que exija revisão humana. O sistema não
+  garante tradução perfeita.
+- Instalação em Windows limpo, requisitos mínimos e distribuição final ainda têm gates
+  pendentes. Veja [Problemas conhecidos](docs/KNOWN_ISSUES.md).
 
-## Testes
+## Documentação
 
-Os testes padrão são offline. Smokes que acessam rede ficam em `scripts/`, exigem opt-in
-explícito e estão documentados em [Testes](docs/TESTING.md).
+Use o [índice da documentação](docs/README.md) para encontrar guias por assunto.
 
-```powershell
-python -m pytest -q                                  # suíte hermética Python (~6160 passed, ~10 min)
-node --experimental-vm-modules tests/test_chapter_reader.mjs   # suítes de frontend
-```
+- [Guia do usuário](docs/user/GUIA_DO_USUARIO.md)
+- [Desenvolvimento](docs/DEVELOPMENT.md) · [Arquitetura](docs/ARCHITECTURE.md)
+- [Testes](docs/TESTING.md) · [Segurança](docs/SECURITY.md)
+- [Contribuir](CONTRIBUTING.md)
 
-A flag `--experimental-vm-modules` é obrigatória para as suítes `.mjs`. Comandos completos em
-[Desenvolvimento](docs/DEVELOPMENT.md#testes).
+Relatórios, auditorias e planos antigos estão preservados como histórico. Eles registram o
+estado na data em que foram escritos; para comportamento atual, use primeiro os guias acima e
+os documentos primários listados no índice.
 
-## Roadmap
-
-> **Snapshot histórico de planejamento.** Os estados, bloqueadores e declarações de suporte
-> desta seção foram escritos antes das missões M1–M17 e não são um status atual do produto.
-> Para capacidades atuais, consulte [Saídas e artefatos](docs/OUTPUT_ARTIFACTS.md),
-> [Adapters de fonte](docs/SOURCE_ADAPTERS.md) e a documentação indicada acima. O conteúdo é
-> preservado como histórico; não use suas referências a Vortex-only, editor de camadas ou Beta
-> antiga como descrição do build atual.
-
-> Esta seção descreve **intenções**, não comportamento disponível. O que já existe está no
-> [resumo do produto atual](#produto-atual--resumo-m18) e na
-> [Documentação Técnica §2](docs/technical/DOCUMENTACAO_TECNICA.md#2-escopo-atual-do-produto);
-> nada listado abaixo deve ser lido como recurso existente.
-
-### Definição da primeira Beta (MVP)
-
-O escopo da primeira Beta é deliberadamente estreito. Um tester externo de Scan deve
-conseguir, **sem clonar o repositório, sem Python, Node ou Git instalados manualmente**:
-
-instalar → abrir → fazer login e ativar a licença de tester → colar uma URL suportada →
-traduzir o capítulo → acompanhar o progresso → revisar quando o gate pedir → abrir o PDF no
-Leitor → reencontrar o capítulo no Histórico → receber uma atualização assinada.
-
-Fora do MVP por decisão explícita: editor de camadas, naturalização automática, memória
-persistente de personagens entre capítulos, presets, monetização e suporte universal a
-fontes. O suporte declarado da primeira Beta é **VortexScans**; outras fontes continuam
-sujeitas à análise universal, que é fail-closed e não é promessa de suporte.
-
-### Bloqueadores da Beta
-
-Ordenados por dependência. Nenhum é trabalho de qualidade de pipeline — o
-[Quality Freeze](docs/QUALITY_FREEZE.md) permanece ativo.
-
-| # | Bloqueador | Estado hoje | Registro |
-| --- | --- | --- | --- |
-| 1 | Convergir para **uma** distribuição de OpenCV em runtime | três variantes coexistem; `cv2` vem da `-headless` | `OPENCV-VARIANT-SHADOWING-001` |
-| 2 | Finalizar installer e distribuição controlada | runtime/spec de produção existem; installer final e distribuição ainda não foram validados | `INSTALLER-FINAL-PENDING` |
-| 3 | Provisionamento de configuração do tester | configuração pública e contratos locais existem; fluxo de entrega ao tester ainda não foi validado em máquina limpa | `TESTER-CONFIG-PROVISIONING-PENDING` |
-| 4 | Ativar e validar o authorizer remoto de licença Beta | implementação local corrigida; deploy e validação remotos ainda pendentes | `BETA-AUTHORIZER-REMOTE-PENDING` |
-| 5 | Validar o primeiro entitlement real de tester | schema/RLS/RPC e correção local existem; LIC-001 remoto ainda não foi executado | `FIRST-TESTER-GRANT-PENDING` |
-| 6 | Canal de release assinado: hospedagem, chave pública e UI de atualização | *(histórico — hoje a chave `beta-2026-10` está em `TRUSTED_PUBLIC_KEYS`, `DEFAULT_MANIFEST_URL` está configurada e a aba Atualizações existe; falta publicar/validar o manifest)* | `UPDATER-RELEASE-CHANNEL-PENDING`, `UPDATE-TRUST-ROOT-EMPTY` |
-| 7 | Provar instalação limpa em Windows + E2E real sobre ela | nenhuma validação em máquina limpa | `CLEAN-INSTALL-NOT-YET-PROVEN`, `CLEAN-VM-VALIDATION-PENDING` |
-
-Itens de robustez que acompanham a Beta sem bloqueá-la: executar as suítes `.mjs` na CI
-(`CI-JS-SUITES-NOT-RUN`) e provar a disponibilidade das fontes do Windows exigidas por
-`font_fidelity` numa instalação limpa.
-
-### Fases
-
-| Fase | Conteúdo | Estado |
-| --- | --- | --- |
-| 0 | Quality Freeze do pipeline | concluída |
-| 1 | Reconciliação de documentação e roadmap | concluída |
-| 2 | Preparação de `main` sobre a baseline congelada | próxima |
-| 3 | Empacotamento: OpenCV único, runtime empacotado, instalador | bloqueadores 1–2 |
-| 4 | Auth/licença de tester ponta a ponta | bloqueadores 3–5 |
-| 5 | Canal de atualização assinado | bloqueador 6 |
-| 6 | Validação em Windows limpo + E2E real | bloqueador 7 |
-| 7 | Entrega controlada a um tester de Scan | — |
-| 8 | Feedback e hotfixes | — |
-| 9 | Evolução pós-Beta | — |
-
-### Pós-Beta
-
-Explicitamente **fora** do caminho crítico, para que nenhum destes atrase a entrega:
-
-- editor de camadas (regiões editáveis, arrastar/redimensionar, controles de tipografia,
-  desfazer/refazer, comparação, presets);
-- naturalização automática PT-BR — hoje é sugestão manual, autorizada caso a caso, e assim
-  permanece na Beta;
-- memória persistente de personagens e glossário editorial entre capítulos (a consistência
-  mínima de terminologia e nome próprio **dentro** do capítulo já existe);
-- fidelidade de reconstrução em regiões texturizadas/open-art;
-- gate automático de qualidade semântica PT-BR;
-- adapters adicionais de fonte e descoberta HTTP genérica (hoje só VortexScans implementa o
-  coletor de HTML estático);
-- monetização, planos e créditos;
-- demonstração pública reproduzível com material autorizado.
-
-## Autor
+## Sobre
 
 Desenvolvido por [Henrique Araujo](https://github.com/HenriquePvAr).
