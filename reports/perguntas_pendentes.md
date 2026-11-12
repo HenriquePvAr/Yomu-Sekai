@@ -68,3 +68,21 @@ Abertos para a Fase 3:
 - Tradução pronta ficou com 61 certificados contra 62 da base: uma página saiu com `source_completeness_unproven`. Não investigado.
 - Suíte completa com OpenCV 5.0.0: 6.501 passaram, 2 falharam. Uma era o Paddle sem o contrib (corrigida no passo 2, teste passa); resta `test_text_touching_a_balloon_border_is_cleaned_without_erasing_the_border`. A suíte completa não foi repetida depois do passo 2.
 - Todas as medições feitas hoje com OpenCV 4.10.0 (jobs `5731a21a`, `abee1571`, `5dae49f7` e as execuções por linha de comando) não servem de comparação com as desta seção.
+
+## Investigação do certificado a menos e linha de base do REF-B (2026-11-12)
+
+**Página 22 (REF-A):** com OpenCV 5.0.0 o OCR enxerga um balão (`BALAO_1`) que com 4.10.0 não aparecia, e a página fica `REVIEW_REQUIRED` por `page_ocr_review_required_for_clean_verification` (reason `source_completeness_unproven`). Isso **não é regressão da Fase 0**: Apenas Clean por linha de comando no código da `dev` (`7879bad`), também com OpenCV 5.0.0, deixa a página 22 em revisão pelo mesmo motivo. Resultado da `dev` com 5.0.0: 62 PASS e revisão em p10, p22 e p23 (371,2 s). Fase 0 com 5.0.0: revisão em p10 e p22 no Apenas Clean (63 PASS); a p23 passa. A Tradução pronta teve revisão adicional em p52 e p60 (`target_or_ownership_incomplete`) na rodada com 5.0.0, mesma causa de variação de OCR entre execuções; não investigado.
+
+**REF-B em Completo pelo painel**, commit `58230f4`, OpenCV 5.0.0, DirectML, job `a9a1339d8157423eacb561d402d24494`:
+
+| Métrica | Base | Fase 0, OpenCV 4.10.0 | Fase 0, OpenCV 5.0.0 |
+|---|---:|---:|---:|
+| Tempo total | 641,26 s | 599,51 s | 518,77 s |
+| Traduzidas | 169/177 | 169/177 | 169/177 (168 `ok` + 1 caixa de legenda) |
+| Certificados `verified` | 70/85 | 70/85 | 70/85 |
+| Gate físico | reprovado, 7 resíduos | reprovado, os mesmos 7 | reprovado, 7 resíduos |
+| Estado | `failed` | `review_required` | `review_required` |
+| Artefatos | | | PDF, 85 imagens traduzidas, 85 limpas, 85 PSD, relatório e manifesto de revisão, todos produzidos |
+| Monitor | | | 2,94 s de amostragem em 518,8 s (0,57%) |
+
+Os 7 resíduos do REF-B e os 15 `target_or_ownership_incomplete` seguem para a Fase 3.
