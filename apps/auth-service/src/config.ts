@@ -28,21 +28,21 @@ function requireSecret(value: string): string {
 function parsePort(value: string): number {
   const parsed = Number.parseInt(value, 10);
   if (!Number.isInteger(parsed) || parsed < 1024 || parsed > 65535) {
-    throw new Error("TRADUTOR_AUTH_SERVICE_PORT must be a TCP port between 1024 and 65535");
+    throw new Error("KOMYST_AUTH_SERVICE_PORT must be a TCP port between 1024 and 65535");
   }
   return parsed;
 }
 
 export function loadConfig(): AuthServiceConfig {
-  const host = env("TRADUTOR_AUTH_SERVICE_HOST", "127.0.0.1");
+  const host = env("KOMYST_AUTH_SERVICE_HOST", "127.0.0.1");
   if (host !== "127.0.0.1" && host !== "localhost") {
     throw new Error("auth-service must bind to loopback only");
   }
-  const port = parsePort(env("TRADUTOR_AUTH_SERVICE_PORT", "8787"));
+  const port = parsePort(env("KOMYST_AUTH_SERVICE_PORT", "8787"));
   const baseUrl = env("BETTER_AUTH_URL", "http://127.0.0.1:8080");
   const defaultUserRoot = process.env.LOCALAPPDATA
-    ? path.join(process.env.LOCALAPPDATA, "TradutorIA")
-    : path.join(process.env.HOME || repoRoot, ".tradutoria");
+    ? path.join(process.env.LOCALAPPDATA, "Komyst")
+    : path.join(process.env.HOME || repoRoot, ".komyst");
   const db = env(
     "BETTER_AUTH_DATABASE_PATH",
     path.join(defaultUserRoot, "runtime", "better-auth.sqlite3"),

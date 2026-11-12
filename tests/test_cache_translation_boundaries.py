@@ -10,16 +10,16 @@ from unittest.mock import patch
 
 import numpy as np
 
-import yomu.config.settings as config
-from yomu.ocr.ocr_balloon import TextGroup, apply_group_translations
-from yomu.ocr.ocr_engine import OCRLine
-from yomu.pipeline.pipeline_cache import (
+import komyst.config.settings as config
+from komyst.ocr.ocr_balloon import TextGroup, apply_group_translations
+from komyst.ocr.ocr_engine import OCRLine
+from komyst.pipeline.pipeline_cache import (
     load_ocr_cache,
     ocr_cache_key,
     ocr_runtime_fingerprint,
     save_ocr_cache,
 )
-from yomu.translation.providers.translator_nvidia import TranslatorNvidiaBatch
+from komyst.translation.providers.translator_nvidia import TranslatorNvidiaBatch
 
 
 def _line(text="HELLO"):

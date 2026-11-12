@@ -392,7 +392,7 @@ class VisualHarnessIsFailClosed(unittest.TestCase):
 
     def test_harness_requires_visual_flag_loopback_and_query_state(self):
         text = self.HARNESS.read_text(encoding="utf-8")
-        for guard in ("__tradutorVisualTestEnabled !== true", "127.0.0.1",
+        for guard in ("__komystVisualTestEnabled !== true", "127.0.0.1",
                       "localhost", "visual_pipeline_state"):
             self.assertIn(guard, text)
         code = code_of(self.HARNESS)
@@ -400,7 +400,7 @@ class VisualHarnessIsFailClosed(unittest.TestCase):
         self.assertNotIn("XMLHttpRequest", code)
 
     def test_harness_asset_is_only_loaded_in_visual_test_mode(self):
-        app = (ROOT / "yomu/ui/app.py").read_text(encoding="utf-8")
+        app = (ROOT / "komyst/ui/app.py").read_text(encoding="utf-8")
         self.assertIn("PIPELINE_HARNESS_ASSET", app)
         self.assertIn("if visual_test_enabled:", app)
 
@@ -412,15 +412,15 @@ class VisualHarnessIsFailClosed(unittest.TestCase):
         self.assertIn("data-pipeline-reduced-motion", css)
 
     def test_harness_reapplies_after_canonical_auth_transition(self):
-        # This used to assert the name 'tradutor:auth-changed', a helper called
+        # This used to assert the name 'komyst:auth-changed', a helper called
         # renderAfterCanonicalUiSettles and a literal 1000ms timer, which pinned
         # the defect instead of the intent: the application dispatches
-        # 'tradutor-auth-changed', so that subscription never fired and the two
+        # 'komyst-auth-changed', so that subscription never fired and the two
         # timers were the only thing reapplying the harness. The transition is
         # now the signal, so no interval has to be guessed.
         harness = code_of(self.HARNESS)
-        self.assertIn("addEventListener('tradutor-auth-changed', renderHarness)", harness)
-        self.assertNotIn("tradutor:auth-changed", harness)
+        self.assertIn("addEventListener('komyst-auth-changed', renderHarness)", harness)
+        self.assertNotIn("komyst:auth-changed", harness)
         self.assertNotIn("setTimeout", harness)
 
     def test_harness_uses_a_dedicated_root_outside_pipeline_polling(self):
@@ -436,9 +436,9 @@ if __name__ == "__main__":
 class IntegrationIsWiredThroughTheViewModel(unittest.TestCase):
     """State reaches the DOM only by way of the canonical mapper."""
 
-    BUNDLE = ROOT / "static" / "tradutor_ui.js"
+    BUNDLE = ROOT / "static" / "komyst_ui.js"
     SHELL = ROOT / "ui" / "ui_shell.html"
-    APP = ROOT / "yomu/ui/app.py"
+    APP = ROOT / "komyst/ui/app.py"
 
     def test_every_render_call_receives_a_mapped_view_model(self):
         """Textual order proves nothing once the mapper is an argument; what
@@ -462,7 +462,7 @@ class IntegrationIsWiredThroughTheViewModel(unittest.TestCase):
             self.assertIn(asset, text, asset)
         order = [text.index("LOADING_VIEW_ASSET)}\" defer"),
                  text.index("PROCESSING_SURFACE_ASSET)}\" defer"),
-                 text.index("TRADUTOR_UI_ASSET)}\" defer")]
+                 text.index("KOMYST_UI_ASSET)}\" defer")]
         self.assertEqual(order, sorted(order), "deferred order must be view, renderer, bundle")
 
     def test_the_integration_point_forwards_and_does_not_decide(self):
@@ -496,7 +496,7 @@ class IntegrationIsWiredThroughTheViewModel(unittest.TestCase):
 class BootstrapIsWiredToTheSurface(unittest.TestCase):
     """The existing boot sequence feeds the shared surface, unchanged."""
 
-    BUNDLE = ROOT / "static" / "tradutor_ui.js"
+    BUNDLE = ROOT / "static" / "komyst_ui.js"
 
     def setUp(self):
         self.text = code_of(self.BUNDLE)
@@ -574,7 +574,7 @@ class BootstrapIsWiredToTheSurface(unittest.TestCase):
 # repaint reaches the same element from a different caller and was never gated.
 #
 # The surface itself is kept: pipeline_loading_harness.js renders it from
-# fixtures behind TRADUTOR_UI_VISUAL_TEST=1 on loopback, and the same
+# fixtures behind KOMYST_UI_VISUAL_TEST=1 on loopback, and the same
 # fail-closed flag is the only thing that lets the bundle paint it.
 # --------------------------------------------------------------------------
 
@@ -615,7 +615,7 @@ function renderLoadingSurfaceSpy() {
   root.children = ['blue-surface'];
 }
 function select(selector) { return selector === '#loadingSurface' ? root : null; }
-const windowStub = {__tradutorVisualTestEnabled: scenario.visualTest === true};
+const windowStub = {__komystVisualTestEnabled: scenario.visualTest === true};
 
 const factory = new Function('$', 'window', 'renderLoadingSurface',
   extractFunction('clearLoadingSurface') + '\n'
@@ -642,7 +642,7 @@ def paint(state, *, visual_test=False, hidden=False, dataset=None, progress=None
         harness = handle.name
     try:
         result = subprocess.run(
-            [NODE, harness, str(ROOT / "static" / "tradutor_ui.js"), json.dumps(scenario)],
+            [NODE, harness, str(ROOT / "static" / "komyst_ui.js"), json.dumps(scenario)],
             capture_output=True, text=True, timeout=60, encoding="utf-8", errors="replace")
     finally:
         Path(harness).unlink(missing_ok=True)
@@ -708,7 +708,7 @@ class TheBluePipelineSurfaceStaysOutOfTheNormalFlow(unittest.TestCase):
 class TheNormalFlowKeepsTheInlinePipeline(unittest.TestCase):
     """Source contracts: one gated call site, no auto-navigation, real state."""
 
-    BUNDLE = ROOT / "static" / "tradutor_ui.js"
+    BUNDLE = ROOT / "static" / "komyst_ui.js"
     SHELL = ROOT / "ui" / "ui_shell.html"
 
     def setUp(self):
@@ -723,7 +723,7 @@ class TheNormalFlowKeepsTheInlinePipeline(unittest.TestCase):
     def test_the_gate_is_the_servers_fail_closed_flag_not_a_sniff(self):
         gate = self.text[self.text.index("function paintPipelineSurface"):]
         gate = gate[:gate.index("\n  }") + 4]
-        self.assertIn("window.__tradutorVisualTestEnabled === true", gate)
+        self.assertIn("window.__komystVisualTestEnabled === true", gate)
         for sniff in ("location.hostname", "localhost", "127.0.0.1", "Date.now"):
             self.assertNotIn(sniff, gate, sniff)
 

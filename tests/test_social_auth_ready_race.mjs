@@ -3,7 +3,7 @@
 // Reproduces (and fails against 842532c to prove) a real race: static/social_community.js
 // used to decide whether to fire profile/me + feed purely from Boolean(session) on the raw
 // Supabase SDK event. auth_ui.js runs an INDEPENDENT subscription to the same SDK and only
-// flips the canonical, backend-confirmed window.__tradutorAuthState to 'authenticated' once
+// flips the canonical, backend-confirmed window.__komystAuthState to 'authenticated' once
 // /api/community/auth/session (or /api/ui/bootstrap) agrees - it explicitly regresses to
 // 'auth_loading' on every SDK event first. Nothing stopped social_community.js from firing
 // its private request while the canonical state was still anonymous/authenticating, which is
@@ -11,7 +11,7 @@
 //
 // This harness models both signals explicitly: a synthetic Supabase auth event stream (the
 // same shape test_social_runtime_lifecycle.mjs / test_social_first_login_idempotency.mjs
-// use) AND a synthetic window.__tradutorAuthState + 'tradutor-auth-changed' event (the real
+// use) AND a synthetic window.__komystAuthState + 'komyst-auth-changed' event (the real
 // canonical signal auth_ui.js drives). Real functions from the shipped module are exercised
 // through a Node vm module linker - nothing here is a reimplementation of the fix.
 //
@@ -47,9 +47,9 @@ function makeElement(tag) {
   return node;
 }
 
-// A real (tiny) event target so window.dispatchEvent('tradutor-auth-changed', ...) actually
+// A real (tiny) event target so window.dispatchEvent('komyst-auth-changed', ...) actually
 // reaches the module's own window.addEventListener subscription - the same mechanism
-// tradutor_ui.js and social_community.js use for real in the browser.
+// komyst_ui.js and social_community.js use for real in the browser.
 function makeEventTarget() {
   const listeners = new Map();
   return {
@@ -78,7 +78,7 @@ function makeWindow(host) {
     URL, AbortController, Promise, console,
     addEventListener: events.addEventListener, removeEventListener: events.removeEventListener,
     dispatchEvent: events.dispatchEvent,
-    __tradutorAuthState: 'auth_loading', // canonical arbiter present from the first tick, like the real shell
+    __komystAuthState: 'auth_loading', // canonical arbiter present from the first tick, like the real shell
   };
   windowStub.window = windowStub;
   windowStub.globalThis = windowStub;
@@ -171,12 +171,12 @@ async function emit(authStub, events) {
   await flush();
 }
 
-// The real canonical signal auth_ui.js drives: it sets window.__tradutorAuthState directly
-// AND dispatches 'tradutor-auth-changed' - the exact two mechanisms
+// The real canonical signal auth_ui.js drives: it sets window.__komystAuthState directly
+// AND dispatches 'komyst-auth-changed' - the exact two mechanisms
 // waitForCanonicalAuthReady() in the fix consults.
 function announceCanonical(win, state, detail = {}) {
-  win.__tradutorAuthState = state;
-  win.dispatchEvent(new win.CustomEvent('tradutor-auth-changed', {
+  win.__komystAuthState = state;
+  win.dispatchEvent(new win.CustomEvent('komyst-auth-changed', {
     detail: { state, authenticated: state === 'authenticated', ...detail },
   }));
 }
@@ -191,7 +191,7 @@ const SESSION = { access_token: 'tok-first-login', user: { id: 'synthetic-user' 
 
 await test('an SDK session with the canonical state still auth_loading issues no private request', async () => {
   const ctx = await bootWith(CURRENT);
-  ctx.win.__tradutorAuthState = 'auth_loading'; // canonical has not confirmed yet
+  ctx.win.__komystAuthState = 'auth_loading'; // canonical has not confirmed yet
   await emit(ctx.authStub, [[SESSION, 'SIGNED_IN']]);
   assert.equal(ctx.counters.profile, 0, `profile/me fired before auth-ready: ${ctx.counters.profile}`);
   assert.equal(ctx.counters.feed, 0, `feed fired before auth-ready: ${ctx.counters.feed}`);
@@ -199,7 +199,7 @@ await test('an SDK session with the canonical state still auth_loading issues no
 
 await test('the pending request executes exactly once as soon as the canonical state catches up', async () => {
   const ctx = await bootWith(CURRENT);
-  ctx.win.__tradutorAuthState = 'auth_loading';
+  ctx.win.__komystAuthState = 'auth_loading';
   await emit(ctx.authStub, [[SESSION, 'SIGNED_IN']]);
   assert.equal(ctx.counters.profile, 0);
   announceCanonical(ctx.win, 'authenticated', { user_id: 'synthetic-user' });
@@ -212,16 +212,16 @@ await test('the pending request executes exactly once as soon as the canonical s
 
 await test('a stray auth event without authenticated:true does not release the pending load', async () => {
   const ctx = await bootWith(CURRENT);
-  ctx.win.__tradutorAuthState = 'auth_loading';
+  ctx.win.__komystAuthState = 'auth_loading';
   await emit(ctx.authStub, [[SESSION, 'SIGNED_IN']]);
-  ctx.win.dispatchEvent(new ctx.win.CustomEvent('tradutor-auth-changed', { detail: { state: 'auth_error', authenticated: false } }));
+  ctx.win.dispatchEvent(new ctx.win.CustomEvent('komyst-auth-changed', { detail: { state: 'auth_error', authenticated: false } }));
   await flush();
   assert.equal(ctx.counters.profile, 0, 'an unauthenticated canonical event must not release the pending load');
 });
 
 await test('F5 with an already-authenticated canonical state loads exactly once, no wait', async () => {
   const ctx = await bootWith(CURRENT);
-  ctx.win.__tradutorAuthState = 'authenticated'; // bootstrap already confirmed before the SDK event arrives
+  ctx.win.__komystAuthState = 'authenticated'; // bootstrap already confirmed before the SDK event arrives
   await emit(ctx.authStub, [[SESSION, 'INITIAL_SESSION']]);
   assert.equal(ctx.counters.profile, 0, 'restored sessions do not fetch social profile');
   assert.equal(ctx.counters.feed, 0, `hidden feed must remain lazy: ${ctx.counters.feed}`);
@@ -229,7 +229,7 @@ await test('F5 with an already-authenticated canonical state loads exactly once,
 
 await test('logout while a load is pending cancels it: no request ever fires for that generation', async () => {
   const ctx = await bootWith(CURRENT);
-  ctx.win.__tradutorAuthState = 'auth_loading';
+  ctx.win.__komystAuthState = 'auth_loading';
   await emit(ctx.authStub, [[SESSION, 'SIGNED_IN']]);
   assert.equal(ctx.counters.profile, 0);
   await emit(ctx.authStub, [[null, 'SIGNED_OUT']]);
@@ -241,11 +241,11 @@ await test('logout while a load is pending cancels it: no request ever fires for
 
 await test('a new sign-in after logout still loads exactly once for the new generation', async () => {
   const ctx = await bootWith(CURRENT);
-  ctx.win.__tradutorAuthState = 'authenticated';
+  ctx.win.__komystAuthState = 'authenticated';
   await emit(ctx.authStub, [[SESSION, 'SIGNED_IN']]);
   assert.equal(ctx.counters.profile, 0);
   await emit(ctx.authStub, [[null, 'SIGNED_OUT']]);
-  ctx.win.__tradutorAuthState = 'auth_loading';
+  ctx.win.__komystAuthState = 'auth_loading';
   await emit(ctx.authStub, [[{ access_token: 'tok-2', user: { id: 'other-user' }, expires_at: 9999999999 }, 'SIGNED_IN']]);
   assert.equal(ctx.counters.profile, 0, 'auth never fetches social profile');
   announceCanonical(ctx.win, 'authenticated', { user_id: 'other-user' });
@@ -256,7 +256,7 @@ await test('a new sign-in after logout still loads exactly once for the new gene
 
 await test('profile/me failing (422, migration pending) after auth-ready is not retried automatically', async () => {
   const ctx = await bootWith(CURRENT, { profileFails: true });
-  ctx.win.__tradutorAuthState = 'authenticated';
+  ctx.win.__komystAuthState = 'authenticated';
   await emit(ctx.authStub, [[SESSION, 'INITIAL_SESSION']]);
   assert.equal(ctx.counters.profile, 0, 'auth errors do not trigger social profile requests');
 });
@@ -270,7 +270,7 @@ const PREVIOUS = process.env.SOCIAL_COMMUNITY_PREVIOUS
 if (PREVIOUS) {
   await test('NEGATIVE CONTROL: the pre-fix module fires the private request while still auth_loading', async () => {
     const ctx = await bootWith(PREVIOUS);
-    ctx.win.__tradutorAuthState = 'auth_loading';
+    ctx.win.__komystAuthState = 'auth_loading';
     await emit(ctx.authStub, [[SESSION, 'SIGNED_IN']]);
     assert.ok(
       ctx.counters.feed > 0,

@@ -27,9 +27,9 @@ import numpy as np
 
 from test_support import cv_text
 
-import yomu.ocr.ocr_balloon as ob
-import yomu.ocr.ocr_line_provenance as ocr_line_provenance
-from yomu.ocr.ocr_engine import OCRLine
+import komyst.ocr.ocr_balloon as ob
+import komyst.ocr.ocr_line_provenance as ocr_line_provenance
+from komyst.ocr.ocr_engine import OCRLine
 
 
 def _line(text, box, *, line_id="L0"):

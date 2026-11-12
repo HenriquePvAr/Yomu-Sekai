@@ -11,8 +11,8 @@ from pathlib import Path
 
 import numpy as np
 
-import yomu.clean.ownership.residual_analysis_artifacts as raa
-import yomu.clean.ownership.residual_mask_revisions as rmr
+import komyst.clean.ownership.residual_analysis_artifacts as raa
+import komyst.clean.ownership.residual_mask_revisions as rmr
 
 
 def make_bundle(mask=None, contract=None):

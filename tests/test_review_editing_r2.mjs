@@ -1,5 +1,5 @@
 // R2 — dirty-detection for review editors (frontend). Executes the REAL
-// reviewEditorDirty from static/tradutor_ui.js (extracted by balanced-brace scan).
+// reviewEditorDirty from static/komyst_ui.js (extracted by balanced-brace scan).
 // This is the guard that prevents silently discarding unsaved source/translation edits.
 // Run with: node tests/test_review_editing_r2.mjs
 import assert from 'node:assert/strict';
@@ -8,7 +8,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const source = fs.readFileSync(path.join(ROOT, 'static', 'tradutor_ui.js'), 'utf8');
+const source = fs.readFileSync(path.join(ROOT, 'static', 'komyst_ui.js'), 'utf8');
 
 function extractFunction(name) {
   const marker = `function ${name}(`;

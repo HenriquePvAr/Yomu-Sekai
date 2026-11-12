@@ -12,7 +12,7 @@ ROOT = Path(__file__).resolve().parents[1]
 _PROBE = """
 import runpy, sys
 sys.path.insert(0, {root!r})
-import yomu.commands.run_webtoon as impl
+import komyst.commands.run_webtoon as impl
 impl.main = lambda: {report!r}
 runpy.run_path({launcher!r}, run_name="__main__")
 """

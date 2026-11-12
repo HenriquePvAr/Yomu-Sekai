@@ -1,6 +1,6 @@
 # Colab inpainting experiment harness
 
-This folder contains isolated research assets. It does not modify the Yomu production pipeline or run model inference automatically.
+This folder contains isolated research assets. It does not modify the Komyst production pipeline or run model inference automatically.
 
 ## Current evidence
 
@@ -18,6 +18,6 @@ This folder contains isolated research assets. It does not modify the Yomu produ
 
 The current Colab runtime liveness is not observable from this Codex session because no Colab execution/runtime tools are exposed. Keep the runtime connected as requested; do not start a run until the active runtime/GPU is confirmed in Colab. The owner has authorized use of credits for this evaluation, but this does not grant the unresolved checkpoint redistribution/commercial rights. Do not enable an upgraded plan, buy units, or launch larger hardware.
 
-The Big-LaMa checkpoint size/hash are pinned. Sanster's model release links to `dreMaz/AnimeMangaInpainting`, whose model card declares MIT; the exact training-data provenance is not independently documented here. Keep this experiment research-only, do not package weights into Yomu, and retain the owner acknowledgment gate. Preserve safety/composition checks and human visual review. Never use private Yomu pages in the synthetic dataset.
+The Big-LaMa checkpoint size/hash are pinned. Sanster's model release links to `dreMaz/AnimeMangaInpainting`, whose model card declares MIT; the exact training-data provenance is not independently documented here. Keep this experiment research-only, do not package weights into Komyst, and retain the owner acknowledgment gate. Preserve safety/composition checks and human visual review. Never use private Komyst pages in the synthetic dataset.
 
 See `../../docs/research/colab-clean-models/MASTER_BENCHMARK_STATE.md` for the current evidence and ranking status.

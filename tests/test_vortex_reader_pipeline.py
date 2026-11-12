@@ -9,10 +9,10 @@ import test_support._test_bootstrap as _test_bootstrap  # noqa: F401
 import unittest
 from unittest import mock
 
-import yomu.download.sources.chapter_source as chapter_source
-import yomu.download.down as down
-from yomu.download.sources.chapter_source import select_adapter
-from yomu.download.lazy_slot_resolver import ResolverLimits
+import komyst.download.sources.chapter_source as chapter_source
+import komyst.download.down as down
+from komyst.download.sources.chapter_source import select_adapter
+from komyst.download.lazy_slot_resolver import ResolverLimits
 
 
 PAGE = "https://vortexscans.org/series/demo-series/chapter-42"

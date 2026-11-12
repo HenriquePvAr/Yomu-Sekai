@@ -2,7 +2,7 @@
 
 > **Revisado em:** 2026-10-24 · **Base verificada:** `5f482ce1` · Status: **experimental (DEV/LAB)**; no production caller (`git grep` finds no import outside `experiments/`).
 
-Isolated DEV/LAB benchmark. This package is deliberately not imported by Yomu production code.
+Isolated DEV/LAB benchmark. This package is deliberately not imported by Komyst production code.
 
 The runner selects a non-M20 image, creates a temporary staging directory, creates a **private** Kaggle dataset, pushes a GPU notebook, waits for completion, downloads and validates `result.json`, then deletes the dataset and local staging in a `finally` block. The worker loads `Qwen/Qwen3-VL-8B-Instruct` in FP16 and writes only `result.json`.
 

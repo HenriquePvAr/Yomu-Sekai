@@ -83,13 +83,13 @@ import unittest
 
 import numpy as np
 
-from yomu.ocr.ocr_balloon import (
+from komyst.ocr.ocr_balloon import (
     TextGroup,
     _repair_narrow_ptbr_verb_mood,
     _score_group_quality,
     group_needs_selective_fallback,
 )
-from yomu.ocr.ocr_engine import (
+from komyst.ocr.ocr_engine import (
     OCRLine,
     assess_ocr_repair,
     repair_ocr_text,

@@ -6,7 +6,7 @@ Supabase).  It then ran the whole OCR pass and only died at the translation prov
 ``commercial_device_id_missing``.  ``_enforce_translation_device_uuid`` now refuses such a
 job up front.  Download-only jobs never translate and stay exempt.
 
-The runner→child→provider half of the chain (env["TRADUTOR_DEVICE_UUID"] from the config)
+The runner→child→provider half of the chain (env["KOMYST_DEVICE_UUID"] from the config)
 is already covered by test_wallet_reserve_error_mapping.py; this file covers creation.
 """
 import os
@@ -14,14 +14,14 @@ import pathlib
 import unittest
 from unittest import mock
 
-import yomu.ui.ui_bridge as ui_bridge
+import komyst.ui.ui_bridge as ui_bridge
 
 
 def _env_without_hermetic():
     # Force the production branch of the gate regardless of how the suite is launched.
     return mock.patch.dict(
         os.environ,
-        {k: v for k, v in os.environ.items() if k != "TRADUTOR_IA_HERMETIC_TEST_ENV"},
+        {k: v for k, v in os.environ.items() if k != "KOMYST_HERMETIC_TEST_ENV"},
         clear=True,
     )
 
@@ -55,7 +55,7 @@ class DeviceUuidCreationGateTest(unittest.TestCase):
 
     def test_hermetic_env_stamps_a_valid_device_uuid(self):
         cfg = {"download_only": False}
-        with mock.patch.dict(os.environ, {"TRADUTOR_IA_HERMETIC_TEST_ENV": "1"}):
+        with mock.patch.dict(os.environ, {"KOMYST_HERMETIC_TEST_ENV": "1"}):
             ui_bridge._enforce_translation_device_uuid(cfg)  # must not raise
         # A syntactically valid UUID so downstream validation stays exercised.
         import uuid
@@ -73,7 +73,7 @@ class StartButtonActiveJobIdentityTest(unittest.TestCase):
     """The start button must gate on a real active job, not a stale terminal status."""
 
     def test_pipeline_busy_uses_active_job_identity(self):
-        js = pathlib.Path("static/tradutor_ui.js").read_text(encoding="utf-8")
+        js = pathlib.Path("static/komyst_ui.js").read_text(encoding="utf-8")
         # Both start-gate call sites must OR in the canonical active-job identity so a
         # previous failed job's status can never re-enable start while a job is active.
         occurrences = js.count(

@@ -6,9 +6,9 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from yomu.runtime.job_store import JobStatus, JobStore
-from yomu.review.source_analysis_phase import SOURCE_READY, apply_source_analysis, should_spawn_runner
-from yomu.review.source_readiness import (
+from komyst.runtime.job_store import JobStatus, JobStore
+from komyst.review.source_analysis_phase import SOURCE_READY, apply_source_analysis, should_spawn_runner
+from komyst.review.source_readiness import (
     DOWNLOAD_AUTHORIZATION_REQUIRED,
     SourceReadinessStore,
     download_fixture_assets,
@@ -315,7 +315,7 @@ class UiContractTests(unittest.TestCase):
     def test_ready_ui_uses_workspace_policy_without_per_source_modal(self):
         root = Path(__file__).resolve().parents[1]
         html = (root / "ui" / "ui_shell.html").read_text(encoding="utf-8")
-        script = (root / "static" / "tradutor_ui.js").read_text(encoding="utf-8")
+        script = (root / "static" / "komyst_ui.js").read_text(encoding="utf-8")
         self.assertIn("Fonte analisada", html)
         # The authorization is asked on Iniciar tradução (app dialog), once.
         self.assertIn("title: 'Autorizar fontes'", script)
@@ -327,7 +327,7 @@ class UiContractTests(unittest.TestCase):
 
     def test_polling_preserves_ready_state_and_isolates_unrelated_terminal_results(self):
         root = Path(__file__).resolve().parents[1]
-        script = (root / "static" / "tradutor_ui.js").read_text(encoding="utf-8")
+        script = (root / "static" / "komyst_ui.js").read_text(encoding="utf-8")
         self.assertIn("applyStandaloneSourceReady(data)", script)
         self.assertIn("&& !runtime.source_ready", script)
         self.assertIn("if (!runtime.source_ready && !draftOnly", script)
@@ -337,7 +337,7 @@ class UiContractTests(unittest.TestCase):
 
     def test_opening_new_translation_hides_unrelated_terminal_artifacts(self):
         root = Path(__file__).resolve().parents[1]
-        script = (root / "static" / "tradutor_ui.js").read_text(encoding="utf-8")
+        script = (root / "static" / "komyst_ui.js").read_text(encoding="utf-8")
         self.assertIn("appState.newTranslationDraft = true;", script)
         self.assertIn("clearNewTranslationDraftPanels();", script)
         reset = script.split("function resetActivePipelineIdentity", 1)[1].split(
@@ -351,7 +351,7 @@ class UiContractTests(unittest.TestCase):
 
     def test_quality_review_must_belong_to_the_current_operation(self):
         root = Path(__file__).resolve().parents[1]
-        script = (root / "static" / "tradutor_ui.js").read_text(encoding="utf-8")
+        script = (root / "static" / "komyst_ui.js").read_text(encoding="utf-8")
         render = script.split("const reviewDismissed =", 1)[1].split(
             "const resultRecord =", 1)[0]
         self.assertIn("qualityReviewJobId", render)
@@ -360,7 +360,7 @@ class UiContractTests(unittest.TestCase):
 
     def test_current_ui_sends_explicit_pipeline_intent(self):
         root = Path(__file__).resolve().parents[1]
-        script = (root / "static" / "tradutor_ui.js").read_text(encoding="utf-8")
+        script = (root / "static" / "komyst_ui.js").read_text(encoding="utf-8")
         form = script.split("function formPayload", 1)[1].split(
             "function resetRunPreview", 1)[0]
         self.assertIn("pipeline_intent", form)
@@ -369,7 +369,7 @@ class UiContractTests(unittest.TestCase):
 
     def test_ui_surfaces_confirmed_official_link_without_technical_parameters(self):
         root = Path(__file__).resolve().parents[1]
-        script = (root / "static" / "tradutor_ui.js").read_text(encoding="utf-8")
+        script = (root / "static" / "komyst_ui.js").read_text(encoding="utf-8")
         self.assertIn("Link oficial do episódio confirmado.", script)
         self.assertNotIn("episode_no=", script)
 

@@ -23,12 +23,12 @@ import numpy as np
 
 from test_support import cv_text
 
-import yomu.translation.human_translation_decisions as htd
-import yomu.translation.linguistic_triage as lt
-import yomu.review.preview_gates as pg
-import yomu.translation.providers.provider_execution as pe
-from yomu.review.chapter_quality_revision import ChapterQualityRevision, read_json
-from yomu.ui.ui_bridge import UiBridge
+import komyst.translation.human_translation_decisions as htd
+import komyst.translation.linguistic_triage as lt
+import komyst.review.preview_gates as pg
+import komyst.translation.providers.provider_execution as pe
+from komyst.review.chapter_quality_revision import ChapterQualityRevision, read_json
+from komyst.ui.ui_bridge import UiBridge
 
 
 def _rid(n=8):
@@ -510,7 +510,7 @@ class PreviewGates(unittest.TestCase):
 
 class LinguisticGateOnHumanLine(unittest.TestCase):
     def test_the_human_line_is_gated_independently_of_the_provider(self):
-        import yomu.review.region_taxonomy as tax
+        import komyst.review.region_taxonomy as tax
         policy = {"normalized_classification": tax.DIALOGUE_TRANSLATE, "translatable": True,
                   "preservable": False, "provider_required": False, "needs_human_review": False}
         source = "THE DOOR WAS OPEN WHEN HE ARRIVED."
@@ -525,7 +525,7 @@ class LinguisticGateOnHumanLine(unittest.TestCase):
         self.assertNotEqual(pg.GATE_VERSION, "")
 
     def test_a_short_line_without_accents_is_not_penalised(self):
-        import yomu.review.region_taxonomy as tax
+        import komyst.review.region_taxonomy as tax
         policy = {"normalized_classification": tax.DIALOGUE_TRANSLATE, "translatable": True,
                   "preservable": False, "provider_required": False, "needs_human_review": False}
         gate = lt.evaluate_linguistic_gate(source_text="IT BETTER BE GOOD.",
@@ -536,12 +536,12 @@ class LinguisticGateOnHumanLine(unittest.TestCase):
 class NoHardcodedTranslations(unittest.TestCase):
     """Production must carry none of the phrases this revision decided on."""
 
-    PRODUCTION = ("yomu/translation/human_translation_decisions.py", "yomu/review/preview_gates.py",
-                  "yomu/translation/providers/provider_execution.py", "yomu/review/chapter_quality_revision.py",
-                  "yomu/ui/ui_bridge.py", "yomu/ui/app.py", "yomu/review/human_typography_decisions.py", "yomu/translation/linguistic_triage.py",
-                  "yomu/clean/ownership/human_mask_decisions.py", "yomu/review/region_taxonomy.py", "yomu/clean/ownership/font_fidelity.py", "yomu/clean/inpainting/art_text_inpainting.py",
-                  "yomu/clean/ownership/visual_refinement_provider_guard.py", "static/tradutor_ui.js",
-                  "static/tradutor_ui.css")
+    PRODUCTION = ("komyst/translation/human_translation_decisions.py", "komyst/review/preview_gates.py",
+                  "komyst/translation/providers/provider_execution.py", "komyst/review/chapter_quality_revision.py",
+                  "komyst/ui/ui_bridge.py", "komyst/ui/app.py", "komyst/review/human_typography_decisions.py", "komyst/translation/linguistic_triage.py",
+                  "komyst/clean/ownership/human_mask_decisions.py", "komyst/review/region_taxonomy.py", "komyst/clean/ownership/font_fidelity.py", "komyst/clean/inpainting/art_text_inpainting.py",
+                  "komyst/clean/ownership/visual_refinement_provider_guard.py", "static/komyst_ui.js",
+                  "static/komyst_ui.css")
 
     def test_no_decided_phrase_appears_in_production(self):
         root = Path(__file__).resolve().parents[1]

@@ -9,12 +9,12 @@ import cv2
 import numpy as np
 import pytest
 
-from yomu.clean.gemini_fallback.adapter import remote_clean_callback
-from yomu.clean.gemini_fallback.authorized_mask import generate_authorized_mask_v2
-from yomu.clean.orchestrator import CleanRequest, LOCAL_RECONSTRUCTION_HARD, run_clean_strategy
-from yomu.ocr.ocr_balloon import TextGroup, get_cleanable_translatable_groups
-from yomu.ocr.ocr_engine import OCRLine
-from yomu.runtime.job_runner import _set_gemini_safe_clean_environment
+from komyst.clean.gemini_fallback.adapter import remote_clean_callback
+from komyst.clean.gemini_fallback.authorized_mask import generate_authorized_mask_v2
+from komyst.clean.orchestrator import CleanRequest, LOCAL_RECONSTRUCTION_HARD, run_clean_strategy
+from komyst.ocr.ocr_balloon import TextGroup, get_cleanable_translatable_groups
+from komyst.ocr.ocr_engine import OCRLine
+from komyst.runtime.job_runner import _set_gemini_safe_clean_environment
 
 
 class _FakeRemote:
@@ -150,9 +150,9 @@ def test_target_group_mask_excludes_every_non_target(monkeypatch, tmp_path):
             self.box = (x, 5, 8, 8)
 
     groups = [_Group("target", 5), _Group("other", 15)]
-    monkeypatch.setattr("yomu.clean.gemini_fallback.authorized_mask.OCREngine",
+    monkeypatch.setattr("komyst.clean.gemini_fallback.authorized_mask.OCREngine",
                         lambda *_args, **_kwargs: type("OCR", (), {"detect_lines": lambda self, _img: []})())
-    monkeypatch.setattr("yomu.clean.gemini_fallback.authorized_mask.yomu_ocr.analyze_image_array",
+    monkeypatch.setattr("komyst.clean.gemini_fallback.authorized_mask.komyst_ocr.analyze_image_array",
                         lambda _image, _lines: ([], groups))
 
     def roi(_shape, selected, *, padding):
@@ -161,8 +161,8 @@ def test_target_group_mask_excludes_every_non_target(monkeypatch, tmp_path):
         mask[y:y + height, x:x + width] = 255
         return mask
 
-    monkeypatch.setattr("yomu.clean.gemini_fallback.authorized_mask.yomu_ocr._build_text_mask", roi)
-    monkeypatch.setattr("yomu.clean.gemini_fallback.authorized_mask.yomu_ocr._component_text_mask",
+    monkeypatch.setattr("komyst.clean.gemini_fallback.authorized_mask.komyst_ocr._build_text_mask", roi)
+    monkeypatch.setattr("komyst.clean.gemini_fallback.authorized_mask.komyst_ocr._component_text_mask",
                         lambda _image, _group, mask, strategy: (mask, {}))
     result = generate_authorized_mask_v2(image_path, tmp_path / "mask.png", target_group_id="target")
     assert result["status"] == "PASS"
@@ -178,34 +178,34 @@ def test_clean_only_story_group_does_not_need_target_translation(monkeypatch):
                       inside_narration_box_like_region=True, source_engine="rapidocr")
     group.translation = ""
     group.translation_candidate = ""
-    monkeypatch.setattr("yomu.ocr.ocr_balloon._group_has_story_translation_authority", lambda _group: True)
+    monkeypatch.setattr("komyst.ocr.ocr_balloon._group_has_story_translation_authority", lambda _group: True)
     assert get_cleanable_translatable_groups([group]) == [group]
     assert group.clean_disposition == "PENDING_LOCAL"
 
 
 def test_gemini_clean_environment_is_default_off_and_requires_complete_attestation():
-    env = {"YOMU_ENABLE_GEMINI_SAFE_FALLBACK": "1", "YOMU_GEMINI_REMOTE_URL": "http://stale"}
+    env = {"KOMYST_ENABLE_GEMINI_SAFE_FALLBACK": "1", "KOMYST_GEMINI_REMOTE_URL": "http://stale"}
     _set_gemini_safe_clean_environment(env, {})
-    assert env["YOMU_ENABLE_GEMINI_SAFE_FALLBACK"] == "0"
-    assert env["YOMU_GEMINI_SAFE_CLEAN_SCHEMA_VERIFIED"] == "0"
-    assert "YOMU_GEMINI_REMOTE_URL" not in env
+    assert env["KOMYST_ENABLE_GEMINI_SAFE_FALLBACK"] == "0"
+    assert env["KOMYST_GEMINI_SAFE_CLEAN_SCHEMA_VERIFIED"] == "0"
+    assert "KOMYST_GEMINI_REMOTE_URL" not in env
     _set_gemini_safe_clean_environment(env, {
         "gemini_safe_clean_enabled": True,
         "gemini_safe_clean_schema": "safe-clean.v2",
         "gemini_safe_clean_worker_verified": True,
         "gemini_safe_clean_remote_url": "http://127.0.0.1:18777",
     })
-    assert env["YOMU_ENABLE_GEMINI_SAFE_FALLBACK"] == "1"
-    assert env["YOMU_GEMINI_SAFE_CLEAN_SCHEMA_VERIFIED"] == "1"
-    assert env["YOMU_GEMINI_REMOTE_URL"] == "http://127.0.0.1:18777"
+    assert env["KOMYST_ENABLE_GEMINI_SAFE_FALLBACK"] == "1"
+    assert env["KOMYST_GEMINI_SAFE_CLEAN_SCHEMA_VERIFIED"] == "1"
+    assert env["KOMYST_GEMINI_REMOTE_URL"] == "http://127.0.0.1:18777"
 
 
 def test_enabled_clean_only_routes_every_eligible_hard_group_sequentially(monkeypatch, tmp_path):
-    from yomu.pipeline import benchmark_pipeline
-    from yomu.clean.gemini_fallback import authorized_mask, adapter, remote_client
+    from komyst.pipeline import benchmark_pipeline
+    from komyst.clean.gemini_fallback import authorized_mask, adapter, remote_client
 
-    monkeypatch.setenv("YOMU_ENABLE_GEMINI_SAFE_FALLBACK", "1")
-    monkeypatch.setenv("YOMU_GEMINI_SAFE_CLEAN_SCHEMA_VERIFIED", "1")
+    monkeypatch.setenv("KOMYST_ENABLE_GEMINI_SAFE_FALLBACK", "1")
+    monkeypatch.setenv("KOMYST_GEMINI_SAFE_CLEAN_SCHEMA_VERIFIED", "1")
     image_path = tmp_path / "source.png"
     source = np.zeros((20, 20, 3), dtype=np.uint8)
     assert cv2.imwrite(str(image_path), source)
@@ -245,7 +245,7 @@ def test_enabled_clean_only_routes_every_eligible_hard_group_sequentially(monkey
     monkeypatch.setattr(remote_client, "HardCleanRemoteClient", FakeClient)
     monkeypatch.setattr(authorized_mask, "generate_authorized_mask_v2", fake_mask)
     monkeypatch.setattr(adapter, "remote_clean_callback", fake_remote)
-    monkeypatch.setattr("yomu.ocr.ocr_balloon._group_has_story_translation_authority", lambda _group: True)
+    monkeypatch.setattr("komyst.ocr.ocr_balloon._group_has_story_translation_authority", lambda _group: True)
 
     result = benchmark_pipeline._gemini_safe_clean_page(state, job_id="job-test")
 

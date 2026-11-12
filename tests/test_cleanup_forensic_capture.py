@@ -13,8 +13,8 @@ install_offline_network_guard()
 import cv2
 import numpy as np
 
-import yomu.ocr.ocr_balloon as ob
-from yomu.ocr.ocr_engine import OCRLine
+import komyst.ocr.ocr_balloon as ob
+from komyst.ocr.ocr_engine import OCRLine
 
 
 def _fixture():

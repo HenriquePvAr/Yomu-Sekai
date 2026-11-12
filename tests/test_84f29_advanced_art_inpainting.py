@@ -17,8 +17,8 @@ from pathlib import Path
 
 import numpy as np
 
-import yomu.clean.inpainting.advanced_art_inpainting as advanced_art_inpainting
-import yomu.config.settings as config
+import komyst.clean.inpainting.advanced_art_inpainting as advanced_art_inpainting
+import komyst.config.settings as config
 
 
 class AdvancedArtInpaintingIntegrityTests(unittest.TestCase):

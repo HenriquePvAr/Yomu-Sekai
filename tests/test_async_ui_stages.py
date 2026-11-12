@@ -14,7 +14,7 @@ import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-JS = (ROOT / "static" / "tradutor_ui.js").read_text(encoding="utf-8")
+JS = (ROOT / "static" / "komyst_ui.js").read_text(encoding="utf-8")
 
 WORKER_STAGES = ("queued", "worker_starting", "source_validation", "browser_loading",
                  "source_analysis", "source_lazy_resolution", "source_selection",
@@ -44,7 +44,7 @@ class StageLabelTests(unittest.TestCase):
         self.assertIn("preparando a ordem das páginas", JS)
 
     def test_the_backend_agrees_on_the_same_stage_keys(self):
-        from yomu.ui.ui_bridge import _UI_STAGE_LABELS
+        from komyst.ui.ui_bridge import _UI_STAGE_LABELS
 
         for stage in WORKER_STAGES:
             self.assertIn(stage, _UI_STAGE_LABELS, stage)
@@ -136,10 +136,10 @@ class PollingTests(unittest.TestCase):
         end = JS.index("refreshBootstrap();", start)
         polling = JS[start:end]
         self.assertEqual(polling.count("window.setInterval(pollState, 850)"), 1)
-        self.assertIn("if (getGlobal('__tradutorUiPollingTimer'))", polling)
-        self.assertIn("setGlobal('__tradutorUiPollingTimer', timer)", polling)
-        self.assertIn("clearInterval(getGlobal('__tradutorUiPollingTimer'))", JS)
-        self.assertIn("setGlobal('__tradutorUiPollingTimer'", JS)
+        self.assertIn("if (getGlobal('__komystUiPollingTimer'))", polling)
+        self.assertIn("setGlobal('__komystUiPollingTimer', timer)", polling)
+        self.assertIn("clearInterval(getGlobal('__komystUiPollingTimer'))", JS)
+        self.assertIn("setGlobal('__komystUiPollingTimer'", JS)
 
     def test_review_is_opened_from_polling_not_from_the_submit(self):
         # The worker produces the review now, so the runtime payload is what opens it.

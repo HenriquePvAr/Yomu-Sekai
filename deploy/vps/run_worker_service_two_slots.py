@@ -12,7 +12,7 @@ from two_slot_browser import TwoSlotGeminiProvider
 from two_slot_config import MAX_BROWSER_SLOTS, MAX_CONCURRENCY
 
 
-root = Path(os.environ["YOMU_WORKER_ROOT"])
+root = Path(os.environ["KOMYST_WORKER_ROOT"])
 if MAX_BROWSER_SLOTS != MAX_CONCURRENCY or MAX_CONCURRENCY != 2:
     raise RuntimeError("this experiment requires exactly two browser slots and concurrency")
 slots = MultiSlotManager(root / ".runtime" / "chat-slots-v2", max_slots=MAX_BROWSER_SLOTS)
@@ -27,7 +27,7 @@ def loop():
         time.sleep(0.1)
 
 
-threads = [threading.Thread(target=loop, name=f"yomu-slot-{i}", daemon=False) for i in range(2)]
+threads = [threading.Thread(target=loop, name=f"komyst-slot-{i}", daemon=False) for i in range(2)]
 for thread in threads:
     thread.start()
 for thread in threads:

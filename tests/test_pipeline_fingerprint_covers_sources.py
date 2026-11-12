@@ -5,8 +5,8 @@ install_offline_network_guard()
 
 import unittest
 
-import yomu.pipeline.benchmark_pipeline as bp
-from yomu.pipeline.pipeline_cache import fingerprint_files, ocr_runtime_fingerprint
+import komyst.pipeline.benchmark_pipeline as bp
+from komyst.pipeline.pipeline_cache import fingerprint_files, ocr_runtime_fingerprint
 
 
 class PipelineFingerprintTests(unittest.TestCase):

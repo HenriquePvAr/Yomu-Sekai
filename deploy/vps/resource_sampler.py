@@ -79,7 +79,7 @@ class ResourceSampler:
             self._stop.wait(self.interval_seconds)
 
     def start(self):
-        self._thread = threading.Thread(target=self._run, name="yomu-perf-sampler", daemon=True)
+        self._thread = threading.Thread(target=self._run, name="komyst-perf-sampler", daemon=True)
         self._thread.start()
         return self
 

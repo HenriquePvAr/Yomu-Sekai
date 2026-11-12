@@ -16,7 +16,7 @@ import unittest
 
 import numpy as np
 
-from yomu.ocr.ocr_balloon import (
+from komyst.ocr.ocr_balloon import (
     OCR_UNINTELLIGIBLE_SOURCE_REASON,
     PROPER_NAME_ONLY_REASON,
     OCRLine,
@@ -199,12 +199,12 @@ class UnreadableSourceTaxonomyTests(unittest.TestCase):
 
     def test_case_noise_on_a_real_word_is_still_readable(self):
         # c/C and k/K are indistinguishable in all-caps lettering: the letters were read.
-        from yomu.ocr.ocr_balloon import _ocr_unintelligible_source_text
+        from komyst.ocr.ocr_balloon import _ocr_unintelligible_source_text
         self.assertFalse(_ocr_unintelligible_source_text("RocK?"))
         self.assertFalse(_ocr_unintelligible_source_text("HeLLo"))
 
     def test_case_noise_on_garbage_is_still_unreadable(self):
-        from yomu.ocr.ocr_balloon import _ocr_unintelligible_source_text
+        from komyst.ocr.ocr_balloon import _ocr_unintelligible_source_text
         for token in ("FluCK", "THUNe", "CRAdKVE", "RiMBCE"):
             with self.subTest(token=token):
                 self.assertTrue(_ocr_unintelligible_source_text(token))
@@ -232,7 +232,7 @@ class DictionaryWordAfterTitleTests(unittest.TestCase):
     TARGET = "MESTRE LEGADO, OS PAGÃOS ESTÃO CHEGANDO."
 
     def _spans(self):
-        from yomu.ocr.ocr_balloon import detect_proper_name_spans
+        from komyst.ocr.ocr_balloon import detect_proper_name_spans
         return detect_proper_name_spans(self.SOURCE, known_names=())
 
     def test_dictionary_word_after_a_title_may_be_translated(self):
@@ -248,7 +248,7 @@ class DictionaryWordAfterTitleTests(unittest.TestCase):
     def test_group_derived_names_do_not_prove_a_name(self):
         # The allowed list also holds the spans found from this text's own shape, so only the
         # chapter-detected names count as evidence (run: Legate rejected a correct sentence).
-        from yomu.ocr.ocr_balloon import _group_validation_allowed_proper_names
+        from komyst.ocr.ocr_balloon import _group_validation_allowed_proper_names
         source = "MASTER LEGATE, WE WERE NOT DECEIVED BY THE HEATHENS!"
         group = _group_for(source)
         spans = self._spans_of(group)
@@ -264,12 +264,12 @@ class DictionaryWordAfterTitleTests(unittest.TestCase):
 
     @staticmethod
     def _spans_of(group):
-        from yomu.ocr.ocr_balloon import group_proper_name_spans
+        from komyst.ocr.ocr_balloon import group_proper_name_spans
         return group_proper_name_spans(group)
 
     def test_a_non_dictionary_name_is_still_protected(self):
         source, target = "MASTER KKULBEOL, WAIT.", "MESTRE KUBOL, ESPERE."
-        from yomu.ocr.ocr_balloon import detect_proper_name_spans
+        from komyst.ocr.ocr_balloon import detect_proper_name_spans
         valid, reason = validate_translation_text(
             source, target, "speech", [], detect_proper_name_spans(source, known_names=()))
         self.assertFalse(valid)

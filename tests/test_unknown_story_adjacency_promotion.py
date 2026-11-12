@@ -19,8 +19,8 @@ import unittest
 
 import numpy as np
 
-import yomu.ocr.ocr_balloon as ocr_balloon
-from yomu.ocr.ocr_balloon import OCRLine, TextGroup
+import komyst.ocr.ocr_balloon as ocr_balloon
+from komyst.ocr.ocr_balloon import OCRLine, TextGroup
 
 
 def _line(text, box, confidence):

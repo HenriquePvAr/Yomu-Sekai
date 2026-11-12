@@ -1,7 +1,7 @@
 from pathlib import Path
 
-import yomu.runtime.build_profile as build_profile
-import yomu.commands.start_tradutor as start_tradutor
+import komyst.runtime.build_profile as build_profile
+import komyst.commands.start_tradutor as start_tradutor
 
 
 def test_build_profile_source_is_not_production():
@@ -16,12 +16,12 @@ def test_production_rejects_performance_validation(monkeypatch, capsys):
 
 
 def test_production_spec_excludes_validation_harness():
-    spec = Path("packaging/tradutor_ia.spec").read_text(encoding="utf-8")
+    spec = Path("packaging/komyst.spec").read_text(encoding="utf-8")
     assert "performance_validation_harness" not in spec.split("if VALIDATION_BUILD:", 1)[0]
     assert "runtime_profile_production.py" in spec
 
 
 def test_validation_spec_keeps_harness_available():
-    spec = Path("packaging/tradutor_ia_validation.spec").read_text(encoding="utf-8")
+    spec = Path("packaging/komyst_validation.spec").read_text(encoding="utf-8")
     assert "VALIDATION_BUILD = True" in spec
-    assert "tradutor_ia.spec" in spec
+    assert "komyst.spec" in spec

@@ -2,7 +2,7 @@
 import cv2
 import numpy as np
 
-from yomu.clean.ownership.glyph_art_boundary_review import (
+from komyst.clean.ownership.glyph_art_boundary_review import (
     _outside_ridge_fraction,
     detect_linear_boundary_conflict,
 )

@@ -22,7 +22,7 @@ import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-APP_UI_SOURCE = (ROOT / "yomu/ui/app.py").read_text(encoding="utf-8")
+APP_UI_SOURCE = (ROOT / "komyst/ui/app.py").read_text(encoding="utf-8")
 REQUIREMENTS_TXT = (ROOT / "requirements.txt").read_text(encoding="utf-8")
 REQUIREMENTS_DEV_TXT = (ROOT / "requirements/requirements-dev.txt").read_text(encoding="utf-8")
 REQUIREMENTS_BETA_TXT = (ROOT / "requirements/requirements-beta.txt").read_text(encoding="utf-8")

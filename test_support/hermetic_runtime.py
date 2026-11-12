@@ -37,11 +37,11 @@ REAL_UI_HISTORY_PATHS = (
     (REPO_ROOT / ".cache" / "ui_history.json").resolve(),
     (REPO_ROOT / ".cache" / "ui_hidden_history.json").resolve(),
 )
-TEST_RUNTIME_ROOT_ENV = "TRADUTOR_TEST_RUNTIME_ROOT"
-# Deliberately distinct from TRADUTOR_IA_HERMETIC_TEST_ENV, which governs .env loading and
+TEST_RUNTIME_ROOT_ENV = "KOMYST_TEST_RUNTIME_ROOT"
+# Deliberately distinct from KOMYST_HERMETIC_TEST_ENV, which governs .env loading and
 # which individual tests strip from child processes on purpose. Runtime isolation must stay
 # in force for those children regardless.
-RUNTIME_GUARD_ENV = "TRADUTOR_IA_RUNTIME_ISOLATION_GUARD"
+RUNTIME_GUARD_ENV = "KOMYST_RUNTIME_ISOLATION_GUARD"
 # start_tradutor pins itself to the production queue and worker regardless of arguments or
 # environment, so a test can never launch it.
 FORBIDDEN_ENTRYPOINTS = ("start_tradutor.py", "start_tradutor.bat")
@@ -92,10 +92,10 @@ def _canonical_forms(value: str) -> tuple[str, ...]:
 # Keep the installed Beta's mutable data protected as well as legacy repo state.
 # Do not call runtime_paths here: its test-aware resolver intentionally redirects.
 REAL_BETA_USER_ROOT = (
-    Path(os.environ["LOCALAPPDATA"]) / "TradutorIA"
+    Path(os.environ["LOCALAPPDATA"]) / "Komyst"
     if os.environ.get("LOCALAPPDATA") else
-    Path(os.environ["XDG_STATE_HOME"]) / "TradutorIA"
-    if os.environ.get("XDG_STATE_HOME") else Path.home() / ".tradutoria"
+    Path(os.environ["XDG_STATE_HOME"]) / "Komyst"
+    if os.environ.get("XDG_STATE_HOME") else Path.home() / ".komyst"
 )
 _REAL_FORMS = (_canonical_forms(str(REAL_RUNTIME_ROOT))
                + _canonical_forms(str(REAL_BETA_USER_ROOT / "runtime")))
@@ -157,7 +157,7 @@ def is_real_runtime_path(value: object) -> bool:
     """
 
     text = _as_text(value)
-    if text is None or not any(part in text.casefold() for part in (".cache", "tradutoria")):
+    if text is None or not any(part in text.casefold() for part in (".cache", "komyst")):
         return False  # cheap reject keeps the guard off the hot path of ordinary file I/O
     return _matches(text, _REAL_FORMS)
 
@@ -169,7 +169,7 @@ def is_real_user_state_path(value: object) -> bool:
     if text is None:
         return False
     lowered = text.casefold()
-    if not any(part in lowered for part in ("output", "ui_history", "ui_hidden_history", "tradutoria")):
+    if not any(part in lowered for part in ("output", "ui_history", "ui_hidden_history", "komyst")):
         return False
     return _matches(text, _REAL_USER_STATE_FORMS)
 
@@ -256,7 +256,7 @@ def _guarded_popen_init(self, args, *rest, **kwargs):
     return _ORIGINAL_POPEN_INIT(self, args, *rest, **kwargs)
 
 
-TEST_RUNTIME_PREFIX = "tradutor-test-runtime-"
+TEST_RUNTIME_PREFIX = "komyst-test-runtime-"
 #: A root whose sqlite handles are still open at interpreter exit cannot be removed on
 #: Windows, so the next run sweeps the ones old enough that no suite can still own them.
 STALE_TEST_RUNTIME_SECONDS = 6 * 60 * 60
@@ -296,7 +296,7 @@ def install_runtime_isolation_guard() -> Path:
         atexit.register(shutil.rmtree, root, ignore_errors=True)
         _sweep_stale_test_runtimes(root)
 
-    if getattr(sqlite3, "_tradutor_ia_runtime_guard", False):
+    if getattr(sqlite3, "_komyst_runtime_guard", False):
         return root
 
     sqlite3.connect = _guarded_connect
@@ -314,5 +314,5 @@ def install_runtime_isolation_guard() -> Path:
     os.scandir = _guard_listing(_ORIGINAL_SCANDIR)
     os.listdir = _guard_listing(_ORIGINAL_LISTDIR)
     subprocess.Popen.__init__ = _guarded_popen_init
-    sqlite3._tradutor_ia_runtime_guard = True
+    sqlite3._komyst_runtime_guard = True
     return root

@@ -7,7 +7,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def _css_rule(selector: str) -> str:
-    text = (ROOT / "static" / "tradutor_ui.css").read_text(encoding="utf-8")
+    text = (ROOT / "static" / "komyst_ui.css").read_text(encoding="utf-8")
     start = text.index(f"\n  {selector}{{")
     brace = text.index("{", start)
     depth = 0

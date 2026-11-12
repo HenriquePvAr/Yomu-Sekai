@@ -9,7 +9,7 @@ import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-CSS = (ROOT / "static" / "tradutor_ui.css").read_text(encoding="utf-8")
+CSS = (ROOT / "static" / "komyst_ui.css").read_text(encoding="utf-8")
 
 
 class CompactAuthenticationViewportContractTest(unittest.TestCase):

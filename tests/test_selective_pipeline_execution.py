@@ -1,13 +1,13 @@
 """Physical proof that the output plan drives real selective execution.
 
 Reuses the hermetic local-folder harness (real benchmark_pipeline, fake OCR/translator) and
-runs it under different YOMU_EFFECTIVE_OPS to prove the CLEAN/TYPESET decoupling:
+runs it under different KOMYST_EFFECTIVE_OPS to prove the CLEAN/TYPESET decoupling:
 
   clean_only      -> clean produced, NO translated, NO PDF, 0 provider calls
   translate_clean -> translation runs, clean produced, NO translated, NO PDF
 
 The automatic + professional regressions live in test_local_benchmark_pipeline_e2e.py and
-remain green (they carry no YOMU_EFFECTIVE_OPS, so they take the identical legacy path).
+remain green (they carry no KOMYST_EFFECTIVE_OPS, so they take the identical legacy path).
 """
 import test_support._test_bootstrap as _test_bootstrap  # noqa: F401
 
@@ -17,13 +17,13 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # sibling harness import
 
-import yomu.pipeline.benchmark_pipeline as benchmark_pipeline
-import yomu.runtime.artifact_contract as ac
+import komyst.pipeline.benchmark_pipeline as benchmark_pipeline
+import komyst.runtime.artifact_contract as ac
 from test_local_benchmark_pipeline_e2e import (
     LocalBenchmarkPipelineE2ETests,
     _OfflineTranslator,
 )
-import yomu.download.local.local_folder_input as local_folder_input
+import komyst.download.local.local_folder_input as local_folder_input
 
 
 class SelectivePipelineExecutionTests(LocalBenchmarkPipelineE2ETests):
@@ -33,7 +33,7 @@ class SelectivePipelineExecutionTests(LocalBenchmarkPipelineE2ETests):
         )
         env = {
             "TRANSLATION_ENABLED": "true" if translation_enabled else "false",
-            "YOMU_EFFECTIVE_OPS": effective_ops,
+            "KOMYST_EFFECTIVE_OPS": effective_ops,
         }
         with self._pipeline_mocks(translator, extra_env=env):
             args = self._args(reference)

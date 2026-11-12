@@ -6,9 +6,9 @@ delete-selected is a trash icon, and the selected state is not error-red.
 """
 from pathlib import Path
 
-JS = Path("static/tradutor_ui.js").read_text(encoding="utf-8")
+JS = Path("static/komyst_ui.js").read_text(encoding="utf-8")
 HTML = Path("ui/ui_shell.html").read_text(encoding="utf-8")
-CSS = Path("static/tradutor_ui.css").read_text(encoding="utf-8")
+CSS = Path("static/komyst_ui.css").read_text(encoding="utf-8")
 
 
 def test_selection_toggle_is_incremental_not_full_rerender():

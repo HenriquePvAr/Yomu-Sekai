@@ -6,7 +6,7 @@ source/reconstruction lineage (``canonical_social_identity`` +
 canonical/remote chapter id, so the UI must not require one before offering Publish.
 
 These tests execute the real ``publicationEligibility`` / ``publicationAction`` /
-``publishToCommunity`` sources from ``static/tradutor_ui.js`` under Node with stubbed
+``publishToCommunity`` sources from ``static/komyst_ui.js`` under Node with stubbed
 boundaries -- no DOM, no network, no Supabase, no Drive.
 """
 
@@ -20,7 +20,7 @@ import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-UI_SOURCE = ROOT / "static" / "tradutor_ui.js"
+UI_SOURCE = ROOT / "static" / "komyst_ui.js"
 NODE = shutil.which("node")
 
 HARNESS = r"""
@@ -37,14 +37,14 @@ function balanced(text) {
 function extract(name) {
   const heads = [`  function ${name}(`, `  async function ${name}(`, `  const ${name} =`];
   const start = lines.findIndex(line => heads.some(head => line.startsWith(head)));
-  if (start < 0) throw new Error(`symbol not found in tradutor_ui.js: ${name}`);
+  if (start < 0) throw new Error(`symbol not found in komyst_ui.js: ${name}`);
   if (/;\s*$/.test(lines[start]) && balanced(lines[start])) return lines[start];
   const out = [lines[start]];
   for (let i = start + 1; i < lines.length; i += 1) {
     out.push(lines[i]);
     if (/^  \};?$/.test(lines[i])) return out.join('\n');
   }
-  throw new Error(`unterminated symbol in tradutor_ui.js: ${name}`);
+  throw new Error(`unterminated symbol in komyst_ui.js: ${name}`);
 }
 
 const SYMBOLS = ['escapeHtml', 'escapeAttr', 'boolish', 'terminalRunStatuses',

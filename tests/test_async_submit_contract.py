@@ -16,8 +16,8 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-import yomu.ui.ui_bridge as ui_bridge
-from yomu.runtime.job_store import JobStatus, JobStore
+import komyst.ui.ui_bridge as ui_bridge
+from komyst.runtime.job_store import JobStatus, JobStore
 
 URL = "https://www.webtoons.com/en/drama/serie/episode-1/viewer?title_no=1&episode_no=1"
 OTHER = "https://www.webtoons.com/en/drama/serie/episode-2/viewer?title_no=1&episode_no=2"
@@ -80,7 +80,7 @@ class SubmitEnqueuesOnlyTests(unittest.TestCase):
         self.assertEqual(self.bridge.analysis_calls, 0)
 
     def test_no_browser_is_created(self):
-        import yomu.download.down as down
+        import komyst.download.down as down
 
         with mock.patch.object(down, "_create_driver") as factory:
             self.submit()
@@ -211,7 +211,7 @@ class DuplicateGuardTests(SubmitEnqueuesOnlyTests):
 
 class StageLabelTests(unittest.TestCase):
     def test_every_worker_stage_the_ui_can_receive_has_a_label(self):
-        from yomu.ui.ui_bridge import _UI_STAGE_LABELS
+        from komyst.ui.ui_bridge import _UI_STAGE_LABELS
 
         for stage in ("queued", "worker_starting", "source_validation", "browser_loading",
                       "source_analysis", "source_lazy_resolution", "source_selection",
@@ -220,7 +220,7 @@ class StageLabelTests(unittest.TestCase):
             self.assertTrue(_UI_STAGE_LABELS[stage].strip(), stage)
 
     def test_an_unknown_stage_falls_back_to_its_key(self):
-        from yomu.ui.ui_bridge import _UI_STAGE_LABELS
+        from komyst.ui.ui_bridge import _UI_STAGE_LABELS
 
         self.assertEqual(_UI_STAGE_LABELS.get("nao_existe", "nao_existe"), "nao_existe")
 

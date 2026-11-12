@@ -1,4 +1,4 @@
-import type { TradutorAuth } from "./auth.js";
+import type { KomystAuth } from "./auth.js";
 
 export type SanitizedSession = {
   authenticated: boolean;
@@ -12,7 +12,7 @@ export type SanitizedSession = {
   } | null;
 };
 
-export async function getSanitizedSession(auth: TradutorAuth, headers: Headers): Promise<SanitizedSession> {
+export async function getSanitizedSession(auth: KomystAuth, headers: Headers): Promise<SanitizedSession> {
   const session = await auth.api.getSession({ headers });
   if (!session?.user || !session?.session) {
     return { authenticated: false, user: null, session: null };

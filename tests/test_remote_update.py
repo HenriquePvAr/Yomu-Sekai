@@ -34,15 +34,15 @@ from unittest.mock import patch
 
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
-import yomu.runtime.version as app_version
-import yomu.commands.start_tradutor as start_tradutor
-import yomu.runtime.update_bootstrap as update_bootstrap
-import yomu.runtime.update_installer as update_installer
-import yomu.runtime.update_manifest as update_manifest
-import yomu.runtime.update_transport as update_transport
+import komyst.runtime.version as app_version
+import komyst.commands.start_tradutor as start_tradutor
+import komyst.runtime.update_bootstrap as update_bootstrap
+import komyst.runtime.update_installer as update_installer
+import komyst.runtime.update_manifest as update_manifest
+import komyst.runtime.update_transport as update_transport
 from scripts.sign_release import public_key_material, sign_manifest
 
-APP_ID = "tradutor-ia"
+APP_ID = "komyst"
 KEY_ID = "beta-test"
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -153,10 +153,10 @@ class _Fixture:
         self.probe_calls: list[Path] = []
 
     def package(self, version: str = "1.1.0", *, mutate: bytes | None = None) -> tuple[str, bytes]:
-        path = _release_zip(self.tmp / f"tradutor-ia-{version}.zip", version)
+        path = _release_zip(self.tmp / f"komyst-{version}.zip", version)
         body = mutate if mutate is not None else path.read_bytes()
         url = self.host.serve(
-            f"/tradutor-ia-{version}.zip", body, content_type="application/zip", secure=True
+            f"/komyst-{version}.zip", body, content_type="application/zip", secure=True
         )
         return url, path.read_bytes()
 
@@ -181,7 +181,7 @@ class _Fixture:
             "minimum_version": minimum_version,
             "published_at": "2026-08-20T12:00:00+00:00",
             "package": {
-                "filename": f"tradutor-ia-{version}.zip",
+                "filename": f"komyst-{version}.zip",
                 "url": package_url,
                 "sha256": update_manifest.hashlib.sha256(package_bytes).hexdigest(),
                 "size": len(package_bytes),
@@ -230,7 +230,7 @@ class ProductVersionTests(unittest.TestCase):
         pattern = re.compile(r"^\s*(__version__|PRODUCT_VERSION|APP_VERSION|RELEASE_VERSION)\s*=")
         duplicates = [
             name for name in tracked
-            if name not in {"app_version.py", "yomu/runtime/version.py"}
+            if name not in {"app_version.py", "komyst/runtime/version.py"}
             and (REPO_ROOT / name).is_file()
             and any(pattern.match(line) for line in (REPO_ROOT / name).read_text(
                 encoding="utf-8", errors="ignore").splitlines())
@@ -401,7 +401,7 @@ class RemoteTrustTests(unittest.TestCase):
         self.assertEqual(status.state, "verification_failed")
         self.assertTrue(status.can_launch)
         self.assertEqual(fixture.state().current, "1.0.0")
-        self.assertNotIn("/tradutor-ia-1.1.0.zip", fixture.host.requests)
+        self.assertNotIn("/komyst-1.1.0.zip", fixture.host.requests)
 
     def test_manifest_signed_by_an_untrusted_key_is_refused(self):
         fixture = _Fixture(self)
@@ -430,7 +430,7 @@ class RemoteTrustTests(unittest.TestCase):
         package_url, package_bytes = fixture.package("1.1.0")
         url = fixture.manifest(version="1.1.0", package_url=package_url, package_bytes=package_bytes)
         # The host swaps the bytes after the manifest was signed.
-        fixture.host.serve("/tradutor-ia-1.1.0.zip", b"E" * len(package_bytes),
+        fixture.host.serve("/komyst-1.1.0.zip", b"E" * len(package_bytes),
                            content_type="application/zip", secure=True)
         status = fixture.check(url)
         self.assertEqual(status.state, "update_failed")
@@ -442,7 +442,7 @@ class RemoteTrustTests(unittest.TestCase):
         fixture = _Fixture(self)
         package_url, package_bytes = fixture.package("1.1.0")
         url = fixture.manifest(version="1.1.0", package_url=package_url, package_bytes=package_bytes)
-        fixture.host.serve("/tradutor-ia-1.1.0.zip", package_bytes[:10],
+        fixture.host.serve("/komyst-1.1.0.zip", package_bytes[:10],
                            content_type="application/zip", secure=True)
         status = fixture.check(url)
         self.assertEqual(status.state, "update_failed")
@@ -471,7 +471,7 @@ class UpdateLifecycleTests(unittest.TestCase):
         status = fixture.check(url)
         self.assertEqual(status.state, "up_to_date")
         self.assertTrue(status.can_launch)
-        self.assertNotIn("/tradutor-ia-1.0.0.zip", fixture.host.requests)
+        self.assertNotIn("/komyst-1.0.0.zip", fixture.host.requests)
 
     def test_older_remote_version_never_downgrades_the_installation(self):
         fixture = _Fixture(self, current="1.2.0")
@@ -518,7 +518,7 @@ class UpdateLifecycleTests(unittest.TestCase):
             version="2.0.0", minimum_version="2.0.0",
             package_url=package_url, package_bytes=package_bytes,
         )
-        fixture.host.routes.pop("/tradutor-ia-2.0.0.zip")
+        fixture.host.routes.pop("/komyst-2.0.0.zip")
         status = fixture.check(url)
         self.assertEqual(status.state, "mandatory_update_required")
         self.assertFalse(status.can_launch)

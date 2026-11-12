@@ -2,8 +2,8 @@ from pathlib import Path
 
 
 EDGE = Path("supabase/functions/wallet-reserve/index.ts").read_text(encoding="utf-8")
-RUNNER = Path("yomu/runtime/job_runner.py").read_text(encoding="utf-8")
-PROVIDER = Path("yomu/translation/providers/yomu_backend_provider.py").read_text(encoding="utf-8")
+RUNNER = Path("komyst/runtime/job_runner.py").read_text(encoding="utf-8")
+PROVIDER = Path("komyst/translation/providers/komyst_backend_provider.py").read_text(encoding="utf-8")
 
 
 def test_wallet_reserve_preserves_known_codes_and_normalizes_unknowns():
@@ -17,9 +17,9 @@ def test_wallet_reserve_preserves_known_codes_and_normalizes_unknowns():
 
 
 def test_job_runner_propagates_verified_device_uuid_to_child_environment():
-    assert 'env["TRADUTOR_DEVICE_UUID"]' in RUNNER
+    assert 'env["KOMYST_DEVICE_UUID"]' in RUNNER
     assert 'configuration.get("device_uuid")' in RUNNER
-    assert 'env["TRADUTOR_JOB_OUTPUT_DIR"]' in RUNNER
+    assert 'env["KOMYST_JOB_OUTPUT_DIR"]' in RUNNER
 
 
 def test_translation_execute_payload_contains_device_uuid_and_reservation():
@@ -28,7 +28,7 @@ def test_translation_execute_payload_contains_device_uuid_and_reservation():
 
 
 def test_reservation_failure_policy_is_explicit_and_fail_safe():
-    from yomu.translation.providers.yomu_backend_provider import ReservationOutcomeClass, classify_reservation_outcome
+    from komyst.translation.providers.komyst_backend_provider import ReservationOutcomeClass, classify_reservation_outcome
 
     assert classify_reservation_outcome("invalid_translation_request") is ReservationOutcomeClass.PRE_PROVIDER_DEFINITE_FAILURE
     assert classify_reservation_outcome("provider_outcome_unknown", outcome_unknown=True) is ReservationOutcomeClass.PROVIDER_STARTED_OR_OUTCOME_UNKNOWN

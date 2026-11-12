@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from yomu.runtime.job_store import JobStatus, JobStore
+from komyst.runtime.job_store import JobStatus, JobStore
 
 
 class WorkerOwnershipContractTests(unittest.TestCase):

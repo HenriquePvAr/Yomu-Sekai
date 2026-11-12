@@ -8,7 +8,7 @@ const context = {
   console,
   Date,
   URLSearchParams,
-  window: {dispatchEvent() {}, addEventListener() {}, setInterval() { return 0; }, clearInterval() {}, __tradutorDesktopRuntime: false},
+  window: {dispatchEvent() {}, addEventListener() {}, setInterval() { return 0; }, clearInterval() {}, __komystDesktopRuntime: false},
   document: {querySelector(selector) { if (!elements.has(selector)) elements.set(selector, {textContent: '', querySelector() { return null; }, addEventListener() {}}); return elements.get(selector); }},
   fetch: async (url) => { fetchUrls.push(String(url)); return {ok: true, json: async () => ({})}; },
   CustomEvent: class { constructor(type, init) { this.type = type; this.detail = init?.detail; } },
@@ -16,7 +16,7 @@ const context = {
 context.window.window = context.window;
 vm.createContext(context);
 vm.runInContext(fs.readFileSync(new URL('../static/control_plane_client.js', import.meta.url), 'utf8'), context);
-const api = context.window.__yomuControlPlane;
+const api = context.window.__komystControlPlane;
 
 assert.equal(api.normalizeWalletState({}).status, 'unknown_schema');
 assert.equal(api.normalizeWalletState({total: 5}).status, 'unknown_schema');

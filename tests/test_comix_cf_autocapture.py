@@ -2,8 +2,8 @@ from unittest import mock
 
 import pytest
 
-from yomu.download import down
-from yomu.download.sources.chapter_source import SourceError
+from komyst.download import down
+from komyst.download.sources.chapter_source import SourceError
 
 
 COMIX = "https://comix.to/title/example/1-chapter-1"

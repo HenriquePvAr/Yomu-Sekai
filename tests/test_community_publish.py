@@ -11,14 +11,14 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-import yomu.community.community_publish_runner as community_publish_runner
-import yomu.runtime.process_tree as process_tree
-from yomu.community.community_auth import RequestPrincipal
-from yomu.community.community_storage import FilesystemStorageProvider, StorageError
-from yomu.community.community_store import CommunityStore, FileStatus, PostStatus
-from yomu.community.community_service import CommunityService
-from yomu.runtime.job_store import JobStatus, JobStore
-from yomu.runtime.worker_service import Worker
+import komyst.community.community_publish_runner as community_publish_runner
+import komyst.runtime.process_tree as process_tree
+from komyst.community.community_auth import RequestPrincipal
+from komyst.community.community_storage import FilesystemStorageProvider, StorageError
+from komyst.community.community_store import CommunityStore, FileStatus, PostStatus
+from komyst.community.community_service import CommunityService
+from komyst.runtime.job_store import JobStatus, JobStore
+from komyst.runtime.worker_service import Worker
 
 REPO = Path(__file__).resolve().parents[1]
 OWNER = RequestPrincipal("local", True, auth_source="test", session_id="test-owner")
@@ -81,7 +81,7 @@ class CommunityPublishTests(unittest.TestCase):
         self.jobs.claim_next_job("w1", 1)
         self.jobs.transition(pub["job_id"], JobStatus.STARTING, expected_worker="w1")
         # Corrupt the stored size after upload by patching stat via a corrupt provider.
-        import yomu.community.community_storage as community_storage
+        import komyst.community.community_storage as community_storage
         real = community_storage.FilesystemStorageProvider.stat_file
 
         def corrupt(self, file_id):
@@ -124,7 +124,7 @@ class CommunityPublishTests(unittest.TestCase):
         try:
             self.assertEqual(
                 worker._runner_fingerprint(pub["job_id"])[0],
-                "yomu.community.community_publish_runner",
+                "komyst.community.community_publish_runner",
             )
             worker.run(once=True)
         finally:
@@ -195,7 +195,7 @@ class CommunityPublishTests(unittest.TestCase):
         worker = Worker(self.jobs_db, poll_seconds=0.01, stale_seconds=10)
         try:
             with patch(
-                "yomu.community.community_store.CommunityStore",
+                "komyst.community.community_store.CommunityStore",
                 side_effect=sqlite3.OperationalError("temporarily locked"),
             ):
                 self.assertFalse(worker._recover_interrupted_community_publishes())
@@ -314,7 +314,7 @@ class CommunityPublishTests(unittest.TestCase):
         worker = Worker(self.jobs_db, poll_seconds=0.01, stale_seconds=10)
         try:
             with patch.object(worker, "_reconcile_stale", return_value=False), patch(
-                "yomu.runtime.worker_service.time.sleep",
+                "komyst.runtime.worker_service.time.sleep",
                 side_effect=AssertionError("--once must not poll forever"),
             ):
                 worker.run(once=True)
@@ -326,7 +326,7 @@ class CommunityPublishTests(unittest.TestCase):
         pub = self._draft_and_publish()
         self.jobs.claim_next_job("w1", 1)
         self.jobs.transition(pub["job_id"], JobStatus.STARTING, expected_worker="w1")
-        import yomu.community.community_storage as community_storage
+        import komyst.community.community_storage as community_storage
         real = community_storage.build_storage_provider
 
         def flaky(config):

@@ -16,8 +16,8 @@ from pathlib import Path
 
 import numpy as np
 
-import yomu.ocr.ocr_line_provenance as provenance
-from yomu.ocr.ocr_engine import OCRLine
+import komyst.ocr.ocr_line_provenance as provenance
+from komyst.ocr.ocr_engine import OCRLine
 
 
 def make_line(text, box, confidence=0.99, engine="rapidocr", page=2):
@@ -57,7 +57,7 @@ class FakeGroup:
 
 
 def test_page_fork_keeps_source_evidence_isolated_and_merges_only_new_records():
-    from yomu.ocr import source_completeness
+    from komyst.ocr import source_completeness
     previous = provenance.active()
     parent = provenance.activate()
     member = make_line("SOURCE WORDS", (10,10,90,20), page=2)
@@ -366,7 +366,7 @@ class ArtifactTest(unittest.TestCase):
 
 class ManifestReferenceTest(unittest.TestCase):
     def build(self, **extra):
-        import yomu.export.output_manifest as output_manifest
+        import komyst.export.output_manifest as output_manifest
 
         return output_manifest.build_run_manifest(
             run_id="r1",
@@ -386,7 +386,7 @@ class ManifestReferenceTest(unittest.TestCase):
         )
 
     def test_manifest_carries_a_bounded_provenance_index(self):
-        import yomu.export.output_manifest as output_manifest
+        import komyst.export.output_manifest as output_manifest
 
         manifest = self.build(
             ocr_line_provenance={
@@ -414,7 +414,7 @@ class ManifestReferenceTest(unittest.TestCase):
         )
 
     def test_legacy_manifest_without_provenance_stays_valid(self):
-        import yomu.export.output_manifest as output_manifest
+        import komyst.export.output_manifest as output_manifest
 
         manifest = self.build()
         self.assertNotIn("ocr_line_provenance", manifest)
@@ -434,7 +434,7 @@ class PipelineInstrumentationTest(unittest.TestCase):
         self.addCleanup(provenance.deactivate)
 
     def test_analyze_image_array_records_raw_lines_groups_and_filters(self):
-        import yomu.ocr.ocr_balloon as ocr_balloon
+        import komyst.ocr.ocr_balloon as ocr_balloon
 
         image = np.full((400, 800, 3), 255, dtype=np.uint8)
         lines = [
@@ -455,7 +455,7 @@ class PipelineInstrumentationTest(unittest.TestCase):
             self.assertTrue(group["member_line_ids"])
 
     def test_render_analyzed_image_records_the_render_input(self):
-        import yomu.ocr.ocr_balloon as ocr_balloon
+        import komyst.ocr.ocr_balloon as ocr_balloon
 
         image = np.full((400, 800, 3), 255, dtype=np.uint8)
         line = make_line("EVERY TIME I GO", (181, 154, 287, 33), page=1)
@@ -479,7 +479,7 @@ class PipelineInstrumentationTest(unittest.TestCase):
         )
 
     def test_manual_review_evidence_survives_a_later_render_attempt(self):
-        import yomu.ocr.ocr_balloon as ocr_balloon
+        import komyst.ocr.ocr_balloon as ocr_balloon
 
         image = np.full((400, 800, 3), 255, dtype=np.uint8)
         line = make_line("EVERY TIME I GO", (181, 154, 287, 33), page=1)

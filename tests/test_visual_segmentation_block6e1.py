@@ -9,7 +9,7 @@ import unittest
 
 import numpy as np
 
-import yomu.clean.inpainting.art_text_inpainting as ati
+import komyst.clean.inpainting.art_text_inpainting as ati
 from tests.test_visual_refinement_block6e1 import _synthetic_text_region
 
 

@@ -16,9 +16,9 @@ from unittest import mock
 import cv2
 import numpy as np
 
-import yomu.config.settings as config
-import yomu.ocr.ocr_balloon as ob
-from yomu.ocr.ocr_engine import OCRLine
+import komyst.config.settings as config
+import komyst.ocr.ocr_balloon as ob
+from komyst.ocr.ocr_engine import OCRLine
 
 
 def _case(gradient):

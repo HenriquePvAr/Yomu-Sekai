@@ -17,9 +17,9 @@ import uuid
 from pathlib import Path
 from unittest import mock
 
-from yomu.review.audit_decisions import AuditDecisionStore
-from yomu.runtime.job_store import JobStore
-from yomu.ui.ui_bridge import UiBridge
+from komyst.review.audit_decisions import AuditDecisionStore
+from komyst.runtime.job_store import JobStore
+from komyst.ui.ui_bridge import UiBridge
 
 
 class _AuditBridge(UiBridge):

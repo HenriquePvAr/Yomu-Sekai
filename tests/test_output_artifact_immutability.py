@@ -7,7 +7,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from yomu.pipeline.benchmark_pipeline import ImmutableArtifactConflict, _finalize_immutable_file
+from komyst.pipeline.benchmark_pipeline import ImmutableArtifactConflict, _finalize_immutable_file
 
 
 class OutputArtifactImmutabilityTests(unittest.TestCase):

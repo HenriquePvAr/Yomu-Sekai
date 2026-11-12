@@ -23,8 +23,8 @@ from tempfile import TemporaryDirectory
 from PIL import Image
 import requests
 
-import yomu.download.down as down
-from yomu.download.download_transport import DownloadLimits, LimitExceeded, RequestsTransport, _BudgetTracker
+import komyst.download.down as down
+from komyst.download.download_transport import DownloadLimits, LimitExceeded, RequestsTransport, _BudgetTracker
 
 
 def _png(seed: int, w: int = 800, h: int = 1200) -> bytes:

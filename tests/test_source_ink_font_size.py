@@ -10,8 +10,8 @@ from unittest import mock
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
-import yomu.ocr.ocr_balloon as ob
-from yomu.ocr.ocr_balloon import OCRLine, TextGroup, render_analyzed_image
+import komyst.ocr.ocr_balloon as ob
+from komyst.ocr.ocr_balloon import OCRLine, TextGroup, render_analyzed_image
 
 FONT = Path(__file__).resolve().parents[1] / "assets" / "fonts" / "comicrelief-bold.ttf"
 

@@ -100,7 +100,7 @@ def main() -> int:
     if int(total_vram_reported) != total_vram:
         raise RuntimeError("gpu_vram_probe_mismatch")
 
-    with tempfile.TemporaryDirectory(prefix="yomu-colab-fixtures-") as temp_name:
+    with tempfile.TemporaryDirectory(prefix="komyst-colab-fixtures-") as temp_name:
         extract_dir = Path(temp_name)
         with zipfile.ZipFile(args.dataset_zip) as archive:
             total_uncompressed = 0
@@ -118,7 +118,7 @@ def main() -> int:
                 raise RuntimeError(f"dataset_zip_corrupt_member:{bad}")
             archive.extractall(extract_dir)
         manifest = json.loads((extract_dir / "manifest.json").read_text(encoding="utf-8"))
-        if manifest.get("schema") != "yomu-synthetic-clean-benchmark.v1" or not manifest.get("synthetic_only"):
+        if manifest.get("schema") != "komyst-synthetic-clean-benchmark.v1" or not manifest.get("synthetic_only"):
             raise RuntimeError("unexpected_dataset_contract")
         entries = [item for item in manifest["cases"] if item["id"] == args.case_id]
         if len(entries) != 1:

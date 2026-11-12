@@ -1,7 +1,7 @@
 /**
  * Visual-only pipeline surface harness.
  *
- * Loaded by the server exclusively when TRADUTOR_UI_VISUAL_TEST=1. It is also
+ * Loaded by the server exclusively when KOMYST_UI_VISUAL_TEST=1. It is also
  * fail-closed in the browser: loopback, the explicit server flag and an
  * allow-listed query state are all required. It performs no request, starts no
  * worker and persists nothing.
@@ -10,7 +10,7 @@
   'use strict';
 
   var loopback = ['127.0.0.1', 'localhost', '::1'].indexOf(window.location.hostname) >= 0;
-  if (window.__tradutorVisualTestEnabled !== true || !loopback) return;
+  if (window.__komystVisualTestEnabled !== true || !loopback) return;
 
   var params = new URLSearchParams(window.location.search);
   var requested = params.get('visual_pipeline_state');
@@ -63,8 +63,8 @@
 
   function renderHarness() {
     var root = document.getElementById('pipelineVisualHarnessRoot');
-    var mapper = window.TradutorLoadingView;
-    var renderer = window.TradutorProcessingSurface;
+    var mapper = window.KomystLoadingView;
+    var renderer = window.KomystProcessingSurface;
     if (!mapper || !renderer) return;
     if (!root) {
       root = document.createElement('section');
@@ -85,8 +85,8 @@
 
   // Three real signals, no timers. The two timers that used to stand in here
   // (50ms and 1000ms) existed to catch the moment the canonical UI settled,
-  // because the auth listener below was subscribed to 'tradutor:auth-changed'
-  // while the application has only ever dispatched 'tradutor-auth-changed'.
+  // because the auth listener below was subscribed to 'komyst:auth-changed'
+  // while the application has only ever dispatched 'komyst-auth-changed'.
   // That subscription never fired, so the guesswork was the only thing keeping
   // the harness working. With the right event name the signal is exact and
   // guessing an interval is unnecessary.
@@ -101,5 +101,5 @@
     renderHarness();
   }
   window.addEventListener('load', renderHarness, {once: true});
-  window.addEventListener('tradutor-auth-changed', renderHarness);
+  window.addEventListener('komyst-auth-changed', renderHarness);
 })();

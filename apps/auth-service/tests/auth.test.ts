@@ -21,7 +21,7 @@ function testConfig(databasePath: string): AuthServiceConfig {
 }
 
 function tempDbPath(): string {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "tradutor-auth-service-"));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "komyst-auth-service-"));
   tmpDirs.push(dir);
   return path.join(dir, "better-auth.sqlite3");
 }

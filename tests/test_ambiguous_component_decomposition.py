@@ -3,7 +3,7 @@ import unittest
 
 import numpy as np
 
-import yomu.clean.ownership.residual_mask_revisions as rmr
+import komyst.clean.ownership.residual_mask_revisions as rmr
 
 
 class AmbiguousComponentDecompositionTests(unittest.TestCase):

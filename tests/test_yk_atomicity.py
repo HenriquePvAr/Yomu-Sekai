@@ -5,7 +5,7 @@ import test_support._test_bootstrap as _test_bootstrap  # noqa: F401
 
 import unittest
 from pathlib import Path
-from yomu.translation.providers.yomu_backend_provider import BackendTranslationError, BatchItem, BatchRequest, MockBackendClient
+from komyst.translation.providers.komyst_backend_provider import BackendTranslationError, BatchItem, BatchRequest, MockBackendClient
 
 AUTH = "jwt.test"
 

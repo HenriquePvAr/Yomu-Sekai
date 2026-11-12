@@ -9,12 +9,12 @@ const state = {
   passiveAdsEnabled: false,
 };
 const WINDOW_REALM_ID = (() => {
-  try { return window.__YOMU_WINDOW_REALM_ID__ || (window.__YOMU_WINDOW_REALM_ID__ = crypto.randomUUID()); }
-  catch (_) { return window.__YOMU_WINDOW_REALM_ID__ || `realm-${Date.now()}`; }
+  try { return window.__KOMYST_WINDOW_REALM_ID__ || (window.__KOMYST_WINDOW_REALM_ID__ = crypto.randomUUID()); }
+  catch (_) { return window.__KOMYST_WINDOW_REALM_ID__ || `realm-${Date.now()}`; }
 })();
 
 const WALLET_FIELDS = ['daily', 'subscription', 'permanent', 'reserved'];
-const YK_DIAGNOSTIC_ENABLED = window.__yomuYkDiagnostic === true;
+const YK_DIAGNOSTIC_ENABLED = window.__komystYkDiagnostic === true;
 let ykClaimAttemptCount = 0;
 let ykWalletRefreshSeq = 0;
 function ykTrace(event, fields = {}) {
@@ -105,17 +105,17 @@ function dispatchControlPlaneUpdated(snapshot) {
     translation_enabled: typeof flags?.translation_enabled === 'boolean' ? flags.translation_enabled : null,
     source: snapshot?.bootstrap?.translation_policy_source || 'control_plane_snapshot',
     resolved_at: snapshot?.bootstrap?.translation_policy_resolved_at || '',
-    event_name: 'tradutor-control-plane-updated', event_target: 'window', window_realm_id: WINDOW_REALM_ID,
+    event_name: 'komyst-control-plane-updated', event_target: 'window', window_realm_id: WINDOW_REALM_ID,
     is_top_window: window.top === window, pathname: window.location?.pathname || '/',
   };
   trace('CONTROL_PLANE_UI_EVENT_DISPATCH_ATTEMPT', fields);
-  window.dispatchEvent(new CustomEvent('tradutor-control-plane-updated', {detail: {state: snapshot}}));
+  window.dispatchEvent(new CustomEvent('komyst-control-plane-updated', {detail: {state: snapshot}}));
   trace('CONTROL_PLANE_UI_EVENT_DISPATCHED', fields);
 }
 
 function trace(event, fields = {}) {
   const safe = {event: String(event || '').slice(0, 80), ...fields};
-  try { window.__tradutorUiTrace?.push({at: Date.now(), ...safe}); } catch (_) {}
+  try { window.__komystUiTrace?.push({at: Date.now(), ...safe}); } catch (_) {}
   // Persist only the explicitly allow-listed, sanitized control-plane fields.
   // Diagnostics are best-effort and must never affect the functional flow.
   try {
@@ -152,7 +152,7 @@ function trace(event, fields = {}) {
 }
 function isDesktopRuntime() {
   return new URLSearchParams(window.location.search || '').get('desktop') === '1'
-    || window.__yomuDesktopRuntime === true;
+    || window.__komystDesktopRuntime === true;
 }
 function friendly(code) {
   return ({
@@ -183,8 +183,8 @@ async function config() {
   return r.json();
 }
 async function token() {
-  const getter = window.__tradutorGetCanonicalAccessToken;
-  return typeof getter === 'function' ? (await getter()) || '' : window.__tradutorAccessToken || '';
+  const getter = window.__komystGetCanonicalAccessToken;
+  return typeof getter === 'function' ? (await getter()) || '' : window.__komystAccessToken || '';
 }
 async function call(name, body = {}) {
   const cfg = await config();
@@ -240,15 +240,15 @@ async function callRpc(name, body = {}) {
 async function loadPassiveAdsPreference() {
   const payload = await callRpc('get_passive_ads_preference');
   state.passiveAdsEnabled = payload?.passive_ads_enabled === true;
-  window.__yomuPassiveAdsPreference = state.passiveAdsEnabled;
-  window.dispatchEvent(new CustomEvent('yomu-passive-ads-preference-changed', {detail: {enabled: state.passiveAdsEnabled}}));
+  window.__komystPassiveAdsPreference = state.passiveAdsEnabled;
+  window.dispatchEvent(new CustomEvent('komyst-passive-ads-preference-changed', {detail: {enabled: state.passiveAdsEnabled}}));
   return state.passiveAdsEnabled;
 }
 async function setPassiveAdsPreference(enabled) {
   const payload = await callRpc('set_passive_ads_enabled', {p_enabled: Boolean(enabled)});
   state.passiveAdsEnabled = payload?.passive_ads_enabled === true;
-  window.__yomuPassiveAdsPreference = state.passiveAdsEnabled;
-  window.dispatchEvent(new CustomEvent('yomu-passive-ads-preference-changed', {detail: {enabled: state.passiveAdsEnabled}}));
+  window.__komystPassiveAdsPreference = state.passiveAdsEnabled;
+  window.dispatchEvent(new CustomEvent('komyst-passive-ads-preference-changed', {detail: {enabled: state.passiveAdsEnabled}}));
   return state.passiveAdsEnabled;
 }
 async function desktopIdentity() {
@@ -275,10 +275,10 @@ async function sealJobAuthContext(jobId, userId = '') {
   trace('AUTH_CONTEXT_SEALED', {job_id: String(jobId || ''), envelope_ready: result?.envelope_ready === true});
   return result;
 }
-window.__yomuSealJobAuthContext = sealJobAuthContext;
+window.__komystSealJobAuthContext = sealJobAuthContext;
 async function ensureDevice() {
   trace('CONTROL_PLANE_ENSURE_DEVICE_STARTED', {step: 'ensure_device', authenticated: state.authenticated});
-  if (!isDesktopRuntime()) { trace('CONTROL_PLANE_ERROR', {step: 'ensure_device', reason_code: 'not_desktop_runtime', desktop_query_present: new URLSearchParams(window.location.search || '').get('desktop') === '1', desktop_global_present: window.__yomuDesktopRuntime === true, pywebview_present: Boolean(window.pywebview?.api)}); return null; }
+  if (!isDesktopRuntime()) { trace('CONTROL_PLANE_ERROR', {step: 'ensure_device', reason_code: 'not_desktop_runtime', desktop_query_present: new URLSearchParams(window.location.search || '').get('desktop') === '1', desktop_global_present: window.__komystDesktopRuntime === true, pywebview_present: Boolean(window.pywebview?.api)}); return null; }
   if (state.device?.verified) return state.device;
   try {
     trace('INSTALL_IDENTITY_REQUESTED', {step: 'get_install_identity'});
@@ -389,7 +389,7 @@ async function bootstrap() {
       state.license = state.bootstrap.license || state.bootstrap.licence || null;
       trace('CONTROL_PLANE_LICENSE_STATE', {step: 'license', license_present: Boolean(state.license), license_status: state.license?.status, license_id: state.license?.id || state.license?.license_id});
       if (!state.license || String(state.license.status || '').toLowerCase() !== 'active') throw Object.assign(new Error('license_not_found'), {code: 'license_not_found', status: 403});
-      try { await loadPassiveAdsPreference(); } catch (_) { state.passiveAdsEnabled = false; window.__yomuPassiveAdsPreference = false; }
+      try { await loadPassiveAdsPreference(); } catch (_) { state.passiveAdsEnabled = false; window.__komystPassiveAdsPreference = false; }
       await ensureDevice();
       state.ready = true;
       trace('CONTROL_PLANE_BOOTSTRAP_SUCCESS', {step: 'bootstrap', ok: true, duration_ms: Date.now() - started}); render(); startHeartbeat();
@@ -498,17 +498,17 @@ async function translationPreflight(payload = {}) {
 }
 function startHeartbeat() { if (state.heartbeatTimer) return; state.heartbeatTimer = window.setInterval(heartbeat, 120000); }
 function stopHeartbeat() { if (state.heartbeatTimer) window.clearInterval(state.heartbeatTimer); state.heartbeatTimer = 0; }
-window.__yomuControlPlane = {state, call, callRpc, bootstrap, heartbeat, dailyClaim, renderDailyClaimStatus, nextDailyClaimText, reserve, finalize, executeTranslation, translationPreflight, ensureDevice, loadPassiveAdsPreference, setPassiveAdsPreference, friendly, normalizeWalletState, applyWallet, render, trace};
-window.addEventListener('tradutor-ui-policy-listener-ready', () => {
-  trace('CONTROL_PLANE_UI_LISTENER_READY_RECEIVED', {event_name: 'tradutor-ui-policy-listener-ready', window_realm_id: WINDOW_REALM_ID, is_top_window: window.top === window, pathname: window.location?.pathname || '/'});
+window.__komystControlPlane = {state, call, callRpc, bootstrap, heartbeat, dailyClaim, renderDailyClaimStatus, nextDailyClaimText, reserve, finalize, executeTranslation, translationPreflight, ensureDevice, loadPassiveAdsPreference, setPassiveAdsPreference, friendly, normalizeWalletState, applyWallet, render, trace};
+window.addEventListener('komyst-ui-policy-listener-ready', () => {
+  trace('CONTROL_PLANE_UI_LISTENER_READY_RECEIVED', {event_name: 'komyst-ui-policy-listener-ready', window_realm_id: WINDOW_REALM_ID, is_top_window: window.top === window, pathname: window.location?.pathname || '/'});
   if (state.bootstrap?.feature_flags && typeof state.bootstrap.feature_flags.translation_enabled === 'boolean') {
     dispatchControlPlaneUpdated({bootstrap: state.bootstrap, wallet: state.wallet, progression: state.progression, license: state.license, device: state.device, authenticated: state.authenticated});
   }
 });
-window.dispatchEvent(new CustomEvent('tradutor-control-plane-ready'));
-document.querySelector('#controlPlaneWallet')?.addEventListener('click', () => window.dispatchEvent(new CustomEvent('tradutor-navigate-tab', {detail: {tab: 'rewards'}})));
-document.querySelector('#controlPlaneRank')?.addEventListener('click', () => window.dispatchEvent(new CustomEvent('tradutor-navigate-tab', {detail: {tab: 'rewards'}})));
-window.addEventListener('tradutor-navigate-tab', event => { if (event.detail?.tab === 'rewards' && state.authenticated) void bootstrap(); });
+window.dispatchEvent(new CustomEvent('komyst-control-plane-ready'));
+document.querySelector('#controlPlaneWallet')?.addEventListener('click', () => window.dispatchEvent(new CustomEvent('komyst-navigate-tab', {detail: {tab: 'rewards'}})));
+document.querySelector('#controlPlaneRank')?.addEventListener('click', () => window.dispatchEvent(new CustomEvent('komyst-navigate-tab', {detail: {tab: 'rewards'}})));
+window.addEventListener('komyst-navigate-tab', event => { if (event.detail?.tab === 'rewards' && state.authenticated) void bootstrap(); });
 document.querySelector('#dailyClaimBtn')?.addEventListener('click', async (event) => {
   const button = event.currentTarget; if (button.dataset.busy === '1') return; button.dataset.busy = '1'; button.disabled = true;
   if (state.passiveAdsEnabled !== true) { button.textContent = 'Ative os anúncios passivos para resgatar'; button.dataset.state = 'ads-off'; button.disabled = false; button.dataset.busy = '0'; return; }
@@ -516,33 +516,33 @@ document.querySelector('#dailyClaimBtn')?.addEventListener('click', async (event
   catch (error) { button.textContent = friendly(error.code); button.dataset.state = String(error.code || 'error'); }
   finally { button.dataset.busy = '0'; button.disabled = false; }
 });
-window.addEventListener('tradutor-auth-changed', event => {
+window.addEventListener('komyst-auth-changed', event => {
   trace('AUTH_CHANGED_EVENT_RECEIVED', {step: 'auth_event', authenticated: String(event.detail?.state || '') === 'authenticated', user_id: event.detail?.user_id});
   const nextAuthenticated = String(event.detail?.state || '') === 'authenticated';
   const authTransition = nextAuthenticated && !state.authenticated;
   state.authenticated = nextAuthenticated;
   if (authTransition) {
-    const generation = Number(window.__yomuAuthGeneration || 0) + 1;
-    window.__yomuAuthGeneration = generation;
-    window.__yomuPendingAuthBootstrapGeneration = generation;
+    const generation = Number(window.__komystAuthGeneration || 0) + 1;
+    window.__komystAuthGeneration = generation;
+    window.__komystPendingAuthBootstrapGeneration = generation;
     trace('CONTROL_PLANE_AUTH_TRANSITION', {authenticated: true, auth_generation: generation});
   }
   if (state.authenticated) {
     trace('CONTROL_PLANE_UI_AUTH_NOTIFY_START', {step: 'auth_bridge', authenticated: true});
     void bootstrap().finally(() => {
       try {
-        const refreshProfile = window.__tradutorRefreshBootstrap;
+        const refreshProfile = window.__komystRefreshBootstrap;
         if (typeof refreshProfile === 'function') {
-          const generation = Number(window.__yomuPendingAuthBootstrapGeneration || 0);
-          window.__yomuPendingAuthBootstrapGeneration = 0;
+          const generation = Number(window.__komystPendingAuthBootstrapGeneration || 0);
+          window.__komystPendingAuthBootstrapGeneration = 0;
           refreshProfile();
           trace('CONTROL_PLANE_UI_AUTH_NOTIFY_RESULT', {step: 'auth_bridge', ok: true, auth_generation: generation});
         } else {
-          trace('CONTROL_PLANE_UI_AUTH_NOTIFY_DEFERRED', {step: 'auth_bridge', pending: true, auth_generation: Number(window.__yomuPendingAuthBootstrapGeneration || 0), reason: 'ui_bridge_not_ready'});
+          trace('CONTROL_PLANE_UI_AUTH_NOTIFY_DEFERRED', {step: 'auth_bridge', pending: true, auth_generation: Number(window.__komystPendingAuthBootstrapGeneration || 0), reason: 'ui_bridge_not_ready'});
         }
       } catch (_) { /* profile refresh is best effort */ }
     });
   }
-   else { stopHeartbeat(); state.bootstrap = state.wallet = state.progression = state.license = state.device = null; state.passiveAdsEnabled = false; window.__yomuPassiveAdsPreference = false; state.walletLoaded = false; state.walletStatus = 'loading'; window.dispatchEvent(new CustomEvent('yomu-passive-ads-preference-changed', {detail: {enabled: false}})); render(); }
+   else { stopHeartbeat(); state.bootstrap = state.wallet = state.progression = state.license = state.device = null; state.passiveAdsEnabled = false; window.__komystPassiveAdsPreference = false; state.walletLoaded = false; state.walletStatus = 'loading'; window.dispatchEvent(new CustomEvent('komyst-passive-ads-preference-changed', {detail: {enabled: false}})); render(); }
 });
-if (window.__tradutorAuthState === 'authenticated') { trace('AUTH_RESTORED_SESSION_DETECTED', {step: 'auth_restore', authenticated: true}); void bootstrap(); }
+if (window.__komystAuthState === 'authenticated') { trace('AUTH_RESTORED_SESSION_DETECTED', {step: 'auth_restore', authenticated: true}); void bootstrap(); }

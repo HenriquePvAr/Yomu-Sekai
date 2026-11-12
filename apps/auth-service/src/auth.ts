@@ -13,7 +13,7 @@ function authOptions(config: AuthServiceConfig, database: Database.Database) {
     database,
     trustedOrigins: config.trustedOrigins,
     advanced: {
-      cookiePrefix: "tradutor-auth",
+      cookiePrefix: "komyst-auth",
       defaultCookieAttributes: {
         httpOnly: true,
         sameSite: "lax" as const,
@@ -55,4 +55,4 @@ export function createAuth(config: AuthServiceConfig) {
   return betterAuth(authOptions(config, database));
 }
 
-export type TradutorAuth = ReturnType<typeof createAuth>;
+export type KomystAuth = ReturnType<typeof createAuth>;

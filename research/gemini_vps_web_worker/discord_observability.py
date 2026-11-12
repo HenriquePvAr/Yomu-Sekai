@@ -12,7 +12,7 @@ from typing import Any
 import requests
 from fastapi import APIRouter, HTTPException
 
-SCHEMA_VERSION = "yomu-observability-v1"
+SCHEMA_VERSION = "komyst-observability-v1"
 EVENTS = {"WORKER_READY", "JOB_CREATED", "JOB_STARTED", "JOB_ANALYZED", "REMOTE_FALLBACK_QUEUED", "REMOTE_FALLBACK_STARTED", "REMOTE_PROGRESS", "REVIEW_REQUIRED", "JOB_COMPLETED", "JOB_FAILED", "REMOTE_AUTH_REQUIRED", "WORKER_DEGRADED", "CHAT_ROTATED", "DATASET_SUMMARY"}
 router = APIRouter()
 _seen: OrderedDict[str, float] = OrderedDict()
@@ -24,14 +24,14 @@ _last_http_status: int | None = None
 
 
 def _webhook() -> str:
-    value = os.environ.get("YOMU_DISCORD_WEBHOOK_URL", "").strip()
+    value = os.environ.get("KOMYST_DISCORD_WEBHOOK_URL", "").strip()
     if value:
         return value
-    path = Path(os.environ.get("YOMU_DISCORD_WEBHOOK_FILE", "/home/ubuntu/yomu/.secrets/discord.env"))
+    path = Path(os.environ.get("KOMYST_DISCORD_WEBHOOK_FILE", "/home/ubuntu/komyst/.secrets/discord.env"))
     try:
         for line in path.read_text(encoding="utf-8").splitlines():
             key, separator, value = line.partition("=")
-            if separator and key.strip() == "YOMU_DISCORD_WEBHOOK_URL":
+            if separator and key.strip() == "KOMYST_DISCORD_WEBHOOK_URL":
                 return value.strip().strip('"').strip("'")
         return ""
     except OSError:
@@ -50,12 +50,12 @@ def _content(event: dict[str, Any]) -> str:
     job = str(event.get("job_id", "unknown"))[:32]
     status = str(event.get("status", ""))[:40]
     if event.get("test_message"):
-        return ("🧪 Yomu · Teste de observabilidade\n\nEnvironment: TEST\nWorker: Online\n"
+        return ("🧪 Komyst · Teste de observabilidade\n\nEnvironment: TEST\nWorker: Online\n"
                 f"Browsers: {event.get('browser_count', 'UNKNOWN')}\nSlots: {event.get('slots', 'UNKNOWN')}\n"
                 f"Concurrency: {event.get('max_concurrency', 'UNKNOWN')}\nQueue: {event.get('queue_depth', 'UNKNOWN')}\n"
                 f"Version: {event.get('version', 'UNKNOWN')}")
     if name == "JOB_STARTED":
-        return ("🟢 Yomu · Trabalho iniciado\n\nObra\n" + str(event.get("series", "UNKNOWN")) +
+        return ("🟢 Komyst · Trabalho iniciado\n\nObra\n" + str(event.get("series", "UNKNOWN")) +
                 "\n\nCapítulo\n" + str(event.get("chapter", "UNKNOWN")) +
                 "\n\nPreset\n" + str(event.get("preset", "UNKNOWN")) +
                 "\n\nPáginas\n" + str(event.get("pages", "UNKNOWN")) +
@@ -63,7 +63,7 @@ def _content(event: dict[str, Any]) -> str:
                 "\n\nInício (UTC)\n" + _event_time(event.get("started_at") or event.get("timestamp")) +
                 "\n\nJob\n" + job)
     if name == "REMOTE_FALLBACK_STARTED":
-        return ("🌐 Yomu · Gemini SAFE CLEAN\n\nPágina: " + str(event.get("page", "UNKNOWN")) +
+        return ("🌐 Komyst · Gemini SAFE CLEAN\n\nPágina: " + str(event.get("page", "UNKNOWN")) +
                 "\nRegião: " + str(event.get("region", "UNKNOWN")) +
                 "\nRequest: " + str(event.get("request_fingerprint", "UNKNOWN")) +
                 "\nSlot: " + str(event.get("slot_id", "UNKNOWN")) +
@@ -72,11 +72,11 @@ def _content(event: dict[str, Any]) -> str:
                 "\nResultado: " + str(event.get("result", "UNKNOWN")) +
                 "\nValidação semântica: " + str(event.get("semantic_status", "UNKNOWN")))
     if name == "CHAT_ROTATED":
-        return ("🔄 Yomu · Chat rotacionado\n\nSlot: " + str(event.get("slot_id", "UNKNOWN")) +
+        return ("🔄 Komyst · Chat rotacionado\n\nSlot: " + str(event.get("slot_id", "UNKNOWN")) +
                 "\nReason: " + str(event.get("reason", "UNKNOWN")) +
                 "\nPrevious generations: " + str(event.get("generation_seq", "UNKNOWN")))
     if name == "JOB_COMPLETED":
-        return ("✅ Yomu · Concluído\n\nPáginas: " + str(event.get("pages", "UNKNOWN")) +
+        return ("✅ Komyst · Concluído\n\nPáginas: " + str(event.get("pages", "UNKNOWN")) +
                 "\nLocal: " + str(event.get("local", "UNKNOWN")) +
                 "\nGemini: " + str(event.get("gemini", "UNKNOWN")) +
                 "\nReview: " + str(event.get("review", "UNKNOWN")) +
@@ -87,16 +87,16 @@ def _content(event: dict[str, Any]) -> str:
                 "\nTreinamento em execução: " + str(event.get("training_running", False)) +
                 "\nArtifacts: " + str(event.get("artifacts", "UNKNOWN")))
     if name == "DATASET_SUMMARY":
-        return ("📦 Yomu · Evidências de treinamento\n\nObservadas: " + str(event.get("samples_observed", "UNKNOWN")) +
+        return ("📦 Komyst · Evidências de treinamento\n\nObservadas: " + str(event.get("samples_observed", "UNKNOWN")) +
                 "\nElegíveis: " + str(event.get("samples_eligible", "UNKNOWN")) +
                 "\nRejeitadas: " + str(event.get("samples_rejected", "UNKNOWN")) +
                 "\nTreinamento em execução: " + str(event.get("training_running", False)) +
                 "\nMotivo principal: " + str(event.get("rejection_reason", "nenhum")))
     if name == "REMOTE_PROGRESS":
-        return (f"🔄 Yomu · Progresso\n\nJob: {job}\nMarco: {event.get('percent', 'UNKNOWN')}%\n"
+        return (f"🔄 Komyst · Progresso\n\nJob: {job}\nMarco: {event.get('percent', 'UNKNOWN')}%\n"
                 f"Páginas: {event.get('processed_pages', 'UNKNOWN')}/{event.get('total_pages', 'UNKNOWN')}")
     detail = f" status={status}" if status else ""
-    return f"[YOMU][OBSERVABILITY] {name} job={job}{detail}"
+    return f"[KOMYST][OBSERVABILITY] {name} job={job}{detail}"
 
 
 def _deliver(webhook: str, content: str) -> int:

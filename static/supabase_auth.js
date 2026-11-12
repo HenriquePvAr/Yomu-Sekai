@@ -16,11 +16,11 @@ const SDK_SESSION_TIMEOUT_MS = 5000;
 const SESSION_RESTORE_TIMEOUT_MS = 7000;
 
 function transportTrace(event, fields = {}) {
-  try { window.__tradutorAuthTraceEvent?.(event, fields); } catch (_) { /* diagnostics never affect auth */ }
+  try { window.__komystAuthTraceEvent?.(event, fields); } catch (_) { /* diagnostics never affect auth */ }
 }
 
-window.__tradutorSupabaseAuthBuild = `supabase_auth:${new URL(import.meta.url).searchParams.get('v') || 'unversioned'}`;
-transportTrace('SUPABASE_AUTH_BUILD_LOADED', {source: window.__tradutorSupabaseAuthBuild});
+window.__komystSupabaseAuthBuild = `supabase_auth:${new URL(import.meta.url).searchParams.get('v') || 'unversioned'}`;
+transportTrace('SUPABASE_AUTH_BUILD_LOADED', {source: window.__komystSupabaseAuthBuild});
 transportTrace('SDK_VENDOR_BUILD_LOADED', {source: 'supabase_sdk:ef0ba14c445fdc3b'});
 
 async function fetchPublicConfig() {
@@ -204,7 +204,7 @@ export async function signIn(email, password, { signal } = {}) {
     }
     memorySession = result.data.session;
     sdkSessionEstablished = true;
-    window.__tradutorAuthTransport = 'supabase_sdk';
+    window.__komystAuthTransport = 'supabase_sdk';
     transportTrace('sdk_sign_in_finished', {authenticated: true, source: 'supabase_password'});
     const identity = await Promise.race([
       client.auth.getUser(),
@@ -263,7 +263,7 @@ export async function signIn(email, password, { signal } = {}) {
       const identity = await client.auth.getUser();
       if (identity?.error || !identity?.data?.user?.id) throw identity?.error || new Error('user_not_available');
       memorySession = {...(persisted.data?.session || {}), user: identity.data.user};
-      window.__tradutorAuthTransport = 'supabase_sdk';
+      window.__komystAuthTransport = 'supabase_sdk';
       transportTrace('sdk_session_persisted', {source: 'supabase_rest'});
       return memorySession;
     } catch (fallbackError) {
@@ -295,8 +295,8 @@ export async function updatePassword(password) {
 export async function signOut() {
   memorySession = null;
   sessionPersistencePromise = null;
-  window.__tradutorAccessToken = '';
-  window.__tradutorAuthTransport = '';
+  window.__komystAccessToken = '';
+  window.__komystAuthTransport = '';
   const client = await getSupabaseClient();
   if (client) {
     await Promise.race([

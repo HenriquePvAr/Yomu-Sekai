@@ -29,15 +29,15 @@ install_offline_network_guard()
 
 import unittest
 
-import yomu.review.chapter_quality_revision as cqr
-from yomu.ocr.ocr_balloon import (
+import komyst.review.chapter_quality_revision as cqr
+from komyst.ocr.ocr_balloon import (
     TextGroup,
     _echo_is_name_shaped,
     _ignored_decorative_requires_review,
     _score_group_quality,
     group_has_name_only_shape,
 )
-from yomu.ocr.ocr_engine import OCRLine
+from komyst.ocr.ocr_engine import OCRLine
 
 
 def _line(text, box=(10, 10, 400, 60)):

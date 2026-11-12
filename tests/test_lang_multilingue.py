@@ -1,14 +1,14 @@
 """Tests for LANG-01: multi-language OCR source support."""
 import unittest
 
-from yomu.ocr.ocr_models import (
+from komyst.ocr.ocr_models import (
     CJK_LANGS,
     CYRILLIC_LANGS,
     LATIN_EXTRA_LANGS,
     source_is_cjk,
     source_is_english,
 )
-from yomu.review import region_taxonomy
+from komyst.review import region_taxonomy
 
 
 class TestSourceIsEnglish(unittest.TestCase):
@@ -160,8 +160,8 @@ class TestNonLatinOcrQuality(unittest.TestCase):
 
     def _scored(self, text):
         import numpy as np
-        from yomu.ocr.ocr_balloon import TextGroup, rapidocr_region_decision, score_group_ocr_quality
-        from yomu.ocr.ocr_engine import OCRLine
+        from komyst.ocr.ocr_balloon import TextGroup, rapidocr_region_decision, score_group_ocr_quality
+        from komyst.ocr.ocr_engine import OCRLine
 
         line = OCRLine(text=text, confidence=0.95,
                        polygon=np.array([[10, 10], [210, 10], [210, 45], [10, 45]], dtype=np.int32),

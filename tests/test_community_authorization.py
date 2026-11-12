@@ -18,8 +18,8 @@ from fastapi.testclient import TestClient
 from starlette.requests import Request
 from starlette.websockets import WebSocketDisconnect
 
-from yomu.community.community_api import ArtifactBindingError, CommunityApi
-from yomu.community.community_auth import (
+from komyst.community.community_api import ArtifactBindingError, CommunityApi
+from komyst.community.community_auth import (
     AuthenticationRequired,
     AuthConfigurationError,
     AuthorizationDenied,
@@ -32,18 +32,18 @@ from yomu.community.community_auth import (
     configured_bind_host,
     validate_bind_security,
 )
-from yomu.community.community_authorization import (
+from komyst.community.community_authorization import (
     authorize_admin_operation,
     authorize_manage_post,
     authorize_moderation,
     can_read_post,
 )
-from yomu.community.community_http import CommunityNetworkBoundaryMiddleware, create_community_router
-from yomu.community.community_service import CommunityError
-from yomu.community.community_storage import FilesystemStorageProvider
-from yomu.community.community_store import FileStatus, Moderation, PostStatus, Visibility
-from yomu.runtime.job_store import JobStatus, JobStore
-from yomu.ui.ui_history import UIHistoryStore
+from komyst.community.community_http import CommunityNetworkBoundaryMiddleware, create_community_router
+from komyst.community.community_service import CommunityError
+from komyst.community.community_storage import FilesystemStorageProvider
+from komyst.community.community_store import FileStatus, Moderation, PostStatus, Visibility
+from komyst.runtime.job_store import JobStatus, JobStore
+from komyst.ui.ui_history import UIHistoryStore
 from test_support.offline_test_guard import (
     _loopback_test_connect,
     _loopback_test_connect_ex,
@@ -430,7 +430,7 @@ def test_bootstrap_response_sets_httponly_strict_cookies_without_body_token(harn
     secret = "local-bootstrap-secret-" + "x" * 32
     response = harness.client.post(
         "/api/community/auth/local-session",
-        headers={"X-Tradutor-Bootstrap-Secret": secret},
+        headers={"X-Komyst-Bootstrap-Secret": secret},
     )
     assert response.status_code == 200
     cookies = response.headers.get_list("set-cookie")
@@ -453,7 +453,7 @@ def test_http_bootstrap_body_cannot_choose_identity_or_roles(harness):
         "/api/community/auth/local-session",
         json={"user_id": "user-b", "roles": ["moderator"]},
         headers={
-            "X-Tradutor-Bootstrap-Secret": "local-bootstrap-secret-" + "x" * 32,
+            "X-Komyst-Bootstrap-Secret": "local-bootstrap-secret-" + "x" * 32,
         },
     )
     assert response.status_code == 200
@@ -487,7 +487,7 @@ def test_https_bootstrap_cookie_is_secure(tmp_path):
     try:
         response = client.post(
             "/api/community/auth/local-session",
-            headers={"X-Tradutor-Bootstrap-Secret": "s" * 40},
+            headers={"X-Komyst-Bootstrap-Secret": "s" * 40},
         )
         assert response.status_code == 200
         cookies = response.headers.get_list("set-cookie")
@@ -551,7 +551,7 @@ def test_runner_independent_middleware_rejects_external_peer(harness):
 
 
 def test_middleware_requires_explicit_opt_in_even_for_strong_provider(monkeypatch):
-    monkeypatch.delenv("TRADUTOR_ALLOW_EXTERNAL_BIND", raising=False)
+    monkeypatch.delenv("KOMYST_ALLOW_EXTERNAL_BIND", raising=False)
     class StrongProvider:
         configured = True
         supports_external_bind = True
@@ -574,7 +574,7 @@ def test_middleware_requires_explicit_opt_in_even_for_strong_provider(monkeypatc
 
 
 def test_middleware_allows_explicit_external_bind_with_strong_provider(monkeypatch):
-    monkeypatch.setenv("TRADUTOR_ALLOW_EXTERNAL_BIND", "1")
+    monkeypatch.setenv("KOMYST_ALLOW_EXTERNAL_BIND", "1")
     class StrongProvider:
         configured = True
         supports_external_bind = True
@@ -1311,7 +1311,7 @@ def test_real_discovered_history_record_maps_to_owned_job_and_publishes(
         }),
         encoding="utf-8",
     )
-    import yomu.ui.ui_history as ui_history
+    import komyst.ui.ui_history as ui_history
     monkeypatch.setattr(ui_history, "OUTPUT_ROOT", harness.output_root)
     records = UIHistoryStore(harness.output_root.parent / "history.json").discover_outputs()
     record = next(item for item in records if item["slug"] == "history-owned")

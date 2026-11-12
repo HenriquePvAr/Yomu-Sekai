@@ -3,8 +3,8 @@
 change there, so they are asserted as 'unchanged contract' guards."""
 from pathlib import Path
 
-CSS = Path("static/tradutor_ui.css").read_text(encoding="utf-8")
-JS = Path("static/tradutor_ui.js").read_text(encoding="utf-8")
+CSS = Path("static/komyst_ui.css").read_text(encoding="utf-8")
+JS = Path("static/komyst_ui.js").read_text(encoding="utf-8")
 
 
 def test_checkbox_has_unmistakable_checked_state():

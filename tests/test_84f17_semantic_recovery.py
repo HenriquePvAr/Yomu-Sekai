@@ -28,9 +28,9 @@ import unittest
 
 import numpy as np
 
-import yomu.ocr.ocr_balloon as ocr_balloon
-import yomu.translation.semantic_fidelity as semantic_fidelity
-from yomu.ocr.ocr_balloon import OCRLine, TextGroup, validate_and_retry_translations
+import komyst.ocr.ocr_balloon as ocr_balloon
+import komyst.translation.semantic_fidelity as semantic_fidelity
+from komyst.ocr.ocr_balloon import OCRLine, TextGroup, validate_and_retry_translations
 
 
 # --- fixtures ---------------------------------------------------------------

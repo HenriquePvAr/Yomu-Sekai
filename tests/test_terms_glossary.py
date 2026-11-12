@@ -1,5 +1,5 @@
 """Protected lore terms: fixed renderings survive provider corruption."""
-from yomu.translation.terms_glossary import enforce_protected_terms, protected_terms
+from komyst.translation.terms_glossary import enforce_protected_terms, protected_terms
 
 
 def test_gehenna_corruption_is_repaired():

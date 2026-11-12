@@ -11,10 +11,10 @@ import cv2
 import numpy as np
 from PIL import Image, ImageDraw
 
-import yomu.pipeline.benchmark_pipeline as benchmark_pipeline
-from yomu.pipeline.benchmark_pipeline import _resolve_download_max_images, _select_image_entries
-import yomu.export.pdf as pdf
-from yomu.export.pdf import (
+import komyst.pipeline.benchmark_pipeline as benchmark_pipeline
+from komyst.pipeline.benchmark_pipeline import _resolve_download_max_images, _select_image_entries
+import komyst.export.pdf as pdf
+from komyst.export.pdf import (
     MAX_LOGICAL_PAGE_HEIGHT,
     PROTECTED_REGION_PADDING,
     ProtectedRegionDetectionError,

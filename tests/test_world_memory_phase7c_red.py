@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 
 from tests.test_chapter_terminology_ledger import _group
-from yomu.pipeline.session_context import SessionContextStore
+from komyst.pipeline.session_context import SessionContextStore
 
 
 class WorldMemoryPhase7CRed(unittest.TestCase):

@@ -18,9 +18,9 @@ import unittest
 import uuid
 from pathlib import Path
 
-import yomu.translation.linguistic_triage as lt
-import yomu.translation.providers.provider_execution as pe
-import yomu.review.region_taxonomy as tax
+import komyst.translation.linguistic_triage as lt
+import komyst.translation.providers.provider_execution as pe
+import komyst.review.region_taxonomy as tax
 
 
 def _rid():

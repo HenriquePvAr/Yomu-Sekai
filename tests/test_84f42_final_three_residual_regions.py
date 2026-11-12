@@ -74,9 +74,9 @@ from unittest.mock import patch
 
 import numpy as np
 
-import yomu.config.settings as config
-import yomu.ocr.ocr_balloon as ocr_balloon
-from yomu.ocr.ocr_balloon import (
+import komyst.config.settings as config
+import komyst.ocr.ocr_balloon as ocr_balloon
+from komyst.ocr.ocr_balloon import (
     RAPIDOCR_CORRUPTION_REASONS,
     TextGroup,
     _ordinary_dialogue_words,
@@ -85,7 +85,7 @@ from yomu.ocr.ocr_balloon import (
     ocr_suspicious_but_translatable,
     rapidocr_region_decision,
 )
-from yomu.ocr.ocr_engine import OCRLine
+from komyst.ocr.ocr_engine import OCRLine
 from tests.test_physical_source_residual_trust import (
     LINE_BOX,
     SOURCE_TEXT,
@@ -181,7 +181,7 @@ class P21NoInventedTokenTests(unittest.TestCase):
     review-required rather than shipping an invented spelling change."""
 
     def test_letter_changing_segmentation_still_needs_agreement(self):
-        from yomu.ocr.ocr_engine import assess_ocr_repair, repair_ocr_text
+        from komyst.ocr.ocr_engine import assess_ocr_repair, repair_ocr_text
 
         original = "COLLDWIELDINHERITED"
         repaired, reason = repair_ocr_text(original)

@@ -9,15 +9,15 @@ from unittest.mock import patch
 
 import httpx
 
-import yomu.translation.natural_ptbr_refinement as refinement
-from yomu.translation.providers.provider_transport import (
+import komyst.translation.natural_ptbr_refinement as refinement
+from komyst.translation.providers.provider_transport import (
     CircuitBreakerPolicy,
     ProviderCircuitBreaker,
     ProviderTimeoutPolicy,
     ProviderTransportError,
     circuit_scope_key,
 )
-from yomu.translation.providers.translator_nvidia import TranslatorNvidiaBatch
+from komyst.translation.providers.translator_nvidia import TranslatorNvidiaBatch
 
 
 class Clock:

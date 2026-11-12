@@ -11,8 +11,8 @@ from pathlib import Path
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
-import yomu.ocr.ocr_balloon as ob
-from yomu.ocr.ocr_engine import OCRLine
+import komyst.ocr.ocr_balloon as ob
+from komyst.ocr.ocr_engine import OCRLine
 
 FONTS = Path(os.environ.get("WINDIR", r"C:\Windows")) / "Fonts"
 

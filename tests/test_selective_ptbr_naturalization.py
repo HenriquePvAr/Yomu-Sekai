@@ -14,9 +14,9 @@ from pathlib import Path
 
 import numpy as np
 
-import yomu.translation.semantic_fidelity as semantic_fidelity
-from yomu.ocr.ocr_balloon import OCRLine, TextGroup, validate_and_retry_translations
-from yomu.pipeline.session_context import SessionContextStore
+import komyst.translation.semantic_fidelity as semantic_fidelity
+from komyst.ocr.ocr_balloon import OCRLine, TextGroup, validate_and_retry_translations
+from komyst.pipeline.session_context import SessionContextStore
 
 
 def _line(text):

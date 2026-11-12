@@ -5,13 +5,13 @@ import numpy as np
 import pytest
 from PIL import Image
 
-from yomu.ocr.ocr_balloon import (
+from komyst.ocr.ocr_balloon import (
     group_has_name_only_shape,
     _render_on_clean_rescue,
     _legible_source_residual,
     PROPER_NAME_ONLY_REASON,
 )
-from yomu.ui.ui_bridge import UiBridge
+from komyst.ui.ui_bridge import UiBridge
 
 
 def test_group_has_name_only_shape_follows_the_shape_contract():
@@ -59,9 +59,9 @@ def test_render_on_clean_rescue_preserves_prior_drawn_pixels():
     group.ocr_lang = "en"
     group.cleanup_lines = []
 
-    with patch("yomu.ocr.ocr_balloon._draw_group_translation", side_effect=lambda canvas, g, *a, **k: canvas):
-        with patch("yomu.ocr.ocr_balloon._enforce_visual_bounds", side_effect=lambda bg, ren, al, **k: (ren, {"visual_validation_passed": True})):
-            with patch("yomu.ocr.ocr_balloon._legible_source_residual", return_value={"status": "not_legible"}):
+    with patch("komyst.ocr.ocr_balloon._draw_group_translation", side_effect=lambda canvas, g, *a, **k: canvas):
+        with patch("komyst.ocr.ocr_balloon._enforce_visual_bounds", side_effect=lambda bg, ren, al, **k: (ren, {"visual_validation_passed": True})):
+            with patch("komyst.ocr.ocr_balloon._legible_source_residual", return_value={"status": "not_legible"}):
                 rendered, allowed = _render_on_clean_rescue(
                     before_group, clean_before, clean_after, clean_before, group, clean_mask, "font.ttf"
                 )
@@ -84,10 +84,10 @@ def test_legible_source_residual_excludes_target_tokens():
     line_laser = MagicMock(text="LASER", confidence=0.9, box=(65, 10, 45, 20))
     line_raio = MagicMock(text="RAIO", confidence=0.9, box=(10, 35, 40, 20))
 
-    with patch("yomu.ocr.ocr_balloon.config.CLEAN_RESIDUAL_OCR_CHECK", True):
-        with patch("yomu.ocr.ocr_balloon._RESIDUAL_OCR_ENGINES", ["mock_engine"]):
-            with patch("yomu.ocr.ocr_balloon._cleanup_lines_for_group", return_value=[MagicMock(box=(10, 10, 100, 50))]):
-                with patch("yomu.ocr.ocr_balloon._reocr_crop_candidates", return_value=[("engine", "mock", 0.9, [line_daemon, line_laser, line_raio])]):
+    with patch("komyst.ocr.ocr_balloon.config.CLEAN_RESIDUAL_OCR_CHECK", True):
+        with patch("komyst.ocr.ocr_balloon._RESIDUAL_OCR_ENGINES", ["mock_engine"]):
+            with patch("komyst.ocr.ocr_balloon._cleanup_lines_for_group", return_value=[MagicMock(box=(10, 10, 100, 50))]):
+                with patch("komyst.ocr.ocr_balloon._reocr_crop_candidates", return_value=[("engine", "mock", 0.9, [line_daemon, line_laser, line_raio])]):
                     img = np.zeros((100, 200, 3), dtype=np.uint8)
                     res = _legible_source_residual(img, group)
                     # Since DAEMON and LASER are part of the target translation, they must not be flagged as uncleaned source residual
@@ -102,8 +102,8 @@ def test_open_artifact_path_uses_explorer_on_windows_dir(tmp_path):
     folder = tmp_path / "test_folder"
     folder.mkdir()
 
-    with patch("yomu.ui.ui_bridge.os.name", "nt"):
-        with patch("yomu.ui.ui_bridge.os.startfile", create=True) as mock_startfile:
+    with patch("komyst.ui.ui_bridge.os.name", "nt"):
+        with patch("komyst.ui.ui_bridge.os.startfile", create=True) as mock_startfile:
             with patch.object(bridge, "_focus_explorer_window") as mock_focus:
                 bridge._open_artifact_path(str(folder))
                 mock_startfile.assert_called_once_with(str(folder.resolve()), "explore")

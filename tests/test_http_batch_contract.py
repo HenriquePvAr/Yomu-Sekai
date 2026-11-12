@@ -1,8 +1,8 @@
 import json, threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.request import Request, urlopen
-from yomu.translation.providers.yomu_backend_provider import BatchItem, BatchRequest, BatchResponse
-from yomu.translation.providers.server_translation_authority import ServerTranslationAuthority
+from komyst.translation.providers.komyst_backend_provider import BatchItem, BatchRequest, BatchResponse
+from komyst.translation.providers.server_translation_authority import ServerTranslationAuthority
 
 
 class Provider:

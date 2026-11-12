@@ -5,7 +5,7 @@ import unittest
 import cv2
 import numpy as np
 
-import yomu.clean.inpainting.art_text_inpainting as ati
+import komyst.clean.inpainting.art_text_inpainting as ati
 
 
 def _masks(size: int = 24):

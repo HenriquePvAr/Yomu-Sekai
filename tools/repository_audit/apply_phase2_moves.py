@@ -13,46 +13,46 @@ ROOT = Path(__file__).resolve().parents[2]
 REPORTS = ROOT / "reports" / "repository_reorganization_v2"
 KEEP_ROOT = {"conftest.py", "sitecustomize.py"}
 SHIMS = {
-    "app_ui.py": "yomu/ui/app.py",
-    "desktop_app.py": "yomu/desktop/app.py",
-    "down.py": "yomu/download/down.py",
-    "main.py": "yomu/commands/legacy_gui.py",
-    "run_local_folder.py": "yomu/commands/run_local_folder.py",
-    "run_webtoon.py": "yomu/commands/run_webtoon.py",
-    "start_tradutor.py": "yomu/commands/start_tradutor.py",
-    "worker_service.py": "yomu/runtime/worker_service.py",
+    "app_ui.py": "komyst/ui/app.py",
+    "desktop_app.py": "komyst/desktop/app.py",
+    "down.py": "komyst/download/down.py",
+    "main.py": "komyst/commands/legacy_gui.py",
+    "run_local_folder.py": "komyst/commands/run_local_folder.py",
+    "run_webtoon.py": "komyst/commands/run_webtoon.py",
+    "start_tradutor.py": "komyst/commands/start_tradutor.py",
+    "worker_service.py": "komyst/runtime/worker_service.py",
 }
 OVERRIDES = {
-    "ad_url_policy.py": "yomu/security/ad_url_policy.py",
-    "app_version.py": "yomu/runtime/version.py",
+    "ad_url_policy.py": "komyst/security/ad_url_policy.py",
+    "app_version.py": "komyst/runtime/version.py",
     "benchmark_environment.py": "tools/performance/benchmark_environment.py",
     "benchmark_ocr_engines.py": "tools/performance/benchmark_ocr_engines.py",
-    "benchmark_pipeline.py": "yomu/pipeline/benchmark_pipeline.py",
-    "classification_profiler.py": "yomu/ocr/classification_profiler.py",
+    "benchmark_pipeline.py": "komyst/pipeline/benchmark_pipeline.py",
+    "classification_profiler.py": "komyst/ocr/classification_profiler.py",
     "cleanup_forensic_capture.py": "tools/research/cleanup_forensic_capture.py",
-    "config.py": "yomu/config/settings.py",
+    "config.py": "komyst/config/settings.py",
     "conftest.py": "conftest.py",
     "fake_pipeline.py": "test_support/fake_pipeline.py",
     "generate_manual_review_report.py": "tools/reports/generate_manual_review_report.py",
     "hermetic_runtime.py": "test_support/hermetic_runtime.py",
-    "image_validation.py": "yomu/download/image_validation.py",
-    "job_runner.py": "yomu/runtime/job_runner.py",
-    "job_store.py": "yomu/runtime/job_store.py",
+    "image_validation.py": "komyst/download/image_validation.py",
+    "job_runner.py": "komyst/runtime/job_runner.py",
+    "job_store.py": "komyst/runtime/job_store.py",
     "local_media_preview_harness.py": "tools/harnesses/local_media_preview_harness.py",
-    "local_media_registry.py": "yomu/ui/local_media_registry.py",
+    "local_media_registry.py": "komyst/ui/local_media_registry.py",
     "local_test_auth.py": "test_support/local_test_auth.py",
-    "manga_translation_pipeline.py": "yomu/pipeline/legacy_gui_pipeline.py",
+    "manga_translation_pipeline.py": "komyst/pipeline/legacy_gui_pipeline.py",
     "offline_test_guard.py": "test_support/offline_test_guard.py",
-    "page_processing_contracts.py": "yomu/core/page_processing_contracts.py",
-    "progress.py": "yomu/ui/progress.py",
+    "page_processing_contracts.py": "komyst/core/page_processing_contracts.py",
+    "progress.py": "komyst/ui/progress.py",
     "performance_validation_harness.py": "tools/harnesses/performance_validation_harness.py",
     "quality_regression_diagnostic.py": "tools/research/quality_regression_diagnostic.py",
-    "request_observability.py": "yomu/runtime/request_observability.py",
+    "request_observability.py": "komyst/runtime/request_observability.py",
     "sitecustomize.py": "sitecustomize.py",
     "social_asset_maintenance_cli.py": "scripts/social_asset_maintenance_cli.py",
-    "smart_split_incremental.py": "yomu/ocr/splitting/smart_split_incremental.py",
-    "source_support_report.py": "yomu/review/source_support_report.py",
-    "worker_service.py": "yomu/runtime/worker_service.py",
+    "smart_split_incremental.py": "komyst/ocr/splitting/smart_split_incremental.py",
+    "source_support_report.py": "komyst/review/source_support_report.py",
+    "worker_service.py": "komyst/runtime/worker_service.py",
     "_test_bootstrap.py": "test_support/_test_bootstrap.py",
     "_test_processes.py": "test_support/_test_processes.py",
 }
@@ -75,54 +75,54 @@ def target_for(record: dict) -> str:
     stem = Path(name).stem
     category = record["module_category"]
     bases = {
-        "auth": "yomu/auth",
-        "clean": "yomu/clean/ownership",
-        "community": "yomu/community",
-        "download": "yomu/download",
-        "domain": "yomu/core",
-        "entrypoint": "yomu/commands",
-        "ocr": "yomu/ocr",
-        "psd": "yomu/export",
-        "review": "yomu/review",
-        "runtime": "yomu/runtime",
+        "auth": "komyst/auth",
+        "clean": "komyst/clean/ownership",
+        "community": "komyst/community",
+        "download": "komyst/download",
+        "domain": "komyst/core",
+        "entrypoint": "komyst/commands",
+        "ocr": "komyst/ocr",
+        "psd": "komyst/export",
+        "review": "komyst/review",
+        "runtime": "komyst/runtime",
         "test_support": "test_support",
-        "translation": "yomu/translation",
-        "ui": "yomu/ui",
-        "utilities": "yomu/core",
-        "pipeline": "yomu/pipeline",
-        "core": "yomu/core",
-        "configuration": "yomu/config",
+        "translation": "komyst/translation",
+        "ui": "komyst/ui",
+        "utilities": "komyst/core",
+        "pipeline": "komyst/pipeline",
+        "core": "komyst/core",
+        "configuration": "komyst/config",
         "script": "scripts",
     }
     base = bases.get(category)
     if category == "tool_or_research":
         base = "tools/research"
     if name in {"advanced_art_inpainting.py", "art_text_inpainting.py", "multiscale_patch_synthesis.py"}:
-        base = "yomu/clean/inpainting"
+        base = "komyst/clean/inpainting"
     if name in {"reference_guided_reconstruction.py", "selective_artifact_reconstruction.py", "learned_rescue.py"}:
-        base = "yomu/clean/reconstruction"
+        base = "komyst/clean/reconstruction"
     if name in {"residual_analysis_artifacts.py", "residual_component_reviews.py", "residual_mask_revisions.py", "human_mask_decisions.py", "glyph_art_boundary_review.py", "source_glyph_envelope.py"}:
-        base = "yomu/clean/ownership"
+        base = "komyst/clean/ownership"
     if name.startswith("legacy_publication_") or name == "legacy_storage_upload_reservation.py":
-        base = "yomu/community/legacy"
+        base = "komyst/community/legacy"
     if name in {"scrapling_reader_resolver.py", "dynamic_resolver_process.py"}:
-        base = "yomu/download/readers"
+        base = "komyst/download/readers"
     if name in {"local_folder_input.py", "local_folder_job.py", "local_folder_source.py", "local_images_source.py"}:
-        base = "yomu/download/local"
+        base = "komyst/download/local"
     if name in {"canonical_source_identity.py", "chapter_source.py", "universal_chapter_adapter.py", "source_profile.py"}:
-        base = "yomu/download/sources"
+        base = "komyst/download/sources"
     if name in {"google_drive_factory.py", "google_drive_storage.py", "google_drive_transport.py", "drive_auth.py"}:
-        base = "yomu/community/storage"
-    if name in {"provider_execution.py", "provider_transport.py", "translation_proxy.py", "server_translation_authority.py", "yomu_backend_provider.py"}:
-        base = "yomu/translation/providers"
+        base = "komyst/community/storage"
+    if name in {"provider_execution.py", "provider_transport.py", "translation_proxy.py", "server_translation_authority.py", "komyst_backend_provider.py"}:
+        base = "komyst/translation/providers"
     if name in {"translator_deepl.py", "translator_nllb.py", "translator_nvidia.py"}:
-        base = "yomu/translation/providers"
+        base = "komyst/translation/providers"
     if name in {"review_reexport.py", "review_reexport_runner.py", "review_rerun.py", "review_rerun_runner.py"}:
-        base = "yomu/review/workflows"
+        base = "komyst/review/workflows"
     if name in {"output_manifest.py", "page_manifest.py", "pdf.py", "pdf_reader.py", "pdf_naming.py", "png_output.py", "editable_psd_writer.py", "professional_psd.py", "psd_exporter.py"}:
-        base = "yomu/export"
+        base = "komyst/export"
     if name in {"benchmark_pipeline.py", "manga_translation_pipeline.py", "pipeline_cache.py", "pipeline_streaming.py", "pipeline_telemetry.py", "session_context.py"}:
-        base = "yomu/pipeline"
+        base = "komyst/pipeline"
     if name in {"benchmark_environment.py", "benchmark_ocr_engines.py", "cleanup_forensic_capture.py", "quality_regression_diagnostic.py", "performance_validation_harness.py", "local_media_preview_harness.py"}:
         base = "tools/harnesses" if "harness" in name else "tools/research"
     if not base:
@@ -131,9 +131,9 @@ def target_for(record: dict) -> str:
 
 
 def batch_for(target: str) -> str:
-    if target.startswith(("yomu/clean/", "yomu/ocr/", "yomu/translation/", "yomu/export/", "yomu/core/", "test_support/")):
+    if target.startswith(("komyst/clean/", "komyst/ocr/", "komyst/translation/", "komyst/export/", "komyst/core/", "test_support/")):
         return "batch1_semantic_and_test_support"
-    if target.startswith(("yomu/download/", "yomu/runtime/", "yomu/pipeline/", "yomu/config/", "yomu/commands/", "yomu/security/")):
+    if target.startswith(("komyst/download/", "komyst/runtime/", "komyst/pipeline/", "komyst/config/", "komyst/commands/", "komyst/security/")):
         return "batch2_runtime_and_sources"
     return "batch3_ui_community_auth_and_tools"
 
@@ -296,7 +296,7 @@ def main() -> int:
         while current != ROOT and ROOT in current.parents:
             init = current / "__init__.py"
             if not init.exists():
-                init.write_text('"""Yomu package."""\n', encoding="utf-8")
+                init.write_text('"""Komyst package."""\n', encoding="utf-8")
             current = current.parent
     selected_mapping = {key: value for key, value in module_map.items() if key in selected}
     import_changes = rewrite_python_imports(selected_mapping, selected)

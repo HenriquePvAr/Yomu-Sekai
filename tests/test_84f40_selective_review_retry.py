@@ -27,9 +27,9 @@ import json
 import os
 import unittest
 
-import yomu.ocr.ocr_engine as ocr_engine
-import yomu.clean.ownership.selective_review_retry as srr
-from yomu.ocr.ocr_balloon import validate_translation_text
+import komyst.ocr.ocr_engine as ocr_engine
+import komyst.clean.ownership.selective_review_retry as srr
+from komyst.ocr.ocr_balloon import validate_translation_text
 
 
 class ClassifyReviewCauseTests(unittest.TestCase):

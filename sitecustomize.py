@@ -21,7 +21,7 @@ def _is_test_invocation(
 
     values = sys.argv if argv is None else argv
     env = os.environ if environment is None else environment
-    if env.get("TRADUTOR_IA_OFFLINE_TEST_GUARD") == "1":
+    if env.get("KOMYST_OFFLINE_TEST_GUARD") == "1":
         return True
     if argv is None:
         original = list(getattr(sys, "orig_argv", ()) or ())
@@ -45,6 +45,6 @@ if _is_test_invocation():
     from test_support.offline_test_guard import install_offline_network_guard
 
     install_offline_network_guard()
-    # A guarded child inherits TRADUTOR_TEST_RUNTIME_ROOT, so it reuses the parent suite's
+    # A guarded child inherits KOMYST_TEST_RUNTIME_ROOT, so it reuses the parent suite's
     # isolated runtime instead of allocating (and leaking) another temporary directory.
     install_runtime_isolation_guard()

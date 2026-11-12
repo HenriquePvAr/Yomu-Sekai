@@ -31,9 +31,9 @@ import unittest
 
 import numpy as np
 
-import yomu.pipeline.benchmark_pipeline as benchmark_pipeline
-import yomu.translation.providers.translator_deepl as translator_deepl
-from yomu.ocr.ocr_balloon import (
+import komyst.pipeline.benchmark_pipeline as benchmark_pipeline
+import komyst.translation.providers.translator_deepl as translator_deepl
+from komyst.ocr.ocr_balloon import (
     OCRLine,
     TextGroup,
     detect_proper_name_spans,

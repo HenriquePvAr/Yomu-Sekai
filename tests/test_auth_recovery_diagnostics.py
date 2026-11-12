@@ -41,7 +41,7 @@ def test_recovery_failure_persists_before_ui_fallback():
 def test_recovery_priority_and_cooldown_contract():
     source = AUTH_UI.read_text(encoding="utf-8")
     assert "authEvent === 'PASSWORD_RECOVERY'" in source
-    assert "yomu_recovery_intent" in source
+    assert "komyst_recovery_intent" in source
     assert "showRecoveryView('password')" in source
     assert "RECOVERY_COOLDOWN_SECONDS = 60" in source
     assert "RECOVERY_COOLDOWN_KEY" in source
@@ -65,7 +65,7 @@ def test_recovery_marker_is_not_cleared_by_auth_events():
     # The cleanup helper is intentionally adjacent to renderSession; ensure
     # the event resolver itself does not clear markers implicitly.
     render_logic = render.split("function clearRecoveryContext", 1)[0]
-    assert "sessionStorage.removeItem('yomu_recovery_intent')" not in render_logic
+    assert "sessionStorage.removeItem('komyst_recovery_intent')" not in render_logic
     assert "authEvent === 'INITIAL_SESSION'" in render
     assert "authEvent === 'SIGNED_IN'" in source
 
@@ -73,7 +73,7 @@ def test_recovery_marker_is_not_cleared_by_auth_events():
 def test_callback_persists_recovery_event_before_redirect():
     callback = (Path(__file__).resolve().parents[1] / "ui" / "auth_callback.html").read_text(encoding="utf-8")
     assert "PASSWORD_RECOVERY" in callback
-    assert "yomu_recovery_intent" in callback
+    assert "komyst_recovery_intent" in callback
     assert "exchangeCodeForSession(code)" in callback
     assert "recovery_session_not_established" in callback
     assert "history.replaceState" in callback
@@ -116,14 +116,14 @@ def test_transient_backend_session_failures_do_not_clear_authenticated_shell():
     assert "response.status === 401" in sync
     assert "canonical_session_check_degraded" in sync
     assert "if (hadAuthenticatedSession)" in sync
-    assert "window.dispatchEvent(new CustomEvent('tradutor-auth-changed'" in sync
+    assert "window.dispatchEvent(new CustomEvent('komyst-auth-changed'" in sync
 
 
 def test_auth_event_trace_is_bounded_and_persists_only_safe_allowlist():
     source = AUTH_UI.read_text(encoding="utf-8")
     trace = source[source.index("function authTrace"):source.index("authTrace('AUTH_UI_BUILD_LOADED'")]
-    persisted = trace[trace.index("const key = 'tradutor_auth_event_trace_v1'"):trace.index("if (window.__tradutorAuthDiagnosticsEnabled")]
-    assert "tradutor_auth_event_trace_v1" in trace
+    persisted = trace[trace.index("const key = 'komyst_auth_event_trace_v1'"):trace.index("if (window.__komystAuthDiagnosticsEnabled")]
+    assert "komyst_auth_event_trace_v1" in trace
     assert ".slice(-40)" in trace
     assert "auth_event" in trace and "source" in trace and "status" in trace
     assert "session_fingerprint" not in persisted
@@ -162,9 +162,9 @@ def test_login_failure_restores_editable_credentials_and_clears_password():
 
 def test_auth_runtime_markers_are_set_at_real_execution_points():
     source = AUTH_UI.read_text(encoding="utf-8")
-    assert "window.__tradutorAuthScriptExecuted = true" in source
-    assert "window.__tradutorAuthInitStarted = true" in source
-    assert "window.__tradutorAuthInitCompleted = true" in source
+    assert "window.__komystAuthScriptExecuted = true" in source
+    assert "window.__komystAuthInitStarted = true" in source
+    assert "window.__komystAuthInitCompleted = true" in source
 
 
 def test_logout_clears_recovery_context_and_url():
@@ -204,7 +204,7 @@ def test_recovery_error_messages_are_user_facing_and_specific():
 
 def test_auth_preview_is_multi_area_carousel():
     shell = (Path(__file__).resolve().parents[1] / "ui" / "ui_shell.html").read_text(encoding="utf-8")
-    css = (Path(__file__).resolve().parents[1] / "static" / "tradutor_ui.css").read_text(encoding="utf-8")
+    css = (Path(__file__).resolve().parents[1] / "static" / "komyst_ui.css").read_text(encoding="utf-8")
     assert 'id="authProductCarousel"' in shell
     for label in ("Início", "Nova tradução", "Fila", "Capítulos traduzidos", "Leitor", "Comunidade"):
         assert label in shell

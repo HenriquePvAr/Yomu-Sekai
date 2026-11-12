@@ -23,9 +23,9 @@ from unittest.mock import patch
 import cv2
 import numpy as np
 
-import yomu.config.settings as config
-import yomu.ocr.ocr_balloon as ob
-from yomu.ocr.ocr_engine import OCRLine
+import komyst.config.settings as config
+import komyst.ocr.ocr_balloon as ob
+from komyst.ocr.ocr_engine import OCRLine
 
 # Persisted real run used as a read-only visual sentinel.  Only the source page
 # images are read, and only into memory: the run itself is never rewritten.  The

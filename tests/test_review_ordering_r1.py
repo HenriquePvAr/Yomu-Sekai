@@ -16,13 +16,13 @@ from unittest.mock import patch
 
 from PIL import Image
 
-import yomu.ui.ui_bridge as ui_bridge
-from yomu.runtime.job_store import JobStatus
+import komyst.ui.ui_bridge as ui_bridge
+from komyst.runtime.job_store import JobStatus
 
 
 def _bridge(tmp_path: Path) -> ui_bridge.UiBridge:
     patches = (
-        patch.dict(os.environ, {"TRADUTOR_TEST_RUNTIME_ROOT": str(tmp_path)}),
+        patch.dict(os.environ, {"KOMYST_TEST_RUNTIME_ROOT": str(tmp_path)}),
         patch.object(ui_bridge, "env_status", lambda *a, **k: {
             "env_exists": True, "nvidia_configured": True,
         }),

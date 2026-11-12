@@ -18,8 +18,8 @@ import unittest
 import uuid
 from pathlib import Path
 
-import yomu.review.region_taxonomy as tax
-from yomu.review.chapter_quality_revision import ChapterQualityRevision
+import komyst.review.region_taxonomy as tax
+from komyst.review.chapter_quality_revision import ChapterQualityRevision
 
 
 def _rand_word(n=7):

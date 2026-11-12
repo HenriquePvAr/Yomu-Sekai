@@ -61,7 +61,7 @@ def main():
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     parser = argparse.ArgumentParser(
-        description="Benchmark isolado de motores OCR para o Tradutor.Ia.",
+        description="Benchmark isolado de motores OCR para o Komyst.",
     )
     parser.add_argument(
         "--input-folder",
@@ -237,7 +237,7 @@ def benchmark_engine(engine_name, input_folder):
 
 def _create_detector(engine_name):
     if engine_name in {"paddle_current", "paddle_no_upscale"}:
-        from yomu.ocr.ocr_engine import OCREngine
+        from komyst.ocr.ocr_engine import OCREngine
 
         engine = OCREngine("en")
         upscale = engine_name == "paddle_current"
@@ -256,7 +256,7 @@ def _create_detector(engine_name):
 
     if engine_name == "paddle_mobile":
         from paddleocr import PaddleOCR
-        from yomu.ocr.ocr_engine import _extract_lines
+        from komyst.ocr.ocr_engine import _extract_lines
 
         engine = PaddleOCR(
             lang="en",
@@ -827,7 +827,7 @@ def _create_boxes_preview(input_folder, result, target):
 
 def _report_text(report):
     lines = [
-        "Tradutor.Ia - Benchmark de motores OCR",
+        "Komyst - Benchmark de motores OCR",
         f"Dataset: {report['dataset']['image_count']} imagens",
         f"Hash: {report['dataset']['dataset_hash']}",
         "",

@@ -7,7 +7,7 @@ import sys
 import time
 import unittest
 
-import yomu.runtime.process_tree as process_tree
+import komyst.runtime.process_tree as process_tree
 
 
 def _spawn_sleeper():

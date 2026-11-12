@@ -16,10 +16,10 @@ import unittest
 import uuid
 from pathlib import Path
 
-import yomu.review.audit_decisions as audit_decisions
-import yomu.translation.linguistic_triage as lt
-import yomu.translation.providers.provider_execution as pe
-import yomu.review.region_taxonomy as tax
+import komyst.review.audit_decisions as audit_decisions
+import komyst.translation.linguistic_triage as lt
+import komyst.translation.providers.provider_execution as pe
+import komyst.review.region_taxonomy as tax
 
 
 def _rid():
@@ -213,7 +213,7 @@ class ExecutionScope(unittest.TestCase):
 
 class CorrectedReadingContract(unittest.TestCase):
     def test_the_ui_writes_the_prefix_the_backend_reads(self):
-        js = Path(__file__).resolve().parents[1].joinpath("static", "tradutor_ui.js").read_text(encoding="utf-8")
+        js = Path(__file__).resolve().parents[1].joinpath("static", "komyst_ui.js").read_text(encoding="utf-8")
         self.assertIn(audit_decisions.CORRECTED_READING_PREFIX.strip().rstrip(":"), js)
 
 

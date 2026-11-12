@@ -8,8 +8,8 @@ from unittest.mock import patch
 
 import pytest
 
-import yomu.community.community_api as community_api
-from yomu.community.community_storage import LocalTestStorageProvider, StorageError, build_storage_provider
+import komyst.community.community_api as community_api
+from komyst.community.community_storage import LocalTestStorageProvider, StorageError, build_storage_provider
 
 
 def _provider(tmp_path: Path, owner: str = "owner-a") -> LocalTestStorageProvider:
@@ -36,11 +36,11 @@ def test_local_test_rejects_missing_or_remote_storage_before_provider_build(
         "ALLOW_LOCAL_TEST_IDENTITIES": "1",
         "STORAGE_PROVIDER": configured,
         "LOCAL_TEST_STORAGE_ROOT": str(tmp_path / "storage"),
-        "TRADUTOR_UI_HOST": "127.0.0.1",
+        "KOMYST_UI_HOST": "127.0.0.1",
         "COMMUNITY_STORAGE_PROVIDER": "google_drive",
     }
     with patch.dict(os.environ, env, clear=True), patch(
-        "yomu.community.storage.google_drive_factory.build_google_drive_provider"
+        "komyst.community.storage.google_drive_factory.build_google_drive_provider"
     ) as remote:
         with pytest.raises(StorageError, match="local_test_external_storage_blocked"):
             community_api.storage_provider_name()
@@ -58,7 +58,7 @@ def test_local_test_storage_rejects_production_or_public_host(tmp_path, app_env,
         "ALLOW_LOCAL_TEST_IDENTITIES": "1",
         "STORAGE_PROVIDER": "local_test",
         "LOCAL_TEST_STORAGE_ROOT": str(tmp_path / "storage"),
-        "TRADUTOR_UI_HOST": host,
+        "KOMYST_UI_HOST": host,
     }
     with patch.dict(os.environ, env, clear=True):
         with pytest.raises(StorageError, match="local_test_external_storage_blocked"):

@@ -7,18 +7,18 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from yomu.export.output_manifest import (
+from komyst.export.output_manifest import (
     MANIFEST_FILENAME,
     build_run_manifest,
     load_verified_run_manifest,
 )
-from yomu.export.pdf_naming import (
+from komyst.export.pdf_naming import (
     build_pdf_filename,
     episode_number_from_url,
     sanitize_filename_component,
     series_slug_from_url,
 )
-from yomu.ui.ui_helpers import find_output_artifacts
+from komyst.ui.ui_helpers import find_output_artifacts
 
 
 _HORROR_URL = (

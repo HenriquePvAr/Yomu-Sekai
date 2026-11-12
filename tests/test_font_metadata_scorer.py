@@ -8,7 +8,7 @@ import test_support._test_bootstrap as _test_bootstrap  # noqa: F401
 
 import unittest
 
-import yomu.clean.ownership.font_fidelity as ff
+import komyst.clean.ownership.font_fidelity as ff
 
 
 def _style(**kw):

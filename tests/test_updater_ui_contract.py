@@ -19,13 +19,13 @@ def test_updater_ui_elements_are_present_in_canonical_shell():
     ):
         assert f'id="{element_id}"' in html
 
-    css = (ROOT / "static" / "tradutor_ui.css").read_text(encoding="utf-8")
+    css = (ROOT / "static" / "komyst_ui.css").read_text(encoding="utf-8")
     assert "#updateAvailableBadge[hidden]" in css
     assert "#updaterInstallBtn[hidden]" in css
 
 
 def test_updater_ui_uses_signed_manifest_and_backend_state_contract():
-    source = (ROOT / "static" / "tradutor_ui.js").read_text(encoding="utf-8")
+    source = (ROOT / "static" / "komyst_ui.js").read_text(encoding="utf-8")
     start = source.index("/* ---------- signed updater UI ---------- */")
     end = source.index("/* ---------- copy ---------- */", start)
     updater = source[start:end]
@@ -41,7 +41,7 @@ def test_updater_ui_uses_signed_manifest_and_backend_state_contract():
 
 
 def test_updater_ui_does_not_bypass_backend_signature_verification():
-    source = (ROOT / "static" / "tradutor_ui.js").read_text(encoding="utf-8")
+    source = (ROOT / "static" / "komyst_ui.js").read_text(encoding="utf-8")
     start = source.index("/* ---------- signed updater UI ---------- */")
     end = source.index("/* ---------- copy ---------- */", start)
     updater = source[start:end]

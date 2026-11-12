@@ -4,7 +4,7 @@ install_offline_network_guard()
 
 import unittest
 
-from yomu.translation.semantic_fidelity import MODALITY_TENSE_CHANGED, VERIFY, evaluate_local_fidelity
+from komyst.translation.semantic_fidelity import MODALITY_TENSE_CHANGED, VERIFY, evaluate_local_fidelity
 
 
 class P28ModalityTenseTests(unittest.TestCase):

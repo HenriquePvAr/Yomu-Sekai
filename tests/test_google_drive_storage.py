@@ -5,8 +5,8 @@ import test_support._test_bootstrap as _test_bootstrap  # noqa: F401
 import json
 import unittest
 
-from yomu.community.community_storage import StorageError
-from yomu.community.storage.google_drive_storage import GoogleDriveStorageProvider, HttpResponse
+from komyst.community.community_storage import StorageError
+from komyst.community.storage.google_drive_storage import GoogleDriveStorageProvider, HttpResponse
 
 
 class FakeTokens:

@@ -93,7 +93,7 @@ jobs:
           node --check static/auth_ui.js
           node --check static/supabase_auth.js
           node --check static/social_community.js
-          node --check static/tradutor_ui.js
+          node --check static/komyst_ui.js
           node --check static/i18n/index.js
           node --check static/i18n/pt-BR.js
           node --check static/i18n/en-US.js
@@ -114,4 +114,4 @@ jobs:
           npm run build
 
       - name: Compile Python modules
-        run: python -m compileall -q yomu test_support app_ui.py desktop_app.py down.py main.py run_local_folder.py run_webtoon.py start_tradutor.py worker_service.py conftest.py sitecustomize.py
+        run: python -m compileall -q komyst test_support app_ui.py desktop_app.py down.py main.py run_local_folder.py run_webtoon.py start_tradutor.py worker_service.py conftest.py sitecustomize.py

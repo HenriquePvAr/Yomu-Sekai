@@ -27,15 +27,15 @@ from unittest.mock import patch
 import cv2
 import numpy as np
 
-import yomu.ocr.ocr_balloon as ocr_balloon
-from yomu.ocr.ocr_balloon import (
+import komyst.ocr.ocr_balloon as ocr_balloon
+from komyst.ocr.ocr_balloon import (
     OCR_UNINTELLIGIBLE_SOURCE_REASON,
     TextGroup,
     _build_text_mask,
     _post_render_source_text_check,
     reconcile_recovery_lines,
 )
-from yomu.ocr.ocr_engine import OCRLine
+from komyst.ocr.ocr_engine import OCRLine
 
 PASS = "pass"
 RESIDUAL = "residual_detected"

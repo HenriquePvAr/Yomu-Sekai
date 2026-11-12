@@ -1,6 +1,6 @@
 from types import SimpleNamespace
 
-from yomu.translation.gemini_fallback import (
+from komyst.translation.gemini_fallback import (
     TRANSLATION_FALLBACK_ACCEPTED,
     TRANSLATION_FALLBACK_REJECTED,
     apply_translation_fallbacks,

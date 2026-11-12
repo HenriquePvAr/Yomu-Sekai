@@ -21,7 +21,7 @@ from test_support.offline_test_guard import install_offline_network_guard
 
 install_offline_network_guard()
 
-from yomu.auth.commercial_foundation import PLANS, Plan, YKWallet
+from komyst.auth.commercial_foundation import PLANS, Plan, YKWallet
 
 ROOT = Path(__file__).resolve().parents[1]
 MIGRATION = ROOT / "supabase/migrations/20260916041829_yk_ads_foundation.sql"

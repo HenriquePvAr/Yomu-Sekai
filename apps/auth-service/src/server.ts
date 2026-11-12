@@ -79,4 +79,4 @@ serve({
   port: config.port,
 });
 
-console.log(`tradutor auth-service listening on ${config.host}:${config.port}`);
+console.log(`komyst auth-service listening on ${config.host}:${config.port}`);

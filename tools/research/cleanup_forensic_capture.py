@@ -40,7 +40,7 @@ def _json_value(value):
 class CleanupForensicCapture:
     """Capture exact cleanup arrays when explicitly enabled by a caller."""
 
-    schema = "tradutoria-cleanup-forensic-v1"
+    schema = "komyst-cleanup-forensic-v1"
 
     def __init__(self, root):
         self.root = Path(root)

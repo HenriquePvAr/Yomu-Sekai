@@ -4,7 +4,7 @@ import test_support._test_bootstrap as _test_bootstrap  # noqa: F401
 
 from pathlib import Path
 
-from yomu.community.publish_authorization import (
+from komyst.community.publish_authorization import (
     REASON_ARTIFACT_MISMATCH,
     REASON_CONSENT_GRANTED,
     REASON_CONSENT_REQUIRED,

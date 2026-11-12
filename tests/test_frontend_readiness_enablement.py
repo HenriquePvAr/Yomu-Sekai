@@ -9,7 +9,7 @@ import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-UI = ROOT / "static" / "tradutor_ui.js"
+UI = ROOT / "static" / "komyst_ui.js"
 NODE = shutil.which("node")
 
 

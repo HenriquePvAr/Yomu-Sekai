@@ -15,7 +15,7 @@ def test_images_mode_has_one_primary_add_action() -> None:
 
 
 def test_same_add_handler_supports_empty_and_append_states() -> None:
-    js = (ROOT / "static" / "tradutor_ui.js").read_text(encoding="utf-8")
+    js = (ROOT / "static" / "komyst_ui.js").read_text(encoding="utf-8")
     assert "$('#addLocalImagesBtn')?.addEventListener('click', chooseLocalImages)" in js
     assert "for (const item of items)" in js
     assert "appState.localImages.push({mediaId" in js

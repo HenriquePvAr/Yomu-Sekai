@@ -1,9 +1,9 @@
 import json
 from pathlib import Path
 
-from yomu.runtime.job_store import JobStatus
-from yomu.download.local.local_folder_job import build_local_job_command
-from yomu.ui.ui_bridge import UiBridge
+from komyst.runtime.job_store import JobStatus
+from komyst.download.local.local_folder_job import build_local_job_command
+from komyst.ui.ui_bridge import UiBridge
 
 
 def test_frozen_local_command_can_bind_output_to_authoritative_job_dir(tmp_path):
@@ -17,7 +17,7 @@ def test_frozen_local_command_can_bind_output_to_authoritative_job_dir(tmp_path)
         use_cache=False,
         force=True,
         use_context=True,
-        python_executable=str(tmp_path / "YomuSekai.exe"),
+        python_executable=str(tmp_path / "Komyst.exe"),
         frozen=True,
     )
 
@@ -26,7 +26,7 @@ def test_frozen_local_command_can_bind_output_to_authoritative_job_dir(tmp_path)
 
 
 def test_legacy_frozen_local_artifacts_populate_review_history_metrics(tmp_path):
-    exe = tmp_path / "candidate23" / "YomuSekai.exe"
+    exe = tmp_path / "candidate23" / "Komyst.exe"
     output_dir = exe.parent / "_internal" / "output" / "webtoon_chapter" / "run-1"
     output_dir.mkdir(parents=True)
     (output_dir / "run_manifest.json").write_text(json.dumps({

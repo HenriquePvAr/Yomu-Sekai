@@ -37,7 +37,7 @@ def _free_loopback_port() -> int:
 
 class RuntimeUiForensicsTests(unittest.TestCase):
     def test_startup_port_preflight_fails_when_port_is_already_owned(self):
-        import yomu.ui.app as app_ui
+        import komyst.ui.app as app_ui
 
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as owner:
             owner.bind(("127.0.0.1", 0))
@@ -61,8 +61,8 @@ class RuntimeUiForensicsTests(unittest.TestCase):
             "LOCAL_TEST_AUTH_SESSION_SECRET": "x" * 40,
             "STORAGE_PROVIDER": "local_test",
             "LOCAL_TEST_STORAGE_ROOT": str(tmp / "local-test-storage"),
-            "TRADUTOR_UI_PORT": str(port),
-            "TRADUTOR_UI_HOST": "127.0.0.1",
+            "KOMYST_UI_PORT": str(port),
+            "KOMYST_UI_HOST": "127.0.0.1",
         }
         env["NICEGUI_SCREEN_TEST_PORT"] = str(port)
         proc = subprocess.Popen(
@@ -93,7 +93,7 @@ class RuntimeUiForensicsTests(unittest.TestCase):
 
             self.assertIn('<button type="button" class="rail-tab active" data-tab="inicio"', html)
             self.assertNotIn('<li class="rail-tab active" data-tab="inicio"', html)
-            self.assertIn("window.__tradutorRuntimeIdentity", html)
+            self.assertIn("window.__komystRuntimeIdentity", html)
             current_head = subprocess.run(
                 ["git", "rev-parse", "HEAD"],
                 cwd=str(ROOT),
@@ -103,8 +103,8 @@ class RuntimeUiForensicsTests(unittest.TestCase):
             ).stdout.strip()
             self.assertIn(current_head, html)
             match = re.search(
-                r"window\.__tradutorRuntimeIdentity\s*=\s*(\{.*?\});"
-                r".*?window\.__tradutorVisualTestEnabled",
+                r"window\.__komystRuntimeIdentity\s*=\s*(\{.*?\});"
+                r".*?window\.__komystVisualTestEnabled",
                 html,
                 re.S,
             )
@@ -117,12 +117,12 @@ class RuntimeUiForensicsTests(unittest.TestCase):
                 identity["shell_sha256"],
             )
             self.assertEqual(
-                hashlib.sha256((ROOT / "static" / "tradutor_ui.js").read_bytes()).hexdigest(),
-                identity["tradutor_ui_js_sha256"],
+                hashlib.sha256((ROOT / "static" / "komyst_ui.js").read_bytes()).hexdigest(),
+                identity["komyst_ui_js_sha256"],
             )
             self.assertEqual(
-                hashlib.sha256((ROOT / "static" / "tradutor_ui.css").read_bytes()).hexdigest(),
-                identity["tradutor_ui_css_sha256"],
+                hashlib.sha256((ROOT / "static" / "komyst_ui.css").read_bytes()).hexdigest(),
+                identity["komyst_ui_css_sha256"],
             )
             self.assertNotIn(str(Path.home()), html)
             self.assertNotIn(str(ROOT), html)
@@ -137,7 +137,7 @@ class DownloadCountConservationTests(unittest.TestCase):
         return str(path)
 
     def test_partial_cache_101_is_not_reused_when_manifest_declares_171_expected(self):
-        import yomu.pipeline.benchmark_pipeline as bp
+        import komyst.pipeline.benchmark_pipeline as bp
 
         tmp = Path(tempfile.mkdtemp())
         cache_root = tmp / "cache"
@@ -201,7 +201,7 @@ class DownloadCountConservationTests(unittest.TestCase):
         self.assertEqual(171, manifest["total_downloaded"])
 
     def test_page_count_trace_preserves_171_source_to_101_logical_boundary(self):
-        import yomu.pipeline.benchmark_pipeline as bp
+        import komyst.pipeline.benchmark_pipeline as bp
 
         trace = bp._page_count_trace(
             {
@@ -227,7 +227,7 @@ class DownloadCountConservationTests(unittest.TestCase):
         self.assertTrue(trace["smart_split_enabled"])
 
     def test_page_count_trace_names_excluded_logical_pages(self):
-        import yomu.pipeline.benchmark_pipeline as bp
+        import komyst.pipeline.benchmark_pipeline as bp
 
         trace = bp._page_count_trace(
             {"download_gate": {"passed": True, "expected_viewer_images": 171}},
@@ -242,7 +242,7 @@ class DownloadCountConservationTests(unittest.TestCase):
         self.assertEqual("invalid_or_blank_logical_page", trace["logical_page_exclusion_reason"])
 
     def test_cache_completeness_compares_source_slices_not_logical_pages(self):
-        import yomu.pipeline.benchmark_pipeline as bp
+        import komyst.pipeline.benchmark_pipeline as bp
 
         manifest = {
             "download_gate": {"passed": True, "expected_viewer_images": 171},
@@ -264,7 +264,7 @@ class DownloadCountConservationTests(unittest.TestCase):
         )
 
     def test_report_exposes_explicit_source_slice_and_logical_page_domains(self):
-        import yomu.pipeline.benchmark_pipeline as bp
+        import komyst.pipeline.benchmark_pipeline as bp
 
         states = [{"index": index, "debug_data": {"group_count": 1}} for index in range(101)]
         page_trace = bp._page_count_trace(
@@ -285,9 +285,9 @@ class DownloadCountConservationTests(unittest.TestCase):
 
 class GroupCountDataflowTests(unittest.TestCase):
     def test_positive_synthetic_ocr_fixture_produces_groups(self):
-        from yomu.ocr.ocr_balloon import analyze_image_array, get_translatable_groups
-        from yomu.ocr.ocr_engine import OCRLine
-        import yomu.pipeline.benchmark_pipeline as bp
+        from komyst.ocr.ocr_balloon import analyze_image_array, get_translatable_groups
+        from komyst.ocr.ocr_engine import OCRLine
+        import komyst.pipeline.benchmark_pipeline as bp
 
         original = np.full((420, 320, 3), 255, dtype=np.uint8)
         raw_lines = [
@@ -328,8 +328,8 @@ class GroupCountDataflowTests(unittest.TestCase):
         self.assertGreater(trace["groups_persisted"], 0)
 
     def test_genuinely_textless_page_can_have_zero_groups_without_bug(self):
-        from yomu.ocr.ocr_balloon import analyze_image_array, get_translatable_groups
-        import yomu.pipeline.benchmark_pipeline as bp
+        from komyst.ocr.ocr_balloon import analyze_image_array, get_translatable_groups
+        import komyst.pipeline.benchmark_pipeline as bp
 
         original = np.full((420, 320, 3), 255, dtype=np.uint8)
         candidates, groups = analyze_image_array(original, [], page_index=1)
@@ -355,7 +355,7 @@ class GroupCountDataflowTests(unittest.TestCase):
         self.assertEqual(1, trace["pages_without_text"])
 
     def test_trace_distinguishes_ocr_not_executed_empty_ocr_and_grouping_loss(self):
-        import yomu.pipeline.benchmark_pipeline as bp
+        import komyst.pipeline.benchmark_pipeline as bp
 
         trace = bp._group_count_trace([
             {"index": 1, "status": "completed", "precheck_reason": "no_text_detected"},
@@ -379,7 +379,7 @@ class GroupCountDataflowTests(unittest.TestCase):
         self.assertEqual(0, trace["groups_created"])
 
     def test_trace_uses_persisted_debug_counts_after_raw_ocr_lines_are_dropped(self):
-        import yomu.pipeline.benchmark_pipeline as bp
+        import komyst.pipeline.benchmark_pipeline as bp
 
         trace = bp._group_count_trace([
             {
@@ -404,7 +404,7 @@ class GroupCountDataflowTests(unittest.TestCase):
 
 class PdfOpenContractTests(unittest.TestCase):
     def test_pdf_open_contract_is_os_default_viewer_for_owner_scoped_artifact(self):
-        import yomu.ui.ui_bridge as ui_bridge
+        import komyst.ui.ui_bridge as ui_bridge
 
         tmp = Path(tempfile.mkdtemp())
         output = (tmp / "output").resolve()
@@ -429,7 +429,7 @@ class PdfOpenContractTests(unittest.TestCase):
         opener.assert_called_once_with(str(pdf), select=False)
 
     def test_open_artifact_path_invokes_platform_opener_and_stays_inside_output_root(self):
-        import yomu.ui.ui_bridge as ui_bridge
+        import komyst.ui.ui_bridge as ui_bridge
 
         tmp = Path(tempfile.mkdtemp())
         output = (tmp / "output").resolve()

@@ -17,9 +17,9 @@ import json
 import sys
 from pathlib import Path
 
-from yomu.community.chapter_asset_repository import ChapterAssetRepository
-from yomu.community.social_asset_reconcile import SocialAssetReconciliationService, SocialAssetRetentionSweep
-from yomu.community.social_asset_retention import SocialAssetRetentionService, retention_days, sweep_enabled
+from komyst.community.chapter_asset_repository import ChapterAssetRepository
+from komyst.community.social_asset_reconcile import SocialAssetReconciliationService, SocialAssetRetentionSweep
+from komyst.community.social_asset_retention import SocialAssetRetentionService, retention_days, sweep_enabled
 
 
 def _repo(db: str) -> ChapterAssetRepository:

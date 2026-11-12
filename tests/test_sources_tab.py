@@ -9,11 +9,11 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-import yomu.desktop.app as desktop_app
+import komyst.desktop.app as desktop_app
 
 ROOT = Path(__file__).resolve().parents[1]
 SHELL = (ROOT / "ui" / "ui_shell.html").read_text(encoding="utf-8")
-UI_JS = (ROOT / "static" / "tradutor_ui.js").read_text(encoding="utf-8")
+UI_JS = (ROOT / "static" / "komyst_ui.js").read_text(encoding="utf-8")
 
 EXPECTED = {
     "webtoon": "https://www.webtoons.com/en/",

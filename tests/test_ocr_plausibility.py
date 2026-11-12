@@ -14,8 +14,8 @@ import random
 import string
 import unittest
 
-import yomu.translation.linguistic_triage as lt
-import yomu.review.region_taxonomy as tax
+import komyst.translation.linguistic_triage as lt
+import komyst.review.region_taxonomy as tax
 
 
 def _garbage(length=6):

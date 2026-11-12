@@ -5,15 +5,15 @@ import threading
 import unittest
 from dataclasses import dataclass
 
-from yomu.community.canonical_social_identity import (
+from komyst.community.canonical_social_identity import (
     CanonicalSocialIdentityError,
     CanonicalSourceKeys,
     FakeCanonicalSocialIdentityMaterializer,
     SupabaseCanonicalSocialIdentityMaterializer,
     canonical_source_identity_from_publish_source,
 )
-from yomu.community.community_auth import RequestPrincipal
-from yomu.community.supabase_social import SocialConfig
+from komyst.community.community_auth import RequestPrincipal
+from komyst.community.supabase_social import SocialConfig
 
 
 OWNER = RequestPrincipal(

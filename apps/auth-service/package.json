@@ -1,5 +1,5 @@
 {
-  "name": "@tradutor-ia/auth-service",
+  "name": "@komyst/auth-service",
   "version": "0.1.0",
   "private": true,
   "type": "module",

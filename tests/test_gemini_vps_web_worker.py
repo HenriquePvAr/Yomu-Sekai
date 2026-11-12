@@ -478,8 +478,8 @@ def test_authorized_mask_generator_persists_coverage_gate_and_blocks_incomplete_
     group.lines[1].text = "SECOND LINE"
     group.lines[1].confidence = .99
     monkeypatch.setattr(authorized_mask, "OCREngine", FakeEngine)
-    monkeypatch.setattr(authorized_mask.yomu_ocr, "analyze_image_array", lambda _image, _lines: ([], [group]))
-    monkeypatch.setattr(authorized_mask.yomu_ocr, "_build_text_mask",
+    monkeypatch.setattr(authorized_mask.komyst_ocr, "analyze_image_array", lambda _image, _lines: ([], [group]))
+    monkeypatch.setattr(authorized_mask.komyst_ocr, "_build_text_mask",
                         lambda shape, _groups, padding=None: np.ones(shape[:2], dtype=np.uint8) * 255)
     image_path = tmp_path / "source.png"
     cv2.imwrite(str(image_path), np.full((240, 300, 3), 245, dtype=np.uint8))
@@ -487,7 +487,7 @@ def test_authorized_mask_generator_persists_coverage_gate_and_blocks_incomplete_
     dense = np.zeros((240, 300), dtype=np.uint8)
     dense[11:33, 11:109] = 255
     dense[43:65, 19:109] = 255
-    monkeypatch.setattr(authorized_mask.yomu_ocr, "_component_text_mask",
+    monkeypatch.setattr(authorized_mask.komyst_ocr, "_component_text_mask",
                         lambda *_args, **_kwargs: (dense.copy(), {"accepted_text_components": 2}))
     pass_meta = authorized_mask.generate_authorized_mask(image_path, tmp_path / "mask-pass.png",
                                                          page_id="053", region_id="REGION_001")
@@ -500,7 +500,7 @@ def test_authorized_mask_generator_persists_coverage_gate_and_blocks_incomplete_
 
     sparse = np.zeros_like(dense)
     sparse[20, 20] = 255
-    monkeypatch.setattr(authorized_mask.yomu_ocr, "_component_text_mask",
+    monkeypatch.setattr(authorized_mask.komyst_ocr, "_component_text_mask",
                         lambda *_args, **_kwargs: (sparse.copy(), {"accepted_text_components": 1}))
     fail_meta = authorized_mask.generate_authorized_mask(image_path, tmp_path / "mask-fail.png",
                                                          page_id="053", region_id="REGION_001")
@@ -529,13 +529,13 @@ def test_authorized_mask_requires_group_ownership_and_keeps_neighbor_story_group
         line.confidence = .99
     neighbor = _neighbor_group()
     monkeypatch.setattr(authorized_mask, "OCREngine", FakeEngine)
-    monkeypatch.setattr(authorized_mask.yomu_ocr, "analyze_image_array", lambda _image, _lines: ([], [target, neighbor]))
-    monkeypatch.setattr(authorized_mask.yomu_ocr, "_build_text_mask",
+    monkeypatch.setattr(authorized_mask.komyst_ocr, "analyze_image_array", lambda _image, _lines: ([], [target, neighbor]))
+    monkeypatch.setattr(authorized_mask.komyst_ocr, "_build_text_mask",
                         lambda shape, _groups, padding=None: np.ones(shape[:2], dtype=np.uint8) * 255)
     dense = np.zeros((240, 300), dtype=np.uint8)
     dense[11:33, 11:109] = 255
     dense[43:65, 19:109] = 255
-    monkeypatch.setattr(authorized_mask.yomu_ocr, "_component_text_mask",
+    monkeypatch.setattr(authorized_mask.komyst_ocr, "_component_text_mask",
                         lambda *_args, **_kwargs: (dense.copy(), {"accepted_text_components": 2}))
     image_path = tmp_path / "source.png"
     cv2.imwrite(str(image_path), np.full((240, 300, 3), 245, dtype=np.uint8))

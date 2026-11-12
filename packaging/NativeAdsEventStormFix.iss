@@ -9,7 +9,7 @@
 AppId={{D4G-EVENT-STORM-FIX-20260915}
 AppName=Komyst - Native Ads Event Storm Fix
 AppVersion=0.9.0-beta.44
-DefaultDirName={localappdata}\Programs\YomuSekai-NativeAdsEventStormFix
+DefaultDirName={localappdata}\Programs\Komyst-NativeAdsEventStormFix
 DefaultGroupName=Komyst - Native Ads Event Storm Fix
 PrivilegesRequired=lowest
 ArchitecturesAllowed=x64
@@ -24,8 +24,8 @@ Uninstallable=yes
 ChangesEnvironment=no
 CreateUninstallRegKey=yes
 [Files]
-Source: "{#BundleRoot}\YomuSekai\*"; DestDir: "{app}"; Flags: recursesubdirs createallsubdirs ignoreversion
+Source: "{#BundleRoot}\Komyst\*"; DestDir: "{app}"; Flags: recursesubdirs createallsubdirs ignoreversion
 [Icons]
-Name: "{group}\Komyst - Native Ads Event Storm Fix"; Filename: "{app}\YomuSekai.exe"; WorkingDir: "{app}"
+Name: "{group}\Komyst - Native Ads Event Storm Fix"; Filename: "{app}\Komyst.exe"; WorkingDir: "{app}"
 [Run]
-Filename: "{app}\YomuSekai.exe"; Description: "Iniciar Komyst - Native Ads Event Storm Fix"; Flags: postinstall skipifsilent nowait
+Filename: "{app}\Komyst.exe"; Description: "Iniciar Komyst - Native Ads Event Storm Fix"; Flags: postinstall skipifsilent nowait

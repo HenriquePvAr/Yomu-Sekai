@@ -4,7 +4,7 @@ import unittest
 
 import numpy as np
 
-import yomu.clean.inpainting.art_text_inpainting as ati
+import komyst.clean.inpainting.art_text_inpainting as ati
 
 
 class TextureConsistencyMetricTests(unittest.TestCase):

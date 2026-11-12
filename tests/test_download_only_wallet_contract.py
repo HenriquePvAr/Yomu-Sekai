@@ -1,6 +1,6 @@
 """Offline contract tests for Download-only entitlement behavior."""
 
-from yomu.ui.app import required_yk_for_run
+from komyst.ui.app import required_yk_for_run
 
 
 def test_download_only_with_zero_balance_is_allowed_without_yk_cost():

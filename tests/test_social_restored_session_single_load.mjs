@@ -88,7 +88,7 @@ function makeWindow(host) {
     URL, AbortController, Promise, console,
     addEventListener: events.addEventListener, removeEventListener: events.removeEventListener,
     dispatchEvent: events.dispatchEvent,
-    __tradutorAuthState: 'authenticated', // canonical arbiter already confirmed, like a real restored-session tab
+    __komystAuthState: 'authenticated', // canonical arbiter already confirmed, like a real restored-session tab
   };
   windowStub.window = windowStub;
   windowStub.globalThis = windowStub;

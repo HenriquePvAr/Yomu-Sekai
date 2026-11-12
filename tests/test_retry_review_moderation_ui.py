@@ -8,19 +8,19 @@ from unittest.mock import patch
 
 import pytest
 
-import yomu.ui.ui_bridge as ui_bridge
-from yomu.community.community_api import CommunityApi
-from yomu.community.community_auth import AuthorizationDenied, RequestPrincipal
-from yomu.community.community_store import Moderation, PostStatus, Visibility
-from yomu.runtime.job_store import JobStatus
-from yomu.runtime.job_store import JobStore, TransitionError
+import komyst.ui.ui_bridge as ui_bridge
+from komyst.community.community_api import CommunityApi
+from komyst.community.community_auth import AuthorizationDenied, RequestPrincipal
+from komyst.community.community_store import Moderation, PostStatus, Visibility
+from komyst.runtime.job_store import JobStatus
+from komyst.runtime.job_store import JobStore, TransitionError
 
 
 def _bridge(tmp_path: Path) -> ui_bridge.UiBridge:
     patches = (
         # Explicit isolated runtime root: jobs.sqlite3, artifacts, profiles and history all
         # land under tmp_path instead of the project's real .cache/runtime.
-        patch.dict(os.environ, {"TRADUTOR_TEST_RUNTIME_ROOT": str(tmp_path)}),
+        patch.dict(os.environ, {"KOMYST_TEST_RUNTIME_ROOT": str(tmp_path)}),
         patch.object(ui_bridge, "env_status", lambda *a, **k: {
             "env_exists": True, "nvidia_configured": True,
         }),
@@ -99,7 +99,7 @@ def test_retry_remains_owner_scoped(tmp_path):
 
 
 def _community(tmp_path: Path) -> tuple[CommunityApi, str]:
-    from yomu.runtime.job_store import JobStore
+    from komyst.runtime.job_store import JobStore
 
     jobs = JobStore(tmp_path / "jobs.sqlite3")
     api = CommunityApi(
@@ -184,7 +184,7 @@ def test_common_user_cannot_moderate_and_reason_is_required(tmp_path):
 
 def test_moderation_surface_and_retry_confirmation_are_wired():
     html = Path("ui/ui_shell.html").read_text(encoding="utf-8")
-    js = Path("static/tradutor_ui.js").read_text(encoding="utf-8")
+    js = Path("static/komyst_ui.js").read_text(encoding="utf-8")
     assert "retryConfirmDialog" in html
     assert "moderationPanel" in html
     assert "/api/community/moderation/posts/" in js
@@ -253,7 +253,7 @@ def test_identical_review_revision_is_idempotent_after_client_state_refresh(tmp_
 
 
 def test_deep_review_ui_uses_versioned_endpoint():
-    js = Path("static/tradutor_ui.js").read_text(encoding="utf-8")
+    js = Path("static/komyst_ui.js").read_text(encoding="utf-8")
     assert "/api/ui/quality-review/edit" in js
     assert "expected_version" in js
     assert "data-review-deep-action=\"rejected\"" in js
@@ -262,7 +262,7 @@ def test_deep_review_ui_uses_versioned_endpoint():
 
 
 def test_persisted_history_retry_uses_selected_job_identity_after_refresh():
-    js = Path("static/tradutor_ui.js").read_text(encoding="utf-8")
+    js = Path("static/komyst_ui.js").read_text(encoding="utf-8")
     assert "retryDialogContext" in js
     assert "retryAction(record)" in js
     assert 'data-action="retry"' in js
@@ -280,7 +280,7 @@ def test_persisted_history_retry_uses_selected_job_identity_after_refresh():
 
 
 def test_history_retry_renders_only_with_concrete_job_and_run_identity():
-    js = Path("static/tradutor_ui.js").read_text(encoding="utf-8")
+    js = Path("static/komyst_ui.js").read_text(encoding="utf-8")
     history_start = js.index("function renderHistoryCard")
     history_end = js.index("function renderHistory(", history_start)
     history_block = js[history_start:history_end]
@@ -293,7 +293,7 @@ def test_history_retry_renders_only_with_concrete_job_and_run_identity():
 
 
 def test_pipeline_retry_requires_recoverable_job_and_concrete_run_identity():
-    js = Path("static/tradutor_ui.js").read_text(encoding="utf-8")
+    js = Path("static/komyst_ui.js").read_text(encoding="utf-8")
     run_status = js[js.index("function renderRunStatus"):js.index(
         "const VISUAL_STATE_LABELS")]
     assert "record?.recoverable === true" in run_status
@@ -305,13 +305,13 @@ def test_pipeline_retry_requires_recoverable_job_and_concrete_run_identity():
 
 
 def test_moderation_refresh_uses_only_canonical_auth_event():
-    js = Path("static/tradutor_ui.js").read_text(encoding="utf-8")
-    assert "window.addEventListener('tradutor-auth-changed', loadModeration)" in js
-    assert "window.addEventListener('tradutor:auth-changed', loadModeration)" not in js
+    js = Path("static/komyst_ui.js").read_text(encoding="utf-8")
+    assert "window.addEventListener('komyst-auth-changed', loadModeration)" in js
+    assert "window.addEventListener('komyst:auth-changed', loadModeration)" not in js
 
 
 def test_publication_ui_requires_technical_gate_or_completed_human_review():
-    js = Path("static/tradutor_ui.js").read_text(encoding="utf-8")
+    js = Path("static/komyst_ui.js").read_text(encoding="utf-8")
     eligibility = js[js.index("function publicationEligibility"):js.index(
         "function publicationAction")]
     assert "qualityApproved" in eligibility
@@ -332,7 +332,7 @@ def test_page_revision_primary_flow_is_automatic_not_manual_geometry():
 
 
 def test_publication_waits_for_authoritative_backend_status():
-    js = Path("static/tradutor_ui.js").read_text(encoding="utf-8")
+    js = Path("static/komyst_ui.js").read_text(encoding="utf-8")
     publish = js[js.index("async function publishToCommunity"):js.index(
         "$('#publicationCancel')")]
     assert "record.publication_status = 'published'" not in publish

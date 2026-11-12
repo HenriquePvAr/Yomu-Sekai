@@ -14,8 +14,8 @@ from typing import Any
 
 import pytest
 
-from yomu.community.legacy.legacy_publication_migrator import load_migration_input, plan_migration
-from yomu.community.legacy.legacy_publication_migration_executor import (
+from komyst.community.legacy.legacy_publication_migrator import load_migration_input, plan_migration
+from komyst.community.legacy.legacy_publication_migration_executor import (
     ConflictingStorageObjectError,
     FakeLegacyProvenanceBackend,
     FakeLegacyTargetBackend,
@@ -25,7 +25,7 @@ from yomu.community.legacy.legacy_publication_migration_executor import (
     TransientBackendError,
     ValidationError,
 )
-from yomu.community.legacy.legacy_publication_drive_adapter import (
+from komyst.community.legacy.legacy_publication_drive_adapter import (
     APP_PROP_IDEMPOTENCY,
     APP_PROP_SCHEMA,
     APP_PROP_SHA256,
@@ -239,7 +239,7 @@ def _write_pdf(root: Path, name: str, data: bytes) -> dict[str, object]:
 
 def _source(source_instance_id: str) -> dict[str, object]:
     return {
-        "source_system": "tradutor_ia_sqlite_synthetic_v1",
+        "source_system": "komyst_sqlite_synthetic_v1",
         "source_instance_id": source_instance_id,
         "source_schema_version": 3,
         "initial_snapshot_sha256": "a" * 64,
@@ -256,7 +256,7 @@ def _published_fixture(root: Path, *, storage_file_id: str = "TEST-DRIVE-REMOTE-
     publication = {
         "legacy_publication_id": "TEST-DRIVE-PUB-001",
         "source_instance_id": "10000000-0000-4000-8000-000000000101",
-        "source_system": "tradutor_ia_sqlite_synthetic_v1",
+        "source_system": "komyst_sqlite_synthetic_v1",
         "owner_id": "30000000-0000-4000-8000-000000000101",
         "owner_resolution_state": "resolved",
         "source_job_id": "synthetic-job-drive-published",
@@ -279,7 +279,7 @@ def _draft_fixture(root: Path, **overrides: object) -> dict[str, object]:
     publication = {
         "legacy_publication_id": "TEST-DRIVE-PUB-002",
         "source_instance_id": "10000000-0000-4000-8000-000000000102",
-        "source_system": "tradutor_ia_sqlite_synthetic_v1",
+        "source_system": "komyst_sqlite_synthetic_v1",
         "owner_id": "30000000-0000-4000-8000-000000000102",
         "owner_resolution_state": "resolved",
         "source_job_id": "synthetic-job-drive-recovery",

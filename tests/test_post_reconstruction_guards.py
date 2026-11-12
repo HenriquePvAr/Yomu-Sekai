@@ -6,10 +6,10 @@ from pathlib import Path
 
 import numpy as np
 
-import yomu.clean.inpainting.art_text_inpainting as ati
-from yomu.review.chapter_quality_revision import ChapterQualityRevision
-from yomu.clean.ownership.residual_component_reviews import ResidualComponentReviewStore
-from yomu.clean.ownership.residual_mask_revisions import MaskRevisionStore
+import komyst.clean.inpainting.art_text_inpainting as ati
+from komyst.review.chapter_quality_revision import ChapterQualityRevision
+from komyst.clean.ownership.residual_component_reviews import ResidualComponentReviewStore
+from komyst.clean.ownership.residual_mask_revisions import MaskRevisionStore
 
 
 class HumanOverrideRenderEligibilityTests(unittest.TestCase):

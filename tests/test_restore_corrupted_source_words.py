@@ -5,7 +5,7 @@ install_offline_network_guard()
 
 import unittest
 
-import yomu.translation.portuguese_words as pw
+import komyst.translation.portuguese_words as pw
 
 
 class RestoreCorruptedSourceWordsTests(unittest.TestCase):

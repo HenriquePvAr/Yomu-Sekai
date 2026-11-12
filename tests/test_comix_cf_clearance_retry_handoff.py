@@ -17,8 +17,8 @@ from unittest import mock
 
 import pytest
 
-from yomu.download import down
-from yomu.download.sources.chapter_source import SourceError
+from komyst.download import down
+from komyst.download.sources.chapter_source import SourceError
 
 
 COMIX = "https://comix.to/title/example/1-chapter-1"
@@ -93,7 +93,7 @@ def test_capture_does_not_fire_for_non_comix_url_with_isolation_detail():
 # ---------------------------------------------------------------------------
 
 def _resolver():
-    from yomu.download.readers import scrapling_reader_resolver
+    from komyst.download.readers import scrapling_reader_resolver
     return scrapling_reader_resolver
 
 

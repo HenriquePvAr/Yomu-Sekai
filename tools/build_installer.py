@@ -5,7 +5,7 @@ import argparse
 import subprocess
 from pathlib import Path
 
-from yomu.runtime.version import BUILD_VERSION
+from komyst.runtime.version import BUILD_VERSION
 
 
 def main() -> int:
@@ -13,7 +13,7 @@ def main() -> int:
     parser.add_argument("--iscc", default="ISCC.exe")
     parser.add_argument("--bundle-root", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
-    parser.add_argument("--script", type=Path, default=Path("packaging/TradutorIA.iss"))
+    parser.add_argument("--script", type=Path, default=Path("packaging/Komyst.iss"))
     args = parser.parse_args()
     command = [args.iscc, f"/DProductVersion={BUILD_VERSION}", f"/DBundleRoot={args.bundle_root}", f"/DOutputDir={args.output_dir}", str(args.script)]
     return subprocess.run(command, check=False).returncode

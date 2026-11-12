@@ -29,11 +29,11 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-import yomu.ui.ui_bridge as ui_bridge
-from yomu.runtime.job_store import JobStatus, JobStore
+import komyst.ui.ui_bridge as ui_bridge
+from komyst.runtime.job_store import JobStatus, JobStore
 
 ROOT = Path(__file__).resolve().parents[1]
-UI_SOURCE = ROOT / "static" / "tradutor_ui.js"
+UI_SOURCE = ROOT / "static" / "komyst_ui.js"
 UI_SHELL = ROOT / "ui" / "ui_shell.html"
 
 
@@ -43,7 +43,7 @@ class ResumeCapabilityTests(unittest.TestCase):
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp())
         self._patches = [
-            patch.dict(os.environ, {"TRADUTOR_TEST_RUNTIME_ROOT": str(self.tmp)}),
+            patch.dict(os.environ, {"KOMYST_TEST_RUNTIME_ROOT": str(self.tmp)}),
             patch.object(ui_bridge, "env_status",
                          lambda *a, **k: {"env_exists": True, "nvidia_configured": True}),
             patch.object(ui_bridge, "_current_commit", lambda: "deadbeef"),
@@ -170,7 +170,7 @@ class ResumeTransitionTests(unittest.TestCase):
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp())
         self._patches = [
-            patch.dict(os.environ, {"TRADUTOR_TEST_RUNTIME_ROOT": str(self.tmp)}),
+            patch.dict(os.environ, {"KOMYST_TEST_RUNTIME_ROOT": str(self.tmp)}),
             patch.object(ui_bridge, "env_status",
                          lambda *a, **k: {"env_exists": True, "nvidia_configured": True}),
             patch.object(ui_bridge, "_current_commit", lambda: "deadbeef"),
@@ -252,12 +252,12 @@ class ResumeHttpContractTests(unittest.TestCase):
     """The endpoint the browser is allowed to call, over the real app router."""
 
     def test_resume_route_is_authenticated_and_takes_a_canonical_job_id(self):
-        import yomu.ui.app as app_ui
+        import komyst.ui.app as app_ui
 
         route = next(r for r in app_ui.app.routes
                      if getattr(r, "path", "") == "/api/ui/resume")
         self.assertEqual(set(route.methods), {"POST"})
-        source = (ROOT / "yomu/ui/app.py").read_text(encoding="utf-8")
+        source = (ROOT / "komyst/ui/app.py").read_text(encoding="utf-8")
         marker = '@app.post("/api/ui/resume")'
         handler = source[source.index(marker):]
         handler = handler[:handler.index("@app.post", len(marker))]

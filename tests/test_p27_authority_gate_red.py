@@ -11,13 +11,13 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from yomu.pipeline.session_context import (
+from komyst.pipeline.session_context import (
     KIND_TERMINOLOGY,
     TERM_AUTHORITY_DOMAIN_TERM,
     TERM_AUTHORITY_LEXICAL_HINT,
     SessionContextStore,
 )
-from yomu.ocr.ocr_balloon import validate_and_retry_translations
+from komyst.ocr.ocr_balloon import validate_and_retry_translations
 from tests.test_chapter_terminology_ledger import _StubTranslator, _group
 
 

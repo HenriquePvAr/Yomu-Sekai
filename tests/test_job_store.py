@@ -7,7 +7,7 @@ import threading
 import time
 import unittest
 
-from yomu.runtime.job_store import JobStatus, JobStore, TransitionError, transition_allowed
+from komyst.runtime.job_store import JobStatus, JobStore, TransitionError, transition_allowed
 
 
 def _make_store(tmp):

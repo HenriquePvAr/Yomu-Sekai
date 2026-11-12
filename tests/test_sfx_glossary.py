@@ -1,9 +1,9 @@
 """pt-BR onomatopoeia for sound effects and *action* labels."""
 from unittest import mock
 
-from yomu.config import settings as config
-from yomu.ocr import ocr_balloon as ob
-from yomu.translation.sfx_glossary import translate_sfx
+from komyst.config import settings as config
+from komyst.ocr import ocr_balloon as ob
+from komyst.translation.sfx_glossary import translate_sfx
 
 
 def test_known_sounds_get_their_ptbr_onomatopoeia_with_case_and_decoration():
@@ -39,7 +39,7 @@ def test_unknown_sound_effects_keep_their_source_text_in_the_pipeline_batch():
 
 
 def test_fuzzy_lookup_repairs_ocr_misread_sfx():
-    from yomu.translation.sfx_glossary import translate_sfx_fuzzy
+    from komyst.translation.sfx_glossary import translate_sfx_fuzzy
 
     assert translate_sfx_fuzzy("CLAMTER") == "BARULHO"   # CLATTER, one misread
     assert translate_sfx_fuzzy("BVAZE") == "FASH"        # BLAZE
@@ -51,7 +51,7 @@ def test_fuzzy_lookup_repairs_ocr_misread_sfx():
 
 
 def test_fuzzy_lookup_never_rewrites_real_words_or_names():
-    from yomu.translation.sfx_glossary import translate_sfx_fuzzy
+    from komyst.translation.sfx_glossary import translate_sfx_fuzzy
 
     # "ROCK?" is a shouted name/an English word, not a misread of "TOCK".
     assert translate_sfx_fuzzy("RocK?") is None
@@ -61,7 +61,7 @@ def test_fuzzy_lookup_never_rewrites_real_words_or_names():
 
 
 def test_fuzzy_lookup_stays_fail_closed_on_short_garbled_tokens():
-    from yomu.translation.sfx_glossary import translate_sfx_fuzzy
+    from komyst.translation.sfx_glossary import translate_sfx_fuzzy
 
     # Too short to disambiguate safely: keeping the source is better than a
     # wrong onomatopoeia.
@@ -71,14 +71,14 @@ def test_fuzzy_lookup_stays_fail_closed_on_short_garbled_tokens():
 
 
 def test_fuzzy_lookup_allows_vowel_omission_on_short_tokens():
-    from yomu.translation.sfx_glossary import translate_sfx_fuzzy
+    from komyst.translation.sfx_glossary import translate_sfx_fuzzy
 
     # OCR on stylized caps drops vowels: "SMSH" is "SMASH".
     assert translate_sfx_fuzzy("SMSH") == "PÁ"
 
 
 def test_fuzzy_lookup_falls_back_to_exact_behavior():
-    from yomu.translation.sfx_glossary import translate_sfx_fuzzy
+    from komyst.translation.sfx_glossary import translate_sfx_fuzzy
 
     assert translate_sfx_fuzzy("BANG") == "BAM"
     assert translate_sfx_fuzzy("BAAANG") == "BAAAM"

@@ -59,10 +59,10 @@ def main() -> None:
             changed_files.append((rel, candidate.stat().st_size))
     credential_suffixes = {".pem", ".key", ".ppk", ".p12", ".pfx"}
     credential_names = {".env", "id_rsa", "id_ed25519", "id_ecdsa"}
-    yomu_moves = [row for row in actual_moves if row["target"].startswith("yomu/")]
+    komyst_moves = [row for row in actual_moves if row["target"].startswith("komyst/")]
 
     write("git_preflight.json", {
-        "mission": "YOMU_REPOSITORY_STRUCTURE_PHASE2_RUNTIME_PACKAGE_EXTRACTION_V1",
+        "mission": "KOMYST_REPOSITORY_STRUCTURE_PHASE2_RUNTIME_PACKAGE_EXTRACTION_V1",
         "base_head": BASE,
         "work_branch": git("branch", "--show-current"),
         "preflight_worktree": "clean at dedicated worktree creation",
@@ -71,7 +71,7 @@ def main() -> None:
         "prohibited_git_operations_used": [],
     })
     write("package_design.json", {
-        "canonical_package": "yomu",
+        "canonical_package": "komyst",
         "packages": [
             "auth", "clean/{inpainting,ownership,reconstruction}", "commands", "community/{legacy,storage}",
             "config", "core", "desktop", "download/{local,readers,sources}", "export", "ocr/splitting",
@@ -95,7 +95,7 @@ def main() -> None:
         "internal_runtime_imports_use_packages": True,
     })
     write("resource_path_fixes.json", {
-        "central_repo_root": "yomu/runtime/paths.py",
+        "central_repo_root": "komyst/runtime/paths.py",
         "root": "Path(__file__).resolve().parents[2]",
         "corrected_areas": ["runtime entrypoints", "worker/runner spawn cwd", "local-folder source/intake",
             "pipeline cwd", "source profile defaults", "job diagnostics", "UI/desktop assets",
@@ -137,15 +137,15 @@ def main() -> None:
     write("collection.json", {"command": "python -m pytest --collect-only -q", "exit_code": 0,
         "collected": 5844, "collection_errors": 0, "duration_seconds": 7.48})
     write("packaging_changes.json", {
-        "pyinstaller_spec": "packaging/tradutor_ia.spec",
-        "canonical_package_hidden_imports": "collect_submodules('yomu')",
+        "pyinstaller_spec": "packaging/komyst.spec",
+        "canonical_package_hidden_imports": "collect_submodules('komyst')",
         "resource_search": "active Python environment site-packages; no worktree-local venv assumption",
         "validation_harness": "tools.harnesses.performance_validation_harness",
-        "ci_compile_targets": ["yomu", "test_support", "historical thin shims", "pytest hooks"],
+        "ci_compile_targets": ["komyst", "test_support", "historical thin shims", "pytest hooks"],
     })
     write("pyinstaller_build.json", {
-        "result": "PASS", "command": "python -m PyInstaller packaging/tradutor_ia.spec --noconfirm --clean",
-        "artifact": r"C:\Users\henri\YomuExperimental\repository-structure-v2-pyinstaller\dist\YomuSekai\YomuSekai.exe",
+        "result": "PASS", "command": "python -m PyInstaller packaging/komyst.spec --noconfirm --clean",
+        "artifact": r"C:\Users\henri\KomystExperimental\repository-structure-v2-pyinstaller\dist\Komyst\Komyst.exe",
         "bytes": 33190752, "worktree_output": False,
         "initial_attempt": "failed because the spec assumed .venv-beta inside worktree; corrected to active site-packages",
         "nonfatal_optional_warnings": ["browserforge undetected_playwright unavailable", "optional hidden imports absent"],
@@ -187,13 +187,13 @@ def main() -> None:
         "head_at_report_generation": current_head, "worktree_clean_after_committing_report_bundle": True,
         "push": "NO"})
     write("final_report.json", {
-        "mission": "YOMU_REPOSITORY_STRUCTURE_PHASE2_RUNTIME_PACKAGE_EXTRACTION_V1",
+        "mission": "KOMYST_REPOSITORY_STRUCTURE_PHASE2_RUNTIME_PACKAGE_EXTRACTION_V1",
         "mission_result": "PASS", "base_head": BASE, "head_at_report_generation": current_head,
         "work_branch": git("branch", "--show-current"), "worktree_clean_after_report_commit": True,
         "push": "NO", "root_files_before": inventory["direct_file_count"],
         "root_files_after": len(root_after), "root_python_before": inventory["direct_python_file_count"],
         "root_python_after": len(root_python_after), "moved_implementations": len(actual_moves),
-        "yomu_package_implementations_moved": len(yomu_moves),
+        "komyst_package_implementations_moved": len(komyst_moves),
         "test_support_moved": sum(row["target"].startswith("test_support/") for row in actual_moves),
         "scripts_moved": sum(row["target"].startswith("scripts/") for row in actual_moves),
         "research_and_tools_moved": sum(row["target"].startswith("tools/") for row in actual_moves),
@@ -203,11 +203,11 @@ def main() -> None:
         "secrets_committed": 0, "private_keys_committed": 0, "large_artifacts_committed": 0,
         "oracle_modal_provider_production_m20_yk_mutations": 0,
         "root_python_leftovers": {
-            "app_ui.py": "historical UI entrypoint shim to yomu.ui.app",
+            "app_ui.py": "historical UI entrypoint shim to komyst.ui.app",
             "conftest.py": "pytest root discovery/startup hook",
-            "desktop_app.py": "PyInstaller and historical desktop entrypoint shim to yomu.desktop.app",
-            "down.py": "historical downloader import shim to yomu.download.down",
-            "main.py": "historical GUI command shim to yomu.commands.legacy_gui",
+            "desktop_app.py": "PyInstaller and historical desktop entrypoint shim to komyst.desktop.app",
+            "down.py": "historical downloader import shim to komyst.download.down",
+            "main.py": "historical GUI command shim to komyst.commands.legacy_gui",
             "run_local_folder.py": "historical local-folder CLI shim",
             "run_webtoon.py": "documented public CLI shim",
             "sitecustomize.py": "Python startup hook for hermetic test guard",

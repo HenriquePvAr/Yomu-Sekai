@@ -9,9 +9,9 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from yomu.export.output_manifest import build_run_manifest, load_verified_run_manifest, sanitize_source_url
-from yomu.download.sources.chapter_source import SourceError
-from yomu.ui.ui_helpers import (
+from komyst.export.output_manifest import build_run_manifest, load_verified_run_manifest, sanitize_source_url
+from komyst.download.sources.chapter_source import SourceError
+from komyst.ui.ui_helpers import (
     ProgressSnapshot,
     build_run_command,
     build_run_output_slug,
@@ -27,7 +27,7 @@ from yomu.ui.ui_helpers import (
     sanitize_diagnostic_text,
     suggest_chapter_details,
 )
-from yomu.ui.ui_history import UIHistoryStore
+from komyst.ui.ui_history import UIHistoryStore
 
 
 LOOKISM_URL = (
@@ -489,7 +489,7 @@ class UIHelpersTests(unittest.TestCase):
                 encoding="utf-8",
             )
             store = UIHistoryStore(root / "history.json")
-            with patch("yomu.ui.ui_history.OUTPUT_ROOT", output_root):
+            with patch("komyst.ui.ui_history.OUTPUT_ROOT", output_root):
                 records = store.discover_outputs()
 
             self.assertEqual(len(records), 1)
@@ -525,7 +525,7 @@ class UIHelpersTests(unittest.TestCase):
                 json.dumps(manifest), encoding="utf-8"
             )
             store = UIHistoryStore(root / "history.json")
-            with patch("yomu.ui.ui_history.OUTPUT_ROOT", output_root):
+            with patch("komyst.ui.ui_history.OUTPUT_ROOT", output_root):
                 records = store.discover_outputs()
 
             self.assertEqual(len(records), 1)
@@ -571,7 +571,7 @@ class UIHelpersTests(unittest.TestCase):
                 )
 
             store = UIHistoryStore(root / "history.json")
-            with patch("yomu.ui.ui_history.OUTPUT_ROOT", output_root):
+            with patch("komyst.ui.ui_history.OUTPUT_ROOT", output_root):
                 records = store.discover_outputs()
 
             folders = {Path(record["output_folder"]).name: record for record in records}
@@ -616,7 +616,7 @@ class UIHelpersTests(unittest.TestCase):
                 json.dumps(manifest), encoding="utf-8"
             )
             store = UIHistoryStore(root / "history.json")
-            with patch("yomu.ui.ui_history.OUTPUT_ROOT", output_root):
+            with patch("komyst.ui.ui_history.OUTPUT_ROOT", output_root):
                 record = store.discover_outputs()[0]
 
             self.assertEqual(record["status"], "review_required")
@@ -656,7 +656,7 @@ class UIHelpersTests(unittest.TestCase):
                 encoding="utf-8",
             )
             store = UIHistoryStore(root / "history.json")
-            with patch("yomu.ui.ui_history.OUTPUT_ROOT", output_root):
+            with patch("komyst.ui.ui_history.OUTPUT_ROOT", output_root):
                 record = store.discover_outputs()[0]
             self.assertEqual(record["id"], "discovered-chapter")
             self.assertEqual(record["job_id"], job_id)
@@ -665,7 +665,7 @@ class UIHelpersTests(unittest.TestCase):
                 json.dumps({"job_id": "discovered-chapter"}),
                 encoding="utf-8",
             )
-            with patch("yomu.ui.ui_history.OUTPUT_ROOT", output_root):
+            with patch("komyst.ui.ui_history.OUTPUT_ROOT", output_root):
                 invalid = store.discover_outputs()[0]
             self.assertFalse(invalid.get("job_id"))
 
@@ -719,7 +719,7 @@ class UIHelpersTests(unittest.TestCase):
             os.utime(legacy / "timing_report.json", (2_000_000_000, 2_000_000_000))
 
             store = UIHistoryStore(root / "history.json")
-            with patch("yomu.ui.ui_history.OUTPUT_ROOT", output_root):
+            with patch("komyst.ui.ui_history.OUTPUT_ROOT", output_root):
                 records = store.discover_outputs()
 
             self.assertEqual(records[0]["slug"], "verified_run")
@@ -757,7 +757,7 @@ class UIHelpersTests(unittest.TestCase):
                 "run_id": "database-run",
             }), encoding="utf-8")
             store = UIHistoryStore(root / "history.json")
-            with patch("yomu.ui.ui_history.OUTPUT_ROOT", output_root):
+            with patch("komyst.ui.ui_history.OUTPUT_ROOT", output_root):
                 record = store.discover_outputs()[0]
             self.assertEqual(record["job_id"], "a" * 32)
             self.assertEqual(record["run_id"], "database-run")
@@ -786,7 +786,7 @@ class UIHelpersTests(unittest.TestCase):
             (runtime / "end_time.txt").write_text("2026-01-01T00:00:00+00:00\n", encoding="utf-8")
 
             store = UIHistoryStore(root / "history.json")
-            with patch("yomu.ui.ui_history.OUTPUT_ROOT", output_root), patch("yomu.ui.ui_history.REPO_ROOT", root):
+            with patch("komyst.ui.ui_history.OUTPUT_ROOT", output_root), patch("komyst.ui.ui_history.REPO_ROOT", root):
                 records = store.discover_outputs()
 
             self.assertEqual(records[0]["output_verification"], "e2e_evidence")

@@ -17,7 +17,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def read(rel: str) -> str:
     if rel == "app_ui.py":
-        rel = "yomu/ui/app.py"
+        rel = "komyst/ui/app.py"
     return (ROOT / rel).read_text(encoding="utf-8")
 
 
@@ -159,7 +159,7 @@ class SocialWiringTests(unittest.TestCase):
         self.assertIn("social_community.js", read("app_ui.py"))
 
     def test_toast_bridge_exposed(self):
-        self.assertIn("__tradutorToast", read("static/tradutor_ui.js"))
+        self.assertIn("__komystToast", read("static/komyst_ui.js"))
 
 
 if __name__ == "__main__":

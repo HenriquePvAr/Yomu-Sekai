@@ -17,10 +17,10 @@ import unittest
 import cv2
 import numpy as np
 
-import yomu.ocr.ocr_balloon as ob
-import yomu.ocr.ocr_line_provenance as ocr_line_provenance
-import yomu.ocr.source_completeness as source_completeness
-from yomu.ocr.ocr_engine import OCRLine
+import komyst.ocr.ocr_balloon as ob
+import komyst.ocr.ocr_line_provenance as ocr_line_provenance
+import komyst.ocr.source_completeness as source_completeness
+from komyst.ocr.ocr_engine import OCRLine
 
 
 _REAL_RUN = os.path.join(

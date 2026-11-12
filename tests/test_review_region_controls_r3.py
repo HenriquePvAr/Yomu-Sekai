@@ -9,7 +9,7 @@ from threading import Barrier
 from PIL import Image
 import pytest
 
-from yomu.runtime.job_store import JobStore, TransitionError
+from komyst.runtime.job_store import JobStore, TransitionError
 from tests.test_review_ordering_r1 import _bridge, _review_job, _close
 
 

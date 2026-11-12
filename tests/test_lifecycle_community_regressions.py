@@ -11,11 +11,11 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from yomu.community.community_auth import RequestPrincipal, ResourceNotFound
-from yomu.community.community_api import ArtifactBindingError, CommunityApi
-from yomu.community.community_http import _community_call
-from yomu.runtime.job_store import JobStatus, JobStore
-import yomu.ui.ui_bridge as ui_bridge
+from komyst.community.community_auth import RequestPrincipal, ResourceNotFound
+from komyst.community.community_api import ArtifactBindingError, CommunityApi
+from komyst.community.community_http import _community_call
+from komyst.runtime.job_store import JobStatus, JobStore
+import komyst.ui.ui_bridge as ui_bridge
 
 
 def _run(coro):
@@ -584,7 +584,7 @@ class CommunityResolutionTests(unittest.TestCase):
 
 class FrontendContractTests(unittest.TestCase):
     def test_frontend_has_timeout_per_job_cancel_and_review_completion_state(self):
-        source = Path("static/tradutor_ui.js").read_text(encoding="utf-8")
+        source = Path("static/komyst_ui.js").read_text(encoding="utf-8")
         for marker in ("AbortController", "/api/ui/jobs/", "unhandledrejection", "reviewCompleted", "revisão concluída"):
             self.assertIn(marker, source)
 

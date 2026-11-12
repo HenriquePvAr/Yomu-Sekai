@@ -13,14 +13,14 @@ import unittest
 from pathlib import Path
 from types import SimpleNamespace
 
-from yomu.download.sources.chapter_source import SUPPORTED_SPECIFIC_ADAPTER
-from yomu.runtime.job_store import JobStore
-from yomu.review.source_readiness import SourceReadinessStore, default_workspace_id
+from komyst.download.sources.chapter_source import SUPPORTED_SPECIFIC_ADAPTER
+from komyst.runtime.job_store import JobStore
+from komyst.review.source_readiness import SourceReadinessStore, default_workspace_id
 from tests.test_translation_start import WEBTOON_URL, _Bridge, drive
 
 
 ROOT = Path(__file__).resolve().parents[1]
-UI = (ROOT / "static" / "tradutor_ui.js").read_text(encoding="utf-8")
+UI = (ROOT / "static" / "komyst_ui.js").read_text(encoding="utf-8")
 LOADING_VIEW = (ROOT / "static" / "loading_view.js").read_text(encoding="utf-8")
 NODE = shutil.which("node")
 
@@ -125,8 +125,8 @@ const sessionStorage = {
   removeItem(key) { storage.delete(key); },
 };
 const document = {createElement: () => ({textContent: '', innerHTML: ''})};
-const window = {TradutorI18n: {t: () => ''}};
-const SOURCE_VALIDATION_DRAFT_STORAGE_KEY = 'tradutor.sourceValidationDraft.v1';
+const window = {KomystI18n: {t: () => ''}};
+const SOURCE_VALIDATION_DRAFT_STORAGE_KEY = 'komyst.sourceValidationDraft.v1';
 const appState = Object.assign({
   selectedScope: 'full',
   selectedMode: 'fast',
@@ -446,7 +446,7 @@ class FrontendSourceStateContracts(unittest.TestCase):
             harness.write_text(SOURCE_REHYDRATION_HARNESS, encoding="utf-8")
             payload.write_text(json.dumps(scenario), encoding="utf-8")
             result = subprocess.run(
-                [NODE, str(harness), str(ROOT / "static" / "tradutor_ui.js"), str(payload)],
+                [NODE, str(harness), str(ROOT / "static" / "komyst_ui.js"), str(payload)],
                 capture_output=True, text=True, timeout=60,
             )
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -503,7 +503,7 @@ class FrontendSourceStateContracts(unittest.TestCase):
         self.assertIn("updateTranslationStartControls();\n        return;", start)
 
     def test_bootstrap_rehydrates_authorized_source_state_after_runtime_restart(self):
-        key = "tradutor.sourceValidationDraft.v1"
+        key = "komyst.sourceValidationDraft.v1"
         result = self._run_rehydration_harness({
             "action": "render",
             "record": self._ready_record(),
@@ -535,7 +535,7 @@ class FrontendSourceStateContracts(unittest.TestCase):
         self.assertTrue(result["payload"]["force"])
 
     def test_rehydrated_start_payload_keeps_source_analysis_and_execution_config(self):
-        key = "tradutor.sourceValidationDraft.v1"
+        key = "komyst.sourceValidationDraft.v1"
         result = self._run_rehydration_harness({
             "action": "render",
             "record": self._ready_record(),
@@ -555,7 +555,7 @@ class FrontendSourceStateContracts(unittest.TestCase):
         self.assertNotIn("/api/ui/source/analyze", bootstrap)
 
     def test_source_changed_after_restart_reanalyzes_current_url_instead_of_reusing_validation(self):
-        key = "tradutor.sourceValidationDraft.v1"
+        key = "komyst.sourceValidationDraft.v1"
         result = self._run_rehydration_harness({
             "action": "render",
             "record": self._ready_record(),
@@ -568,7 +568,7 @@ class FrontendSourceStateContracts(unittest.TestCase):
         self.assertTrue(result["elements"]["#sourceReadyPanel"]["hidden"])
 
     def test_incomplete_ready_evidence_fails_closed_and_does_not_display_authorized(self):
-        key = "tradutor.sourceValidationDraft.v1"
+        key = "komyst.sourceValidationDraft.v1"
         record = self._ready_record()
         record["source_analysis_result"].pop("normalized_url_hash")
         result = self._run_rehydration_harness({
@@ -582,7 +582,7 @@ class FrontendSourceStateContracts(unittest.TestCase):
         self.assertTrue(result["elements"]["#sourceReadyPanel"]["hidden"])
 
     def test_display_and_canonical_source_ready_are_consistent_after_bootstrap(self):
-        key = "tradutor.sourceValidationDraft.v1"
+        key = "komyst.sourceValidationDraft.v1"
         ready = self._run_rehydration_harness({
             "action": "render",
             "record": self._ready_record(),

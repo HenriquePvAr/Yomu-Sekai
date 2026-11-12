@@ -8,12 +8,12 @@ from unittest.mock import patch
 
 import numpy as np
 
-from yomu.community.community_store import CommunityStore
-from yomu.ocr import ocr_balloon as ob
-from yomu.ocr.ocr_engine import OCRLine
-from yomu.ui.ui_bridge import UiBridge
-from yomu.core.page_processing_contracts import PreTranslationPageResult
-from yomu.pipeline import benchmark_pipeline as bp
+from komyst.community.community_store import CommunityStore
+from komyst.ocr import ocr_balloon as ob
+from komyst.ocr.ocr_engine import OCRLine
+from komyst.ui.ui_bridge import UiBridge
+from komyst.core.page_processing_contracts import PreTranslationPageResult
+from komyst.pipeline import benchmark_pipeline as bp
 
 
 def sound():
@@ -135,7 +135,7 @@ def test_folder_uses_shell_action_after_root_validation(tmp_path):
     folder.mkdir()
     bridge = UiBridge.__new__(UiBridge)
     bridge.output_root = tmp_path
-    with patch("yomu.ui.ui_bridge.os.startfile", create=True) as shell, patch.object(
+    with patch("komyst.ui.ui_bridge.os.startfile", create=True) as shell, patch.object(
         bridge, "_focus_explorer_window"
     ) as focus:
         bridge._open_artifact_path(str(folder))

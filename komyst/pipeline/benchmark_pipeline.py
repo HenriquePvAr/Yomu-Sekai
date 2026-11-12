@@ -1,0 +1,8269 @@
+import json
+import copy
+import hashlib
+import json
+import math
+import os
+import random
+import re
+import shutil
+import subprocess
+import time
+import traceback
+import contextlib
+import threading
+import queue
+import tempfile
+from dataclasses import replace
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime, timezone
+from pathlib import Path
+from urllib.parse import urlparse
+
+import cv2
+import numpy as np
+from PIL import Image, ImageDraw, ImageFont, ImageOps
+
+import komyst.config.settings as config
+import komyst.runtime.artifact_contract as ac
+import komyst.export.editable_psd_writer as editable_psd_writer
+from komyst.ocr.residual_sweep import sweep_page_residuals, synthetic_sfx_lines
+import komyst.review.region_taxonomy as region_taxonomy
+from komyst.ocr.classification_profiler import (
+    ClassificationProfiler,
+    get_active_profiler,
+    profile_step,
+    set_active_profiler,
+)
+from komyst.download.down import download_images, force_remove
+from komyst.core.json_utils import dumps_json
+from komyst.ocr.ocr_balloon import (
+    OCR_UNINTELLIGIBLE_SOURCE_REASON,
+    PROPER_NAME_ONLY_REASON,
+    RENDER_CLEAN,
+    RENDER_WITH_REVIEW,
+    RESIDUAL_SOURCE_LETTERING_REASONS,
+    REVIEW_TERMINAL_STATES,
+    TRANSLATION_TERMINAL_STATES,
+    analyze_image_array,
+    apply_rapidocr_region_recovery,
+    apply_variant_votes,
+    resolve_split_word_ambiguity,
+    apply_selective_ocr_fallbacks,
+    apply_speech_container_reocr,
+    apply_group_translations,
+    known_sound_translation_target,
+    enforce_rapidocr_quality_gate,
+    get_translatable_groups,
+    normalize_recurring_compact_names,
+    propagate_chapter_declared_names,
+    split_glued_source_words,
+    chapter_source_words,
+    recover_protected_term_boundaries,
+    summarize_speech_container_reocr,
+    render_analyzed_image,
+    validate_and_retry_translations,
+)
+import komyst.ocr.ocr_line_provenance as ocr_line_provenance
+import komyst.translation.semantic_fidelity as semantic_fidelity
+import komyst.ocr.source_completeness as source_completeness
+import komyst.pipeline.pipeline_telemetry as pipeline_telemetry
+from komyst.runtime.progress_contract import emit_progress_v1
+from komyst.ocr.ocr_parallel import detect_ocr_jobs
+from komyst.export.page_manifest import to_image_entry
+from komyst.ocr.splitting.smart_split_incremental import IncrementalSmartSplitter
+from komyst.ocr.ocr_engine import OCREngine, stamp_initial_ocr_provenance
+from komyst.ocr.fast_ocr_policy import FastOCRBudget
+from komyst.export.pdf import (
+    create_split_boundary_contact_sheet,
+    generate_pdf,
+    pdf_page_manifest,
+    prepare_smart_webtoon_pages,
+    smart_split_audit,
+)
+from komyst.pipeline.pipeline_cache import (
+    atomic_copy,
+    atomic_write_json,
+    cache_folder,
+    file_sha256,
+    fingerprint_files,
+    load_json,
+    load_ocr_cache,
+    load_processed_cache,
+    no_text_precheck,
+    ocr_cache_key,
+    processed_cache_key,
+    save_ocr_cache,
+    save_processed_cache,
+    stable_hash,
+    valid_image,
+)
+from komyst.pipeline.session_context import SessionContextStore
+from komyst.export.png_output import export_final_pages_png, PngExportError
+from komyst.translation.providers.komyst_backend_provider import SystemicTranslationFailure
+
+_RAPIDOCR_INFERENCE_LOCK = threading.BoundedSemaphore(1)
+
+
+def _rapidocr_section():
+    """The page-level RapidOCR lock on the CPU; on DirectML each session Run already
+    takes the GPU lock, so the CPU work around it (crops, variants) runs per page."""
+    from komyst.core.gpu import directml_enabled
+
+    return contextlib.nullcontext() if directml_enabled() else _RAPIDOCR_INFERENCE_LOCK
+_PERF_JOB_ORIGIN_NS = None
+_PERF_EVENTS = []
+_PIPELINE_TELEMETRY = None
+_DISCORD_OBSERVABILITY = None
+
+
+def _perf_offset_ns() -> int | None:
+    """Return a monotonic offset from the single active job origin."""
+    if _PERF_JOB_ORIGIN_NS is None:
+        return None
+    return max(0, time.perf_counter_ns() - int(_PERF_JOB_ORIGIN_NS))
+
+
+def _record_perf_event(stage, phase, start_ns, end_ns, *, page_index=None, worker="main"):
+    if start_ns is None or end_ns is None:
+        return
+    _PERF_EVENTS.append({"stage": str(stage), "phase": str(phase), "page_index": page_index,
+                         "worker": str(worker), "start_offset_ns": int(start_ns),
+                         "end_offset_ns": int(end_ns)})
+    if _PIPELINE_TELEMETRY is not None:
+        _PIPELINE_TELEMETRY.emit(
+            "PERF_EVENT", stage=str(stage), phase=str(phase), page_index=page_index,
+            worker=str(worker), duration_ms=max(0.0, (int(end_ns) - int(start_ns)) / 1_000_000.0),
+        )
+
+
+def _emit_pipeline_event(event_name, **fields):
+    """Emit privacy-safe monotonic pipeline events when telemetry is enabled."""
+    if _PIPELINE_TELEMETRY is None:
+        return
+    fields.setdefault("monotonic_offset_ns", _perf_offset_ns())
+    _PIPELINE_TELEMETRY.emit(str(event_name), **fields)
+
+
+MAX_PIPELINE_PAGE_WORKERS = 4
+
+
+def _auto_page_workers():
+    """Pages rendered at once on this machine: a third of the logical cores and
+    one page per ~3 GB of free memory (LaMa + page buffers), at most 4."""
+    cores = os.cpu_count() or 2
+    try:
+        import psutil
+
+        free_gb = psutil.virtual_memory().available / 2**30
+    except Exception:  # noqa: BLE001 - no psutil: assume a modest machine
+        free_gb = 6.0
+    return max(1, min(MAX_PIPELINE_PAGE_WORKERS, cores // 3, int(free_gb // 3)))
+
+
+_DELIBERATE_PRESERVE_REASONS = frozenset({
+    "source_echo_preserved_original", "sfx_original_lettering_kept", "proper_name_only",
+    "credit", "sound_effect", "sfx_preserved",
+})
+
+
+def _deliberately_preserved(group):
+    """Kept in English by decision (a sound, a name, a credit), not by failure."""
+    return (
+        str(getattr(group, "translation_final_state", "") or "") == "preserved_original"
+        and str(getattr(group, "translation_final_reason", "") or "") in _DELIBERATE_PRESERVE_REASONS
+    )
+
+
+def _share_native_threads(workers):
+    """Give each page worker its slice of the cores in the native libraries.
+
+    OpenCV and the LaMa model (PyTorch) each spread one call over every core by
+    default; with several pages in flight they fight over the same cores and
+    the summed per-page time doubled (measured: 4 workers, 33 pages).
+    """
+    if workers <= 1:
+        return
+    share = max(1, (os.cpu_count() or 2) // workers)
+    try:
+        cv2.setNumThreads(share)
+    except Exception:  # noqa: BLE001 - a tuning knob, never a failure
+        pass
+    try:
+        import torch
+
+        torch.set_num_threads(share)
+    except Exception:  # noqa: BLE001 - torch absent or already configured
+        pass
+
+
+def _pipeline_page_workers():
+    raw = os.environ.get("PIPELINE_PAGE_WORKERS", str(getattr(config, "PIPELINE_PAGE_WORKERS", "auto")))
+    text = str(raw).strip().lower()
+    if text in {"", "auto"}:
+        return _auto_page_workers()
+    try:
+        value = int(text)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("PIPELINE_PAGE_WORKERS must be auto or 1-4") from exc
+    if not 1 <= value <= MAX_PIPELINE_PAGE_WORKERS:
+        raise ValueError("PIPELINE_PAGE_WORKERS must be auto or 1-4")
+    return value
+
+
+def _residual_sweep_known_boxes(state):
+    """Hide established readings, never a region rejected as uncertain OCR.
+
+    Masking a rejected page-sized OCR box erased its contents before the
+    independent detector could re-read them. Intentional names/credits remain
+    hidden; only retryable detection/quality refusals are exposed again.
+    """
+    retryable = {"box_too_large", "group_too_large", "weak_unknown_text",
+                 "low_confidence", "ocr_not_reliable", "too_few_useful_chars",
+                 "noise_like_text", "noise_like_group"}
+    def source_refs(line):
+        metadata = getattr(line, "metadata", None) or {}
+        return {metadata.get("ocr_line_id") or id(line),
+                *(str(value) for value in metadata.get("ocr_line_parent_ids", []))}
+    rejected_lines = {
+        ref for candidate in (state.get("candidates", []) or [])
+        if getattr(candidate, "ignored", False)
+        and getattr(candidate, "ignore_reason", "") in retryable
+        for ref in source_refs(candidate.line)
+    }
+    rejected_groups = set()
+    for group in state.get("groups", []) or []:
+        unreliable_sound = (
+            getattr(group, "classification", "") == "sfx"
+            and not getattr(group, "preserve_as_name", False)
+            and (getattr(group, "ocr_quality_blocked", False)
+                 or float(getattr(group, "confidence", 1.0)) < max(
+                     .55, float(getattr(config, "RAPIDOCR_MIN_CONFIDENCE", .55))))
+        )
+        if unreliable_sound or (getattr(group, "ignored", False)
+                               and getattr(group, "ignore_reason", "") in retryable):
+            rejected_groups.add(id(group))
+            rejected_lines.update(ref for line in
+                list(getattr(group, "lines", [])) + list(getattr(group, "cleanup_lines", []))
+                for ref in source_refs(line))
+    boxes = []
+    for line in state.get("raw_lines", []) or []:
+        if (source_refs(line) & rejected_lines
+                or float(getattr(line, "confidence", 1.0)) < max(
+                    .55, float(getattr(config, "RAPIDOCR_MIN_CONFIDENCE", .55)))):
+            continue
+        box = getattr(line, "box", None)
+        if box and len(box) >= 4:
+            boxes.append(tuple(box[:4]))
+    for group in state.get("groups", []) or []:
+        if id(group) in rejected_groups:
+            continue
+        box = getattr(group, "box", None)
+        if box and len(box) >= 4:
+            boxes.append(tuple(box[:4]))
+    return boxes
+
+
+def _auto_fix_residual_sfx(page_result, page_state):
+    """Inject short sweep reads only after normal visual SFX classification."""
+    residual_started = time.perf_counter()
+    groups = page_state.get("groups", []) or []
+    original = page_state.get("original_bgr")
+    if not isinstance(original, np.ndarray) or original.size == 0:
+        return page_result
+    detections = sweep_page_residuals(
+        original, _residual_sweep_known_boxes(page_state),
+        page_index=int(page_state.get("index") or 0),
+    )
+    page_state["residual_sweep"] = detections
+    if not getattr(config, "OCR_RESIDUAL_AUTO_FIX", True):
+        page_state["residual_sweep_auto_fix"] = {
+            "detected": len(detections), "synthetic_candidates": 0, "accepted": 0,
+        }
+        return replace(
+            page_result, page_state=dict(page_state),
+            timings={**dict(page_result.timings), "residual_sweep": time.perf_counter() - residual_started},
+        )
+    lines = synthetic_sfx_lines(
+        detections, page_index=int(page_state.get("index") or 0),
+        image_shape=original.shape, image_bgr=original,
+    )
+    result = {"detected": len(detections), "synthetic_candidates": len(lines), "accepted": 0}
+    if not lines:
+        page_state["residual_sweep_auto_fix"] = result
+        return replace(
+            page_result, page_state=dict(page_state),
+            timings={**dict(page_result.timings), "residual_sweep": time.perf_counter() - residual_started},
+        )
+
+    stamp_initial_ocr_provenance(lines)
+    with ocr_line_provenance.page(int(page_state.get("index") or 0)):
+        ocr_line_provenance.record_input_lines(
+            lines, origin="paddle_residual_sweep", reason="auto_fix_visual_sfx",
+        )
+    _candidates, recovered_groups = analyze_image_array(
+        original, lines, page_index=int(page_state.get("index") or 0),
+    )
+    accepted_groups = []
+    accepted_line_ids = set()
+    for group in recovered_groups:
+        # Detection is not enough: the standard visual classifier must agree
+        # that this is display SFX before it can reach the provider.
+        if str(getattr(group, "classification", "")).lower() != "sfx":
+            continue
+        box = tuple(int(v) for v in (getattr(group, "box", ()) or (0, 0, 0, 0)))
+        group.group_id = f"SWEEP_P{int(page_state.get('index') or 0)}_{box[0]}_{box[1]}"
+        group.region_id = group.group_id
+        group.source_engine = "paddle_residual_sweep"
+        group.ocr_provenance_engines = ("paddle_residual_sweep",)
+        group.classification_evidence = {
+            **(getattr(group, "classification_evidence", {}) or {}),
+            "residual_sweep_recovered": True,
+        }
+        with ocr_line_provenance.page(int(page_state.get("index") or 0)):
+            # analyze_image_array used a local BALAO id which may already
+            # belong to another region. Bind the final unique sweep id to
+            # its actual source lines before any completeness gate sees it.
+            ocr_line_provenance.record_group(group)
+        accepted_groups.append(group)
+        accepted_line_ids.update(id(line) for line in (getattr(group, "lines", []) or []))
+
+    translation_items = list(page_result.translation_items)
+    if accepted_groups:
+        accepted_lines = [line for line in lines if id(line) in accepted_line_ids]
+        page_state.setdefault("raw_lines", []).extend(accepted_lines)
+        groups.extend(accepted_groups)
+        page_state["groups"] = groups
+        page_state["translatable_groups"] = get_translatable_groups(groups)
+        translation_items.extend(get_translatable_groups(accepted_groups))
+    result["accepted"] = len(accepted_groups)
+    page_state["residual_sweep_auto_fix"] = result
+    return replace(
+        page_result,
+        groups=tuple(page_state.get("groups", []) or []),
+        translation_items=tuple(translation_items),
+        page_state=dict(page_state),
+        timings={**dict(page_result.timings), "residual_sweep": time.perf_counter() - residual_started},
+    )
+
+
+def process_pre_translation_pages(
+    page_states,
+    *,
+    image_paths,
+    ocr_lang,
+    fast_ocr_budget,
+    errors_folder,
+    progress_callback=None,
+    include_residual_sweep=False,
+):
+    """Run page-local pre-translation work with a bounded executor.
+
+    Results are returned in page order; all aggregate merging remains with the
+    caller thread. workers=1 intentionally uses the legacy direct call path.
+    """
+    workers = _pipeline_page_workers()
+
+    def run_one(state):
+        perf_start = _perf_offset_ns()
+        context = PageProcessingContext(
+            page_index=int(state["index"]),
+            source_path=str(state.get("image_path", "")),
+            ocr_result=state.get("raw_lines", []),
+        )
+        result = process_pre_translation_page(
+            context,
+            page_state=state,
+            image_paths=image_paths,
+            ocr_lang=ocr_lang,
+            fast_ocr_budget=fast_ocr_budget,
+            errors_folder=errors_folder,
+        )
+        if include_residual_sweep and result.analyzable:
+            previous_recorder = ocr_line_provenance.active()
+            ocr_line_provenance.activate(result.page_recorder)
+            try:
+                result = _auto_fix_residual_sfx(result, dict(result.page_state))
+            finally:
+                ocr_line_provenance.activate(previous_recorder)
+            if result.page_recorder is not None:
+                result = replace(result, ocr_line_provenance=tuple(
+                    result.page_recorder.to_dict().get("pages", [])))
+        perf_end = _perf_offset_ns()
+        if isinstance(result.page_state, dict):
+            result.page_state.setdefault("_performance_events", []).append({
+                "stage": "pre_translation", "phase": "pre", "page_index": int(state["index"]),
+                "worker": threading.current_thread().name,
+                "start_offset_ns": perf_start, "end_offset_ns": perf_end,
+            })
+        return result
+
+    if workers == 1:
+        results = []
+        for state in page_states:
+            result = run_one(state)
+            results.append(result)
+            if progress_callback is not None:
+                progress_callback(result)
+        return results
+    with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="pre-page") as executor:
+        futures = [executor.submit(run_one, state) for state in page_states]
+        results = []
+        for future in as_completed(futures):
+            result = future.result()
+            results.append(result)
+            if progress_callback is not None:
+                progress_callback(result)
+    return sorted(results, key=lambda result: result.page_index)
+
+
+_RECON_BLANK_VARIANCE_FLOOR = 5.0
+
+
+def _page_gray_variance(image) -> float:
+    try:
+        if image is None or getattr(image, "size", 0) == 0:
+            return 0.0
+        gray = image if image.ndim == 2 else cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        return float(gray.var())
+    except Exception:  # noqa: BLE001 - a variance probe must never break the pipeline
+        return 0.0
+
+
+def _reconstructed_page_is_valid(output_path, source_path: str = "") -> bool:
+    """Validate a rendered page RELATIVE to its accepted source page.
+
+    The downloader already validated the source, so reconstruction must not drop a page
+    merely for being short (some reader pages are 800x32 strips) or for being faithfully
+    blank (some source pages are genuinely blank). Unlike the absolute ``valid_image``
+    floor (>=100x100 and variance>5), this only rejects a genuine render failure: an
+    unreadable/corrupt output, a zero-dimension render, or a page whose source had visual
+    content but whose render came out blank (content destroyed).  No page that the
+    downloader accepted disappears silently, and nothing is masked with a fake/blank
+    placeholder for a page that really had content.
+    """
+    if not output_path:
+        return False
+    out = cv2.imread(str(output_path))
+    if out is None or out.size == 0 or out.shape[0] <= 0 or out.shape[1] <= 0:
+        return False
+    if source_path:
+        src = cv2.imread(str(source_path))
+        if (src is not None and src.size
+                and _page_gray_variance(src) > _RECON_BLANK_VARIANCE_FLOOR
+                and _page_gray_variance(out) <= _RECON_BLANK_VARIANCE_FLOOR):
+            return False
+    return True
+
+
+def _resolve_output_profile(args=None) -> str:
+    """Select the output profile programmatically (no UI). Order: explicit ``args`` attribute,
+    then ``KOMYST_OUTPUT_PROFILE`` env, else AUTOMATIC. An unknown value falls back to AUTOMATIC
+    rather than aborting a real run."""
+    raw = None
+    if args is not None:
+        raw = getattr(args, "output_profile", None)
+    raw = raw or os.environ.get("KOMYST_OUTPUT_PROFILE")
+    raw = (str(raw).strip().lower() if raw else "") or ac.OutputProfile.AUTOMATIC
+    return raw if raw in ac.PROFILE_ARTIFACTS else ac.OutputProfile.AUTOMATIC
+
+
+PAGE_SHAPED_MAX_ASPECT = 2.0
+
+
+def _images_are_page_shaped(paths, *, min_share=0.8):
+    """True when (almost) every image is page-shaped: height < 2x width.
+
+    Reads only the image headers. Webtoon strips are far taller than wide; a
+    chapter of ordinary pages has nothing for smart split to rebuild.
+    """
+    from PIL import Image
+
+    shapes = []
+    for path in paths or []:
+        try:
+            with Image.open(path) as image:
+                width, height = image.size
+        except Exception:  # noqa: BLE001 - an unreadable file is judged elsewhere
+            continue
+        if width > 0:
+            shapes.append(height / width < PAGE_SHAPED_MAX_ASPECT)
+    return bool(shapes) and sum(shapes) / len(shapes) >= min_share
+
+
+def _source_needs_smart_split(download_report, image_paths):
+    """Smart split is needed for a strip, never for pages; an unknown source is judged by shape."""
+    if str((download_report or {}).get("page_layout") or "") == "strip":
+        return True
+    if _images_are_page_shaped(image_paths):
+        return False
+    return bool((download_report or {}).get("requires_smart_split", True))
+
+
+def _prewarm_learned_inpainter():
+    """Build the LaMa DirectML session in the background, after page OCR.
+
+    Session creation compiles the graph for the GPU (~12 s) and used to happen in the
+    middle of rendering, with every page waiting.
+    Best effort: any failure leaves the normal lazy load to run (and report) later.
+    """
+    if (os.getenv("KOMYST_HERMETIC_TEST_ENV") == "1"
+            or os.getenv("KOMYST_LAMA_PREWARM", "1") == "0"
+            or not config.ADVANCED_ART_INPAINTING
+            or not _plan_pipeline_flags()["want_render"]):
+        return None
+    try:
+        from komyst.core.gpu import directml_enabled
+        if not directml_enabled():
+            return None
+    except Exception:  # noqa: BLE001 - prewarm is an optimisation only
+        return None
+
+    def load():
+        try:
+            from komyst.clean.inpainting import advanced_art_inpainting
+            advanced_art_inpainting.get_default_inpainter().load()
+        except Exception:  # noqa: BLE001 - the lazy load reports real failures
+            pass
+
+    thread = threading.Thread(target=load, name="lama-prewarm", daemon=True)
+    thread.start()
+
+    def load_sfx_paddle() -> None:
+        try:
+            from komyst.ocr.sfx_region_reocr import prewarm_sfx_paddle
+
+            prewarm_sfx_paddle()
+        except Exception:  # noqa: BLE001 - optional engine, never blocks a job
+            pass
+
+    paddle_thread = threading.Thread(target=load_sfx_paddle, name="sfx-paddle-prewarm", daemon=True)
+    paddle_thread.start()
+    return thread
+
+
+def _plan_pipeline_flags():
+    """Resolve what the output plan asks the pipeline to execute, from ``KOMYST_EFFECTIVE_OPS``.
+
+    An UNSET/empty env is the legacy case: every stage runs exactly as before (zero behaviour
+    change for automatic/professional/legacy jobs). Only a job created from an explicit output
+    plan carries the env, and only then do the selective gates activate.
+
+    Returns a dict with: ``legacy`` (no plan), ``want_typeset``, ``want_clean``, ``want_pdf``,
+    ``want_render`` (any image output at all), and ``effective_ops`` (the raw set).
+    """
+    raw = os.getenv("KOMYST_EFFECTIVE_OPS")
+    ops = {o for o in (raw or "").split(",") if o}
+    legacy = raw is None or not ops
+    if legacy:
+        return {"legacy": True, "want_typeset": True, "want_clean": True,
+                "want_pdf": True, "want_render": True, "effective_ops": ops}
+    want_typeset = "typeset" in ops
+    want_clean = "clean" in ops or want_typeset  # typeset consumes a clean page
+    want_pdf = "pdf" in ops
+    return {"legacy": False, "want_typeset": want_typeset, "want_clean": want_clean,
+            "want_pdf": want_pdf, "want_render": want_typeset or want_clean,
+            "effective_ops": ops}
+
+
+def _gemini_safe_clean_page(state, *, job_id: str = ""):
+    """Run the historical SAFE clean leg only for a proven hard local case.
+
+    The feature is opt-in at runtime (``KOMYST_ENABLE_GEMINI_SAFE_FALLBACK=1``).
+    Translation/typeset rendering remains local; the remote result is accepted
+    only as the CLEAN artifact after the existing authorized-mask composite.
+    """
+    if str(os.getenv("KOMYST_ENABLE_GEMINI_SAFE_FALLBACK", "0")).strip().lower() not in {"1", "true", "yes"}:
+        return None
+    if str(os.getenv("KOMYST_GEMINI_SAFE_CLEAN_SCHEMA_VERIFIED", "0")).strip().lower() not in {"1", "true", "yes"}:
+        return {"status": "NOT_ELIGIBLE", "reason": "remote_schema_not_verified"}
+    hard_groups = [
+        group for group in state.get("groups", [])
+        if str(getattr(group, "clean_disposition", "") or "") == "LOCAL_HARD"
+    ]
+    if not hard_groups:
+        return {"status": "NOT_ELIGIBLE", "reason": "local_clean_not_hard"}
+    from komyst.clean.gemini_fallback.adapter import remote_clean_callback
+    from komyst.clean.gemini_fallback.authorized_mask import generate_authorized_mask_v2
+    from komyst.clean.orchestrator import (
+        CleanRequest,
+        LOCAL_RECONSTRUCTION_HARD,
+        run_clean_strategy,
+    )
+    from komyst.clean.gemini_fallback.remote_client import HardCleanRemoteClient
+
+    local_base = state.get("clean_local_base")
+    if not isinstance(local_base, np.ndarray) or local_base.shape != state["original_bgr"].shape:
+        local_base = state["original_bgr"].copy()
+    results = []
+    client = HardCleanRemoteClient(os.getenv("KOMYST_GEMINI_REMOTE_URL", "http://127.0.0.1:18777"))
+    for group in hard_groups:
+        group.clean_remote_attempted = True
+        from komyst.ocr.ocr_balloon import _group_has_story_translation_authority
+        ownership_confirmed = bool(_group_has_story_translation_authority(group))
+        source_text = str(getattr(group, "canonical_source_text", "") or getattr(group, "text", "") or "").strip()
+        local_validation = dict(getattr(group, "clean_artifact_validation", {}) or {})
+        source_provenance = "+".join(getattr(group, "ocr_provenance_engines", ()) or ())
+        source_provenance = source_provenance or str(getattr(group, "source_engine", "") or "")
+        source_language = str(state.get("source_language") or state.get("ocr_lang") or "").strip()
+        if (not ownership_confirmed
+                or not getattr(group, "clean_local_attempted", False)
+                or local_validation.get("clean_validation_passed") is not False
+                or not source_text or float(getattr(group, "quality_score", 0.0) or 0.0) < 0.60
+                or not source_provenance or not source_language
+                or str(getattr(group, "classification", "")).lower() in {"sfx", "unknown", "art", "decorative"}):
+            group.clean_disposition = "REVIEW_UNOWNED"
+            group.clean_disposition_reason = "remote_eligibility_evidence_incomplete"
+            group.manual_review_required = True
+            results.append({"status": "REVIEW_REQUIRED", "reason": "remote_eligibility_evidence_incomplete",
+                            "group_id": str(group.group_id)})
+            continue
+        with tempfile.TemporaryDirectory(prefix="komyst-gemini-mask-") as temp:
+            mask_path = Path(temp) / "authorized-mask.png"
+            mask_meta = generate_authorized_mask_v2(
+                state["image_path"], mask_path,
+                page_id=str(state.get("index") or ""),
+                region_id=str(getattr(group, "region_id", "") or ""),
+                target_group_id=str(getattr(group, "group_id", "") or ""),
+                content_type=str(getattr(group, "classification", "") or ""),
+            )
+            if mask_meta.get("status") != "PASS":
+                group.clean_remote_result = "REVIEW_REQUIRED_MASK_UNCERTAIN"
+                group.clean_disposition = "REVIEW_UNOWNED"
+                group.clean_disposition_reason = "authorized_mask_target_uncertain"
+                group.manual_review_required = True
+                results.append({"status": "REVIEW_REQUIRED", "reason": "authorized_mask_uncertain",
+                                "group_id": str(group.group_id), "mask": mask_meta})
+                continue
+            authorized_mask = cv2.imread(str(mask_path), cv2.IMREAD_GRAYSCALE)
+            output_root = Path(os.getenv("KOMYST_GEMINI_EVIDENCE_ROOT") or
+                               (Path(state["output_path"]).resolve().parents[1] / "evidence" / "gemini_safe_clean"))
+            request = CleanRequest(
+                original=state["original_bgr"],
+                base_image=local_base,
+                authorized_mask=authorized_mask,
+                mask_confidence=float(mask_meta.get("mask_confidence") or 0.0),
+                source_type=str(getattr(group, "classification", "")),
+                job_id=job_id,
+                page_id=str(state.get("index") or ""),
+                region_ids=(str(getattr(group, "region_id", "") or group.group_id),),
+                evidence_dir=str(output_root),
+                run_id=str(state.get("run_id") or ""),
+                metadata={"mask_generator_version": mask_meta.get("mask_generator_version"),
+                          "group_id": str(group.group_id),
+                          "classification": str(getattr(group, "classification", "unknown") or "unknown"),
+                          "ownership_confirmed": ownership_confirmed,
+                          "disposition": group.clean_disposition,
+                          "local_clean_attempted": bool(getattr(group, "clean_local_attempted", False)),
+                          "local_validation": local_validation,
+                          "source_text": source_text,
+                          "source_text_confidence": float(getattr(group, "quality_score", 0.0) or 0.0),
+                          "source_text_provenance": source_provenance,
+                          "source_language": source_language,
+                          "source_language_provenance": "configured_ocr_language",
+                          "mask_coverage": mask_meta.get("mask_coverage"),
+                          "translation_enabled": False},
+            )
+            remote_started = time.monotonic()
+            result = run_clean_strategy(
+                request,
+                {"status": LOCAL_RECONSTRUCTION_HARD},
+                fallback=lambda req: remote_clean_callback(client, req),
+            )
+            _emit_gemini_observability(
+                job_id=job_id, run_id=str(state.get("run_id") or ""),
+                page=str(state.get("index") or ""),
+                region=str(getattr(group, "region_id", "") or group.group_id),
+                request_id=str(result.get("request_id") or ""),
+                slot_id=str(result.get("slot_id") or "UNKNOWN"),
+                generation_seq=result.get("generation_seq"),
+                duration_seconds=float(result.get("duration_seconds") or
+                                       (time.monotonic() - remote_started)),
+                status=str(result.get("status") or "UNKNOWN"),
+                semantic_status=str((result.get("ocr_text_removal") or {}).get("status") or "UNKNOWN"),
+            )
+            result["mask_metadata"] = mask_meta
+            result["remote_provider"] = "gemini_web_vps"
+            result["group_id"] = str(group.group_id)
+            if result.get("status") == "COMPLETED" and isinstance(result.get("image"), np.ndarray):
+                local_base = result["image"]
+                group.clean_disposition = "REMOTE_SAFE"
+                group.clean_disposition_reason = "remote_safe_composite_validated"
+                group.clean_remote_result = "PASS"
+                observations = result.get("source_text_observations")
+                group.clean_remote_text_observations = observations[:20] if isinstance(observations, list) else []
+            else:
+                group.clean_disposition = "REMOTE_REJECTED"
+                group.clean_disposition_reason = str(result.get("fallback_reason") or result.get("reason") or "remote_not_accepted")
+                group.clean_remote_result = str(result.get("fallback_status") or result.get("status") or "FAILED")
+                group.manual_review_required = True
+            results.append(result)
+    if not results or any(item.get("status") != "COMPLETED" for item in results):
+        return {"status": "REVIEW_REQUIRED", "reason": "one_or_more_hard_regions_not_safely_resolved",
+                "image": local_base, "regions": [{k: v for k, v in item.items() if k not in {"image", "raw_image", "safe_clean_image"}} for item in results]}
+    return {"status": "COMPLETED", "image": local_base, "regions": [
+        {k: v for k, v in item.items() if k not in {"image", "raw_image", "safe_clean_image"}}
+        for item in results
+    ], "remote_provider": "gemini_web_vps"}
+
+
+_PAGE_CLEAN_BOUNDARY_LOCK = threading.Lock()
+
+
+def _clean_revision_id(state: dict) -> str:
+    return str(state.get("qc_revision_id") or state.get("page_revision_id")
+               or state.get("run_id") or "").strip()
+
+
+def _clean_target_snapshot(state: dict) -> list[dict]:
+    targets = []
+    page = state.get("original_bgr")
+    page_height, page_width = page.shape[:2] if isinstance(page, np.ndarray) and page.ndim >= 2 else (0, 0)
+    for group in state.get("groups", []) or []:
+        geometry = None
+        try:
+            values = [float(value) for value in list(getattr(group, "box", None))]
+            if len(values) == 4 and all(math.isfinite(value) and value.is_integer() for value in values):
+                x, y, width, height = (int(value) for value in values)
+                if (page_width > 0 and page_height > 0 and x >= 0 and y >= 0
+                        and width > 0 and height > 0 and x + width <= page_width
+                        and y + height <= page_height):
+                    geometry = [x, y, width, height]
+        except (TypeError, ValueError):
+            pass
+        source_text = str(getattr(group, "canonical_source_text", "")
+                          or getattr(group, "text", "") or "").strip()
+        targets.append({
+            "group_id": str(getattr(group, "group_id", "") or ""),
+            "region_id": str(getattr(group, "region_id", "") or ""),
+            "classification": str(getattr(group, "classification", "") or ""),
+            "geometry": geometry,
+            "source_text_sha256": hashlib.sha256(source_text.encode("utf-8")).hexdigest()
+            if source_text else "",
+            "disposition": str(getattr(group, "clean_disposition", "") or ""),
+            "remote_candidate": bool(getattr(group, "clean_remote_candidate", False)),
+            "remote_eligible": bool(getattr(group, "clean_remote_eligible", False)),
+            "remote_attempted": bool(getattr(group, "clean_remote_attempted", False)),
+            "remote_result": str(getattr(group, "clean_remote_result", "") or ""),
+            "local_attempted": bool(getattr(group, "clean_local_attempted", False)),
+            "local_validation_passed": bool(
+                isinstance(getattr(group, "clean_artifact_validation", None), dict)
+                and getattr(group, "clean_artifact_validation", {}).get("clean_validation_passed") is True
+            ),
+            "review_required": bool(getattr(group, "manual_review_required", False)),
+        })
+    return sorted(targets, key=lambda item: (item["group_id"], item["region_id"]))
+
+
+def _is_ignored_noise_line(item) -> bool:
+    """A stray OCR line dropped before grouping (a lone letter): nothing was there to clean."""
+    return bool(isinstance(item, dict) and item.get("ignored")
+                and str(item.get("classification_reason") or "") == "line_ignored_before_grouping")
+
+
+def _make_clean_certificate(state: dict, job_id: str) -> dict:
+    """Bind verified Clean pixels to source, target ownership, and current QC revision."""
+    source_path = Path(str(state.get("image_path") or ""))
+    clean_path = Path(str(state.get("cleaned_path") or ""))
+    source_hash = clean_hash = ""
+    source_pixels_match = clean_readback_ok = False
+    try:
+        source_hash = file_sha256(source_path)
+        source_pixels = cv2.imread(str(source_path), cv2.IMREAD_COLOR)
+        original = state.get("original_bgr")
+        source_pixels_match = bool(
+            source_pixels is not None and isinstance(original, np.ndarray)
+            and source_pixels.shape == original.shape and np.array_equal(source_pixels, original)
+        )
+    except (OSError, TypeError, ValueError):
+        source_pixels = None
+    try:
+        clean_hash = file_sha256(clean_path)
+        clean_pixels = cv2.imread(str(clean_path), cv2.IMREAD_COLOR)
+        original = state.get("original_bgr")
+        clean_readback_ok = bool(
+            clean_pixels is not None and clean_pixels.size and isinstance(original, np.ndarray)
+            and clean_pixels.shape == original.shape
+        )
+    except (OSError, TypeError, ValueError):
+        clean_pixels = None
+
+    metadata = state.get("ocr_metadata") if isinstance(state.get("ocr_metadata"), dict) else {}
+    ocr_sufficiency = str(metadata.get("ocr_sufficiency") or "")
+    targets = _clean_target_snapshot(state)
+    remote_targets = [item for item in targets if item["disposition"] == "REMOTE_SAFE"]
+    targets_complete = all(
+        item["group_id"] and item["region_id"] and item["geometry"] and item["source_text_sha256"]
+        and item["remote_candidate"] and item["remote_eligible"] and item["remote_attempted"]
+        and item["remote_result"] == "PASS"
+        for item in remote_targets
+    )
+    certified_targets = [item for item in targets if item["disposition"] in {"REMOTE_SAFE", "LOCAL_SAFE"}]
+    # A page with no source-text target (pure art) has nothing to certify and may pass; what
+    # must never pass is a target with no final disposition. ``bool(certified_targets)`` used to
+    # do that job but also failed every page without text.
+    final_dispositions = {"REMOTE_SAFE", "LOCAL_SAFE", "PRESERVE_SFX", "PRESERVE_ART"}
+    final_target_dispositions = final_dispositions
+    targets_complete = all(item["disposition"] in final_dispositions for item in targets) and targets_complete and all(
+        item["group_id"] and item["region_id"] and item["geometry"] and item["source_text_sha256"]
+        and (item["disposition"] != "LOCAL_SAFE"
+             or (item["local_attempted"] and item["local_validation_passed"]))
+        for item in certified_targets
+    )
+    strategy = state.get("clean_result") if isinstance(state.get("clean_result"), dict) else {}
+    outside = strategy.get("outside_mask_changed_pixels")
+    outside_ok = isinstance(outside, int) and not isinstance(outside, bool) and outside == 0
+    # ``review_required`` carries the *translation* review flag of the region. A region whose
+    # source removal is already proven (final disposition + validation) keeps that flag for the
+    # translation review queue; it is not an unresolved Clean target.
+    unresolved = any(
+        (item["review_required"] and item["disposition"] not in final_target_dispositions)
+        or item["disposition"] in {
+            "PENDING_LOCAL",
+            "LOCAL_HARD", "REVIEW_UNOWNED", "REVIEW_OCR", "REVIEW_SEMANTIC",
+            "REVIEW_REQUIRED", "REMOTE_REJECTED",
+        } for item in targets
+    )
+    verified = bool(
+        state.get("clean_verified") is True and strategy.get("status") == "COMPLETED"
+        and ocr_sufficiency == "OCR_SUFFICIENT" and not state.get("clean_page_review")
+        and not unresolved and targets_complete and source_hash and clean_hash
+        and source_pixels_match and clean_readback_ok and _clean_revision_id(state) and outside_ok
+    )
+    reason = "verified" if verified else (
+        "source_completeness_unproven" if ocr_sufficiency != "OCR_SUFFICIENT"
+        else "target_or_ownership_incomplete" if not targets_complete or unresolved
+        else "source_or_clean_artifact_binding_failed" if not source_pixels_match or not clean_readback_ok
+        else "qc_revision_or_outside_mask_evidence_missing" if not _clean_revision_id(state) or not outside_ok
+        else "clean_validation_not_passed"
+    )
+    return {
+        "schema_version": "komyst.clean-certificate.v1", "status": "PASS" if verified else "REVIEW_REQUIRED",
+        "reason": reason, "job_id": str(job_id or ""), "run_id": str(state.get("run_id") or ""),
+        "page_id": str(state.get("index") or ""), "qc_revision_id": _clean_revision_id(state),
+        "source_sha256": source_hash, "clean_sha256": clean_hash,
+        "target_snapshot_sha256": stable_hash(targets), "target_count": len(targets),
+        "source_pixels_match": source_pixels_match, "clean_readback_ok": clean_readback_ok,
+        "ocr_sufficiency": ocr_sufficiency,
+        "outside_mask_changed_pixels": outside if outside_ok else None,
+    }
+
+
+def _validate_clean_certificate(state: dict, clean_path: Path) -> tuple[bool, str]:
+    certificate = state.get("clean_certificate")
+    if not isinstance(certificate, dict):
+        return False, "clean_certificate_missing"
+    if certificate.get("schema_version") != "komyst.clean-certificate.v1" or certificate.get("status") != "PASS":
+        return False, "clean_certificate_not_pass"
+    if (str(certificate.get("page_id") or "") != str(state.get("index") or "")
+            or str(certificate.get("run_id") or "") != str(state.get("run_id") or "")
+            or str(certificate.get("qc_revision_id") or "") != _clean_revision_id(state)):
+        return False, "clean_certificate_revision_mismatch"
+    if (certificate.get("target_snapshot_sha256") != stable_hash(_clean_target_snapshot(state))
+            or certificate.get("outside_mask_changed_pixels") != 0
+            or certificate.get("source_pixels_match") is not True
+            or certificate.get("clean_readback_ok") is not True
+            or certificate.get("ocr_sufficiency") != "OCR_SUFFICIENT"):
+        return False, "clean_certificate_evidence_mismatch"
+    try:
+        source_hash = file_sha256(str(state.get("image_path") or ""))
+        clean_hash = file_sha256(clean_path)
+    except (OSError, TypeError, ValueError):
+        return False, "clean_certificate_artifact_unavailable"
+    if source_hash != certificate.get("source_sha256"):
+        return False, "clean_certificate_source_hash_mismatch"
+    if clean_hash != certificate.get("clean_sha256"):
+        return False, "clean_certificate_clean_hash_mismatch"
+    return True, "verified"
+
+
+def _clean_page_certificate_valid(state):
+    clean_path = Path(str(state.get("cleaned_path") or ""))
+    valid, reason = _validate_clean_certificate(state, clean_path)
+    if not valid:
+        return False, reason
+    group_ids = {str(getattr(group, "group_id", "") or "") for group in (state.get("groups") or [])}
+    story_ids = {
+        str(item.get("id") or "")
+        for item in (state.get("debug_data") or {}).get("items", [])
+        if isinstance(item, dict) and _story_translation_required(item)
+    }
+    if "" in story_ids or not story_ids.issubset(group_ids):
+        return False, "clean_certificate_target_inventory_mismatch"
+    return True, "verified"
+
+
+def _clean_output_accounting(states):
+    """Count verified Clean pages separately from merely written image files."""
+    pages = len(states)
+    certified = no_text_proven = 0
+    failures = []
+    for state in states:
+        page = int(state.get("index") or 0)
+        if state.get("status") != "completed" or state.get("ocr_error"):
+            failures.append({"page": page, "reason": "page_not_completed"})
+            continue
+        groups = state.get("groups") or []
+        items = (state.get("debug_data") or {}).get("items", [])
+        if not groups and not items:
+            ocr = state.get("ocr_metadata") if isinstance(state.get("ocr_metadata"), dict) else {}
+            if ((state.get("precheck") or {}).get("skip") is True
+                    or ocr.get("ocr_sufficiency") == "OCR_SUFFICIENT"):
+                no_text_proven += 1
+            else:
+                failures.append({"page": page, "reason": "source_text_evidence_missing"})
+            continue
+        valid, reason = _clean_page_certificate_valid(state)
+        if valid:
+            certified += 1
+        else:
+            failures.append({"page": page, "reason": reason})
+    passed = bool(pages) and not failures and certified + no_text_proven == pages
+    return {
+        "applicable": True, "passed": passed, "pages_expected": pages,
+        "pages_certified": certified, "pages_no_text_proven": no_text_proven,
+        "pages_failed": len(failures), "failures": failures[:100],
+    }
+
+
+def _sync_clean_decisions_to_debug_data(debug_data: object, groups: list) -> None:
+    if not isinstance(debug_data, dict) or not isinstance(debug_data.get("items"), list):
+        return
+    groups_by_id = {str(getattr(group, "group_id", "")): group for group in groups}
+    fields = (
+        "clean_disposition", "clean_disposition_reason", "clean_local_attempted",
+        "clean_artifact_validation", "clean_remote_candidate", "clean_remote_eligible",
+        "clean_remote_attempted", "clean_remote_mode", "clean_remote_result",
+        "clean_remote_text_observations", "manual_review_required",
+    )
+    for item in debug_data["items"]:
+        if not isinstance(item, dict):
+            continue
+        group = groups_by_id.get(str(item.get("id") or ""))
+        if group is None:
+            continue
+        for key in fields:
+            value = getattr(group, key, None)
+            if key == "clean_disposition" and not value:
+                continue
+            if key == "clean_artifact_validation":
+                value = dict(value or {})
+            elif key == "clean_remote_text_observations":
+                value = list(value or [])[:20]
+            elif key in {"clean_disposition_reason", "clean_remote_mode", "clean_remote_result"}:
+                value = str(value or "")
+            elif key in {"clean_local_attempted", "clean_remote_candidate", "clean_remote_eligible",
+                         "clean_remote_attempted", "manual_review_required"}:
+                value = bool(value)
+            item[key] = value
+
+
+def _complete_page_clean(state, cleaned_capture, debug_data, *, job_id: str = ""):
+    """Run the same fail-closed Clean boundary for serial and parallel page workers."""
+    if not _plan_pipeline_flags()["want_clean"]:
+        return None
+    local_image = cleaned_capture.get("cleaned_bgr")
+    if local_image is None:
+        local_image = state.get("original_bgr")
+    state["clean_local_base"] = local_image
+    with _PAGE_CLEAN_BOUNDARY_LOCK:
+        remote_strategy = _gemini_safe_clean_page(state, job_id=job_id)
+
+    ocr_state = str((state.get("ocr_metadata") or {}).get("ocr_sufficiency") or "")
+    if ocr_state != "OCR_SUFFICIENT":
+        state["clean_page_review"] = {
+            "OCR_INSUFFICIENT": "page_ocr_insufficient_for_clean_verification",
+            "OCR_REVIEW": "page_ocr_review_required_for_clean_verification",
+        }.get(ocr_state, "page_ocr_completeness_unknown_for_clean_verification")
+    from komyst.clean.orchestrator import CleanRequest, LOCAL_SAFE, run_clean_strategy
+    if isinstance(remote_strategy, dict) and remote_strategy.get("status") == "COMPLETED":
+        remote_image = remote_strategy.get("image")
+        if isinstance(remote_image, np.ndarray):
+            local_image = remote_image
+        strategy = remote_strategy
+    else:
+        # A sound, name or credit kept on purpose keeps its lettering in the
+        # CLEAN layer too: that is the decision, not an unresolved clean.
+        unresolved = [group for group in state.get("groups", []) if str(
+            getattr(group, "clean_disposition", "") or "") in {
+                "PENDING_LOCAL", "LOCAL_HARD", "REVIEW_UNOWNED", "REVIEW_OCR", "REVIEW_SEMANTIC", "REMOTE_REJECTED",
+            } and not _deliberately_preserved(group)]
+        if remote_strategy is None and unresolved:
+            for group in unresolved:
+                if group.clean_disposition == "LOCAL_HARD":
+                    group.clean_disposition_reason = "remote_fallback_disabled_or_not_configured"
+                group.manual_review_required = True
+            strategy = {
+                "status": "REVIEW_REQUIRED", "strategy_requested": "clean",
+                "strategy_used": "local_with_unresolved_regions", "fallback_invoked": False,
+                "fallback_reason": "unresolved_clean_regions", "review_required": True, "image": local_image,
+            }
+        elif isinstance(remote_strategy, dict) and remote_strategy.get("status") == "REVIEW_REQUIRED":
+            strategy = {**remote_strategy, "image": remote_strategy.get("image", local_image)}
+        else:
+            strategy = run_clean_strategy(
+                CleanRequest(original=state["original_bgr"],
+                             authorized_mask=cleaned_capture.get("authorized_cleanup_mask"),
+                             job_id=job_id, page_id=str(state["index"])),
+                {"status": LOCAL_SAFE, "image": local_image},
+            )
+    if state.get("clean_page_review"):
+        strategy = {**strategy, "status": "REVIEW_REQUIRED", "review_required": True,
+                    "page_review_reason": state["clean_page_review"]}
+    clean_image = strategy.get("image") if isinstance(strategy, dict) else None
+    clean_path = Path(state["output_path"]).with_name(Path(state["output_path"]).stem + "_cleaned.png")
+    if isinstance(clean_image, np.ndarray):
+        if not cv2.imwrite(str(clean_path), clean_image):
+            raise RuntimeError("clean_image_write_failed")
+        persisted = cv2.imread(str(clean_path), cv2.IMREAD_COLOR)
+        if persisted is None or persisted.shape != clean_image.shape or not np.array_equal(persisted, clean_image):
+            raise RuntimeError("clean_image_persisted_readback_mismatch")
+        state["cleaned_path"] = str(clean_path)
+    persisted = cv2.imread(str(clean_path), cv2.IMREAD_COLOR)
+    clean_persisted = bool(persisted is not None and persisted.size
+                           and persisted.shape == state["original_bgr"].shape)
+    if clean_persisted:
+        state["cleaned_path"] = str(clean_path)
+    for group in state.get("groups", []):
+        if not getattr(group, "clean_disposition", ""):
+            from komyst.clean.disposition import classify_group_disposition
+            group.clean_disposition, group.clean_disposition_reason = map(str, classify_group_disposition(group))
+    final_clean_dispositions = {"REMOTE_SAFE", "LOCAL_SAFE", "PRESERVE_SFX", "PRESERVE_ART"}
+    state["clean_verified"] = bool(
+        strategy.get("status") == "COMPLETED" and clean_persisted and not state.get("clean_page_review")
+        and not any(
+            (getattr(group, "manual_review_required", False)
+             and str(getattr(group, "clean_disposition", "")) not in final_clean_dispositions)
+            or str(getattr(group, "clean_disposition", "")) in {
+                "PENDING_LOCAL", "LOCAL_HARD", "REVIEW_UNOWNED", "REVIEW_OCR", "REVIEW_SEMANTIC", "REMOTE_REJECTED",
+            }
+            for group in state.get("groups", [])
+        )
+    )
+    state["clean_result"] = {key: value for key, value in strategy.items()
+                              if key not in {"image", "raw_image", "safe_clean_image"}}
+    state["clean_result"].update({
+        "clean_produced": clean_persisted, "clean_verified": state["clean_verified"],
+        "clean_source": "remote" if any(getattr(g, "clean_disposition", "") == "REMOTE_SAFE"
+                                          for g in state.get("groups", []))
+        else "local" if state["clean_verified"] else "preserved_review",
+    })
+    state["clean_certificate"] = _make_clean_certificate(state, job_id)
+    state["clean_verified"] = state["clean_certificate"]["status"] == "PASS"
+    state["clean_result"].update({
+        "clean_verified": state["clean_verified"],
+        "clean_certificate_schema": state["clean_certificate"]["schema_version"],
+        "clean_certificate_status": state["clean_certificate"]["status"],
+        "clean_execution_status": "EXECUTION_COMPLETED" if clean_persisted else "EXECUTION_FAILED",
+        "clean_quality_status": "CLEAN_QUALITY_VERIFIED" if state["clean_verified"] else "REVIEW_REQUIRED",
+    })
+    _sync_clean_decisions_to_debug_data(debug_data, state.get("groups", []))
+    return strategy
+
+
+def _emit_gemini_observability(*, job_id: str, run_id: str, page: str, region: str,
+                               request_id: str, slot_id: str, generation_seq: object,
+                               duration_seconds: float, status: str,
+                               semantic_status: str) -> None:
+    """Best-effort SAFE CLEAN event; only bounded identifiers and validation state leave Komyst."""
+    global _DISCORD_OBSERVABILITY
+    base_url = str(os.getenv("KOMYST_DISCORD_OBSERVABILITY_URL") or
+                   os.getenv("KOMYST_GEMINI_REMOTE_URL") or "").strip()
+    if not base_url:
+        return
+    try:
+        if _DISCORD_OBSERVABILITY is None:
+            from komyst.observability.client import ObservabilityClient
+            _DISCORD_OBSERVABILITY = ObservabilityClient(
+                base_url, timeout=3.0, progress_interval=0.0)
+        import hashlib
+        fingerprint = hashlib.sha256(str(request_id or f"{job_id}:{page}:{region}").encode()).hexdigest()[:12]
+        _DISCORD_OBSERVABILITY.emit(
+            "REMOTE_FALLBACK_STARTED", job_id=job_id, run_id=run_id,
+            request_id=fingerprint, page=str(page)[:24], region=str(region)[:80],
+            request_fingerprint=fingerprint, slot_id=str(slot_id)[:24],
+            generation_seq=int(generation_seq) if str(generation_seq or "").isdigit() else "UNKNOWN",
+            duration_seconds=round(max(0.0, float(duration_seconds)), 2),
+            result=str(status)[:48], semantic_status=str(semantic_status)[:32],
+        )
+    except Exception:
+        # Discord is best-effort and cannot change a page's clean result.
+        return
+
+
+def _plan_requested_artifacts(effective_ops):
+    """Artifact types a plan's operation set is expected to produce (manifest requested set)."""
+    from komyst.runtime.output_plan import plan_artifact_types
+    return plan_artifact_types(effective_ops)
+
+
+def _build_translation_only_manifest(page_states):
+    """User-facing translation deliverable for a translate-only job: per-page source->target
+    from the already-translated groups. No image is produced; this JSON *is* the output."""
+    pages = []
+    total = translated = 0
+    for state in sorted(page_states, key=lambda s: int(s.get("index") or 0)):
+        regions = []
+        for group in state.get("groups", []) or []:
+            source = str(getattr(group, "text", "") or "")
+            target = str(getattr(group, "translation", "") or "")
+            if not source and not target:
+                continue
+            total += 1
+            final_state = str(getattr(group, "translation_final_state", "") or "")
+            if final_state == "translated" and target:
+                translated += 1
+            regions.append({
+                "region_id": str(getattr(group, "group_id", "") or ""),
+                "classification": str(getattr(group, "classification", "") or ""),
+                "source": source,
+                "target": target,
+                "translation_final_state": final_state,
+                "translation_valid": bool(getattr(group, "translation_valid", False)),
+            })
+        pages.append({"page_index": int(state.get("index") or 0), "regions": regions})
+    return {
+        "schema_version": 1,
+        "kind": "translation_only",
+        "pages": pages,
+        "summary": {"pages": len(pages), "regions": total, "translated_regions": translated},
+    }
+
+
+def _copy_canonical_artifact(src, dst) -> int | None:
+    """Atomically copy one already-rendered page image to its canonical Artifact-Contract v2
+    slot. Returns bytes written, or None when the source is missing/unreadable/degenerate
+    (§21: exists + decodable + dims>0; no absolute size or variance floor). Never leaves a
+    partial file at ``dst`` -- ``atomic_copy`` writes a temp then ``os.replace``."""
+    if not src or not os.path.exists(src):
+        return None
+    try:
+        atomic_copy(src, dst)
+    except OSError:
+        return None
+    # Validate the PRODUCED artifact (§21): decodable + non-degenerate dims. One decode of the
+    # written file is enough -- it is a byte copy of the source, so this also proves the source
+    # was a real image; a non-image source is copied then rejected here and the file removed.
+    img = cv2.imread(str(dst), cv2.IMREAD_UNCHANGED)
+    if img is None or getattr(img, "size", 0) == 0 or img.shape[0] <= 0 or img.shape[1] <= 0:
+        try:
+            os.remove(dst)
+        except OSError:
+            pass
+        return None
+    return os.path.getsize(dst)
+
+
+def _persist_canonical_artifacts(output_root, completed_states, total_pages, profile, *, typeset=True,
+                                 plan_wants_clean=False):
+    """Persist CLEAN and TRANSLATED as canonical per-page artifacts (Artifact Contract v2).
+
+    Additive: the legacy ``pages/page_NNN.png`` (translated) and ``*_cleaned.png`` are left in
+    place; this only *copies* the same buffers into ``images/translated/NNN.png`` and (when the
+    profile requests it) ``images/clean/NNN.png`` via the single contract resolver.
+
+    * TRANSLATED source is ``state["output_path"]`` -- the exact buffer the PDF is built from
+      (§8, no re-render).
+    * CLEAN source is ``state["cleaned_path"]`` (art after source-text removal) when cleanup ran,
+      else ``state["image_path"]`` -- the accepted source page, which for a no-text/blank page IS
+      the clean art (§3 cases B/C). This is what closes the old 203/208 clean gap: no-text pages
+      no longer skip a clean artifact.
+
+    Identity is the logical page index, never a directory listing (§12). Returns a coverage +
+    I/O report; it never fabricates a page it could not actually write (§21/§23).
+    """
+    # When typeset did not run (clean-only / translate+clean) there is no translated page to
+    # persist -- the rendered buffer IS the clean art. Persist CLEAN only and never write a
+    # phantom translated image. Clean becomes mandatory regardless of profile.
+    # The output plan's manifest owes CLEAN for "Tradução pronta" too (plan_artifact_types);
+    # deciding by the legacy profile alone left that run failing its own contract.
+    want_clean = ((not typeset) or plan_wants_clean
+                  or ac.ArtifactType.CLEAN_IMAGE in ac.profile_artifacts(profile))
+    want_translated = typeset
+    requested = sorted(int(s["index"]) for s in completed_states)
+    translated_ok, clean_ok = {}, {}
+    translated_failed, clean_failed = [], []
+    translated_bytes = clean_bytes = 0
+    provenance = {}
+    started = time.perf_counter()
+    for state in completed_states:
+        idx = int(state["index"])
+        if want_translated:
+            dst = ac.artifact_path(output_root, ac.ArtifactType.TRANSLATED_IMAGE,
+                                   page=idx, total_pages=total_pages)
+            n = _copy_canonical_artifact(state.get("output_path"), dst)
+            if n is None:
+                translated_failed.append(idx)
+            else:
+                translated_ok[idx] = str(dst)
+                translated_bytes += n
+        # SOURCE -> CLEAN -> TRANSLATED chain for this logical page (§22).
+        chain = {"source": state.get("image_path"), "translated": translated_ok.get(idx)}
+        clean_result = state.get("clean_result")
+        if isinstance(clean_result, dict):
+            chain["clean_strategy"] = {
+                key: value for key, value in clean_result.items()
+                if key not in {"image", "raw_image"}
+            }
+        if want_clean:
+            cdst = ac.artifact_path(output_root, ac.ArtifactType.CLEAN_IMAGE,
+                                    page=idx, total_pages=total_pages)
+            # Prefer the captured cleaned buffer (art after text removal, before glyphs).
+            cn = _copy_canonical_artifact(state.get("cleaned_path"), cdst)
+            if cn is not None:
+                clean_from = "cleaned_buffer"
+            elif state.get("cache_source") == "fresh":
+                # The page WENT THROUGH render this run ("fresh"), so render_analyzed_image
+                # always captures a cleaned buffer -- its absence means cleanup/write really
+                # failed. That is a genuine failure, NOT a page without text: never mask it with
+                # a source fallback (§8). Report it FAILED and write nothing.
+                clean_from = "failed"
+            else:
+                # The page did NOT go through render this run (no_text_precheck copy, passthrough,
+                # or cache/resume restore) -- no cleanup was attempted, so the accepted source IS
+                # the clean art (§3 case B). This is what closes the old 203/208 gap.
+                cn = _copy_canonical_artifact(state.get("image_path"), cdst)
+                clean_from = "source_fallback" if cn is not None else "failed"
+            if cn is None:
+                clean_failed.append(idx)
+                chain["clean"] = None
+                chain["clean_from"] = "failed"
+            else:
+                clean_ok[idx] = str(cdst)
+                clean_bytes += cn
+                chain["clean"] = str(cdst)
+                chain["clean_from"] = clean_from
+            debug_items = ((state.get("debug_data") or {}).get("items") or [])
+            region_dispositions = [
+                {
+                    "group_id": item.get("id"),
+                    "region_id": item.get("region_id"),
+                    "disposition": item.get("clean_disposition") or (
+                        "PRESERVE_ART" if _is_ignored_noise_line(item) else "REVIEW_UNOWNED"),
+                    "reason": item.get("clean_disposition_reason") or (
+                        "ignored_noise_line" if _is_ignored_noise_line(item) else "disposition_not_persisted"),
+                    "local_attempted": bool(item.get("clean_local_attempted")),
+                    "local_validation": item.get("clean_artifact_validation") or {},
+                    "remote_attempted": bool(item.get("clean_remote_attempted")),
+                    "remote_result": item.get("clean_remote_result") or "",
+                    "source_text_observations": item.get("clean_remote_text_observations") or [],
+                    "review_required": (
+                        bool(item.get("manual_review_required"))
+                        and str(item.get("clean_disposition") or "") not in {
+                            "REMOTE_SAFE", "LOCAL_SAFE", "PRESERVE_SFX", "PRESERVE_ART",
+                        }
+                    )
+                        or str(item.get("clean_disposition") or "").startswith("REVIEW_")
+                        or item.get("clean_disposition") in {"LOCAL_HARD", "REMOTE_REJECTED"},
+                }
+                for item in debug_items if isinstance(item, dict)
+            ]
+            dispositions = {item["disposition"] for item in region_dispositions}
+            if not region_dispositions and state.get("cache_source") == "fresh":
+                ocr_meta = state.get("ocr_metadata") or {}
+                if str(ocr_meta.get("ocr_sufficiency") or "") in {"OCR_INSUFFICIENT", "OCR_REVIEW"}:
+                    region_dispositions.append({
+                        "group_id": None, "region_id": None, "disposition": "REVIEW_UNOWNED",
+                        "reason": "page_ocr_not_sufficient_for_clean_verification",
+                        "local_attempted": False, "local_validation": {},
+                        "remote_attempted": False, "remote_result": "", "review_required": True,
+                    })
+                    dispositions.add("REVIEW_UNOWNED")
+            review_codes = sorted({
+                str(item.get("disposition")) + ":" + str(item.get("reason") or "")
+                for item in region_dispositions if item.get("review_required")
+            })
+            certificate_required = (
+                clean_from == "cleaned_buffer" or state.get("clean_verified") is True
+                or isinstance(state.get("clean_certificate"), dict)
+            )
+            certificate_valid, certificate_reason = (
+                _validate_clean_certificate(state, cdst)
+                if certificate_required and cn is not None
+                else (False, "clean_certificate_missing")
+            )
+            if certificate_required and not certificate_valid:
+                review_codes.append("REVIEW_CERTIFICATE:" + certificate_reason)
+                review_codes.sort()
+            clean_verified = bool(
+                cn is not None and state.get("clean_verified") is True
+                and clean_from == "cleaned_buffer" and certificate_valid and not review_codes
+            )
+            if clean_from == "source_fallback":
+                clean_source = "source_fallback"
+            elif "REMOTE_SAFE" in dispositions and any(value == "LOCAL_SAFE" for value in dispositions):
+                clean_source = "mixed"
+            elif "REMOTE_SAFE" in dispositions:
+                clean_source = "remote"
+            elif clean_from == "cleaned_buffer":
+                clean_source = "local" if clean_verified else "preserved_review"
+            else:
+                clean_source = "preserved_review"
+            chain.update({
+                "clean_produced": cn is not None,
+                "clean_verified": clean_verified,
+                "clean_source": clean_source,
+                "region_dispositions": region_dispositions,
+                "residual_validation": {"status": "NOT_RUN", "reason": "post_clean_target_ocr_not_yet_implemented"},
+                "review_reasons": review_codes,
+                "clean_certificate": (dict(state.get("clean_certificate"))
+                                      if isinstance(state.get("clean_certificate"), dict) else None),
+                "clean_certificate_validation": {
+                    "status": "PASS" if certificate_valid else "REVIEW_REQUIRED",
+                    "reason": certificate_reason,
+                },
+            })
+        provenance[idx] = chain
+    io_seconds = time.perf_counter() - started
+    all_pages = set(range(1, int(total_pages) + 1))
+    produced_translated = set(translated_ok)
+    produced_clean = set(clean_ok)
+    return {
+        "profile": profile,
+        "logical_page_count": int(total_pages),
+        "requested_pages": requested,
+        "translated_requested": want_translated,
+        "translated_produced": sorted(produced_translated),
+        "translated_failed": sorted(translated_failed),
+        "translated_missing": (sorted(all_pages - produced_translated - set(translated_failed))
+                               if want_translated else []),
+        "translated_total_bytes": int(translated_bytes),
+        "clean_requested": want_clean,
+        "clean_produced": sorted(produced_clean),
+        "clean_failed": sorted(clean_failed),
+        "clean_missing": sorted(all_pages - produced_clean - set(clean_failed)) if want_clean else [],
+        "clean_total_bytes": int(clean_bytes),
+        "io_seconds": round(io_seconds, 4),
+        "provenance": provenance,
+    }
+
+
+_COLOR_NAME_RGB = {
+    "black": (17, 17, 17), "white": (245, 245, 245), "red": (200, 30, 30),
+    "blue": (20, 30, 120), "gray": (90, 90, 90), "grey": (90, 90, 90),
+}
+_DIALOGUE_CLASSES = {"speech", "speech_balloon", "balloon", "dialogue"}
+
+
+def _editable_psd_regions(state):
+    """Build the writer's decoupled region model from a page's own render items (Mission 6 §42,
+    Mission 7 typography propagation).
+
+    The RENDERER is the source of truth for automatic typography: when a render item exposes the
+    real font_size, final wrapped lines, refined position and colour, the PSD reuses those exact
+    values -- it never runs a second layout/font-fitting pass (§6/§7/§8). Each region records a
+    ``sources`` map (RENDERER vs *_FALLBACK) for provenance. Safe fallbacks apply per property
+    when a value is absent, so legacy runs without typography metadata still export (§20/§32).
+
+    Every DETECTED text region with content becomes a Type Layer: a drawn translation is a
+    translated layer; a region with source text but no drawn translation is kept as a
+    ``source_fallback`` layer so QC still finds the text (§14). A region with no text is skipped.
+    """
+    regions = []
+    for item in (state.get("debug_data") or {}).get("items", []) or []:
+        if not isinstance(item, dict):
+            continue
+        # position: renderer's refined box (translation_box / draw_box) wins over the raw bbox.
+        refined = item.get("translation_box") or item.get("draw_box")
+        raw_box = item.get("bounding_box")
+        box = refined or raw_box
+        if not box:
+            continue
+        try:
+            x, y, w, h = [int(round(float(v))) for v in box]
+        except (TypeError, ValueError):
+            continue
+        if w <= 0 or h <= 0:
+            continue
+        position_source = "RENDERER" if refined else "BBOX_FALLBACK"
+
+        translation = str(item.get("translation") or "").strip()
+        source = str(item.get("clean_text") or item.get("text") or "").strip()
+        drawn = bool(item.get("redrawn") or item.get("translated")
+                     or item.get("translation_final_state") == "translated")
+        if drawn and translation and not item.get("preserved_original"):
+            base_text, status = translation, "translated"
+        elif source:
+            base_text, status = source, "source_fallback"
+        else:
+            continue
+
+        # wrapping: reuse the renderer's final wrapped lines when present (§8), else raw text.
+        rendered_lines = item.get("rendered_lines") if status == "translated" else None
+        if rendered_lines:
+            text = "\n".join(str(s) for s in rendered_lines)
+            wrap_source = "RENDERER"
+        else:
+            text = base_text
+            wrap_source = "RAW_TEXT_FALLBACK"
+
+        stype = str(item.get("classification") or "")
+        # font size: renderer value wins; bbox-derived only as fallback (§6).
+        raw_size = int(item.get("font_size") or 0)
+        if raw_size > 0:
+            font_size, size_source = raw_size, "RENDERER"
+        else:
+            nlines = max(1, text.count("\n") + 1)
+            font_size = int(h / (nlines * 1.3)) or int(config.MIN_FONT_SIZE)
+            size_source = "BBOX_FALLBACK"
+        font_size = max(int(config.MIN_FONT_SIZE), min(font_size, 200))
+
+        # colour: map the renderer's colour name; black default otherwise (§11/§24).
+        cname = str(item.get("text_color") or "").strip().lower()
+        if cname in _COLOR_NAME_RGB:
+            color, color_source = _COLOR_NAME_RGB[cname], "RENDERER"
+        else:
+            color, color_source = (0, 0, 0), "BLACK_DEFAULT"
+
+        # alignment: the renderer exposes no discrete left/center/right, only a score, so this is
+        # a semantic default -- reported honestly, not claimed as RENDERER.
+        align = "center" if stype.strip().lower() in _DIALOGUE_CLASSES else "left"
+
+        regions.append(editable_psd_writer.EditableTextRegion(
+            region_id=str(item.get("region_id") or item.get("id") or ""),
+            semantic_type=stype, text=text, source_text=source,
+            translation_status=status, bbox=(x, y, w, h),
+            font_size=font_size, color=color, alignment=align,
+            review_required=bool(item.get("manual_review_required")) or status != "translated",
+            sources={
+                "font_size_source": size_source, "position_source": position_source,
+                "wrap_source": wrap_source, "color_source": color_source,
+                "alignment_source": "SEMANTIC_DEFAULT",
+            },
+        ))
+    return regions
+
+
+def _export_editable_psds(output_root, completed_states, total_pages, clean_pages, font_path):
+    """Write one native-Type-Layer PSD per logical page under ``psd/<page>.psd`` (PROFESSIONAL_QC
+    only; caller gates on profile). Memory-bounded: one page built, written, validated, released
+    before the next (§48). Returns coverage for the artifact manifest."""
+    produced, failed, missing, per_page = [], [], [], {}
+    total_bytes = 0.0
+    started = time.perf_counter()
+    clean_set = set(clean_pages or [])
+    for state in completed_states:
+        idx = int(state["index"])
+        clean_path = ac.artifact_path(output_root, ac.ArtifactType.CLEAN_IMAGE,
+                                      page=idx, total_pages=total_pages)
+        original_path = state.get("image_path")
+        if idx not in clean_set or not clean_path.exists() or not original_path \
+                or not os.path.exists(original_path):
+            missing.append(idx)
+            continue
+        original = cv2.imread(str(original_path), cv2.IMREAD_COLOR)
+        clean = cv2.imread(str(clean_path), cv2.IMREAD_COLOR)
+        if original is None or clean is None:
+            failed.append(idx)
+            continue
+        h, w = clean.shape[:2]
+        if original.shape[:2] != (h, w):
+            original = cv2.resize(original, (w, h))
+        regions = _editable_psd_regions(state)
+        dst = ac.artifact_path(output_root, ac.ArtifactType.EDITABLE_PSD,
+                               page=idx, total_pages=total_pages)
+        try:
+            result = editable_psd_writer.write_editable_psd(
+                dst, original, clean, regions, (w, h),
+                metadata={"logical_page": idx}, font_path=font_path)
+        except Exception:  # noqa: BLE001 -- a failed page is FAILED, never silently produced
+            failed.append(idx)
+            continue
+        produced.append(idx)
+        total_bytes += os.path.getsize(dst)
+        # Keep the writer-returned layer identities in memory for the QC index. Never
+        # reconstruct a PSD layer name from region ordering after the write.
+        per_page[idx] = {"path": str(dst), "text_layers": result["text_layers"],
+                         "color_profile": result["color_profile"]}
+        del original, clean, regions
+    all_pages = set(range(1, int(total_pages) + 1))
+    covered = set(produced)
+    missing = sorted(all_pages - covered - set(failed))
+    return {
+        "produced": sorted(produced), "failed": sorted(failed), "missing": missing,
+        "total_bytes": int(total_bytes), "io_seconds": round(time.perf_counter() - started, 4),
+        "text_mode": editable_psd_writer.PRODUCTION_TEXT_MODE, "per_page": per_page,
+    }
+
+
+def process_post_translation_page(state, *, diagnostic_folder=None, targeted_regression=False,
+                                  translator=None, translation_retry_records=None,
+                                    force=False, retry_lock=None, job_id: str = "", source_recorder=None):
+    """Render and save one page, returning only page-owned state."""
+    local = dict(state)
+    timings = {}
+    perf_start = _perf_offset_ns()
+    previous_recorder = ocr_line_provenance.active()
+    analysis_recorder = source_recorder or previous_recorder
+    page_recorder = (analysis_recorder.fork_page(local["index"]) if analysis_recorder is not None
+                     else ocr_line_provenance.ProvenanceRecorder())
+    ocr_line_provenance.activate(page_recorder)
+    try:
+        debug_folder = None
+        if targeted_regression and diagnostic_folder is not None:
+            debug_folder = str(Path(diagnostic_folder) / f"page_{int(local['index']):03}")
+        layout_retry_attempt = 0
+        cleaned_capture: dict = {}
+        _want_typeset = _plan_pipeline_flags()["want_typeset"]
+        # The pre-settlement layout preflight already rendered this page; with the
+        # same translations its page and CLEAN capture are the final ones (its time
+        # is counted under the translation stage).
+        preflight = local.pop("_preflight_render", None)
+        reusable = bool(
+            preflight is not None and debug_folder is None and _want_typeset
+            and preflight["signature"] == _translation_render_signature(local["groups"])
+        )
+        while True:
+            if reusable:
+                final, debug_data = preflight["result"]
+                cleaned_capture.update(preflight["capture"])
+                for name, val in (preflight.get("timings") or {}).items():
+                    if isinstance(val, (int, float)):
+                        timings[name] = float(val)
+                break
+            final, debug_data = render_analyzed_image(
+                local["original_bgr"], local.get("raw_lines", []), local["candidates"],
+                local["groups"], font_path=config.FONT_PATH, debug_folder=debug_folder,
+                page_index=local["index"], image_path=local["image_path"], stage_timings=timings,
+                capture=cleaned_capture, typeset=_want_typeset,
+            )
+            overflow_groups = [
+                group for group in local["groups"]
+                if group.sent_to_translation
+                and float(group.text_overflow_ratio or 0.0) > config.MAX_TEXT_OVERFLOW_RATIO
+            ]
+            if (translator is None or not overflow_groups
+                    or layout_retry_attempt >= config.TRANSLATION_MAX_RETRIES
+                    or not hasattr(translator, "translate_strict")):
+                break
+            retry_kwargs = {
+                "force": force,
+                "attempt": layout_retry_attempt + 1,
+            }
+            if retry_lock is None:
+                retried = _retry_layout_overflow_translations(
+                    overflow_groups, translator,
+                    translation_retry_records if translation_retry_records is not None else [],
+                    **retry_kwargs)
+            else:
+                with retry_lock:
+                    retried = _retry_layout_overflow_translations(
+                        overflow_groups, translator,
+                        translation_retry_records if translation_retry_records is not None else [],
+                        **retry_kwargs)
+            if not retried:
+                break
+            layout_retry_attempt += 1
+        Path(local["output_path"]).parent.mkdir(parents=True, exist_ok=True)
+        save_started = time.perf_counter()
+        if not cv2.imwrite(local["output_path"], final):
+            raise RuntimeError("cv2.imwrite retornou False")
+        timings["image_save"] = time.perf_counter() - save_started
+        if not _reconstructed_page_is_valid(local["output_path"], local.get("image_path", "")):
+            raise RuntimeError("imagem final invalida")
+        # Canonical Cleaned artifact (P1): page after text removal/inpaint, before
+        # translated glyphs. Persisted deterministically (not debug-gated) so the
+        # professional PSD exporter has a real base layer.
+        cleaned_bgr = cleaned_capture.get("cleaned_bgr")
+        if cleaned_bgr is not None:
+            cleaned_path = Path(local["output_path"]).with_name(
+                Path(local["output_path"]).stem + "_cleaned.png")
+            if cv2.imwrite(str(cleaned_path), cleaned_bgr):
+                local["cleaned_path"] = str(cleaned_path)
+        _complete_page_clean(local, cleaned_capture, debug_data, job_id=job_id)
+        local["timings"] = {**dict(local.get("timings") or {}), **timings}
+        local["status"] = "completed"
+        local["cache_source"] = "fresh"
+        debug_data["ocr_metadata"] = local.get("ocr_metadata", {})
+        debug_data["selective_ocr_fallbacks"] = local.get("selective_ocr_fallbacks", [])
+        debug_data["text_repairs"] = _applied_text_repairs(local.get("ocr_metadata", {})) + local.get("group_text_repairs", [])
+        debug_data["rejected_text_repairs"] = _rejected_text_repairs(local.get("ocr_metadata", {}))
+        local["debug_data"] = debug_data
+        _save_page_processed_cache(local)
+        local.setdefault("_performance_events", []).append({
+            "stage": "post_translation", "phase": "post", "page_index": int(local["index"]),
+            "worker": threading.current_thread().name,
+            "start_offset_ns": perf_start, "end_offset_ns": _perf_offset_ns(),
+        })
+        return PostTranslationPageResult(page_index=int(local["index"]), output_path=str(local["output_path"]), timings=dict(timings), page_state=local, page_recorder=page_recorder)
+    except Exception as exc:
+        return PostTranslationPageResult(page_index=int(local["index"]), timings=dict(timings), page_state=local, page_recorder=page_recorder, error=f"{type(exc).__name__}: {exc}")
+    finally:
+        ocr_line_provenance.activate(previous_recorder)
+
+
+def process_post_translation_pages(page_states, *, diagnostic_folder=None, targeted_regression=False,
+                                   translator=None, translation_retry_records=None,
+                                   force=False, retry_lock=None, job_id: str = ""):
+    workers = _pipeline_page_workers()
+    source_recorder = ocr_line_provenance.active()
+    if workers == 1:
+        return [process_post_translation_page(state, diagnostic_folder=diagnostic_folder,
+                                               targeted_regression=targeted_regression,
+                                               translator=translator,
+                                               translation_retry_records=translation_retry_records,
+                                                force=force, retry_lock=retry_lock, job_id=job_id,
+                                                source_recorder=source_recorder)
+                for state in page_states]
+    with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="post-page") as executor:
+        futures = [executor.submit(process_post_translation_page, state,
+                                   diagnostic_folder=diagnostic_folder,
+                                   targeted_regression=targeted_regression,
+                                   translator=translator,
+                                   translation_retry_records=translation_retry_records,
+                                    force=force, retry_lock=retry_lock, job_id=job_id,
+                                    source_recorder=source_recorder)
+                   for state in page_states]
+        return sorted((future.result() for future in as_completed(futures)), key=lambda result: result.page_index)
+from komyst.export.output_manifest import (
+    build_run_manifest,
+    sanitize_source_provenance,
+    sanitize_source_url,
+)
+from komyst.export.pdf_naming import (
+    build_pdf_filename,
+    episode_number_from_url,
+    series_slug_from_url,
+)
+from komyst.core.page_processing_contracts import (
+    PageProcessingContext,
+    PageProgressAggregator,
+    PageProgressEvent,
+    PreTranslationPageAccumulator,
+    PreTranslationPageResult,
+    PostTranslationPageResult,
+)
+from komyst.translation.providers.translator_nllb import get_translator
+
+
+class PipelineCancelled(RuntimeError):
+    """Cooperative cancellation reached the child pipeline boundary."""
+
+
+def _cancel_event_from_environment():
+    path = str(os.getenv("KOMYST_CANCEL_FILE") or "").strip()
+    event = threading.Event()
+    if not path:
+        return event, None
+
+    def watch():
+        while not event.is_set():
+            if Path(path).is_file():
+                event.set()
+                marker_dir = str(os.getenv("KOMYST_CANCEL_TEST_MARKER_DIR") or "").strip()
+                if marker_dir:
+                    try:
+                        marker = Path(marker_dir)
+                        marker.mkdir(parents=True, exist_ok=True)
+                        (marker / "benchmark_cancel_observed").write_text("1", encoding="utf-8")
+                    except OSError:
+                        pass
+                return
+            time.sleep(0.05)
+
+    thread = threading.Thread(target=watch, name="pipeline-cancel-watch", daemon=True)
+    thread.start()
+    return event, thread
+
+
+def _build_translation_provider(requested_provider: str, *, translation_enabled: bool):
+    """Resolve the server-authoritative provider only at the real pipeline boundary.
+
+    Disabled runs retain the existing provider-neutral path.  The local/test
+    backend is deliberately injectable and unavailable in production-like mode;
+    production transport is supplied by the deployed backend integration.
+    """
+    provider = str(requested_provider or "").strip().lower()
+    if provider != "komyst_backend" or not translation_enabled:
+        return None
+    from komyst.runtime.runtime_paths import runtime_root
+    from komyst.translation.providers.komyst_backend_provider import HttpBackendClient, MockBackendClient, KomystBackendTranslationProvider
+
+    env = str(os.getenv("KOMYST_ENV", "")).strip().lower()
+    test_backend = str(os.getenv("KOMYST_TEST_BACKEND", "mock")).strip().lower()
+    if env in {"local", "test"} and test_backend in {"", "mock"}:
+        backend = MockBackendClient()
+    else:
+        backend = HttpBackendClient.from_environment()
+    return KomystBackendTranslationProvider(
+        runtime_root=runtime_root(), backend=backend
+    )
+
+
+def _resolve_translation_runtime(
+    requested_provider: str,
+    *,
+    translation_enabled: bool,
+    source_lang: str = "3",
+):
+    """Resolve translation and OCR language at the pipeline boundary.
+
+    A disabled job must not call the legacy ``get_translator`` factory: that
+    factory intentionally honors historical config/provider values and can
+    initialize DeepL, Google, or NLLB.  The OCR language mapping is pure and
+    remains available for the disabled path.
+    """
+    from komyst.translation.providers.translator_nllb import ocr_code_for_choice
+
+    if not translation_enabled:
+        print("TRANSLATION_STAGE_CONFIGURED disabled provider_init=0", flush=True)
+        return None, ocr_code_for_choice(source_lang)
+    # An enabled production job always crosses the server-authoritative bridge.
+    # Legacy CLI provider labels remain metadata only and must never select the
+    # desktop DeepL/NLLB factories for an enabled job.
+    injected_provider = _build_translation_provider(
+        "komyst_backend", translation_enabled=True
+    )
+    if injected_provider is None:
+        raise RuntimeError("komyst_backend_provider_unavailable")
+    print("TRANSLATION_PROVIDER_INIT provider=komyst_backend", flush=True)
+    return get_translator(source_lang, translation_provider=injected_provider)
+from komyst.translation.providers.translator_nvidia import PROMPT_VERSION
+from komyst.runtime.resource_monitor import ResourceMonitor, detect_gpu_basic
+from komyst.ui.ui_helpers import (
+    classify_quality_validation,
+    derive_final_run_status,
+    sanitize_diagnostic_text,
+)
+
+
+def _hidden_subprocess_options():
+    """Keep diagnostic helper subprocesses console-free on Windows."""
+    from komyst.runtime.process_options import hidden_console_options
+
+    return hidden_console_options()
+
+
+BASELINE_SECONDS = 2129.41
+OUTPUT_FOLDER = Path("output/full_chapter")
+def _pipeline_source_files():
+    """Every source file whose change can alter a page's output.
+
+    The names this tuple used to hold ("ocr_balloon.py", ...) were bare file names resolved
+    against the working directory, where none exists since the code moved under ``komyst/``:
+    the fingerprint was the hash of an empty list, so a page cached by older code was reused
+    after an update and the new rendering never ran.
+    """
+    root = Path(__file__).resolve().parents[1]
+    files = []
+    for package in ("ocr", "clean", "review", "translation", "pipeline", "export", "core"):
+        files.extend(sorted((root / package).rglob("*.py")))
+    return tuple(files)
+
+
+PIPELINE_FILES = _pipeline_source_files()
+
+_PROGRESS_WRITE_LOCK = threading.RLock()
+_PROGRESS_FINGERPRINTS = {}
+PIPELINE_MANIFEST_VERSION = "benchmark-pipeline-v1"
+
+
+# The code a run executes is the code the process loaded at start, so the manifest records the
+# commit seen then; re-reading HEAD at the end made any commit/pull during a long job fail it.
+_GIT_AT_RUN_START = None
+
+
+def _git_metadata():
+    def resolve(*args):
+        try:
+            completed = subprocess.run(
+                ["git", *args],
+                cwd=Path(__file__).resolve().parents[2],
+                capture_output=True,
+                text=True,
+                check=False,
+                **_hidden_subprocess_options(),
+            )
+        except OSError:
+            return ""
+        return completed.stdout.strip() if completed.returncode == 0 else ""
+
+    return {
+        "commit_hash": resolve("rev-parse", "HEAD"),
+        "branch": resolve("branch", "--show-current"),
+    }
+
+
+def _first_source_value(*values):
+    """Return the first explicitly supplied source diagnostic without treating zero as absent."""
+
+    for value in values:
+        if value is not None and value != "":
+            return value
+    return None
+
+
+def _source_manifest_provenance(download_report):
+    """Reduce a downloader report to URL/path-free scalar run evidence.
+
+    The full downloader report is useful only inside its own restricted output directory and
+    contains opaque candidate ids plus per-image information.  The canonical run manifest is
+    an index/discovery artifact, so it records counts and decisions rather than a replayable
+    source manifest.  ``sanitize_source_provenance`` is the final allowlist before writing.
+    """
+
+    report = download_report if isinstance(download_report, dict) else {}
+    analysis = report.get("source_analysis")
+    analysis = analysis if isinstance(analysis, dict) else {}
+    selection = report.get("source_selection")
+    selection = selection if isinstance(selection, dict) else {}
+
+    candidate_ids = selection.get("candidate_ids")
+    selected_count_from_ids = (
+        len(candidate_ids) if isinstance(candidate_ids, (list, tuple)) else None
+    )
+    raw_selection = {
+        "automatic": selection.get("automatic"),
+        "selected_page_count": _first_source_value(
+            selection.get("fresh_candidate_count"),
+            selection.get("selected_candidate_count"),
+            selection.get("confirmed_candidate_count"),
+            selected_count_from_ids,
+        ),
+        "accepted_candidate_count": _first_source_value(
+            selection.get("accepted_candidate_count"),
+            selection.get("observed_candidate_count"),
+            analysis.get("accepted_count"),
+        ),
+        "manual_subset": selection.get("manual_subset"),
+        "manual_reordered": selection.get("manual_reordered"),
+        "reason_code": _first_source_value(
+            selection.get("reason_code"),
+            report.get("source_reason"),
+            report.get("source_outcome"),
+            analysis.get("outcome"),
+        ),
+    }
+    raw_provenance = {
+        "source_type": report.get("source_type"),
+        "adapter_name": _first_source_value(
+            report.get("adapter_name"), analysis.get("adapter")
+        ),
+        "adapter_version": _first_source_value(
+            report.get("adapter_version"), analysis.get("adapter_version")
+        ),
+        "transport_name": report.get("transport_name"),
+        "score": _first_source_value(
+            report.get("source_score"),
+            report.get("source_confidence"),
+            analysis.get("score"),
+            analysis.get("confidence"),
+        ),
+        "candidate_count": _first_source_value(
+            report.get("candidate_count"), analysis.get("candidate_count")
+        ),
+        "accepted_page_count": _first_source_value(
+            report.get("accepted_count"), analysis.get("accepted_count")
+        ),
+        "rejected_page_count": _first_source_value(
+            report.get("rejected_page_count"),
+            report.get("discarded_count"),
+            analysis.get("rejected_count"),
+            analysis.get("discarded_count"),
+        ),
+        "outcome": _first_source_value(
+            report.get("source_outcome"), analysis.get("outcome")
+        ),
+        "selection": raw_selection,
+    }
+    return sanitize_source_provenance(raw_provenance)
+
+
+def resolve_provider_provenance(
+    translator, requested_provider="", *, translation_enabled=True
+):
+    from komyst.ui.ui_helpers import normalize_translation_provider
+
+    requested = normalize_translation_provider(requested_provider)
+    stats = getattr(translator, "stats", {}) if translator is not None else {}
+    if not isinstance(stats, dict):
+        stats = {}
+
+    # A disabled translation stage deliberately has no provider instance.  Keep
+    # provenance first-class without asking the legacy provider validation to
+    # compare a requested CLI default with an intentionally absent provider.
+    if not translation_enabled:
+        stats["provider_requested"] = ""
+        stats["provider_effective"] = ""
+        stats["provider_source"] = "disabled"
+        stats["provider_disabled"] = True
+        stats["provider_fallback_used"] = False
+        stats["provider_fallback_reason"] = ""
+        return report_provider_provenance(stats)
+
+    effective = str(stats.get("provider_name") or "").strip().lower()
+    provenance = normalize_translation_provider_provenance(
+        requested, effective, translation_enabled=translation_enabled
+    )
+    stats["remote_engine"] = provenance["remote_engine"]
+    stats["internal_provider"] = provenance["internal_provider"]
+    stats["provider_class"] = provenance["provider_class"]
+    stats["provenance_status"] = provenance["status"]
+    if requested:
+        stats["provider_requested"] = requested
+        stats["provider_source"] = "run_argument"
+    else:
+        # A run nobody asked a provider for stays *unrequested*.  Copying the effective
+        # provider here is what let a lost --translation-provider flag self-certify as
+        # "requested=nemotron, effective=nemotron, mismatch=false" for a riva job.
+        stats.setdefault("provider_source", "runtime_default")
+    stats["provider_effective"] = effective
+    stats["provider_fallback_used"] = False
+    stats["provider_fallback_reason"] = ""
+    return report_provider_provenance(stats)
+
+
+def normalize_translation_provider_provenance(
+    requested_provider: str,
+    effective_provider: str,
+    *,
+    translation_enabled: bool = True,
+):
+    """Validate the boundary between the selected remote engine and runtime transport.
+
+    ``deepl`` is the user-facing/remote engine selection.  In the commercial
+    desktop path it is intentionally implemented by the internal
+    ``komyst_backend`` transport, which then calls the server-side provider.  Do
+    not compare those identifiers as if they were the same namespace.
+    """
+    from komyst.ui.ui_helpers import normalize_translation_provider
+
+    requested = normalize_translation_provider(requested_provider)
+    effective = str(effective_provider or "").strip().lower()
+    if not translation_enabled:
+        return {
+            "remote_engine": "",
+            "internal_provider": "",
+            "provider_class": "",
+            "status": "disabled",
+        }
+    if not effective:
+        raise RuntimeError("provider_mismatch")
+    if effective == "komyst_backend":
+        if requested not in {"", "deepl"}:
+            raise RuntimeError("provider_mismatch")
+        return {
+            "remote_engine": requested or "deepl",
+            "internal_provider": "komyst_backend",
+            "provider_class": "KomystBackendTranslationProvider",
+            "status": "valid",
+        }
+    # Legacy providers remain valid only when the selected label and runtime
+    # implementation are the same namespace (e.g. explicit nemotron->nemotron).
+    if requested and requested != effective:
+        raise RuntimeError("provider_mismatch")
+    return {
+        "remote_engine": requested,
+        "internal_provider": effective,
+        "provider_class": "",
+        "status": "valid",
+    }
+
+
+def report_provider_provenance(translator_stats):
+    """Provenance of a finished run, derived only from what was actually requested.
+
+    ``provider_requested`` is an immutable job identity: no runtime default, environment
+    variable, CLI default or effective provider may become a request after the fact.
+    """
+    stats = translator_stats if isinstance(translator_stats, dict) else {}
+    requested = str(stats.get("provider_requested") or "").strip().lower()
+    effective = str(
+        stats.get("provider_effective") or stats.get("provider_name") or ""
+    ).strip().lower()
+    provenance = {
+        "provider_requested": requested,
+        "provider_effective": effective,
+        "provider_model": stats.get("model", config.NVIDIA_TRANSLATION_MODEL),
+        "provider_source": stats.get("provider_source", ""),
+        "provider_disabled": bool(stats.get("provider_disabled", False)),
+        "provider_fallback_used": bool(stats.get("provider_fallback_used", False)),
+        "provider_fallback_reason": str(stats.get("provider_fallback_reason", "")),
+        "provider_mismatch": bool(
+            stats.get("provenance_status") == "invalid"
+            or (requested and effective and requested != effective
+                and not (requested == "deepl" and effective == "komyst_backend"))
+        ),
+        "remote_engine": str(stats.get("remote_engine") or "").strip().lower(),
+        "internal_provider": str(stats.get("internal_provider") or effective).strip().lower(),
+        "provider_class": str(stats.get("provider_class") or "").strip(),
+        "provenance_status": "disabled" if stats.get("provider_disabled") else "valid",
+    }
+    # Reported only when the provider actually publishes them, so a run can never
+    # invent a model type it never asked for or was never told about.  DeepL is
+    # the first provider to distinguish the two; the fields stay absent for the
+    # NVIDIA family rather than being back-filled from configuration.
+    for key in ("provider_family", "model_type_requested", "model_type_used"):
+        value = str(stats.get(key) or "").strip()
+        if value:
+            provenance[
+                key if key == "provider_family" else f"provider_{key}"
+            ] = value
+    return provenance
+
+
+def _safe_count(value):
+    if isinstance(value, bool):
+        return None
+    try:
+        count = int(value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return count if count >= 0 else None
+
+
+def _first_positive_count(*values):
+    for value in values:
+        count = _safe_count(value)
+        if count and count > 0:
+            return count
+    return 0
+
+
+def _expected_download_count(manifest):
+    """Return the source/download count declared by a downloader manifest."""
+
+    report = manifest if isinstance(manifest, dict) else {}
+    gate = report.get("download_gate")
+    gate = gate if isinstance(gate, dict) else {}
+    analysis = report.get("source_analysis")
+    analysis = analysis if isinstance(analysis, dict) else {}
+    selection = report.get("source_selection")
+    selection = selection if isinstance(selection, dict) else {}
+    expected_ids = report.get("expected_chapter_candidate_ids")
+    selected_ids = selection.get("candidate_ids")
+    return _first_positive_count(
+        gate.get("expected_viewer_images"),
+        report.get("expected_viewer_images"),
+        report.get("viewer_image_count"),
+        report.get("accepted_count"),
+        analysis.get("accepted_count"),
+        len(expected_ids) if isinstance(expected_ids, (list, tuple)) else None,
+        len(selected_ids) if isinstance(selected_ids, (list, tuple)) else None,
+        selection.get("fresh_candidate_count"),
+        selection.get("selected_candidate_count"),
+        selection.get("confirmed_candidate_count"),
+    )
+
+
+def _download_cache_is_complete(manifest, cached_paths):
+    """A cache hit is valid only if it is explicitly complete for its source."""
+
+    report = manifest if isinstance(manifest, dict) else {}
+    gate = report.get("download_gate")
+    if isinstance(gate, dict) and gate and not gate.get("passed", False):
+        return False
+    expected = _expected_download_count(report)
+    actual = len(cached_paths or [])
+    if expected and actual < expected:
+        return False
+    total = _safe_count(report.get("total_downloaded"))
+    if total is not None and actual < total:
+        return False
+    return bool(actual)
+
+
+def _page_count_trace(download_report, *, all_image_paths, source_image_paths,
+                      image_paths, completed_states, smart_split_report):
+    split = smart_split_report if isinstance(smart_split_report, dict) else {}
+    logical_count = len(image_paths or [])
+    processed_indices = sorted(
+        {
+            int(state.get("index"))
+            for state in (completed_states or [])
+            if isinstance(state, dict) and state.get("index") is not None
+        }
+    )
+    processed_index_set = set(processed_indices)
+    excluded_logical_pages = [
+        index
+        for index in range(1, logical_count + 1)
+        if index not in processed_index_set
+    ]
+    return {
+        "source_expected": _expected_download_count(download_report),
+        "downloaded": len(all_image_paths or []),
+        "source_images": len(source_image_paths or []),
+        "logical_pages": logical_count,
+        "processed_pages": len(completed_states or []),
+        "processed_logical_pages": processed_indices,
+        "excluded_logical_pages": excluded_logical_pages,
+        "logical_page_exclusion_reason": (
+            "invalid_or_blank_logical_page" if excluded_logical_pages else ""
+        ),
+        "smart_split_enabled": bool(split.get("enabled")),
+        "smart_split_source_images": _safe_count(split.get("source_images")),
+        "smart_split_pdf_pages": _safe_count(split.get("pdf_pages")),
+        "smart_split_unsafe_count": _safe_count(split.get("unsafe_split_count")),
+    }
+
+
+def _group_count_trace(page_states):
+    """Return count-only OCR/grouping provenance without exposing OCR text."""
+
+    states = list(page_states or [])
+    trace = {
+        "logical_pages": len(states),
+        "detector_inputs": 0,
+        "regions_detected": 0,
+        "ocr_inputs": 0,
+        "ocr_executed": 0,
+        "ocr_nonempty": 0,
+        "candidate_regions": 0,
+        "groups_created": 0,
+        "groups_filtered": 0,
+        "translation_groups": 0,
+        "groups_persisted": 0,
+        "pages_without_text": 0,
+        "pages_with_ocr_error": 0,
+    }
+    for state in states:
+        raw_lines = list(state.get("raw_lines") or [])
+        candidates = list(state.get("candidates") or [])
+        groups = list(state.get("groups") or [])
+        translatable = list(state.get("translatable_groups") or [])
+        debug = state.get("debug_data") if isinstance(state.get("debug_data"), dict) else {}
+        metadata = state.get("ocr_metadata") if isinstance(state.get("ocr_metadata"), dict) else {}
+        raw_line_count = len(raw_lines)
+        if not raw_line_count:
+            raw_line_count = int(debug.get("ocr_line_count") or 0)
+
+        skipped_without_text = state.get("status") == "completed" and bool(
+            (state.get("precheck") or {}).get("skipped_no_text")
+            or state.get("precheck_reason")
+        )
+        trace["detector_inputs"] += 1
+        trace["ocr_inputs"] += 0 if skipped_without_text else 1
+        if (
+            state.get("ocr_source") in {"run", "cache"}
+            or raw_line_count
+            or state.get("ocr_completed")
+        ):
+            trace["ocr_executed"] += 1
+        if raw_line_count:
+            trace["ocr_nonempty"] += 1
+        elif not groups and not int(debug.get("group_count") or 0):
+            trace["pages_without_text"] += 1
+        if state.get("ocr_error"):
+            trace["pages_with_ocr_error"] += 1
+
+        estimated_regions = _safe_count(metadata.get("estimated_text_regions"))
+        trace["regions_detected"] += (
+            estimated_regions if estimated_regions is not None else raw_line_count
+        )
+        trace["candidate_regions"] += (
+            len(candidates) if candidates else int(debug.get("ocr_line_count") or 0)
+        )
+        created = len(groups) if groups else int(debug.get("group_count") or 0)
+        translation_count = (
+            len(translatable)
+            if translatable
+            else int(debug.get("translated_group_count") or 0)
+        )
+        trace["groups_created"] += created
+        trace["translation_groups"] += translation_count
+        trace["groups_filtered"] += max(0, created - translation_count)
+        trace["groups_persisted"] += int(debug.get("group_count") or created)
+    return trace
+
+
+def _output_run_manifest(output_folder, report, translator):
+    created_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    git = _GIT_AT_RUN_START or _git_metadata()
+    run_id = str(report.get("job_run_id") or "").strip()
+    if not run_id:
+        run_id = stable_hash(
+            {
+                "run_signature": report.get("run_signature"),
+                "output_folder": str(output_folder),
+                "created_at": created_at,
+            }
+        )[:24]
+    quality = report.get("quality_validation") or {}
+    source_url = str(report.get("url") or "")
+    source_type = str(report.get("source_type") or "url")
+    return build_run_manifest(
+        run_id=run_id,
+        created_at=created_at,
+        source_url=source_url,
+        commit_hash=git["commit_hash"],
+        branch=git["branch"],
+        pipeline_version=PIPELINE_MANIFEST_VERSION,
+        model=str(getattr(translator, "model", "") or "unknown"),
+        final_status=str(report.get("status") or ""),
+        quality_passed=bool(quality.get("passed")),
+        manual_review_count=int(quality.get("manual_review_required_groups") or 0),
+        rejected_count=int(report.get("translation_rejections") or 0),
+        pdf_path=str(report.get("pdf_path") or ""),
+        # ``source_url`` is deliberately sanitised before the timing report is written,
+        # so it cannot safely yield a semantic series/chapter identifier.  The run slug is
+        # the output directory identity; optional series metadata stays empty unless a
+        # future trusted source supplies it separately.
+        slug=Path(output_folder).name,
+        series_slug=str(report.get("series_slug") or ""),
+        episode_number=str(report.get("episode_number") or ""),
+        source_type=source_type,
+        adapter_name=str(report.get("adapter_name") or ""),
+        adapter_version=str(report.get("adapter_version") or ""),
+        transport_name=str(report.get("transport_name") or ""),
+        source_provenance=report.get("source_provenance"),
+        provider_provenance=report.get("provider_provenance"),
+        quality_validation=quality,
+        ocr_line_provenance=report.get("ocr_line_provenance"),
+    )
+
+
+def _sha256_and_size(path):
+    digest = hashlib.sha256()
+    size = 0
+    with Path(path).open("rb") as handle:
+        for block in iter(lambda: handle.read(1024 * 1024), b""):
+            size += len(block)
+            digest.update(block)
+    return digest.hexdigest(), size
+
+
+class ImmutableArtifactConflict(RuntimeError):
+    """Raised when a terminal artifact path already contains different bytes."""
+
+
+def _finalize_immutable_file(temp_path, final_path):
+    """Promote ``temp_path`` to ``final_path`` without overwriting different bytes.
+
+    Re-running the same logical run with byte-identical output is idempotent.  Producing
+    different bytes for an existing terminal artifact fails closed because overwriting it
+    would erase the previous run's audit evidence.
+    """
+
+    temp = Path(temp_path).resolve()
+    final = Path(final_path).resolve()
+    final.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        temp.relative_to(final.parent)
+    except ValueError as exc:
+        raise ImmutableArtifactConflict("temporary_artifact_outside_run_folder") from exc
+    if final.exists():
+        if not final.is_file():
+            raise ImmutableArtifactConflict("artifact_path_not_file")
+        temp_hash, temp_size = _sha256_and_size(temp)
+        final_hash, final_size = _sha256_and_size(final)
+        if temp_hash == final_hash and temp_size == final_size:
+            try:
+                temp.unlink()
+            except OSError:
+                pass
+            return {"status": "idempotent", "sha256": final_hash, "size": final_size}
+        raise ImmutableArtifactConflict("artifact_already_exists_with_different_bytes")
+    temp.replace(final)
+    final_hash, final_size = _sha256_and_size(final)
+    return {"status": "created", "sha256": final_hash, "size": final_size}
+
+
+def process_pre_translation_page(
+    context: PageProcessingContext,
+    *,
+    page_state,
+    image_paths,
+    ocr_lang,
+    fast_ocr_budget,
+    errors_folder,
+) -> PreTranslationPageResult:
+    """Process exactly one page and return only page-owned state/results."""
+    if not isinstance(context, PageProcessingContext):
+        raise TypeError("context must be PageProcessingContext")
+    if int(context.page_index) != int(page_state.get("index", -1)):
+        raise ValueError("page context/index mismatch")
+    state = page_state
+    page_acc = PreTranslationPageAccumulator(page_index=int(state["index"]))
+    # Isolate page-owned writes from the aggregate list entry.  Nested
+    # timing state is copied explicitly; large image references remain
+    # shared read-only until the page produces its final result.
+    global_page_state = state
+    state = dict(state)
+    index = int(state["index"])
+    # Keep the page-local accumulator complete even when an early OCR/image
+    # failure takes the error path before ordinary stages have been entered.
+    stage_seconds = {"image_save": 0.0}
+    state["timings"] = dict(global_page_state.get("timings", {}) or {})
+    # OCR lines are page-owned mutable input once recovery/classification
+    # starts; do not let a future worker alias the aggregate state's list.
+    if isinstance(state.get("raw_lines"), list):
+        state["raw_lines"] = list(state["raw_lines"])
+    # Copy small nested page metadata so local mutation cannot alias the
+    # aggregate state. Large image/model objects are intentionally shared
+    # as read-only references.
+    for field in (
+        "precheck", "ocr_metadata", "debug_data", "fast_ocr_fallback_metadata",
+        "speech_container_reocr", "rapidocr_region_recovery",
+        "selective_ocr_fallbacks", "group_text_repairs",
+    ):
+        if field in state and state[field] is not None:
+            state[field] = copy.deepcopy(state[field])
+    run_recorder = ocr_line_provenance.active()
+    page_recorder = ocr_line_provenance.ProvenanceRecorder()
+    ocr_line_provenance.activate(page_recorder)
+    run_profiler = get_active_profiler()
+    page_profiler = ClassificationProfiler(
+        enabled=bool(run_profiler and run_profiler.enabled)
+    )
+    classification_profiler = page_profiler
+    set_active_profiler(page_profiler)
+
+    def finish_page_provenance():
+        ocr_line_provenance.activate(run_recorder)
+        set_active_profiler(run_profiler)
+        page_acc.ocr_line_provenance.extend(
+            page_recorder.to_dict().get("pages", [])
+        )
+
+    if state.get("status") == "completed":
+        page_acc.page_state = state
+        page_acc.page_recorder = page_recorder
+        page_acc.page_profiler = page_profiler
+        finish_page_provenance()
+        return page_acc.to_result()
+
+    if state.get("ocr_error"):
+        _complete_page_with_error(
+            state,
+            state["ocr_error"],
+            errors_folder,
+            stage_seconds,
+            stage="ocr",
+        )
+        page_acc.counters["pages_with_error"] = (
+            page_acc.counters.get("pages_with_error", 0) + 1
+        )
+        page_acc.progress_events.append(PageProgressEvent(
+            page_index=index, stage="pre_translation", completed_units=1,
+            total_units=1, code="page_error",
+        ))
+        page_acc.timings.update(stage_seconds)
+        page_acc.error = str(state.get("page_error", {}).get("message", "ocr_error"))
+        page_acc.page_state = state
+        page_acc.page_recorder = page_recorder
+        page_acc.page_profiler = page_profiler
+        finish_page_provenance()
+        return page_acc.to_result()
+
+    original = cv2.imread(state["image_path"])
+    if original is None:
+        _complete_page_with_error(
+            state,
+            "image_load_failed_before_classification",
+            errors_folder,
+            stage_seconds,
+            stage="image_load",
+        )
+        page_acc.counters["pages_with_error"] = (
+            page_acc.counters.get("pages_with_error", 0) + 1
+        )
+        page_acc.progress_events.append(PageProgressEvent(
+            page_index=index, stage="pre_translation", completed_units=1,
+            total_units=1, code="page_error",
+        ))
+        page_acc.timings.update(stage_seconds)
+        page_acc.error = str(state.get("page_error", {}).get("message", "image_load_failed_before_classification"))
+        page_acc.page_state = state
+        page_acc.page_recorder = page_recorder
+        page_acc.page_profiler = page_profiler
+        finish_page_provenance()
+        return page_acc.to_result()
+
+    classification_profiler.start_page(
+        state["index"],
+        raw_line_count=len(state.get("raw_lines", []) or []),
+    )
+    classify_started = time.perf_counter()
+    with profile_step(
+        "pipeline.analyze_initial",
+        page_index=state["index"],
+        items=len(state.get("raw_lines", []) or []),
+    ):
+        candidates, groups = analyze_image_array(
+            original,
+            state.get("raw_lines", []),
+            page_index=state["index"],
+        )
+    reocr_started = time.perf_counter()
+    with profile_step(
+        "pipeline.speech_container_reocr",
+        page_index=state["index"],
+        items=len(state.get("raw_lines", []) or []),
+    ):
+        reocr_lines, reocr_records = apply_speech_container_reocr(
+            original,
+            state.get("raw_lines", []),
+            ocr_lang,
+            state["index"],
+        )
+    reocr_elapsed = time.perf_counter() - reocr_started
+    if reocr_records:
+        state["speech_container_reocr"] = reocr_records
+        page_acc.timings["ocr_selective_fallback"] = (
+            page_acc.timings.get("ocr_selective_fallback", 0.0) + reocr_elapsed
+        )
+        if any(record.get("accepted") for record in reocr_records):
+            with ocr_line_provenance.page(state["index"]):
+                ocr_line_provenance.record_replacement(
+                    state.get("raw_lines", []),
+                    reocr_lines,
+                    reason="speech_container_reocr",
+                )
+            state["raw_lines"] = reocr_lines
+            with profile_step(
+                "pipeline.analyze_after_speech_container_reocr",
+                page_index=state["index"],
+                items=len(reocr_lines),
+            ):
+                candidates, groups = analyze_image_array(
+                    original,
+                    reocr_lines,
+                    page_index=state["index"],
+                )
+    recovery_started = time.perf_counter()
+    with profile_step(
+        "pipeline.rapidocr_region_recovery",
+        page_index=state["index"],
+        items=len(groups),
+    ):
+        with _rapidocr_section():
+            recovery_lines, recovery_records = apply_rapidocr_region_recovery(
+                original,
+                state.get("raw_lines", []),
+                groups,
+                ocr_lang,
+                state["index"],
+            )
+    if recovery_records:
+        state["rapidocr_region_recovery"] = recovery_records
+        recovery_elapsed = time.perf_counter() - recovery_started
+        page_acc.timings["ocr_selective_fallback"] = (
+            page_acc.timings.get("ocr_selective_fallback", 0.0) + recovery_elapsed
+        )
+        if any(record.get("selection") == "attempt_2" for record in recovery_records):
+            with ocr_line_provenance.page(state["index"]):
+                ocr_line_provenance.record_replacement(
+                    state.get("raw_lines", []),
+                    recovery_lines,
+                    reason="rapidocr_region_recovery",
+                )
+            state["raw_lines"] = recovery_lines
+            with profile_step(
+                "pipeline.analyze_after_rapidocr_recovery",
+                page_index=state["index"],
+                items=len(recovery_lines),
+            ):
+                candidates, groups = analyze_image_array(
+                    original,
+                    recovery_lines,
+                    page_index=state["index"],
+                )
+                apply_variant_votes(groups)
+    with _rapidocr_section():
+        resolve_split_word_ambiguity(original, groups, ocr_lang, state["index"])
+    selective_started = time.perf_counter()
+    with profile_step(
+        "pipeline.selective_ocr_fallbacks",
+        page_index=state["index"],
+        items=len(groups),
+    ):
+        with _rapidocr_section():
+            fallback_lines, selective_records = apply_selective_ocr_fallbacks(
+                original,
+                state.get("raw_lines", []),
+                groups,
+                ocr_lang,
+                state["index"],
+                fast_ocr_budget=fast_ocr_budget if fast_ocr_budget.enabled else None,
+            )
+    selective_elapsed = time.perf_counter() - selective_started
+    if selective_records:
+        state["selective_ocr_fallbacks"] = selective_records
+        page_acc.timings["ocr_selective_fallback"] = (
+            page_acc.timings.get("ocr_selective_fallback", 0.0) + selective_elapsed
+        )
+        state["timings"]["ocr_selective_fallback"] = selective_elapsed
+        used_records = [
+            record for record in selective_records if record.get("fallback_used")
+        ]
+        if used_records:
+            with ocr_line_provenance.page(state["index"]):
+                ocr_line_provenance.record_replacement(
+                    state.get("raw_lines", []),
+                    fallback_lines,
+                    reason="selective_ocr_fallback",
+                )
+            state["raw_lines"] = fallback_lines
+            with profile_step(
+                "pipeline.analyze_after_selective_fallback",
+                page_index=state["index"],
+                items=len(fallback_lines),
+            ):
+                candidates, groups = analyze_image_array(
+                    original,
+                    fallback_lines,
+                    page_index=state["index"],
+                )
+            state["ocr_metadata"] = {
+                **state.get("ocr_metadata", {}),
+                "selective_fallbacks": selective_records,
+            }
+    grouping_fallback_reason = _grouping_fallback_reason(state, groups)
+    if grouping_fallback_reason and fast_ocr_budget.enabled:
+        allowed, budget_reason = fast_ocr_budget.allow(
+            kind="paddle_full_page", page=state["index"]
+        )
+        if not allowed:
+            _mark_fast_ocr_review(state, budget_reason, grouping_fallback_reason)
+            print(
+                f"OCR: pagina {state['index']}/{len(image_paths)} - "
+                f"fallback pesado preservado ({budget_reason})",
+                flush=True,
+            )
+            grouping_fallback_reason = ""
+    fallback_elapsed = 0.0
+    if grouping_fallback_reason:
+        fallback_started = time.perf_counter()
+        with profile_step(
+            "pipeline.full_page_paddle_fallback",
+            page_index=state["index"],
+            metadata={"reason": grouping_fallback_reason},
+        ):
+            if fast_ocr_budget.enabled:
+                from komyst.ocr.fast_ocr_policy import run_ocr_with_timeout
+
+                fallback_lines, fallback_metadata = run_ocr_with_timeout(
+                    original,
+                    lang=ocr_lang,
+                    engine_name="paddle",
+                    page=state["index"],
+                    timeout_seconds=fast_ocr_budget.page_timeout_seconds,
+                )
+                if fallback_metadata.get("timeout"):
+                    _mark_fast_ocr_review(
+                        state,
+                        "fast_ocr_page_timeout",
+                        grouping_fallback_reason,
+                    )
+                state["fast_ocr_fallback_metadata"] = fallback_metadata
+            else:
+                paddle = OCREngine(
+                    ocr_lang,
+                    engine="paddle",
+                    fallback_engine="",
+                )
+                fallback_lines = paddle.detect_lines(
+                    original,
+                    page=state["index"],
+                )
+            fallback_lines, preserved_regional_count = (
+                _preserve_selected_regional_ocr(
+                    fallback_lines,
+                    state.get("raw_lines", []),
+                )
+            )
+        fallback_elapsed = time.perf_counter() - fallback_started
+        if fast_ocr_budget.enabled:
+            fast_ocr_budget.record(
+                kind="paddle_full_page",
+                elapsed=fallback_elapsed,
+                page=state["index"],
+            )
+        state["timings"]["ocr"] = (
+            float(state["timings"].get("ocr", 0.0))
+            + fallback_elapsed
+        )
+        page_acc.timings["ocr"] = page_acc.timings.get("ocr", 0.0) + fallback_elapsed
+        page_acc.timings["ocr_cpu"] = page_acc.timings.get("ocr_cpu", 0.0) + fallback_elapsed
+        if _fallback_discards_source_text(
+            state.get("raw_lines", []), fallback_lines
+        ):
+            # Keep the read we already have. Taking this answer would leave
+            # the page with no groups at all, and an untranslated source
+            # page is a worse defect than the badly-read region that asked
+            # for the escalation.
+            state["ocr_metadata"] = {
+                **state.get("ocr_metadata", {}),
+                "fallback_used": False,
+                "fallback_attempted_reason": grouping_fallback_reason,
+                "fallback_rejected_reason": "fallback_discards_source_text",
+                "fallback_variant": "paddle_full",
+            }
+        else:
+            with ocr_line_provenance.page(state["index"]):
+                ocr_line_provenance.record_replacement(
+                    state.get("raw_lines", []),
+                    fallback_lines,
+                    reason="full_page_paddle_fallback",
+                )
+            state["raw_lines"] = fallback_lines
+            state["ocr_metadata"] = {
+                **state.get("ocr_metadata", {}),
+                "fallback_used": True,
+                "fallback_reason": grouping_fallback_reason,
+                "original_engine": "rapidocr",
+                "final_engine": (
+                    "hybrid" if preserved_regional_count else "paddle"
+                ),
+                "fallback_variant": "paddle_full",
+                "preserved_regional_line_count": preserved_regional_count,
+            }
+            with profile_step(
+                "pipeline.analyze_after_full_page_fallback",
+                page_index=state["index"],
+                items=len(fallback_lines),
+            ):
+                candidates, groups = analyze_image_array(
+                    original,
+                    fallback_lines,
+                    page_index=state["index"],
+                )
+            if config.ENABLE_OCR_CACHE:
+                save_ocr_cache(
+                    state["ocr_cache_key"],
+                    state["image_hash"],
+                    ocr_lang,
+                    fallback_lines,
+                    state["timings"]["ocr"],
+                    state.get("precheck", {}),
+                    ocr_metadata=state["ocr_metadata"],
+                )
+    with profile_step(
+        "pipeline.collect_group_text_repairs",
+        page_index=state["index"],
+        items=len(groups),
+    ):
+        state["group_text_repairs"] = _group_text_repairs(groups)
+    # ``classify_started`` also covers the OCR passes above (speech re-OCR,
+    # selective fallback, full-page fallback); those report under their own
+    # timers/keys, so subtract them here to keep ``classification_grouping``
+    # honest instead of double-counted as the slowest stage.
+    classify_elapsed = (
+        time.perf_counter()
+        - classify_started
+        - reocr_elapsed
+        - selective_elapsed
+        - fallback_elapsed
+    )
+    classification_profiler.record_step(
+        "classification_grouping.page_total",
+        classify_elapsed,
+        page_index=state["index"],
+        items=len(groups),
+    )
+    page_acc.timings["classification_grouping"] = (
+        page_acc.timings.get("classification_grouping", 0.0) + classify_elapsed
+    )
+    state["timings"]["classification_grouping"] = classify_elapsed
+    state["original_bgr"] = original
+    state["candidates"] = candidates
+    state["groups"] = groups
+    page_acc.provenance.update(
+        {
+            "page_index": int(state["index"]),
+            "ocr_metadata": dict(state.get("ocr_metadata", {}) or {}),
+            "initial_ocr_engine": (state.get("ocr_metadata", {}) or {}).get("initial_engine"),
+            "current_ocr_engine": (state.get("ocr_metadata", {}) or {}).get("final_engine"),
+        }
+    )
+    # Last gate before the translation list is built: a region RapidOCR could
+    # not read acceptably, even after its one selective retry, goes to review
+    # instead of to the translator.
+    enforce_rapidocr_quality_gate(groups, page_index=state["index"])
+    with profile_step(
+        "pipeline.get_translatable_groups",
+        page_index=state["index"],
+        items=len(groups),
+    ):
+        state["translatable_groups"] = get_translatable_groups(groups)
+    # Keep page-owned translation items isolated until the page has
+    # completed.  The ordered merge below preserves the legacy serial
+    # translation barrier and avoids mutating the job list mid-page.
+    page_acc.translation_items.extend(state["translatable_groups"])
+    page_acc.progress_events.append(PageProgressEvent(
+        page_index=index, stage="pre_translation", completed_units=1,
+        total_units=1, code="page_ready_for_translation",
+    ))
+    state["structural_snapshot"] = _structural_page_snapshot(state, groups)
+    classification_profiler.finish_page(
+        state["index"],
+        group_count=len(groups),
+        translatable_groups=len(state["translatable_groups"]),
+        fallback_count=sum(
+            1 for record in state.get("selective_ocr_fallbacks", []) if record.get("fallback_used")
+        )
+        + (1 if grouping_fallback_reason else 0),
+        repair_count=len(state.get("group_text_repairs", []) or []),
+        classification_grouping_seconds=classify_elapsed,
+    )
+    page_acc.page_state = state
+    page_acc.analyzable = True
+    page_acc.page_recorder = page_recorder
+    page_acc.page_profiler = page_profiler
+    finish_page_provenance()
+    return page_acc.to_result()
+
+def run_benchmark(args):
+    started = time.perf_counter()
+    monotonic_origin_ns = time.perf_counter_ns()
+    global _PERF_JOB_ORIGIN_NS, _PERF_EVENTS, _PIPELINE_TELEMETRY, _GIT_AT_RUN_START
+    _GIT_AT_RUN_START = _git_metadata()
+    region_taxonomy.set_series_identity(series_slug_from_url(str(getattr(args, "url", "") or "")))
+    # Direct benchmark callers (including the streaming audit harness) may not
+    # pass through run_webtoon._configure_mode. Resolve the supported Beta
+    # engine here as well, so a stale local OCR_ENGINE=paddle cannot select the
+    # optional legacy path and block a Paddle-free RapidOCR run.
+    requested_engine = str(getattr(args, "ocr_engine", "") or "").strip().lower()
+    if requested_engine in getattr(config, "BETA_OCR_ENGINES", {"rapidocr"}):
+        config.OCR_ENGINE = requested_engine
+    elif not requested_engine:
+        config.OCR_ENGINE = config.effective_ocr_engine()
+    _PERF_JOB_ORIGIN_NS = monotonic_origin_ns
+    _PERF_EVENTS = []
+    # Line provenance is collected for the whole run: raw OCR lines, every list
+    # replacement between passes, group membership and the exact renderer input.
+    ocr_line_provenance.activate()
+    output_folder = Path(getattr(args, "output_folder", OUTPUT_FOLDER)).resolve()
+    telemetry_path = output_folder / "pipeline_telemetry.jsonl"
+    _PIPELINE_TELEMETRY = (
+        pipeline_telemetry.TelemetrySink(
+            telemetry_path,
+            run_id=str(getattr(args, "job_run_id", "") or "") or None,
+            job_id=str(getattr(args, "job_id", "") or ""),
+        )
+        if pipeline_telemetry.enabled() else None
+    )
+    if _PIPELINE_TELEMETRY is not None:
+        _PIPELINE_TELEMETRY.emit("PIPELINE_RUN_START", stage="pipeline")
+        _emit_pipeline_event("SOURCE_STREAM_START", source_count=0)
+    marker_dir = str(os.getenv("KOMYST_CANCEL_TEST_MARKER_DIR") or "").strip()
+    if marker_dir:
+        try:
+            marker = Path(marker_dir)
+            marker.mkdir(parents=True, exist_ok=True)
+            (marker / "benchmark_pipeline_entered").write_text("1", encoding="utf-8")
+        except OSError:
+            pass
+    pages_folder = output_folder / "pages"
+    errors_folder = output_folder / "errors"
+    diagnostic_folder = output_folder / "debug"
+    progress_path = output_folder / "progress.json"
+    timing_json_path = output_folder / "timing_report.json"
+    timing_txt_path = output_folder / "timing_report.txt"
+    selected_page_indices = _parse_page_indices(getattr(args, "page_indices", ""))
+    targeted_regression = bool(selected_page_indices)
+    contact_sheet_path = (
+        output_folder / "regression_contact_sheet.jpg"
+        if targeted_regression
+        else output_folder / "preview_contact_sheet.jpg"
+    )
+    compare_sheet_path = (
+        output_folder / "regression_compare_sheet.jpg"
+        if targeted_regression
+        else output_folder / "preview_compare_sheet.jpg"
+    )
+    quality_json_path = (
+        output_folder / "regression_report.json"
+        if targeted_regression
+        else output_folder / "quality_report.json"
+    )
+    quality_html_path = (
+        output_folder / "regression_report.html"
+        if targeted_regression
+        else output_folder / "quality_report.html"
+    )
+    context_enabled = bool(getattr(args, "use_context", False))
+    fast_ocr_budget = FastOCRBudget.from_config(fast=bool(getattr(args, "fast", False)))
+    session_context_path = Path(
+        getattr(args, "session_context_path", output_folder / "session_context.json")
+    ).resolve()
+    session_context = (
+        SessionContextStore(session_context_path, args.url)
+        if context_enabled
+        else None
+    )
+
+    output_folder.mkdir(parents=True, exist_ok=True)
+    cancel_event, cancel_watcher = _cancel_event_from_environment()
+    if cancel_event.is_set():
+        raise PipelineCancelled("user_cancelled")
+    resource_monitor = ResourceMonitor(
+        output_folder,
+        enabled=config.RESOURCE_MONITORING,
+        interval_seconds=config.RESOURCE_MONITOR_INTERVAL_SECONDS,
+    )
+    classification_profiler = ClassificationProfiler(
+        enabled=config.CLASSIFICATION_PROFILING,
+    )
+    set_active_profiler(classification_profiler)
+    resource_monitor.start()
+    resource_monitor.set_stage("preparing")
+    if args.force:
+        _reset_generated_folders(pages_folder, errors_folder)
+        if targeted_regression:
+            _reset_generated_folders(diagnostic_folder)
+    pages_folder.mkdir(parents=True, exist_ok=True)
+    errors_folder.mkdir(parents=True, exist_ok=True)
+
+    effective_debug = bool(config.DEBUG_VISUAL and not args.fast)
+    max_images = None if args.full else args.max_images
+    local_manifest_path = str(getattr(args, "local_manifest_path", "") or "")
+    download_max_images = _resolve_download_max_images(
+        max_images,
+        selected_page_indices,
+        local_manifest_path,
+        getattr(args, "source_candidate_ids", []) or [],
+    )
+    run_signature = stable_hash(
+        {
+            "url": args.url,
+            "max_images": max_images,
+            "full": args.full,
+            "fast": args.fast,
+            "page_indices": selected_page_indices,
+            "source_candidate_ids": list(getattr(args, "source_candidate_ids", []) or []),
+            "pipeline": "benchmark-v2-smart-pages",
+            "ocr_engine": config.OCR_ENGINE,
+            "ocr_fallback_engine": config.OCR_FALLBACK_ENGINE,
+            "ocr_hybrid_fallback": config.OCR_HYBRID_FALLBACK,
+            "fast_ocr_mode": bool(getattr(config, "FAST_OCR_MODE", False)),
+            "fast_ocr_heavy_fallback": bool(getattr(config, "FAST_OCR_HEAVY_FALLBACK", False)),
+            "fast_ocr_region_timeout": float(getattr(config, "FAST_OCR_REGION_TIMEOUT_SECONDS", 0.0)),
+            "fast_ocr_full_fallback_max_pages": int(
+                getattr(config, "FAST_OCR_FULL_FALLBACK_MAX_PAGES", 0)
+            ),
+            "fast_ocr_full_fallback_max_regions": int(
+                getattr(config, "FAST_OCR_FULL_FALLBACK_MAX_REGIONS", 0)
+            ),
+            "smart_webtoon_pdf_split": config.SMART_WEBTOON_PDF_SPLIT,
+            "smart_pdf_target_height": config.SMART_PDF_TARGET_HEIGHT,
+            "smart_pdf_min_height": config.SMART_PDF_MIN_HEIGHT,
+            "smart_pdf_max_height": config.SMART_PDF_MAX_HEIGHT,
+        }
+    )
+    pipeline_fingerprint = fingerprint_files(PIPELINE_FILES)
+    relevant_config = _relevant_output_config(pipeline_fingerprint)
+
+    # Console output is captured by the job runner, so never place signed reader queries in
+    # it. The raw URL remains in memory only for the actual, validated download.
+    print(f"Benchmark: {sanitize_source_url(args.url)}", flush=True)
+    print(f"Imagens: {'capitulo completo' if args.full else max_images}", flush=True)
+    if selected_page_indices:
+        print(f"Paginas selecionadas: {selected_page_indices}", flush=True)
+    print(f"Fast: {'sim' if args.fast else 'nao'}", flush=True)
+    print(f"Force: {'sim' if args.force else 'nao'}", flush=True)
+    print(f"Saida: {output_folder}", flush=True)
+
+    resource_monitor.set_stage("downloading")
+    print("DOWNLOAD_STAGE_STARTED", flush=True)
+    download_started = time.perf_counter()
+    all_image_paths, download_report, download_cache_hit = _download_with_cache(
+        args.url,
+        download_max_images,
+        output_folder,
+        force=bool(getattr(args, "force_download", False)),
+        source_candidate_ids=list(getattr(args, "source_candidate_ids", []) or []),
+        local_manifest_path=local_manifest_path,
+        resume_checkpoint=bool(getattr(args, "resume_checkpoint", False)),
+    )
+    download_wall_seconds = time.perf_counter() - download_started
+    print(
+        "DOWNLOAD_STAGE_RESULT "
+        f"status=success downloaded_count={len(all_image_paths)} "
+        f"duration_ms={int(download_wall_seconds * 1000)}", flush=True,
+    )
+    if not all_image_paths:
+        raise RuntimeError("Nenhuma imagem valida encontrada para o benchmark.")
+    download_gate = download_report.get("download_gate") or {}
+    if download_gate and not download_gate.get("passed", False):
+        raise RuntimeError(
+            "Download gate reprovado: "
+            + ", ".join(download_gate.get("reasons") or ["motivo desconhecido"])
+        )
+    resource_monitor.set_stage("validation")
+    # Smart split rebuilds pages from a long webtoon strip. Manga/comic pages are already
+    # pages; a reader that exposed a few <img> tags (Comix) used to have its 22 pages re-cut
+    # and merged into 13. A source that knows its layout says so; only an unknown one is
+    # judged by image shape, which cannot tell a 800x1280 strip chunk from a manga page
+    # (Webtoons chunks were left uncut, so balloons crossing a chunk edge stayed half-cleaned).
+    download_report["requires_smart_split"] = _source_needs_smart_split(
+        download_report, all_image_paths)
+    source_selection = [] if (
+        config.SMART_WEBTOON_PDF_SPLIT
+        and bool(download_report.get("requires_smart_split", True))
+    ) else selected_page_indices
+    source_entries, missing_page_indices = _select_image_entries(
+        all_image_paths,
+        source_selection,
+    )
+    if missing_page_indices:
+        print(
+            "Aviso: paginas selecionadas indisponiveis apos download: "
+            + ",".join(str(item) for item in missing_page_indices),
+            flush=True,
+        )
+    if not source_entries:
+        raise RuntimeError("Nenhuma pagina selecionada estava disponivel para processar.")
+    source_image_paths = [entry["path"] for entry in source_entries]
+    smart_split_report = {
+        "enabled": False,
+        "reason": "disabled",
+        "source_images": len(source_image_paths),
+        "pdf_pages": len(source_image_paths),
+        "unsafe_split_count": 0,
+    }
+    smart_split_seconds = 0.0
+    smart_split_contact_sheet = output_folder / "smart_split_contact_sheet.jpg"
+    should_rebuild_pages = bool(
+        config.SMART_WEBTOON_PDF_SPLIT
+        and download_report.get("viewer_image_count")
+        and download_report.get("requires_smart_split", True)
+    )
+    if should_rebuild_pages:
+        resource_monitor.set_stage("smart_split")
+        split_started = time.perf_counter()
+        if config.PIPELINE_STREAMING:
+            # The splitter is owned by _incremental_entries below so its output
+            # can feed page-state/job production while sources are still being
+            # accepted. Do not materialize a manifest here.
+            smart_paths = []
+            smart_split_report = {
+                "enabled": True,
+                "mode": "incremental",
+                "source_images": len(source_image_paths),
+                "pdf_pages": 0,
+                "pre_eof_final_items": 0,
+                "unsafe_split_count": 0,
+            }
+        else:
+            smart_paths, smart_split_report = prepare_smart_webtoon_pages(
+                source_image_paths,
+                output_folder / "smart_input_pages",
+                target_height=config.SMART_PDF_TARGET_HEIGHT,
+                min_height=config.SMART_PDF_MIN_HEIGHT,
+                max_height=config.SMART_PDF_MAX_HEIGHT,
+            )
+        smart_split_seconds = time.perf_counter() - split_started
+        smart_split_report = {"enabled": True, **smart_split_report}
+        if selected_page_indices:
+            create_split_boundary_contact_sheet(
+                smart_paths,
+                smart_split_report,
+                smart_split_contact_sheet,
+            )
+            image_entries, missing_page_indices = _select_image_entries(
+                smart_paths,
+                selected_page_indices,
+            )
+            selected_smart_paths = [entry["path"] for entry in image_entries]
+        elif config.PIPELINE_STREAMING:
+            # Keep the manifest producer live.  The consumer below records the
+            # emitted paths for the final report, but page-state/OCR production
+            # consumes this iterator as items are emitted instead of waiting for
+            # a second materialized image_entries list.
+            smart_paths = []
+            selected_smart_paths = []
+
+            def _incremental_entries():
+                splitter = IncrementalSmartSplitter(
+                    output_folder / "smart_input_pages",
+                    target_height=config.SMART_PDF_TARGET_HEIGHT,
+                    min_height=config.SMART_PDF_MIN_HEIGHT,
+                    max_height=config.SMART_PDF_MAX_HEIGHT,
+                )
+                emitted = 0
+                limit = None if args.full else max(0, int(max_images or 0))
+                for source_index, source_path in enumerate(source_image_paths, start=1):
+                    _emit_pipeline_event("SOURCE_ITEM_READY", source_index=source_index)
+                    _emit_pipeline_event("SMART_SPLIT_PUSH_START", source_index=source_index)
+                    items = splitter.push(f"source-{source_index:03d}", source_path)
+                    for item in items:
+                        _emit_pipeline_event(
+                            "SOURCE_REORDER_RELEASE",
+                            page_index=int(item.logical_page_index),
+                            source_index=source_index,
+                        )
+                        _emit_pipeline_event("SMART_SPLIT_PUSH_END", page_index=int(item.logical_page_index))
+                        smart_paths.append(item.path)
+                        if limit is None or emitted < limit:
+                            emitted += 1
+                            selected_smart_paths.append(item.path)
+                            yield to_image_entry(item)
+                for item in splitter.finish():
+                    _emit_pipeline_event("FINAL_MANIFEST_ITEM_READY", page_index=int(item.logical_page_index))
+                    smart_paths.append(item.path)
+                    if limit is None or emitted < limit:
+                        emitted += 1
+                        selected_smart_paths.append(item.path)
+                        yield to_image_entry(item)
+                smart_split_report.update({
+                    "mode": "incremental",
+                    "source_images": len(source_image_paths),
+                    "pdf_pages": len(smart_paths),
+                    "pre_eof_final_items": max(0, len(smart_paths) - 1),
+                    "source_reorder_depth_max": splitter.telemetry["source_reorder_max"],
+                    "vertical_buffer_max": splitter.telemetry["vertical_buffer_max"],
+                    "unsafe_split_count": 0,
+                })
+                _emit_pipeline_event(
+                    "SOURCE_EOF",
+                    source_count=len(source_image_paths),
+                    logical_pages=len(smart_paths),
+                    pre_eof_final_items=max(0, len(smart_paths) - 1),
+                )
+                _emit_pipeline_event("SMART_SPLIT_FINISH_END", logical_pages=len(smart_paths))
+
+            image_entries = _incremental_entries()
+        else:
+            create_split_boundary_contact_sheet(
+                smart_paths,
+                smart_split_report,
+                smart_split_contact_sheet,
+            )
+            selected_smart_paths = (
+                smart_paths if args.full else smart_paths[: max(0, int(max_images or 0))]
+            )
+            image_entries, _ = _select_image_entries(selected_smart_paths, [])
+        if not config.PIPELINE_STREAMING:
+            create_split_boundary_contact_sheet(
+                smart_paths,
+                smart_split_report,
+                smart_split_contact_sheet,
+            )
+        print(
+            "Smart split: "
+            f"{len(source_image_paths)} fatias -> {len(smart_paths)} paginas logicas "
+            f"({len(selected_smart_paths)} selecionadas; "
+            f"{smart_split_report.get('unsafe_split_count', 0)} cortes de baixo risco)",
+            flush=True,
+        )
+    else:
+        smart_split_report["reason"] = (
+            "targeted_page_selection" if selected_page_indices else "disabled"
+        )
+        image_entries = source_entries
+    image_paths = [] if config.PIPELINE_STREAMING else [entry["path"] for entry in image_entries]
+    print(
+        "DOWNLOAD_TO_OCR_BUILD_RESULT "
+        f"downloaded_records={len(all_image_paths)} physical_files={sum(1 for p in all_image_paths if Path(p).is_file())} "
+        f"image_entries={'streaming' if config.PIPELINE_STREAMING else len(image_entries)} image_paths={len(image_paths)}",
+        flush=True,
+    )
+    resource_monitor.set_progress(pages_done=0, pages_total=len(image_paths))
+
+    previous_progress = load_json(progress_path, default={})
+    previous_records = {}
+    checkpoint_job_id = str(
+        getattr(args, "checkpoint_job_id", "")
+        or os.getenv("KOMYST_CHECKPOINT_JOB_ID", "")
+        or getattr(args, "job_id", "")
+        or ""
+    ).strip()
+    resume_cache = bool(getattr(args, "resume_checkpoint", False))
+    if ((resume_cache or not args.force)
+            and _checkpoint_identity_matches(
+                previous_progress, checkpoint_job_id, resume=resume_cache)
+            and previous_progress.get("run_signature") == run_signature):
+        previous_records = {
+            int(record["index"]): record
+            for record in previous_progress.get("pages", [])
+            if str(record.get("index", "")).isdigit()
+        }
+
+    from komyst.ui.ui_helpers import normalize_translation_provider
+
+    requested_provider = normalize_translation_provider(
+        getattr(args, "translation_provider", ""))
+    translation_enabled = _translation_enabled_from_env()
+    source_lang = str(getattr(args, "source_lang", None) or "3")
+    translator, ocr_lang = _resolve_translation_runtime(
+        requested_provider,
+        translation_enabled=translation_enabled,
+        source_lang=source_lang,
+    )
+    if hasattr(translator, "force_cache"):
+        translator.force_cache = bool(args.force)
+    resolve_provider_provenance(
+        translator,
+        requested_provider,
+        translation_enabled=translation_enabled,
+    )
+
+    counters = {
+        "images_skipped_by_cache": 0,
+        "images_skipped_by_no_text_precheck": 0,
+        "ocr_runs": 0,
+        "ocr_cache_hits": 0,
+        "ocr_page_fallbacks": 0,
+        "ocr_region_fallbacks": 0,
+        "ocr_text_repairs": 0,
+        "translation_retries": 0,
+        "translation_rejections": 0,
+        "visual_validation_failures": 0,
+        "pages_with_error": 0,
+    }
+    validation_seconds = (
+        0.0
+        if download_cache_hit
+        else float(download_report.get("timings", {}).get("validation_seconds", 0.0))
+    )
+    stage_seconds = {
+        "download_collection": max(0.0, download_wall_seconds - validation_seconds),
+        "image_validation": validation_seconds,
+        "smart_pdf_split": smart_split_seconds,
+        "no_text_precheck": 0.0,
+        "ocr": 0.0,
+        "ocr_cpu": 0.0,
+        "ocr_selective_fallback": 0.0,
+        "classification_grouping": 0.0,
+        "translation": 0.0,
+        "inpainting": 0.0,
+        "redraw": 0.0,
+        "cleanup": 0.0,
+        "typography": 0.0,
+        "quality": 0.0,
+        "render": 0.0,
+        "image_save": 0.0,
+        "pdf": 0.0,
+        "cache_load": 0.0,
+    }
+
+    page_states = []
+    ocr_jobs = []
+    streaming_job_queue = None
+    streaming_results = {}
+    streaming_error = []
+    streaming_thread = None
+    if config.PIPELINE_STREAMING:
+        from komyst.ocr.ocr_streaming import run_ocr_stream
+
+        streaming_job_queue = queue.Queue(
+            maxsize=max(1, int(getattr(config, "OCR_STREAM_QUEUE_CAPACITY", 2)))
+        )
+        stream_close = object()
+
+        def _enqueue_stream_job(job):
+            if job is not stream_close:
+                _emit_pipeline_event("OCR_JOB_READY", page_index=int(job.get("index", 0)))
+                _emit_pipeline_event("OCR_QUEUE_PUT_START", page_index=int(job.get("index", 0)))
+            while True:
+                if cancel_event.is_set():
+                    raise PipelineCancelled("ocr_stream_cancelled")
+                try:
+                    streaming_job_queue.put(job, timeout=0.05)
+                    if job is not stream_close:
+                        _emit_pipeline_event(
+                            "OCR_QUEUE_PUT_END",
+                            page_index=int(job.get("index", 0)),
+                            queue_depth=streaming_job_queue.qsize(),
+                        )
+                    return
+                except queue.Full:
+                    continue
+
+        def _stream_job_iter():
+            while True:
+                job = streaming_job_queue.get()
+                if job is stream_close:
+                    return
+                yield job
+
+        def _run_stream_consumer():
+            try:
+                def _stream_event(name, payload):
+                    _emit_pipeline_event(name, **(payload or {}))
+
+                result, _stream_metrics = run_ocr_stream(
+                    _stream_job_iter(),
+                    ocr_lang,
+                    capacity=max(1, int(getattr(config, "OCR_STREAM_QUEUE_CAPACITY", 2))),
+                    cancel_event=cancel_event,
+                    event_callback=_stream_event,
+                )
+                streaming_results.update(result)
+            except BaseException as exc:
+                streaming_error.append(exc)
+                cancel_event.set()
+
+        streaming_thread = threading.Thread(
+            target=_run_stream_consumer,
+            name="pipeline-ocr-stream-consumer",
+            daemon=True,
+        )
+        streaming_thread.start()
+    resource_monitor.set_stage("precheck")
+    for entry in image_entries:
+        index = int(entry["index"])
+        image_path = entry["path"]
+        if config.PIPELINE_STREAMING:
+            image_paths.append(image_path)
+        image_hash = file_sha256(image_path)
+        process_key = processed_cache_key(
+            image_hash,
+            pipeline_fingerprint,
+            relevant_config,
+        )
+        output_path = pages_folder / f"page_{index:03}.png"
+        state = {
+            "index": index,
+            "run_id": str(getattr(args, "job_run_id", "") or run_signature),
+            "sequence_index": int(entry.get("sequence_index", index)),
+            "original_index": int(entry.get("original_index", index)),
+            "image_path": str(image_path),
+            "image_hash": image_hash,
+            "process_key": process_key,
+            "output_path": str(output_path),
+            "ocr_lang": ocr_lang,
+            "timings": {},
+        }
+
+        cache_started = time.perf_counter()
+        reused = _reuse_completed_page(
+            state,
+            previous_records.get(index),
+            force=(args.force and not resume_cache),
+        )
+        stage_seconds["cache_load"] += time.perf_counter() - cache_started
+        if reused:
+            counters["images_skipped_by_cache"] += 1
+            page_states.append(state)
+            print(f"Pagina {index}/{len(image_paths)}: cache processado", flush=True)
+            continue
+
+        precheck_started = time.perf_counter()
+        precheck = {
+            "skip": False,
+            "reason": "disabled_or_debug",
+            "metrics": {},
+        }
+        if config.SKIP_NO_TEXT_IMAGES and not effective_debug:
+            precheck = no_text_precheck(
+                image_path,
+                image_hash=image_hash,
+                force=args.force,
+            )
+        precheck_elapsed = time.perf_counter() - precheck_started
+        stage_seconds["no_text_precheck"] += precheck_elapsed
+        state["precheck"] = precheck
+        state["timings"]["no_text_precheck"] = precheck_elapsed
+
+        if precheck.get("skip"):
+            copy_started = time.perf_counter()
+            atomic_copy(image_path, output_path)
+            copy_elapsed = time.perf_counter() - copy_started
+            stage_seconds["image_save"] += copy_elapsed
+            state["timings"]["image_save"] = copy_elapsed
+            state["status"] = "completed"
+            state["ocr_completed"] = True
+            state["cache_source"] = "no_text_precheck"
+            state["debug_data"] = _empty_debug_data(
+                image_path,
+                precheck_reason=precheck.get("reason"),
+            )
+            counters["images_skipped_by_no_text_precheck"] += 1
+            _save_page_processed_cache(state)
+            page_states.append(state)
+            _write_progress(
+                progress_path,
+                run_signature,
+                args,
+                len(image_paths),
+                page_states,
+            )
+            print(
+                f"Pagina {index}/{len(image_paths)}: OCR pulado "
+                f"({precheck.get('reason')})",
+                flush=True,
+            )
+            continue
+
+        key = ocr_cache_key(image_hash, ocr_lang)
+        state["ocr_cache_key"] = key
+        cached_ocr = (
+            load_ocr_cache(key)
+            if config.ENABLE_OCR_CACHE and not args.force
+            else None
+        )
+        if cached_ocr is not None:
+            state["raw_lines"] = cached_ocr[0]
+            state["ocr_metadata"] = cached_ocr[1].get("ocr_metadata", {})
+            state["ocr_source"] = "cache"
+            state["timings"]["ocr"] = 0.0
+            counters["ocr_cache_hits"] += 1
+        else:
+            job = {"index": index, "image_path": str(image_path)}
+            ocr_jobs.append(job)
+            if config.PIPELINE_STREAMING:
+                _enqueue_stream_job(job)
+            state["ocr_source"] = "run"
+        page_states.append(state)
+        _emit_pipeline_event("PAGE_STATE_READY", page_index=index)
+
+    # A positive download must never collapse into an empty OCR stage solely because
+    # the conservative no-text precheck classified every page as blank.  Keep the
+    # precheck as an optimization, but fail open to real RapidOCR when it would
+    # otherwise discard the entire downloaded set.
+    if image_paths and not ocr_jobs and counters["images_skipped_by_no_text_precheck"]:
+        print(
+            "OCR_INPUT_DISCOVERY fallback=precheck_all_skipped "
+            f"downloaded_count={len(image_paths)} accepted_count={len(image_paths)}",
+            flush=True,
+        )
+        for state in page_states:
+            state["status"] = "pending"
+            state["ocr_completed"] = False
+            state["cache_source"] = ""
+            state["ocr_source"] = "run"
+            job = {"index": int(state["index"]), "image_path": state["image_path"]}
+            ocr_jobs.append(job)
+            if config.PIPELINE_STREAMING:
+                _enqueue_stream_job(job)
+
+    if config.PIPELINE_STREAMING:
+        _emit_pipeline_event("OCR_STREAM_CLOSE")
+        _enqueue_stream_job(stream_close)
+        streaming_thread.join()
+        if streaming_error:
+            raise streaming_error[0]
+
+    state_by_index = {state["index"]: state for state in page_states}
+
+    def _persist_ocr_result(result):
+        """Checkpoint one OCR page as soon as its worker returns."""
+        state = state_by_index.get(int(result.get("index", -1)))
+        if state is None:
+            return
+        state["raw_lines"] = result.get("lines", [])
+        stamp_initial_ocr_provenance(state["raw_lines"])
+        state["ocr_metadata"] = result.get("ocr_metadata", {})
+        state["ocr_completed"] = True
+        elapsed = float(result.get("elapsed_seconds", 0.0))
+        state["timings"]["ocr"] = elapsed
+        if result.get("error"):
+            state["ocr_error"] = result["error"]
+        elif config.ENABLE_OCR_CACHE:
+            save_ocr_cache(
+                state["ocr_cache_key"], state["image_hash"], ocr_lang,
+                state["raw_lines"], elapsed, state.get("precheck", {}),
+                ocr_metadata=state.get("ocr_metadata", {}),
+            )
+        _write_progress(progress_path, run_signature, args, len(image_paths), page_states)
+
+    resource_monitor.set_stage("ocr")
+    emit_progress_v1(
+        stage_id="ocr", phase="recognition", status="running",
+        stage_current=0, stage_total=len(ocr_jobs),
+    )
+    print(
+        f"OCR_STAGE_STARTED input_count={len(ocr_jobs)} engine={config.OCR_ENGINE}",
+        flush=True,
+    )
+    print(
+        f"OCR: iniciando {len(ocr_jobs)} páginas com engine={config.OCR_ENGINE}",
+        flush=True,
+    )
+    resource_monitor.set_progress(queue_depth=len(ocr_jobs), active_workers=min(config.OCR_WORKERS, 1))
+    ocr_positions = {
+        int(job["index"]): position
+        for position, job in enumerate(ocr_jobs, start=1)
+    }
+    ocr_completed_positions = set()
+
+    def _ocr_progress(item, phase):
+        index = int(item.get("index", 0))
+        position = ocr_positions.get(index, 0)
+        engine_name = str(
+            (item.get("ocr_metadata") or {}).get("final_engine")
+            or config.OCR_ENGINE
+        )
+        if phase == "started":
+            print(
+                f"OCR: {position}/{len(ocr_jobs)} - pagina {index} - "
+                f"engine={engine_name} - iniciando",
+                flush=True,
+            )
+            resource_monitor.set_progress(
+                pages_done=len(ocr_completed_positions),
+                pages_total=len(image_paths),
+                queue_depth=max(0, len(ocr_jobs) - len(ocr_completed_positions)),
+                active_workers=1,
+            )
+        else:
+            ocr_completed_positions.add(position)
+            emit_progress_v1(
+                stage_id="ocr", phase="recognition", status="running",
+                stage_current=len(ocr_completed_positions), stage_total=len(ocr_jobs),
+                current_page=index or None, operation="recognize_page",
+            )
+            elapsed = float(item.get("elapsed_seconds", 0.0) or 0.0)
+            metadata = item.get("ocr_metadata") or {}
+            final_engine = metadata.get("final_engine") or engine_name
+            print(
+                f"OCR: {position}/{len(ocr_jobs)} - pagina {index} - "
+                f"engine={final_engine} "
+                f"- concluida em {elapsed:.1f}s",
+                flush=True,
+            )
+            resource_monitor.set_progress(
+                pages_done=len(ocr_completed_positions),
+                pages_total=len(image_paths),
+                queue_depth=max(0, len(ocr_jobs) - len(ocr_completed_positions)),
+                active_workers=1 if len(ocr_completed_positions) < len(ocr_jobs) else 0,
+            )
+
+    ocr_wall_started = time.perf_counter()
+    if config.PIPELINE_STREAMING:
+        ocr_results = dict(streaming_results)
+        ocr_parallel_info = {
+            "parallel_requested": False,
+            "parallel_used": False,
+            "workers_requested": 1,
+            "worker_pids": [os.getpid()],
+            "fallback_reason": None,
+            "streaming": True,
+            "queue_capacity": int(getattr(config, "OCR_STREAM_QUEUE_CAPACITY", 2)),
+            "max_in_flight": 1,
+            "jobs_produced": len(ocr_results),
+            "jobs_completed": len(ocr_results),
+        }
+        for result in sorted(ocr_results.values(), key=lambda item: int(item.get("index", 0))):
+            _persist_ocr_result(result)
+    else:
+        ocr_results, ocr_parallel_info = detect_ocr_jobs(
+            ocr_jobs,
+            ocr_lang,
+            parallel=config.OCR_PARALLEL,
+            workers=config.OCR_WORKERS,
+            result_callback=_persist_ocr_result,
+            progress_callback=_ocr_progress,
+            cancel_event=cancel_event,
+        )
+    if cancel_event.is_set():
+        raise PipelineCancelled("user_cancelled")
+    emit_progress_v1(
+        stage_id="ocr", phase="recognition", status="completed",
+        stage_current=len(ocr_results), stage_total=len(ocr_jobs),
+    )
+    stage_seconds["ocr"] = time.perf_counter() - ocr_wall_started
+    _record_perf_event("ocr", "ocr", int((ocr_wall_started - started) * 1_000_000_000), int((time.perf_counter() - started) * 1_000_000_000))
+    counters["ocr_runs"] = len(ocr_jobs)
+    resource_monitor.register_worker_roles(
+        ocr_parallel_info.get("worker_pids", []),
+        "ocr-worker",
+    )
+    policy = ocr_parallel_info.get("memory_policy") or {}
+    set_memory_policy = getattr(resource_monitor, "set_memory_policy", None)
+    if callable(set_memory_policy):
+        set_memory_policy(
+            mode=policy.get("memory_mode", "normal"),
+            pressure=policy.get("memory_pressure", "unknown"),
+            ocr_workers=policy.get("workers", 0),
+        )
+    resource_monitor.set_progress(queue_depth=0, active_workers=0)
+    ocr_failed_count = sum(1 for result in ocr_results.values() if result.get("error"))
+    print(
+        "OCR_STAGE_RESULT "
+        f"status={'success' if ocr_failed_count == 0 else 'failed'} "
+        f"input_count={len(ocr_jobs)} processed_count={len(ocr_results) - ocr_failed_count} "
+        f"failed_count={ocr_failed_count} duration_ms={int(stage_seconds['ocr'] * 1000)}",
+        flush=True,
+    )
+    # After the reader browser is gone: building the session during the download
+    # slowed the Comix canvas reader by ~32 s (A/B 48.8/47.8 s vs 16.4/16.4 s).
+    _prewarm_learned_inpainter()
+
+    for index, result in ocr_results.items():
+        state = state_by_index[index]
+        elapsed = float(result.get("elapsed_seconds", 0.0))
+        state["timings"]["ocr"] = elapsed
+        stage_seconds["ocr_cpu"] += elapsed
+        state["raw_lines"] = result.get("lines", [])
+        stamp_initial_ocr_provenance(state["raw_lines"])
+        state["ocr_metadata"] = result.get("ocr_metadata", {})
+        if result.get("error"):
+            state["ocr_error"] = result["error"]
+            continue
+
+    translation_targets = []
+    analyzable_states = []
+    pre_page_results = []
+    resource_monitor.set_stage("classification")
+    emit_progress_v1(
+        stage_id="classification", phase="analysis", status="running",
+        stage_current=0, stage_total=len(page_states),
+    )
+    run_recorder = ocr_line_provenance.active()
+    run_profiler = get_active_profiler()
+    page_state_by_index = {
+        int(state.get("index", position)): state
+        for position, state in enumerate(page_states)
+    }
+    pre_translation_wall_started = time.perf_counter()
+    configured_page_workers = _pipeline_page_workers()
+    _share_native_threads(configured_page_workers)
+    classification_progress = {"current": 0}
+
+    def _emit_classification_progress(_result):
+        classification_progress["current"] += 1
+        emit_progress_v1(
+            stage_id="classification", phase="analysis", status="running",
+            stage_current=classification_progress["current"], stage_total=len(page_states),
+        )
+
+    page_results = process_pre_translation_pages(
+        page_states,
+        image_paths=image_paths,
+        ocr_lang=ocr_lang,
+        fast_ocr_budget=fast_ocr_budget,
+        errors_folder=errors_folder,
+        progress_callback=_emit_classification_progress,
+        include_residual_sweep=True,
+    )
+    pre_translation_wall_seconds = time.perf_counter() - pre_translation_wall_started
+    stage_seconds["pre_translation"] = pre_translation_wall_seconds
+    # All page-analysis/sweep futures have joined. The isolated Paddle worker
+    # otherwise retains its model/oneDNN caches through FLUX and rendering
+    # despite having no requests left in this phase. Late selective reads can
+    # still create a new gateway lazily; no OCR evidence or result is discarded.
+    from komyst.ocr.subprocess_ocr import shutdown_subprocess_ocr
+    heavy_ocr_release_started = time.perf_counter()
+    shutdown_subprocess_ocr()
+    stage_seconds["heavy_ocr_release"] = time.perf_counter() - heavy_ocr_release_started
+    _record_perf_event("pre_translation", "pre", int((pre_translation_wall_started - started) * 1_000_000_000), int((time.perf_counter() - started) * 1_000_000_000))
+    for page_result in page_results:
+        global_page_state = page_state_by_index[page_result.page_index]
+        if run_recorder is not None and page_result.page_recorder is not None:
+            run_recorder.merge_from(page_result.page_recorder)
+        if run_profiler is not None and page_result.page_profiler is not None:
+            run_profiler.merge_from(page_result.page_profiler)
+        global_page_state.update(page_result.page_state)
+        for stage_name, elapsed in page_result.timings.items():
+            stage_seconds[stage_name] = stage_seconds.get(stage_name, 0.0) + float(elapsed)
+        counters["pages_with_error"] += int(page_result.counters.get("pages_with_error", 0))
+        pre_page_results.append(page_result)
+        _write_progress(
+            progress_path,
+            run_signature,
+            args,
+            len(image_paths),
+            page_states,
+        )
+        if page_result.analyzable:
+            translation_targets.extend(page_result.translation_items)
+            analyzable_states.append(page_result.page_state)
+    emit_progress_v1(
+        stage_id="classification", phase="analysis", status="completed",
+        stage_current=len(page_results), stage_total=len(page_states),
+    )
+    all_analyzed_groups = [
+        group
+        for state in analyzable_states
+        for group in state.get("groups", [])
+    ]
+    chapter_name_repairs = normalize_recurring_compact_names(all_analyzed_groups)
+    # Same chapter-level evidence, the other direction: a term the chapter
+    # spells on its own that the OCR glued to the next word. Done here so the
+    # canonical source the provider receives is the repaired one, while
+    # ``group.original_text`` keeps the raw read for forensics.
+    chapter_name_repairs += recover_protected_term_boundaries(
+        all_analyzed_groups,
+        extra_anchors=_session_terminology_terms(session_context),
+    )
+    if chapter_name_repairs:
+        for state in analyzable_states:
+            state["group_text_repairs"] = _group_text_repairs(
+                state.get("groups", [])
+            )
+    # Declared names ("X... but people call me Y") from any group are evidence
+    # for the whole chapter: propagate them so every group that mentions the
+    # name knows it is a proper name, even without local context clues.
+    propagate_chapter_declared_names(all_analyzed_groups)
+    detected_names = sorted(
+        {
+            name
+            for group in all_analyzed_groups
+            for name in getattr(group, "detected_proper_names", [])
+        }
+    )
+    if hasattr(translator, "set_detected_names"):
+        translator.set_detected_names(detected_names)
+    _raw_glossary = os.getenv("KOMYST_NAME_GLOSSARY", "").strip()
+    if _raw_glossary and hasattr(translator, "set_name_overrides"):
+        try:
+            import json as _json
+            _glossary_pairs = _json.loads(_raw_glossary)
+            if isinstance(_glossary_pairs, list):
+                translator.set_name_overrides(
+                    [(str(p[0]), str(p[1])) for p in _glossary_pairs
+                     if isinstance(p, (list, tuple)) and len(p) >= 2]
+                )
+        except Exception:  # noqa: BLE001 - malformed env never breaks translation
+            pass
+    # Reuse the page-local result objects after chapter-level name repair.  The
+    # contained group references are the same production objects, so repairs
+    # remain visible while the global list is rebuilt deterministically.
+    translation_targets = [
+        item
+        for result in sorted(pre_page_results, key=lambda value: value.page_index)
+        for item in result.translation_items
+    ]
+    for state in analyzable_states:
+        state["translatable_groups"] = get_translatable_groups(
+            state.get("groups", [])
+        )
+
+    resource_monitor.set_stage("translation")
+    if translation_enabled:
+        emit_progress_v1(
+            stage_id="translation", phase="translation", status="running",
+            stage_current=0, stage_total=len(translation_targets),
+        )
+    _emit_pipeline_event("GLOBAL_TRANSLATION_BARRIER_ENTER", page_count=len(page_states))
+    # Stage identity is provider-neutral: which provider actually ran is recorded
+    # in provenance, not baked into a label the UI mirrors.
+    print("Tradução: iniciando", flush=True)
+    translation_started = time.perf_counter()
+    if session_context is not None:
+        session_context.prepare(all_analyzed_groups)
+        if hasattr(translator, "set_session_context"):
+            translator.set_session_context(session_context)
+    # The local/Fase-18 kill switch is evaluated immediately before the provider
+    # boundary.  This keeps OCR and all preparation stages real while guaranteeing
+    # that a disabled translation run never initializes or calls a provider.
+    translator_stats = {}
+    if not translation_enabled:
+        print("PROVIDER_GATE_CHECKED translation_enabled=false allow_translation=false", flush=True)
+        print("DEEPL_REQUEST_ATTEMPTED=NO", flush=True)
+        print("TRANSLATION_STAGE_SKIPPED reason=disabled", flush=True)
+        translations = [""] * len(translation_targets)
+        if translator is not None:
+            translator_stats = getattr(translator, "stats", {})
+        translator_stats["provider_gate_checked"] = True
+        translator_stats["translation_enabled"] = False
+        translator_stats["allow_translation"] = False
+        translator_stats["provider_requested"] = ""
+        translator_stats["provider_effective"] = ""
+        translator_stats["provider_source"] = "disabled"
+        translator_stats["provider_disabled"] = True
+    else:
+        if cancel_event.is_set():
+            raise PipelineCancelled("user_cancelled")
+        # Known SFX use the glossary. Unknown sweep-derived display tokens may
+        # try the provider after visual SFX classification; ordinary unknown SFX
+        # still preserve their source lettering.
+        from komyst.translation.sfx_glossary import translate_sfx_fuzzy
+        local = [(
+            (translate_sfx_fuzzy(group.text)
+             or (None if (getattr(group, "classification_evidence", {}) or {}).get(
+                 "residual_sweep_recovered"
+             ) else group.text))
+            if group.classification == "sfx"
+            else known_sound_translation_target(group)
+        ) for group in translation_targets]
+        remote_index = [i for i, value in enumerate(local) if value is None]
+        # OCR-damaged tokens are repaired before the provider sees them: glued words
+        # ("WEPLANTO", read as a name), a chapter name glued to a token ("ILJEON")
+        # and one misread letter the chapter itself attests ("HIPES" -> HIDES).
+        # The first pass and every retry then see the same source.
+        chapter_words = chapter_source_words(group.text for group in translation_targets)
+        for i in remote_index:
+            group = translation_targets[i]
+            source = str(getattr(group, "canonical_source_text", "") or group.text)
+            split = split_glued_source_words(
+                source, protected=getattr(group, "detected_proper_names", ()),
+                chapter_names=detected_names, chapter_words=chapter_words)
+            if split != source:
+                group.canonical_source_text = split
+        remote = translator.translate_many(
+            [str(getattr(translation_targets[i], "canonical_source_text", "") or translation_targets[i].text)
+             for i in remote_index],
+            force=args.force,
+        ) if remote_index else []
+        translations = list(local)
+        for i, value in zip(remote_index, remote or []):
+            source = translation_targets[i].text
+            # A bare action label lettered outside a balloon ("NOD", "GRIN") is
+            # classified as speech, and the provider hands it back untouched.
+            if config.TRANSLATE_SFX and str(value or "").strip().upper() == str(source or "").strip().upper():
+                value = translate_sfx_fuzzy(source) or value
+            translations[i] = value
+        translator_stats_sfx_glossary = len(translation_targets) - len(remote_index)
+    stage_seconds["translation"] = time.perf_counter() - translation_started
+    if translator is not None:
+        translator_stats = getattr(translator, "stats", {})
+    translator_stats["translation_candidates"] = len(translation_targets)
+    translator_stats["sfx_glossary_translations"] = int(locals().get("translator_stats_sfx_glossary", 0))
+    translator_stats["translation_results_received"] = len(translations or [])
+    translator_stats["translation_results_nonempty"] = sum(
+        1 for item in (translations or []) if str(item or "").strip()
+    )
+    # A translation-enabled job with translatable content cannot complete as a
+    # successful-looking untranslated PDF.  This invariant is intentionally
+    # evaluated from the effective job policy, so OCR-only/disabled runs remain
+    # valid while provider misconfiguration fails explicitly.
+    if translation_enabled and translation_targets and not any(
+        str(item or "").strip() for item in (translations or [])
+    ):
+        translator_stats["translation_execution_invariant"] = "failed"
+        raise RuntimeError("translation_not_executed")
+    translator_stats["translation_execution_invariant"] = (
+        "passed" if translation_enabled and translation_targets else "not_applicable"
+    )
+    apply_group_translations(translation_targets, translations)
+    translator_stats["translated_groups_after_apply"] = sum(
+        1
+        for group in translation_targets
+        if getattr(group, "translation_final_state", "") == "translated"
+    )
+    translator_stats["renderable_translated_groups"] = sum(
+        1
+        for group in translation_targets
+        if getattr(group, "translation_final_state", "") == "translated"
+        and bool(getattr(group, "translation", ""))
+        and bool(getattr(group, "translation_valid", False))
+    )
+    retry_started = time.perf_counter()
+    if session_context is not None and translator is not None:
+        # Learn the chapter's terminology from the first pass *before* retrying,
+        # so a region near the end is judged against the decisions taken at the
+        # start instead of against whatever survived the rolling window.
+        session_context.record_translations(translation_targets)
+        if hasattr(translator, "set_session_context"):
+            translator.set_session_context(session_context)
+    if translation_enabled and translator is not None:
+        translation_retry_records = validate_and_retry_translations(
+            translation_targets,
+            translator,
+            force=args.force,
+            terminology_ledger=session_context,
+            fidelity_verifier=getattr(translator, "fidelity_verifier", None),
+            fidelity_stats=translator_stats,
+            ptbr_naturalizer=getattr(translator, "ptbr_naturalizer", None),
+            source_recovery_context={
+                id(group): {
+                    "original_bgr": state["original_bgr"],
+                    "ocr_lang": ocr_lang,
+                    "page_index": state["index"],
+                }
+                for state in analyzable_states
+                for group in state.get("translatable_groups", [])
+            },
+        )
+    else:
+        translation_retry_records = []
+    # The Gemini translation leg is deliberately separate from CLEAN.  It is an
+    # injected, text-only adapter owned by the provider/runtime; absence of the
+    # adapter is a normal fail-closed outcome and never turns OCR or SFX into a
+    # remote request.  Billing remains attached to the original translation
+    # operation, so this bounded recovery cannot reserve a second YK.
+    translation_fallback_stats = {
+        "eligible": 0, "attempted": 0, "accepted": 0,
+        "rejected": 0, "unavailable": 0, "items": [],
+    }
+    if translation_enabled and translator is not None:
+        fallback_adapter = getattr(translator, "gemini_translation_fallback", None)
+        if callable(fallback_adapter):
+            from komyst.translation.gemini_fallback import apply_translation_fallbacks
+            translation_fallback_stats = apply_translation_fallbacks(
+                translation_targets,
+                fallback_adapter,
+                context_provider=lambda group: getattr(group, "page_context_texts", ()) or (),
+                fidelity_verifier=getattr(translator, "fidelity_verifier", None),
+            )
+            translator_stats["gemini_translation_fallback"] = "injected_text_adapter"
+        else:
+            translator_stats["gemini_translation_fallback"] = "unavailable"
+    translator_stats["translation_fallback_stats"] = translation_fallback_stats
+    if session_context is not None:
+        session_context.record_translations(translation_targets)
+    stage_seconds["translation"] += time.perf_counter() - retry_started
+
+    commit_translation = getattr(translator, "commit_translation_success", None)
+
+    # Layout shortening is still a provider request.  It must happen while the
+    # reservation is held, not after the durable provider result has settled the
+    # job.  Running this dry render pass before settlement keeps one valid
+    # reservation available to every bounded retry and prevents a consumed
+    # reservation from being mistaken for dozens of independent bad regions.
+    layout_preflight_wall_seconds = 0.0
+    if translation_enabled and translator is not None:
+        layout_started = time.perf_counter()
+        try:
+            layout_retry_count = _resolve_layout_overflow_before_settlement(
+                analyzable_states,
+                translator,
+                translation_retry_records,
+                force=args.force,
+            )
+        except Exception:
+            # Initial batches are already persisted before this preflight. If a
+            # later local/layout or provider-contract error interrupts it, the
+            # existing recovery contract still settles that durable provider
+            # success once; the original error remains the job failure.
+            if callable(commit_translation):
+                commit_translation()
+            raise
+        layout_preflight_wall_seconds = time.perf_counter() - layout_started
+        _record_perf_event("layout_preflight", "render", int((layout_started-started)*1e9),
+                           int((time.perf_counter()-started)*1e9))
+        translator_stats["pre_settlement_layout_retries"] = layout_retry_count
+        stage_seconds["translation"] += sum(
+            float(s.pop("_preflight_translation_retry_seconds", 0.0) or 0.0)
+            for s in analyzable_states
+        )
+
+    # The charged milestone is after every translation/retry response has been
+    # validated and a durable job-local recovery copy exists, but before any
+    # reconstruction or export work can fail. Providers without this explicit
+    # wallet contract are unaffected.
+    if translation_enabled and translation_targets and callable(commit_translation):
+        settlement = commit_translation()
+        translator_stats["wallet_commit_state"] = str(settlement.get("state") or "unknown")
+        translator_stats["wallet_commit_net_yk"] = int(settlement.get("net_yk") or 0)
+    if translation_enabled:
+        emit_progress_v1(
+            stage_id="translation", phase="translation", status="completed",
+            stage_current=len(translations or []), stage_total=len(translation_targets),
+        )
+
+    # Output-plan gates. Empty for legacy/automatic/professional jobs -> full pipeline,
+    # identical behaviour. Only a plan-driven job (clean-only, translate+clean, ...) narrows
+    # what render/persist/PDF produce.
+    _pipeline_flags = _plan_pipeline_flags()
+
+    if not _pipeline_flags["legacy"] and not _pipeline_flags["want_render"]:
+        # TRANSLATE-ONLY: translation is the deliverable. OCR + translation + settlement have
+        # already run above. No clean, no typeset, no image, no PDF -- the persisted
+        # translation (durable .translation_ready cache) is the economic result; this JSON is
+        # the user-facing rendering of it. YK was settled on translation persistence, never on
+        # a visual artifact.
+        resource_monitor.set_stage("reports")
+        tm = _build_translation_only_manifest(page_states)
+        tm_dir = output_folder / "translation"
+        tm_dir.mkdir(parents=True, exist_ok=True)
+        tm_path = tm_dir / "translation.json"
+        atomic_write_json(tm_path, tm)
+        quality = {
+            "passed": True, "mode": "translation_only",
+            "translation_regions": tm["summary"]["regions"],
+            "translated_regions": tm["summary"]["translated_regions"],
+        }
+        final_status = derive_final_run_status(technical_success=True, quality_validation=quality)
+        eff = sorted(_pipeline_flags["effective_ops"])
+        req_ops_env = os.getenv("KOMYST_REQUESTED_OPS")
+        manifest = ac.build_artifact_manifest(
+            output_profile=_resolve_output_profile(args), output_root=output_folder,
+            logical_page_count=len(image_paths), produced={},
+            run_id=str(run_signature), status=final_status,
+            output_plan=os.getenv("KOMYST_OUTPUT_PLAN", ""),
+            requested_operations=([o for o in req_ops_env.split(",") if o]
+                                  if req_ops_env is not None else None),
+            effective_operations=eff,
+            requested_artifacts=_plan_requested_artifacts(_pipeline_flags["effective_ops"]),
+        )
+        manifest["produced_artifacts"] = (
+            ["translation_manifest"] if tm["summary"]["regions"] else [])
+        manifest["translation_manifest_path"] = str(tm_path)
+        atomic_write_json(output_folder / "artifact_manifest.json", manifest)
+        atomic_write_json(output_folder / "run_manifest.json", {
+            "output_plan": os.getenv("KOMYST_OUTPUT_PLAN", ""), "effective_operations": eff,
+            "status": final_status, "translation_manifest_path": str(tm_path)})
+        atomic_write_json(output_folder / "timing_report.json", {
+            "status": final_status, "output_format": "translation",
+            "quality_validation": quality,
+            "logical_page_count": len(image_paths)})
+        print(f"TRANSLATION_ONLY_RESULT status={final_status} "
+              f"regions={tm['summary']['regions']} "
+              f"translated={tm['summary']['translated_regions']}", flush=True)
+        return {
+            "status": final_status, "output_format": "translation",
+            "translation_manifest_path": str(tm_path),
+            "pdf_path": "", "png_path": "", "psd_path": "",
+            "result_kind": "directory", "result_path": str(output_folder),
+            "quality_validation": quality,
+            "artifact_manifest_path": str(output_folder / "artifact_manifest.json"),
+            "run_manifest_path": str(output_folder / "run_manifest.json"),
+            "timing_report_txt": "",
+            "artifact_export": {
+                "translate_only": True,
+                "translation_regions": tm["summary"]["regions"],
+                "translated_regions": tm["summary"]["translated_regions"],
+            },
+            "translator": translator_stats,
+        }
+
+    resource_monitor.set_stage("rendering")
+    # Page completion is reduced by the serial/job owner.  The page body only
+    # records a local event; this keeps future out-of-order workers from
+    # deriving global progress from page indexes and prevents regressions.
+    render_progress = PageProgressAggregator(
+        total_pages=len(image_paths),
+        emit=lambda payload: resource_monitor.set_progress(
+            pages_done=payload["completed_pages"],
+            pages_total=payload["total_pages"],
+        ),
+    )
+    rendered_page_ids = {
+        int(state["index"]) for state in page_states
+        if state.get("status") == "completed"
+        and _reconstructed_page_is_valid(state.get("output_path"), state.get("image_path", ""))
+    }
+    emit_progress_v1(
+        stage_id="rendering", phase="render", status="running",
+        stage_current=len(rendered_page_ids), stage_total=len(image_paths),
+    )
+    post_translation_wall_started = time.perf_counter()
+    post_parallel_results = None
+    if _pipeline_page_workers() > 1:
+        overflow_retry_lock = threading.Lock()
+        post_parallel_results = process_post_translation_pages(
+            analyzable_states,
+            diagnostic_folder=diagnostic_folder,
+            targeted_regression=targeted_regression,
+            # Provider requests are deliberately closed at settlement.  All
+            # bounded layout retries were resolved above while it was held.
+            translator=None,
+            translation_retry_records=translation_retry_records,
+            force=args.force,
+            retry_lock=overflow_retry_lock,
+            job_id=str(getattr(args, "job_id", "") or ""),
+        )
+        analyzable_states = []
+    for state in analyzable_states:
+        if state.get("status") == "completed":
+            continue
+        try:
+            render_timings = {}
+            page_debug_folder = None
+            if targeted_regression:
+                page_debug_folder = str(
+                    diagnostic_folder / f"page_{state['index']:03}"
+                )
+            layout_retry_attempt = 0
+            cleaned_capture: dict = {}
+            preflight = state.pop("_preflight_render", None)
+            reusable = bool(
+                preflight is not None
+                and page_debug_folder is None
+                and _pipeline_flags["want_typeset"]
+                and preflight["signature"] == _translation_render_signature(state["groups"])
+            )
+            if reusable:
+                final, debug_data = preflight["result"]
+                cleaned_capture.update(preflight["capture"])
+                for name, val in (preflight.get("timings") or {}).items():
+                    if isinstance(val, (int, float)):
+                        render_timings[name] = float(val)
+            while not reusable:
+                final, debug_data = render_analyzed_image(
+                    state["original_bgr"],
+                    state.get("raw_lines", []),
+                    state["candidates"],
+                    state["groups"],
+                    font_path=config.FONT_PATH,
+                    debug_folder=page_debug_folder,
+                    page_index=state["index"],
+                    image_path=state["image_path"],
+                    stage_timings=render_timings,
+                    capture=cleaned_capture,
+                    typeset=_pipeline_flags["want_typeset"],
+                )
+                overflow_groups = [
+                    group
+                    for group in state["groups"]
+                    if group.sent_to_translation
+                    and float(group.text_overflow_ratio or 0.0)
+                    > config.MAX_TEXT_OVERFLOW_RATIO
+                ]
+                if not overflow_groups:
+                    break
+                # Provider work is closed after the settlement boundary.  Any
+                # overflow remaining here is review-visible, but cannot trigger
+                # a new provider request with a consumed reservation.
+                break
+            for name in ("inpainting", "redraw", "cleanup", "typography", "quality", "render"):
+                elapsed = float(render_timings.get(name, 0.0))
+                state["timings"][name] = elapsed
+                stage_seconds[name] += elapsed
+
+            save_started = time.perf_counter()
+            Path(state["output_path"]).parent.mkdir(parents=True, exist_ok=True)
+            if not cv2.imwrite(state["output_path"], final):
+                raise RuntimeError("cv2.imwrite retornou False")
+            cleaned_bgr = cleaned_capture.get("cleaned_bgr")
+            if cleaned_bgr is not None:
+                cleaned_path = Path(state["output_path"]).with_name(
+                    Path(state["output_path"]).stem + "_cleaned.png")
+                if cv2.imwrite(str(cleaned_path), cleaned_bgr):
+                    state["cleaned_path"] = str(cleaned_path)
+            if _pipeline_flags["want_clean"]:
+                _complete_page_clean(
+                    state, cleaned_capture, debug_data,
+                    job_id=str(getattr(args, "job_id", "") or ""),
+                )
+            save_elapsed = time.perf_counter() - save_started
+            state["timings"]["image_save"] = save_elapsed
+            stage_seconds["image_save"] += save_elapsed
+
+            if not _reconstructed_page_is_valid(state["output_path"], state.get("image_path", "")):
+                raise RuntimeError("imagem final invalida")
+
+            state["status"] = "completed"
+            state["cache_source"] = "fresh"
+            debug_data["ocr_metadata"] = state.get("ocr_metadata", {})
+            debug_data["selective_ocr_fallbacks"] = state.get(
+                "selective_ocr_fallbacks",
+                [],
+            )
+            debug_data["text_repairs"] = (
+                _applied_text_repairs(state.get("ocr_metadata", {}))
+                + state.get("group_text_repairs", [])
+            )
+            debug_data["rejected_text_repairs"] = _rejected_text_repairs(
+                state.get("ocr_metadata", {})
+            )
+            state["debug_data"] = debug_data
+            _save_page_processed_cache(state)
+            render_progress.consume((PageProgressEvent(
+                page_index=int(state["index"]),
+                stage="rendering",
+                completed_units=1,
+                total_units=1,
+                code="page_completed",
+            ),),
+                terminal=False,
+            )
+            if _reconstructed_page_is_valid(state.get("output_path"), state.get("image_path", "")):
+                page_index = int(state["index"])
+                rendered_page_ids.add(page_index)
+                emit_progress_v1(
+                    stage_id="rendering", phase="render", status="running",
+                    stage_current=len(rendered_page_ids), stage_total=len(image_paths),
+                    completed_page_ids=[f"page:{page_index}"],
+                    current_page=page_index, operation="render_page",
+                )
+            print(
+                f"Pagina {state['index']}/{len(image_paths)}: concluida",
+                flush=True,
+            )
+        except Exception as exc:
+            # The exception object, not ``str(exc)``: flattening it here is what
+            # turned five real #84F9 page failures into the word "str".
+            _complete_page_with_error(
+                state,
+                exc,
+                errors_folder,
+                stage_seconds,
+                stage="page_processing",
+            )
+            counters["pages_with_error"] += 1
+            record = state["page_error"]
+            print(
+                f"Pagina {state['index']}/{len(image_paths)}: erro:"
+                f" {record['exception_type']}: {record['message']}",
+                flush=True,
+            )
+            # The local technical log keeps the trace; the UI never sees it.
+            trace = _page_error_traceback(exc)
+            if trace:
+                print(trace, flush=True)
+            render_progress.consume((PageProgressEvent(
+                page_index=int(state["index"]),
+                stage="rendering",
+                completed_units=1,
+                total_units=1,
+                code="page_completed_with_error",
+            ),), terminal=False)
+            if _reconstructed_page_is_valid(state.get("output_path"), state.get("image_path", "")):
+                page_index = int(state["index"])
+                rendered_page_ids.add(page_index)
+                emit_progress_v1(
+                    stage_id="rendering", phase="render", status="running",
+                    stage_current=len(rendered_page_ids), stage_total=len(image_paths),
+                    completed_page_ids=[f"page:{page_index}"],
+                    current_page=page_index, operation="render_page",
+                )
+        finally:
+            state.pop("original_bgr", None)
+            state.pop("candidates", None)
+            state.pop("groups", None)
+            state.pop("translatable_groups", None)
+            state.pop("raw_lines", None)
+            _write_progress(
+                progress_path,
+                run_signature,
+                args,
+                len(image_paths),
+                page_states,
+            )
+
+    if post_parallel_results is not None:
+        for result in post_parallel_results:
+            state = state_by_index[result.page_index]
+            if run_recorder is not None and result.page_recorder is not None:
+                run_recorder.merge_from(result.page_recorder)
+            if result.error:
+                _complete_page_with_error(state, result.error, errors_folder, stage_seconds, stage="page_processing")
+                counters["pages_with_error"] += 1
+                continue
+            state.update(result.page_state)
+            for name, elapsed in result.timings.items():
+                if isinstance(elapsed, (int, float)):
+                    stage_seconds[name] += float(elapsed)
+            render_progress.consume((PageProgressEvent(page_index=result.page_index, stage="rendering", completed_units=1, total_units=1, code="page_completed"),), terminal=False)
+            rendered_page_ids.add(int(result.page_index))
+            emit_progress_v1(
+                stage_id="rendering", phase="render", status="running",
+                stage_current=len(rendered_page_ids), stage_total=len(image_paths),
+                completed_page_ids=[f"page:{int(result.page_index)}"],
+                current_page=int(result.page_index), operation="render_page",
+            )
+
+    # Rendering still operates on the page-local dictionaries.  Publish their
+    # final page results back to the aggregate list before PDF aggregation.
+    for local_state in analyzable_states:
+        if cancel_event.is_set():
+            raise PipelineCancelled("user_cancelled")
+        aggregate_state = state_by_index.get(local_state.get("index"))
+        if aggregate_state is not None:
+            aggregate_state.update(local_state)
+
+    post_translation_wall_seconds = time.perf_counter() - post_translation_wall_started
+    _record_perf_event("post_translation", "render", int((post_translation_wall_started-started)*1e9),
+                       int((time.perf_counter()-started)*1e9))
+    completed_states = [
+        state
+        for state in sorted(page_states, key=lambda item: item["index"])
+        if state.get("status") in {"completed", "completed_with_error"}
+        and _reconstructed_page_is_valid(state.get("output_path"), state.get("image_path", ""))
+    ]
+    if not completed_states:
+        raise RuntimeError("Nenhuma pagina valida foi produzida.")
+    emit_progress_v1(
+        stage_id="rendering", phase="render", status="completed",
+        stage_current=len(rendered_page_ids), stage_total=len(image_paths),
+    )
+
+    output_profile = _resolve_output_profile(args)
+    artifact_export = _persist_canonical_artifacts(
+        output_folder, completed_states, len(image_paths), output_profile,
+        typeset=_pipeline_flags["want_typeset"],
+        plan_wants_clean=(not _pipeline_flags["legacy"] and ac.ArtifactType.CLEAN_IMAGE
+                          in _plan_requested_artifacts(_pipeline_flags["effective_ops"])),
+    )
+    # Translate+clean (translation ran, text not typeset): also persist the readable
+    # translation so the "Ver tradução" viewer works, same file as translate-only.
+    if (translation_enabled and not _pipeline_flags["legacy"]
+            and not _pipeline_flags["want_typeset"]
+            and "translate" in _pipeline_flags["effective_ops"]):
+        try:
+            tm = _build_translation_only_manifest(completed_states)
+            tm_dir = output_folder / "translation"
+            tm_dir.mkdir(parents=True, exist_ok=True)
+            atomic_write_json(tm_dir / "translation.json", tm)
+        except (OSError, ValueError, TypeError):
+            pass
+    editable_psd_export = None
+    if ac.ArtifactType.EDITABLE_PSD in ac.profile_artifacts(output_profile):
+        editable_psd_export = _export_editable_psds(
+            output_folder, completed_states, len(image_paths),
+            artifact_export["clean_produced"], getattr(config, "FONT_PATH", None),
+        )
+
+    pdf_filename = (
+        "regression.pdf"
+        if targeted_regression
+        else (
+            build_pdf_filename(
+                source_url=args.url,
+                fallback_id=output_folder.name,
+            )
+            if args.full
+            else f"benchmark_{args.max_images:03}.pdf"
+        )
+    )
+    pdf_path = output_folder / pdf_filename
+    pdf_temp_path = output_folder / f".{pdf_filename}.{os.getpid()}.{time.time_ns()}.tmp"
+    resource_monitor.set_stage("pdf")
+    pdf_started = time.perf_counter()
+    if not _pipeline_flags["want_pdf"]:
+        # The plan did not request a PDF (e.g. clean-only / translate+clean). Never build a
+        # translated PDF from clean pages; pdf_path stays a non-existent path so the manifest
+        # truthfully reports FINAL_PDF as not produced.
+        artifact = {"status": "not_requested", "sha256": "", "size": 0}
+    else:
+        try:
+            existing_pdf_valid = False
+            if bool(getattr(args, "resume_checkpoint", False)) and pdf_path.is_file():
+                try:
+                    if pdf_path.stat().st_size > 5:
+                        with pdf_path.open("rb") as existing_pdf:
+                            existing_pdf_valid = existing_pdf.read(5) == b"%PDF-"
+                except OSError:
+                    existing_pdf_valid = False
+            if (
+                bool(getattr(args, "resume_checkpoint", False))
+                and existing_pdf_valid
+            ):
+                # A prior attempt may have completed the immutable PDF and then
+                # failed while publishing an additional format (PNG/PSD). Reuse
+                # that valid canonical artifact rather than regenerate timestamp-
+                # dependent bytes and collide with the immutable path.
+                existing_hash, existing_size = _sha256_and_size(pdf_path)
+                artifact = {"status": "reused", "sha256": existing_hash, "size": existing_size}
+            else:
+                generate_pdf([state["output_path"] for state in completed_states], str(pdf_temp_path))
+                artifact = _finalize_immutable_file(pdf_temp_path, pdf_path)
+        finally:
+            try:
+                if pdf_temp_path.exists():
+                    pdf_temp_path.unlink()
+            except OSError:
+                pass
+    stage_seconds["pdf"] = time.perf_counter() - pdf_started
+    _record_perf_event("pdf", "pdf", int((pdf_started - started) * 1_000_000_000), int((time.perf_counter() - started) * 1_000_000_000))
+    artifact_sha256 = artifact["sha256"]
+    artifact_size_bytes = artifact["size"]
+
+    # PDF remains the canonical quality artifact for backwards compatibility.  PNG/PSD are
+    # additional chapter-level result produced from the already-rendered final pages, so it
+    # cannot accidentally expose untranslated source images or create per-page jobs.
+    output_format = str(getattr(args, "output_format", "pdf") or "pdf").casefold()
+    if output_format not in {"pdf", "png", "psd"}:
+        raise ValueError("unsupported_output_format")
+    png_path = None
+    psd_path = None
+    if output_format == "png":
+        try:
+            png_path = export_final_pages_png(
+                [state["output_path"] for state in completed_states],
+                output_folder,
+                output_folder.parent.name or output_folder.name,
+                cancel=cancel_event.is_set,
+            )
+        except PngExportError:
+            raise
+    if output_format == "psd":
+        # Canonical PSD path for Quality: the professional layered exporter (Original,
+        # Cleaned, per-region translated rasters, Translated Preview) driven by the
+        # pipeline's own region data — no Review required. Pages stream one at a time.
+        from komyst.export.professional_psd import export_professional_psd
+        tmode = str(getattr(args, "typesetting_mode", "on") or "on").casefold()
+
+        def _professional_psd_pages():
+            for state in completed_states:
+                original = cv2.imread(str(state["image_path"]), cv2.IMREAD_COLOR)
+                cleaned_path = state.get("cleaned_path")
+                cleaned = cv2.imread(str(cleaned_path), cv2.IMREAD_COLOR) if cleaned_path else None
+                if cleaned is None:
+                    cleaned = original  # no inpaint captured -> cleaned == source
+                translated = cv2.imread(str(state["output_path"]), cv2.IMREAD_COLOR)
+                yield {
+                    "page_index": int(state.get("index") or 0),
+                    "original_bgr": original, "cleaned_bgr": cleaned,
+                    "translated_bgr": translated,
+                    "regions": _professional_psd_regions(state),
+                }
+
+        psd_path = export_professional_psd(
+            _professional_psd_pages(), output_folder,
+            output_folder.parent.name or output_folder.name,
+            cancel=cancel_event.is_set, typesetting_mode=tmode,
+        )
+
+    resource_monitor.set_stage("reports")
+    preview_started = time.perf_counter()
+    selected_states = _create_preview_contact_sheet(
+        completed_states,
+        contact_sheet_path,
+    )
+    _create_preview_compare_sheet(selected_states, compare_sheet_path)
+    preview_seconds = time.perf_counter() - preview_started
+
+    translation_applicable = bool(_pipeline_flags.get("want_translate", True))
+    quality = _validate_quality(
+        completed_states,
+        pdf_path,
+        full=args.full,
+        pdf_expected=_pipeline_flags["want_pdf"],
+    )
+    split_audit = smart_split_audit(smart_split_report)
+    quality["smart_split_unsafe_count"] = split_audit["unsafe_count"]
+    quality["smart_split_safe"] = split_audit["safe"]
+    quality["smart_split_details"] = split_audit["details"]
+    quality["smart_split_summary"] = {
+        "safe": split_audit["safe"],
+        "unsafe_count": split_audit["unsafe_count"],
+        "details_count": split_audit["details_count"],
+    }
+    quality["passed"] = bool(
+        quality.get("passed") and quality["smart_split_safe"]
+    )
+    summary = _aggregate_debug_data(completed_states)
+    translation_accounting = _translation_quality_accounting(completed_states)
+    clean_accounting = _clean_output_accounting(completed_states)
+    physical_accounting = _physical_residual_accounting(
+        completed_states, translation_applicable=translation_applicable,
+    )
+    # Reconciled over every source page the run set out to process, not over the
+    # states that survived: a page whose analysis threw produces no regions, and
+    # region accounting alone cannot see it at all.
+    page_accounting = _source_page_accounting(page_states, len(image_paths))
+    quality["translation_accounting"] = translation_accounting
+    quality["translation_quality_applicable"] = translation_applicable
+    quality["clean_quality"] = clean_accounting
+    quality["physical_quality"] = physical_accounting
+    quality["source_page_accounting"] = page_accounting
+    quality["source_pages_unverified"] = page_accounting["source_pages_unverified"]
+    quality["source_page_findings"] = page_accounting["findings"]
+    quality["source_page_gate_passed"] = page_accounting["page_gate_passed"]
+    quality["final_story_output_verified"] = page_accounting["story_output_verified"]
+    quality["translation_terminal_states_complete"] = translation_accounting[
+        "accounting_closed"
+    ]
+    quality["translation_not_applied"] = translation_accounting[
+        "translation_not_applied"
+    ]
+    quality["missing_translation_candidate"] = translation_accounting[
+        "missing_candidate"
+    ]
+    quality["source_language_residual_groups"] = translation_accounting[
+        "source_language_residual"
+    ]
+    quality["physical_source_residual_count"] = physical_accounting[
+        "physical_source_residual_count"
+    ]
+    quality["physical_source_residual_group_ids"] = physical_accounting[
+        "physical_source_residual_group_ids"
+    ]
+    quality["ordinary_story_physical_residual_count"] = physical_accounting[
+        "ordinary_story_physical_residual_count"
+    ]
+    quality["ordinary_story_physical_residual_ids"] = physical_accounting[
+        "ordinary_story_physical_residual_ids"
+    ]
+    quality["physical_gate_passed"] = physical_accounting["physical_gate_passed"]
+    if physical_accounting.get("source_completeness"):
+        quality["source_completeness"] = physical_accounting["source_completeness"]
+    quality["passed"] = bool(
+        quality.get("passed")
+        and (not translation_applicable or translation_accounting["quality_passed"])
+        and (translation_applicable or clean_accounting["passed"])
+        and physical_accounting["physical_gate_passed"]
+        and page_accounting["page_gate_passed"]
+    )
+    counters["ocr_page_fallbacks"] = summary["ocr_page_fallbacks"]
+    counters["ocr_region_fallbacks"] = summary["ocr_region_fallbacks"]
+    counters["ocr_text_repairs"] = summary["ocr_text_repairs"]
+    counters["translation_retries"] = summary["translation_retries"]
+    counters["translation_rejections"] = summary["translation_rejections"]
+    counters["visual_validation_failures"] = summary["visual_validation_failures"]
+    quality["mixed_language_items"] = summary["mixed_language_items"]
+    quality["no_mixed_language_items"] = summary["mixed_language_items"] == 0
+    quality["passed"] = bool(
+        quality.get("passed") and quality["no_mixed_language_items"]
+    )
+    total_seconds = time.perf_counter() - started
+    for _stage_name, _stage_value in stage_seconds.items():
+        print(
+            "PIPELINE_STAGE_TIMING "
+            f"stage={_stage_name} duration_ms={int(float(_stage_value) * 1000)} "
+            f"pid={os.getpid()}",
+            flush=True,
+        )
+    if translator is not None:
+        translator_stats = getattr(translator, "stats", {})
+    quality["translation_batches_succeeded"] = (
+        translator_stats.get("failed_batches", 0) == 0
+    )
+    quality["passed"] = bool(
+        quality.get("passed")
+        and quality["translation_batches_succeeded"]
+        and counters["pages_with_error"] == 0
+    )
+    quality["zero_processing_errors"] = counters["pages_with_error"] == 0
+    quality["classification_version"] = 1
+    quality_classification = classify_quality_validation(quality)
+    quality["severity"] = quality_classification["severity"]
+    quality["outcome"] = quality_classification["outcome"]
+    quality["reason_codes"] = quality_classification["reason_codes"]
+    quality["structural_failure_reasons"] = (
+        quality_classification["reason_codes"]
+        if quality_classification["severity"] == "ERROR" else []
+    )
+    quality["status"] = (
+        "passed" if quality_classification["severity"] == "INFO"
+        else "review_required" if quality_classification["severity"] == "REVIEW"
+        else "failed"
+    )
+    new_images = len(completed_states) - counters["images_skipped_by_cache"]
+    cache_average = (
+        stage_seconds["cache_load"] / counters["images_skipped_by_cache"]
+        if counters["images_skipped_by_cache"]
+        else 0.0
+    )
+    old_reduction = ((BASELINE_SECONDS - total_seconds) / BASELINE_SECONDS) * 100
+    comparable_stages = {
+        key: value
+        for key, value in stage_seconds.items()
+        if key not in {"ocr_cpu", "cache_load"}
+    }
+    slowest_stage = max(comparable_stages, key=comparable_stages.get)
+
+    resource_summary = resource_monitor.stop()
+    gpu_diagnostics = detect_gpu_basic()
+    classification_profile_paths = classification_profiler.write_reports(output_folder)
+    classification_profile_summary = (
+        classification_profiler.summary()
+        if config.CLASSIFICATION_PROFILING
+        else {"enabled": False}
+    )
+    structural_fingerprint = _structural_fingerprint(completed_states)
+    page_count_trace = _page_count_trace(
+        download_report,
+        all_image_paths=all_image_paths,
+        source_image_paths=source_image_paths,
+        image_paths=image_paths,
+        completed_states=completed_states,
+        smart_split_report=smart_split_report,
+    )
+    group_count_trace = _group_count_trace(completed_states)
+    set_active_profiler(None)
+    final_status = derive_final_run_status(
+        technical_success=True,
+        quality_validation=quality,
+    )
+    source_provenance = _source_manifest_provenance(download_report)
+
+    page_timings = {
+        str(int(state.get("index") or 0)): {
+            **{
+                key: round(float(value), 6)
+                for key, value in (state.get("timings") or {}).items()
+                if isinstance(value, (int, float))
+            },
+            "cleanup_substages": {
+                name: {
+                    "call_count": int(entry.get("call_count", 0)),
+                    "total_ms": round(float(entry.get("total_ms", 0.0)), 3),
+                    "max_single_call_ms": round(float(entry.get("max_single_call_ms", 0.0)), 3),
+                }
+                for name, entry in ((state.get("timings") or {}).get("cleanup_substages") or {}).items()
+            },
+            "performance_events": list(state.get("_performance_events") or []),
+        }
+        for state in sorted(completed_states, key=lambda item: int(item.get("index") or 0))
+    }
+    report = {
+        "url": sanitize_source_url(args.url),
+        "source_type": str(download_report.get("source_type") or "url"),
+        "adapter_name": str(download_report.get("adapter_name") or ""),
+        "adapter_version": str(download_report.get("adapter_version") or ""),
+        "transport_name": str(download_report.get("transport_name") or ""),
+        # The canonical run manifest and timing report share this small, non-replayable
+        # evidence block. It intentionally has no page URLs, local paths, candidate ids or
+        # transport/session details.
+        "source_provenance": source_provenance,
+        "mode": "full" if args.full else "controlled",
+        "force": bool(args.force),
+        "fast": bool(args.fast),
+        "job_run_id": str(getattr(args, "job_run_id", "") or ""),
+        "fast_ocr_budget": fast_ocr_budget.report(),
+        "run_signature": run_signature,
+        "total_dom_images": download_report.get("total_dom_images", 0),
+        "total_unique_urls": download_report.get("total_unique_urls", 0),
+        "viewer_image_count": download_report.get("viewer_image_count", 0),
+        "collection_strategy": download_report.get("collection_strategy", ""),
+        "download_gate": download_report.get("download_gate", {}),
+        "available_valid_images": len(all_image_paths),
+        "selected_source_images": len(source_image_paths),
+        "status": final_status,
+        "smart_pdf_split": smart_split_report,
+        "page_count_trace": page_count_trace,
+        "group_count_trace": group_count_trace,
+        "source_expected_slices": page_count_trace["source_expected"],
+        "downloaded_source_slices": page_count_trace["downloaded"],
+        "source_image_slices": page_count_trace["source_images"],
+        "logical_page_count": page_count_trace["logical_pages"],
+        "processed_logical_pages": page_count_trace["processed_pages"],
+        "source_expected_pages": page_count_trace["source_expected"],
+        "downloaded_pages": page_count_trace["downloaded"],
+        "logical_pages": page_count_trace["logical_pages"],
+        "smart_split_contact_sheet": (
+            str(smart_split_contact_sheet) if smart_split_report.get("enabled") else ""
+        ),
+        "selected_page_indices": selected_page_indices,
+        "missing_page_indices": missing_page_indices,
+        "total_images": len(image_paths),
+        "processed_images": len(completed_states),
+        "images_skipped_by_cache": counters["images_skipped_by_cache"],
+        "images_skipped_by_no_text_precheck": counters[
+            "images_skipped_by_no_text_precheck"
+        ],
+        "ocr_runs": counters["ocr_runs"],
+        "ocr_cache_hits": counters["ocr_cache_hits"],
+        "ocr_page_fallbacks": counters["ocr_page_fallbacks"],
+        "ocr_region_fallbacks": counters["ocr_region_fallbacks"],
+        "ocr_region_fallback_attempts": summary["ocr_region_fallback_attempts"],
+        "paddle_mobile_region_fallbacks": summary[
+            "paddle_mobile_region_fallbacks"
+        ],
+        "paddle_full_region_fallbacks": summary["paddle_full_region_fallbacks"],
+        "paddle_full_calls": summary["paddle_full_calls"],
+        "paddle_full_total_seconds": round(summary["paddle_full_total_seconds"], 6),
+        "paddle_full_accepted": summary["paddle_full_accepted"],
+        "paddle_full_rejected": summary["paddle_full_rejected"],
+        "paddle_full_no_change": summary["paddle_full_no_change"],
+        "paddle_full_worse": summary["paddle_full_worse"],
+        "paddle_full_duplicate": summary["paddle_full_duplicate"],
+        "paddle_full_required": summary["paddle_full_required"],
+        "paddle_full_useful": summary["paddle_full_useful"],
+        "paddle_full_after_mobile_candidate": summary[
+            "paddle_full_after_mobile_candidate"
+        ],
+        "paddle_full_after_mobile_sufficient": summary[
+            "paddle_full_after_mobile_sufficient"
+        ],
+        "paddle_full_after_mobile_failure": summary[
+            "paddle_full_after_mobile_failure"
+        ],
+        "paddle_full_for_speech": summary["paddle_full_for_speech"],
+        "paddle_full_for_narration": summary["paddle_full_for_narration"],
+        "paddle_full_for_sfx": summary["paddle_full_for_sfx"],
+        "paddle_full_for_decorative": summary["paddle_full_for_decorative"],
+        "paddle_full_for_unknown": summary["paddle_full_for_unknown"],
+        "ocr_text_repairs": counters["ocr_text_repairs"],
+        "ocr_text_repairs_rejected": summary["ocr_text_repairs_rejected"],
+        "groups_reverted_for_visual_safety": summary[
+            "groups_reverted_for_visual_safety"
+        ],
+        "manual_review_required_groups": summary["manual_review_required_groups"],
+        "translation_retries": counters["translation_retries"],
+        "translation_rejections": counters["translation_rejections"],
+        "mixed_language_items": summary["mixed_language_items"],
+        "text_overflow_items": summary["text_overflow_items"],
+        "visual_validation_failures": counters["visual_validation_failures"],
+        "translation_api_texts": translator_stats.get("api_texts", 0),
+        "translation_cache_hits": translator_stats.get("cache_hits", 0),
+        "translation_api_requests": translator_stats.get("api_requests", 0),
+        "translation_provider": translator_stats.get("provider_name", ""),
+        "provider_provenance": report_provider_provenance(translator_stats),
+        "translation_model_runtime": translator_stats.get(
+            "model", config.NVIDIA_TRANSLATION_MODEL
+        ),
+        "translation_language_pair": translator_stats.get("language_pair", ""),
+        "credential_pool_size": translator_stats.get("credential_pool_size", 0),
+        "eligible_credentials": translator_stats.get("eligible_credentials", 0),
+        "credential_switches": translator_stats.get("credential_switches", 0),
+        "credential_429_cooldowns": translator_stats.get(
+            "credential_429_cooldowns", 0
+        ),
+        "provider_rate_limited_count": translator_stats.get(
+            "provider_rate_limited_count", 0
+        ),
+        "provider_timeout_count": translator_stats.get("provider_timeout_count", 0),
+        "provider_error_count": translator_stats.get("provider_error_count", 0),
+        "translation_candidates": translator_stats.get("translation_candidates", 0),
+        "translation_batches": translator_stats.get("translation_batches", 0),
+        "translation_requests_succeeded": translator_stats.get("successful_batches", 0),
+        "translation_requests_failed": translator_stats.get("failed_batches", 0),
+        "translation_responses_received": translator_stats.get(
+            "translation_responses_received", 0
+        ),
+        "translation_responses_nonempty": translator_stats.get(
+            "translation_responses_nonempty", 0
+        ),
+        "translation_results_parsed": translator_stats.get(
+            "translation_results_parsed", 0
+        ),
+        "translation_results_associated": translator_stats.get(
+            "translation_results_associated", 0
+        ),
+        "translated_groups_after_apply": translator_stats.get(
+            "translated_groups_after_apply", 0
+        ),
+        "renderable_translated_groups": translator_stats.get(
+            "renderable_translated_groups", 0
+        ),
+        "translation_configuration_missing": translator_stats.get(
+            "translation_configuration_missing", 0
+        ),
+        "translation_last_failure_reason": translator_stats.get(
+            "last_transport_reason", ""
+        ),
+        "translation_failed_batches": translator_stats.get("failed_batches", 0),
+        "translation_invalid_json_retries": translator_stats.get(
+            "invalid_json_retries", 0
+        ),
+        "translation_invalid_json_failures": translator_stats.get(
+            "invalid_json_failures", 0
+        ),
+        "translation_logical_batches": translator_stats.get("logical_batches", 0),
+        "logical_calls_by_origin": dict(
+            translator_stats.get("logical_calls_by_origin") or {}
+        ),
+        "provider_http_attempts": translator_stats.get("provider_http_attempts", 0),
+        "provider_attempts_by_kind": dict(
+            translator_stats.get("provider_attempts_by_kind") or {}
+        ),
+        "format_failures_total": translator_stats.get("format_failures_total", 0),
+        "format_failure_truncated": translator_stats.get("format_failure_truncated", 0),
+        "format_failure_malformed": translator_stats.get("format_failure_malformed", 0),
+        "format_failure_wrong_schema": translator_stats.get("format_failure_wrong_schema", 0),
+        "format_failure_missing_id": translator_stats.get("format_failure_missing_id", 0),
+        "format_retry_requests": translator_stats.get("format_retry_requests", 0),
+        "format_retry_success": translator_stats.get("format_retry_success", 0),
+        "format_retry_failure": translator_stats.get("format_retry_failure", 0),
+        "selective_recovery_requests": translator_stats.get("selective_recovery_requests", 0),
+        "source_equal_recovery_requests": translator_stats.get("source_equal_recovery_requests", 0),
+        "partial_residual_recovery_requests": translator_stats.get("partial_residual_recovery_requests", 0),
+        "finish_reason_length": translator_stats.get("finish_reason_length", 0),
+        "retry_budget_exhausted": translator_stats.get("retry_budget_exhausted", 0),
+        "provider_request_telemetry": list(
+            translator_stats.get("provider_request_telemetry") or []
+        )[:500],
+        "pages_with_error": counters["pages_with_error"],
+        "ocr_detected_lines": summary["ocr_detected_lines"],
+        "groups_formed": summary["groups_formed"],
+        "groups_translated": summary["groups_translated"],
+        "groups_ignored_sfx_decorative": summary[
+            "groups_ignored_sfx_decorative"
+        ],
+        "classification_counts": summary["classification_counts"],
+        "ocr_hybrid_provenance": {
+            "NVIDIA_INITIAL_REGIONS": summary["NVIDIA_INITIAL_REGIONS"],
+            "RAPIDOCR_INITIAL_REGIONS": summary["RAPIDOCR_INITIAL_REGIONS"],
+            "NVIDIA_REGIONS_RECOVERED_BY_RAPIDOCR": summary[
+                "NVIDIA_REGIONS_RECOVERED_BY_RAPIDOCR"
+            ],
+            "RAPIDOCR_INITIAL_REGIONS_RECOVERED": summary[
+                "RAPIDOCR_INITIAL_REGIONS_RECOVERED"
+            ],
+            "MIXED_ENGINE_GROUPS": summary["MIXED_ENGINE_GROUPS"],
+        },
+        "ocr_engine": config.OCR_ENGINE,
+        "ocr_fallback_engine": config.OCR_FALLBACK_ENGINE,
+        "download_cache_hit": download_cache_hit,
+        "ocr_parallel": ocr_parallel_info,
+        "adaptive_parallelism": {
+            "enabled": bool(config.ADAPTIVE_PARALLELISM),
+            "min_ocr_workers": config.MIN_OCR_WORKERS,
+            "max_ocr_workers": config.MAX_OCR_WORKERS,
+            "queue_multiplier": config.OCR_QUEUE_MULTIPLIER,
+            "decisions": ocr_parallel_info.get("adaptive_decisions", []),
+        },
+        "translation_parallel_requested": translator_stats.get(
+            "parallel_requested", config.TRANSLATION_PARALLEL
+        ),
+        "translation_parallel_used": translator_stats.get("parallel_used", False),
+        "translation_workers": translator_stats.get(
+            "workers", config.TRANSLATION_WORKERS
+        ),
+        "pipeline_page_workers": configured_page_workers,
+        "pre_translation_parallel": configured_page_workers > 1,
+        "pre_translation_includes_residual_sweep": True,
+        "pre_translation_wall_seconds": round(pre_translation_wall_seconds, 6),
+        "layout_preflight_wall_seconds": round(layout_preflight_wall_seconds, 6),
+        "post_translation_wall_seconds": round(post_translation_wall_seconds, 6),
+        "page_timings": page_timings,
+        "performance_events": list(_PERF_EVENTS),
+        "stage_seconds": {
+            key: round(float(value), 6) for key, value in stage_seconds.items()
+        },
+        "preview_seconds": round(preview_seconds, 6),
+        "total_seconds": round(total_seconds, 6),
+        "average_seconds_per_image": round(total_seconds / len(completed_states), 6),
+        "average_seconds_per_image_without_cache": round(
+            (total_seconds - stage_seconds["cache_load"]) / new_images
+            if new_images
+            else 0.0,
+            6,
+        ),
+        "average_seconds_per_image_with_cache": round(cache_average, 6),
+        "slowest_stage": slowest_stage,
+        "slowest_stage_seconds": round(comparable_stages[slowest_stage], 6),
+        "baseline_seconds": BASELINE_SECONDS,
+        "baseline_comparison_applicable": bool(args.full),
+        "difference_from_baseline_seconds": round(total_seconds - BASELINE_SECONDS, 6),
+        "reduction_from_baseline_percent": round(old_reduction, 3),
+        "pdf_path": str(pdf_path),
+        "output_format": output_format,
+        "result_kind": "directory" if (png_path or psd_path) else "file",
+        "result_path": str(psd_path or png_path or pdf_path),
+        "png_path": str(png_path) if png_path else "",
+        "psd_path": str(psd_path) if psd_path else "",
+        "artifact_sha256": artifact_sha256,
+        "artifact_size_bytes": artifact_size_bytes,
+        "progress_path": str(progress_path),
+        "timing_report_json": str(timing_json_path),
+        "timing_report_txt": str(timing_txt_path),
+        "preview_contact_sheet": str(contact_sheet_path),
+        "preview_compare_sheet": str(compare_sheet_path),
+        "quality_report_json": str(quality_json_path),
+        "quality_report_html": str(quality_html_path),
+        "quality_validation": quality,
+        "resource_monitoring": resource_summary,
+        "classification_profiling": {
+            "enabled": bool(config.CLASSIFICATION_PROFILING),
+            **classification_profile_paths,
+            "top_steps": classification_profile_summary.get("top_steps", [])[:10],
+            "slowest_pages": classification_profile_summary.get("slowest_pages", [])[:10],
+            "slowest_groups": classification_profile_summary.get("slowest_groups", [])[:10],
+        },
+        "ocr_line_provenance": ocr_line_provenance.write_artifact(output_folder),
+        "structural_fingerprint": structural_fingerprint,
+        "gpu_diagnostics": gpu_diagnostics,
+        "session_context": {
+            "enabled": bool(session_context is not None),
+            **(session_context.summary() if session_context is not None else {}),
+        },
+    }
+    if _PIPELINE_TELEMETRY is not None:
+        _PIPELINE_TELEMETRY.emit(
+            "PIPELINE_RUN_END", stage="pipeline", duration_ms=total_seconds * 1000.0,
+            status=final_status, page_count=len(completed_states),
+            region_count=sum(len((s.get("groups") or [])) for s in completed_states),
+        )
+        _PIPELINE_TELEMETRY.flush()
+        report["pipeline_telemetry"] = {
+            "enabled": True,
+            "events_path": str(telemetry_path),
+            "summary": pipeline_telemetry.aggregate_events(telemetry_path),
+            "timing_summary": pipeline_telemetry.summarize_timing_report(report),
+        }
+    else:
+        report["pipeline_telemetry"] = {"enabled": False}
+    run_manifest_path = output_folder / "run_manifest.json"
+    report["run_manifest_path"] = str(run_manifest_path)
+    atomic_write_json(
+        run_manifest_path,
+        _output_run_manifest(output_folder, report, translator),
+    )
+    _lpc = artifact_export["logical_page_count"]
+    _translated_complete = (
+        len(artifact_export["translated_produced"]) == _lpc
+        and not artifact_export["translated_failed"]
+    )
+    _clean_complete = (
+        artifact_export["clean_requested"]
+        and len(artifact_export["clean_produced"]) == _lpc
+        and not artifact_export["clean_failed"]
+    )
+    _psd_complete = bool(
+        editable_psd_export
+        and len(editable_psd_export["produced"]) == _lpc
+        and not editable_psd_export["failed"]
+    )
+    artifact_manifest = ac.build_artifact_manifest(
+        output_profile=artifact_export["profile"],
+        output_root=output_folder,
+        logical_page_count=_lpc,
+        produced={
+            ac.ArtifactType.FINAL_PDF: pdf_path.is_file(),
+            ac.ArtifactType.TRANSLATED_IMAGE: _translated_complete,
+            ac.ArtifactType.CLEAN_IMAGE: _clean_complete,
+            ac.ArtifactType.EDITABLE_PSD: _psd_complete,
+        },
+        run_id=str(run_signature),
+        status=final_status,
+        output_plan=os.getenv("KOMYST_OUTPUT_PLAN", ""),
+        requested_operations=(
+            [o for o in os.getenv("KOMYST_REQUESTED_OPS", "").split(",") if o]
+            if os.getenv("KOMYST_REQUESTED_OPS") is not None else None),
+        effective_operations=(
+            [o for o in os.getenv("KOMYST_EFFECTIVE_OPS", "").split(",") if o]
+            if os.getenv("KOMYST_EFFECTIVE_OPS") is not None else None),
+        # Plan-driven requested set so a clean-only run owes CLEAN only, not a translated PDF.
+        requested_artifacts=(None if _pipeline_flags["legacy"]
+                             else _plan_requested_artifacts(_pipeline_flags["effective_ops"])),
+    )
+    artifact_manifest["coverage"] = {
+        ac.ArtifactType.TRANSLATED_IMAGE: {
+            "produced": artifact_export["translated_produced"],
+            "missing": artifact_export["translated_missing"],
+            "failed": artifact_export["translated_failed"],
+        },
+        ac.ArtifactType.CLEAN_IMAGE: {
+            "requested": artifact_export["clean_requested"],
+            "produced": artifact_export["clean_produced"],
+            "missing": artifact_export["clean_missing"],
+            "failed": artifact_export["clean_failed"],
+        },
+    }
+    artifact_manifest["byte_totals"] = {
+        ac.ArtifactType.TRANSLATED_IMAGE: artifact_export["translated_total_bytes"],
+        ac.ArtifactType.CLEAN_IMAGE: artifact_export["clean_total_bytes"],
+    }
+    if editable_psd_export is not None:
+        artifact_manifest["coverage"][ac.ArtifactType.EDITABLE_PSD] = {
+            "produced": editable_psd_export["produced"],
+            "missing": editable_psd_export["missing"],
+            "failed": editable_psd_export["failed"],
+        }
+        artifact_manifest["byte_totals"][ac.ArtifactType.EDITABLE_PSD] = \
+            editable_psd_export["total_bytes"]
+        artifact_manifest["editable_psd_text_mode"] = editable_psd_export["text_mode"]
+    artifact_manifest["io_seconds"] = artifact_export["io_seconds"]
+    artifact_manifest["provenance"] = artifact_export["provenance"]
+    artifact_manifest["outcome"] = quality_classification["outcome"]
+    artifact_manifest["review_required"] = quality_classification["severity"] == "REVIEW"
+    artifact_manifest_path = output_folder / "artifact_manifest.json"
+    report["artifact_manifest_path"] = str(artifact_manifest_path)
+    report["artifact_export"] = artifact_export
+    quality_report = _build_quality_report(
+        report,
+        completed_states,
+        translation_retry_records,
+    )
+    atomic_write_json(quality_json_path, quality_report)
+    quality_html_path.write_text(
+        _quality_report_html(quality_report),
+        encoding="utf-8",
+    )
+    if quality_json_path.is_file() and quality_json_path.stat().st_size > 0:
+        artifact_manifest["artifact_status"][ac.ArtifactType.QUALITY_REPORT] = ac.ArtifactStatus.PRODUCED
+        artifact_manifest["produced_artifacts"].append(ac.ArtifactType.QUALITY_REPORT)
+    if artifact_export["profile"] == ac.OutputProfile.PROFESSIONAL_QC:
+        import komyst.review.review_manifest as review_manifest_writer
+        manifest_path = ac.artifact_path(output_folder, ac.ArtifactType.REVIEW_MANIFEST)
+        page_artifacts = {}
+        for page in quality_report.get("pages", []):
+            try:
+                page_index = int(page.get("index") or page.get("sequence_index") or 0)
+            except (TypeError, ValueError):
+                continue
+            if page_index < 1:
+                continue
+            paths = {}
+            for field, kind in (("source_artifact", None),
+                                ("translated_artifact", ac.ArtifactType.TRANSLATED_IMAGE),
+                                ("clean_artifact", ac.ArtifactType.CLEAN_IMAGE)):
+                if kind is None:
+                    candidate = page.get("image_path")
+                    try:
+                        resolved = Path(str(candidate)).resolve()
+                        relative = resolved.relative_to(output_folder.resolve()).as_posix()
+                        paths[field] = relative
+                    except (OSError, ValueError, TypeError):
+                        continue
+                else:
+                    candidate = ac.artifact_path(output_folder, kind, page=page_index,
+                                                 total_pages=_lpc)
+                    if candidate.is_file():
+                        paths[field] = candidate.relative_to(output_folder).as_posix()
+            page_artifacts[page_index] = paths
+        psd_provenance = {
+            page: {"path": entry.get("path"), "text_layers": entry.get("text_layers", [])}
+            for page, entry in (editable_psd_export or {}).get("per_page", {}).items()
+        }
+        try:
+            review_started = time.perf_counter()
+            review_body = review_manifest_writer.build_review_manifest(
+                quality_report=quality_report,
+                logical_page_count=_lpc,
+                job_outcome=final_status,
+                artifact_root=output_folder,
+                psd_provenance=psd_provenance,
+                page_artifacts=page_artifacts,
+            )
+            build_seconds = round(time.perf_counter() - review_started, 6)
+            write_stats = review_manifest_writer.write_review_manifest(manifest_path, review_body)
+        except Exception:
+            artifact_manifest["artifact_status"][ac.ArtifactType.REVIEW_MANIFEST] = ac.ArtifactStatus.FAILED
+            artifact_manifest["failed_artifacts"] = list(artifact_manifest.get("failed_artifacts") or [])
+            if ac.ArtifactType.REVIEW_MANIFEST not in artifact_manifest["failed_artifacts"]:
+                artifact_manifest["failed_artifacts"].append(ac.ArtifactType.REVIEW_MANIFEST)
+            artifact_manifest["coverage"][ac.ArtifactType.REVIEW_MANIFEST] = {
+                "expected_pages": _lpc, "produced_pages": [],
+                "missing_pages": list(range(1, _lpc + 1)), "failed_pages": list(range(1, _lpc + 1)),
+            }
+            atomic_write_json(artifact_manifest_path, artifact_manifest)
+            raise
+        artifact_manifest["artifact_status"][ac.ArtifactType.REVIEW_MANIFEST] = ac.ArtifactStatus.PRODUCED
+        artifact_manifest["produced_artifacts"].append(ac.ArtifactType.REVIEW_MANIFEST)
+        artifact_manifest["coverage"][ac.ArtifactType.REVIEW_MANIFEST] = {
+            "expected_pages": _lpc,
+            "produced_pages": list(range(1, _lpc + 1)),
+            "missing_pages": [], "failed_pages": [],
+            "items_total": review_body["summary"]["items_total"],
+            "items_pending": review_body["summary"]["items_pending"],
+            "items_approved": review_body["summary"]["items_approved"],
+            "items_resolved": review_body["summary"]["items_resolved"],
+        }
+        artifact_manifest.setdefault("byte_totals", {})[ac.ArtifactType.REVIEW_MANIFEST] = write_stats["size_bytes"]
+        artifact_manifest.setdefault("io_seconds_by_artifact", {})[ac.ArtifactType.REVIEW_MANIFEST] = {
+            "build": build_seconds, "write": write_stats["write_seconds"],
+        }
+        report["review_manifest_json"] = str(manifest_path)
+    atomic_write_json(artifact_manifest_path, artifact_manifest)
+    _write_requested_artifact_aliases(
+        output_folder,
+        pdf_path,
+        contact_sheet_path,
+        compare_sheet_path,
+        args,
+    )
+    atomic_write_json(timing_json_path, report)
+    timing_txt_path.write_text(_timing_report_text(report), encoding="utf-8")
+    _write_progress(
+        progress_path,
+        run_signature,
+        args,
+        len(image_paths),
+        page_states,
+        status=final_status,
+        pdf_path=str(pdf_path),
+    )
+
+    print(
+        f"PDF_STAGE_RESULT status={'success' if pdf_path.is_file() else 'failed'} "
+        f"pages={len(page_states)}", flush=True,
+    )
+    print(
+        f"PIPELINE_FINAL_STATE status={final_status} "
+        f"pdf_generated={pdf_path.is_file()}", flush=True,
+    )
+
+    console_report = {
+        **report,
+        "smart_pdf_split": {
+            key: value
+            for key, value in (report.get("smart_pdf_split") or {}).items()
+            if key != "splits"
+        },
+    }
+    report["performance_clock"] = {
+        "clock": "perf_counter_ns",
+        "origin": "job_start",
+        "job_start_offset_ns": 0,
+        "job_end_offset_ns": max(0, time.perf_counter_ns() - monotonic_origin_ns),
+        "absolute_offsets_available": False,
+    }
+    print(dumps_json(console_report, ensure_ascii=False, indent=2), flush=True)
+    return report
+
+
+def _structural_fingerprint(page_states):
+    records = []
+    for state in page_states:
+        snapshot = state.get("structural_snapshot")
+        if snapshot:
+            records.append(snapshot)
+            continue
+        records.append(_structural_page_snapshot(state, state.get("groups", []) or []))
+    payload = {"pages": records}
+    return {
+        "hash": stable_hash(payload),
+        "page_count": len(records),
+        "group_count": sum(len(page["groups"]) for page in records),
+    }
+
+
+def _structural_page_snapshot(state, groups):
+    group_records = []
+    for group in groups or []:
+        group_records.append(
+            {
+                "id": group.group_id,
+                "box": [int(value) for value in group.box],
+                "line_count": len(group.lines),
+                "cleanup_line_count": len(group.cleanup_lines),
+                "classification": group.classification,
+                "ignored": bool(group.ignored),
+                "ignore_reason": group.ignore_reason,
+                "sent_to_translation": bool(group.sent_to_translation),
+                "manual_review_required": bool(group.manual_review_required),
+                "fallback_used": bool(group.fallback_used),
+                "quality_reason_count": len(group.quality_reasons),
+                "background_type": group.background_type,
+            }
+        )
+    return {
+        "page_index": int(state.get("index") or 0),
+        "raw_lines": len(state.get("raw_lines", []) or []),
+        "groups": group_records,
+    }
+
+
+def _retry_layout_overflow_translations(
+    groups,
+    translator,
+    retry_records,
+    force=False,
+    attempt=1,
+):
+    retried = 0
+    for group in groups:
+        # Render safety may clear an overflowing candidate from the accepted
+        # ``translation`` field.  Keep the provider candidate as retry context;
+        # it is never rendered/final until a subsequent layout validation passes.
+        previous = str(
+            getattr(group, "translation", "")
+            or getattr(group, "translation_candidate", "")
+            or ""
+        ).strip()
+        try:
+            candidate = translator.translate_strict(
+                group.text,
+                previous_translation=previous,
+                validation_reason=(
+                    "layout_overflow: a traducao nao cabe na regiao original; "
+                    "use uma versao substancialmente mais curta sem perder o sentido"
+                ),
+                force=force,
+            )
+        except Exception as exc:
+            if isinstance(exc, SystemicTranslationFailure):
+                raise
+            retry_records.append(
+                {
+                    "group_id": group.group_id,
+                    "source": group.text,
+                    "previous_translation": previous,
+                    "candidate_translation": "",
+                    "attempt": attempt,
+                    "valid": False,
+                    "reason": f"layout_retry_error:{type(exc).__name__}",
+                    "retry_type": "layout_overflow",
+                }
+            )
+            continue
+
+        candidate = str(candidate or "").strip()
+        if not candidate:
+            continue
+        apply_group_translations([group], [candidate])
+        shorter = len(group.translation) <= max(1, len(previous))
+        accepted = bool(group.translation_valid and shorter)
+        retry_records.append(
+            {
+                "group_id": group.group_id,
+                "source": group.text,
+                "previous_translation": previous,
+                "candidate_translation": group.translation,
+                "attempt": attempt,
+                "valid": accepted,
+                "reason": (
+                    "layout_retry_shorter"
+                    if accepted
+                    else "layout_retry_not_shorter_or_invalid"
+                ),
+                "retry_type": "layout_overflow",
+            }
+        )
+        if accepted:
+            group.translation_retry_count += 1
+            # The initial overflow was a provisional rejection.  Once the
+            # shortened candidate passes validation and rerendering, clear the
+            # failure bookkeeping so quality/accounting reflects the accepted
+            # final translation rather than the discarded intermediate.
+            group.translation_unresolved = False
+            group.trusted_translation_missing = False
+            group.source_fallback_prevented = False
+            group.translation_attempts_exhausted = False
+            group.manual_review_required = False
+            group.preserved_original = False
+            group.translation_validation_reason = "layout_retry_ok"
+            retried += 1
+        else:
+            group.translation = previous
+            group.translation_valid = True
+            group.translation_validation_reason = "layout_retry_rejected"
+    return retried
+
+
+_RESIDUAL_RENDER_REASONS = frozenset({
+    "source_tokens_detected_after_render",
+    "source_language_detected_after_render",
+})
+
+
+RESIDUAL_SOURCE_MAX_RETRIES = 2
+
+
+def _render_residual_source_tokens(group):
+    """English tokens the post-render OCR still read on this group's render."""
+    tokens = []
+    for attempt in getattr(group, "visual_attempts", None) or []:
+        if attempt.get("reason") not in _RESIDUAL_RENDER_REASONS:
+            continue
+        check = attempt.get("post_render_ocr") or {}
+        tokens.extend(str(token) for token in check.get("residual_source_tokens") or [])
+    return list(dict.fromkeys(token for token in tokens if token))
+
+
+def _letters(text):
+    return re.sub(r"[^A-Z]", "", str(text or "").upper())
+
+
+def _retry_residual_source_translations(groups, translator, retry_records, force=False, attempt=1):
+    """Re-ask once for a translation whose render still shows English words.
+
+    The post-render OCR read words of the source in the drawn translation
+    ("SRA. GO ALONE" for "with Ms. Go alone"); the region was then kept in
+    English. The provider is told which words survived, and the new candidate
+    is kept only if they are gone from it.
+    """
+    retried = 0
+    for group in groups:
+        residual = _render_residual_source_tokens(group)
+        # Up to two requests: the provider's answer varies, and a second one
+        # often drops the word the first one kept.
+        tries = int(getattr(group, "_residual_source_retries", 0) or 0)
+        if not residual or tries >= RESIDUAL_SOURCE_MAX_RETRIES:
+            continue
+        group._residual_source_retries = tries + 1
+        previous = str(getattr(group, "translation", "") or getattr(group, "translation_candidate", "") or "").strip()
+        source = str(getattr(group, "canonical_source_text", "") or group.text)
+        try:
+            candidate = translator.translate_strict(
+                source,
+                previous_translation=previous,
+                validation_reason=(
+                    "residual_source_language: a traducao manteve palavras em ingles "
+                    f"({', '.join(residual)}); traduza-as para portugues do Brasil, "
+                    "mantendo apenas nomes proprios como estao"
+                ),
+                force=force,
+            )
+        except Exception as exc:
+            if isinstance(exc, SystemicTranslationFailure):
+                raise
+            retry_records.append({
+                "group_id": group.group_id, "source": source, "previous_translation": previous,
+                "candidate_translation": "", "attempt": attempt, "valid": False,
+                "reason": f"residual_retry_error:{type(exc).__name__}", "retry_type": "residual_source",
+            })
+            continue
+        candidate = str(candidate or "").strip()
+        if not candidate:
+            continue
+        apply_group_translations([group], [candidate])
+        survived = [token for token in residual if _letters(token) and _letters(token) in _letters(group.translation)]
+        accepted = bool(group.translation_valid and not survived)
+        retry_records.append({
+            "group_id": group.group_id, "source": source, "previous_translation": previous,
+            "candidate_translation": group.translation, "attempt": attempt, "valid": accepted,
+            "reason": "residual_retry_ok" if accepted else "residual_retry_still_english",
+            "retry_type": "residual_source",
+        })
+        if accepted:
+            group.translation_retry_count += 1
+            group.translation_validation_reason = "residual_retry_ok"
+            group._residual_source_retries = RESIDUAL_SOURCE_MAX_RETRIES
+            retried += 1
+        else:
+            group.translation = previous
+            group.translation_valid = True
+    return retried
+
+
+def _translation_render_signature(groups):
+    """What a page render depends on that translation retries can change."""
+    return tuple(
+        (id(group), str(getattr(group, "translation", "") or ""),
+         str(getattr(group, "translation_candidate", "") or ""),
+         bool(getattr(group, "translation_valid", False)))
+        for group in groups
+    )
+
+
+def _resolve_layout_overflow_before_settlement(
+    page_states,
+    translator,
+    retry_records,
+    *,
+    force=False,
+):
+    """Resolve bounded provider-backed layout retries before YK settlement.
+
+    This is intentionally an in-memory preflight: it exercises the same layout
+    and overflow detector as final rendering but writes no artifact.  A later
+    render remains local-only, so a consumed reservation is never reused for a
+    new provider request.
+    """
+
+    lock = threading.Lock()
+
+    def preflight(state):
+        retried_total = 0
+        attempts = 0
+        while attempts < int(config.TRANSLATION_MAX_RETRIES):
+            # The preflight is a full render; its result is kept so the final
+            # render of an unchanged page does not repeat the whole cleanup.
+            preflight_capture: dict = {}
+            preflight_timings: dict = {}
+            preflight_result = render_analyzed_image(
+                state["original_bgr"],
+                state.get("raw_lines", []),
+                state["candidates"],
+                state["groups"],
+                font_path=config.FONT_PATH,
+                page_index=state["index"],
+                image_path=state["image_path"],
+                stage_timings=preflight_timings,
+                capture=preflight_capture,
+            )
+            state["_preflight_render"] = {
+                "signature": _translation_render_signature(state["groups"]),
+                "result": preflight_result,
+                "capture": preflight_capture,
+                "timings": preflight_timings,
+            }
+            overflow_groups = [
+                group
+                for group in state["groups"]
+                if group.sent_to_translation
+                and float(group.text_overflow_ratio or 0.0)
+                > config.MAX_TEXT_OVERFLOW_RATIO
+            ]
+            residual_groups = [
+                group
+                for group in state["groups"]
+                if group.sent_to_translation
+                and not getattr(group, "redrawn", False)
+                and _render_residual_source_tokens(group)
+            ]
+            if not overflow_groups and not residual_groups:
+                break
+            # Provider calls stay one at a time; only the page renders overlap.
+            with lock:
+                retry_started = time.perf_counter()
+                retried = _retry_layout_overflow_translations(
+                    overflow_groups,
+                    translator,
+                    retry_records,
+                    force=force,
+                    attempt=attempts + 1,
+                ) if overflow_groups else 0
+                retried += _retry_residual_source_translations(
+                    residual_groups, translator, retry_records, force=force, attempt=attempts + 1,
+                )
+                state["_preflight_translation_retry_seconds"] = (
+                    float(state.get("_preflight_translation_retry_seconds", 0.0) or 0.0)
+                    + (time.perf_counter() - retry_started)
+                )
+            if not retried:
+                break
+            retried_total += retried
+            attempts += 1
+        return retried_total
+
+    pending = [state for state in page_states if state.get("status") != "completed"]
+    workers = min(_pipeline_page_workers(), max(1, len(pending)))
+    if workers == 1:
+        return sum(preflight(state) for state in pending)
+
+    run_recorder = ocr_line_provenance.active()
+
+    def preflight_in_thread(state):
+        # Provenance is thread-local: each page records into its own recorder,
+        # merged in page order below, as the post-translation pages do.
+        recorder = (run_recorder.fork_page(state["index"]) if run_recorder is not None
+                    else ocr_line_provenance.ProvenanceRecorder())
+        ocr_line_provenance.activate(recorder)
+        try:
+            return preflight(state), recorder
+        finally:
+            ocr_line_provenance.deactivate()
+
+    with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="preflight-page") as executor:
+        results = list(executor.map(preflight_in_thread, pending))
+    total_retried = 0
+    for retried, recorder in results:
+        total_retried += retried
+        if run_recorder is not None:
+            run_recorder.merge_from(recorder)
+    return total_retried
+
+
+def _download_with_cache(url, max_images, output_folder, force, source_candidate_ids=None,
+                         local_manifest_path="", resume_checkpoint=False):
+    approved_ids = list(dict.fromkeys(str(value) for value in (source_candidate_ids or []) if value))
+    input_folder = output_folder / "input"
+    output_report_path = output_folder / "downloaded_images.json"
+    if local_manifest_path:
+        # Local input is already an immutable, validated snapshot.  It is deliberately never
+        # entered in the remote-download cache and it declares logical pages so Webtoon smart
+        # splitting cannot alter a user-supplied page sequence.
+        from komyst.download.local.local_folder_input import materialize_snapshot
+
+        paths, manifest = materialize_snapshot(
+            local_manifest_path,
+            input_folder,
+            max_images=max_images,
+            # A resumed local-folder run re-materializes the same immutable,
+            # validated snapshot into its job-owned input directory.  The
+            # ownership marker and filename allowlist remain the deletion gate.
+            clear_existing=bool(force or resume_checkpoint),
+        )
+        atomic_write_json(output_report_path, manifest)
+        print(f"Entrada local: {len(paths)} paginas logicas", flush=True)
+        return paths, manifest, False
+    key = stable_hash(
+        {
+            "url": url,
+            "max_images": max_images,
+            # A manually confirmed subset must never reuse the cache for a different reader
+            # snapshot or automatic selection.
+            "source_candidate_ids": approved_ids,
+            "download_rules": "chapter-download-v4",
+        }
+    )
+    download_folder = cache_folder("downloads") / key
+    manifest_path = download_folder / "manifest.json"
+
+    if _download_cache_reuse_allowed(url, force=force, approved_ids=approved_ids):
+        manifest = load_json(manifest_path)
+        cached_paths = _valid_download_paths(manifest)
+        if _download_cache_is_complete(manifest, cached_paths):
+            if input_folder.exists():
+                force_remove(str(input_folder))
+            input_folder.mkdir(parents=True, exist_ok=True)
+            active_manifest = dict(manifest)
+            active_items = []
+            active_paths = []
+            for index, item in enumerate(manifest.get("downloaded", []), start=1):
+                cached_path = item.get("path")
+                active_path = input_folder / f"{index:03}.png"
+                atomic_copy(cached_path, active_path)
+                active_item = dict(item)
+                active_item["cache_path"] = cached_path
+                active_item["path"] = str(active_path)
+                active_items.append(active_item)
+                active_paths.append(str(active_path))
+            active_manifest["downloaded"] = active_items
+            atomic_write_json(output_report_path, active_manifest)
+            print(f"Download: cache ({len(active_paths)} imagens)", flush=True)
+            return active_paths, active_manifest, True
+        if cached_paths:
+            expected = _expected_download_count(manifest)
+            print(
+                "Download: cache parcial ignorado "
+                f"({len(cached_paths)}/{expected or 'desconhecido'} imagens)",
+                flush=True,
+            )
+
+    paths = download_images(
+        url,
+        max_images=max_images,
+        debug_folder=str(output_folder),
+        target_folder=str(input_folder),
+        force=True,
+        approved_candidate_ids=approved_ids,
+        progress_callback=lambda current, total, message: print(
+            f"{message}: {current}/{total}",
+            flush=True,
+        ),
+    )
+    manifest = load_json(output_report_path)
+    valid_items = _chapter_download_items(manifest)
+    from komyst.download.sources.chapter_source import select_adapter
+
+    cacheable_source = select_adapter(url).is_specific and not approved_ids
+    if cacheable_source:
+        if download_folder.exists():
+            force_remove(str(download_folder))
+        download_folder.mkdir(parents=True, exist_ok=True)
+    cache_items = []
+    for item in valid_items:
+        path = item.get("path")
+        if _valid_download_item(item, path):
+            file_hash = file_sha256(path)
+            cache_path = download_folder / Path(path).name if cacheable_source else None
+            if cache_path is not None:
+                atomic_copy(path, cache_path)
+            item["sha256"] = file_hash
+            cache_item = dict(item)
+            cache_item["path"] = str(cache_path) if cache_path is not None else ""
+            cache_item["active_path"] = path
+            cache_items.append(cache_item)
+    manifest["downloaded"] = valid_items
+    manifest["total_downloaded"] = len(valid_items)
+    paths = [
+        item["path"]
+        for item in valid_items
+        if _valid_download_item(item, item.get("path"))
+    ]
+    if cacheable_source:
+        cache_manifest = dict(manifest)
+        cache_manifest["downloaded"] = cache_items
+        cache_manifest["total_downloaded"] = len(cache_items)
+        atomic_write_json(manifest_path, cache_manifest)
+    atomic_write_json(output_report_path, manifest)
+    return paths, manifest, False
+
+
+def _download_cache_reuse_allowed(url, *, force, approved_ids) -> bool:
+    """Generic readers must be observed afresh; cache never substitutes source review."""
+    if not config.ENABLE_DOWNLOAD_CACHE or force or approved_ids:
+        return False
+    from komyst.download.sources.chapter_source import select_adapter
+
+    return bool(select_adapter(url).is_specific)
+
+
+def _parse_page_indices(raw):
+    if not raw:
+        return []
+    if isinstance(raw, (list, tuple, set)):
+        values = raw
+    else:
+        values = re.split(r"[,;\s]+", str(raw))
+    indices = []
+    seen = set()
+    for value in values:
+        if value in (None, ""):
+            continue
+        try:
+            index = int(value)
+        except (TypeError, ValueError):
+            raise ValueError(f"Indice de pagina invalido: {value!r}") from None
+        if index <= 0:
+            raise ValueError(f"Indice de pagina deve ser positivo: {index}")
+        if index not in seen:
+            indices.append(index)
+            seen.add(index)
+    return indices
+
+
+def _resolve_download_max_images(
+    max_images,
+    selected_page_indices,
+    local_manifest_path,
+    source_candidate_ids,
+):
+    approved_ids = list(source_candidate_ids or [])
+    if approved_ids:
+        # A submitted source_selection is already a concrete reader snapshot. Keep bounded
+        # runs bounded instead of expanding them to a full smart-split chapter download.
+        return max_images
+    # An explicit bounded request is an execution contract even when the source
+    # adapter supports smart PDF splitting.  Analysis may still inspect all
+    # candidates, but the downloader must not expand ``max_images=5`` to the
+    # complete chapter.
+    if max_images is not None:
+        return max_images
+    if config.SMART_WEBTOON_PDF_SPLIT and not local_manifest_path:
+        return None
+    if selected_page_indices and (not config.SMART_WEBTOON_PDF_SPLIT or local_manifest_path):
+        return max(max(selected_page_indices), max_images or 0)
+    return max_images
+
+
+def _select_image_entries(image_paths, selected_page_indices):
+    if not selected_page_indices:
+        return [
+            {
+                "index": index,
+                "original_index": index,
+                "sequence_index": index,
+                "path": path,
+            }
+            for index, path in enumerate(image_paths, start=1)
+        ], []
+
+    entries = []
+    missing = []
+    for sequence_index, original_index in enumerate(selected_page_indices, start=1):
+        if original_index > len(image_paths):
+            missing.append(original_index)
+            continue
+        entries.append(
+            {
+                "index": original_index,
+                "original_index": original_index,
+                "sequence_index": sequence_index,
+                "path": image_paths[original_index - 1],
+            }
+        )
+    return entries, missing
+
+
+def _write_requested_artifact_aliases(
+    output_folder,
+    pdf_path,
+    contact_sheet_path,
+    compare_sheet_path,
+    args,
+):
+    aliases = [
+        (contact_sheet_path, output_folder / "contact_sheet.jpg"),
+        (compare_sheet_path, output_folder / "compare_sheet.jpg"),
+    ]
+    if not args.full:
+        aliases.append((pdf_path, output_folder / f"pdf_{args.max_images}_pages.pdf"))
+    for source, target in aliases:
+        try:
+            if Path(source).exists() and Path(source).resolve() != Path(target).resolve():
+                shutil.copyfile(source, target)
+        except OSError:
+            pass
+
+
+MIXED_LANGUAGE_VALIDATION_REASON_PREFIXES = (
+    "mixed_language",
+    "english_phrase",
+    "residual_english",
+    "residual_inflected_english",
+    "residual_spanish",
+    "multilingual_partial",
+    "untranslated_english",
+    "untranslated_single_english",
+    "untranslated_source",
+    "residual_source",
+    "missing_translation",
+    "invalid_translation",
+)
+def _is_mixed_language_validation_reason(reason):
+    return str(reason or "").startswith(MIXED_LANGUAGE_VALIDATION_REASON_PREFIXES)
+
+
+def _region_source_lexical_words(item):
+    """Real source words that stayed visible because the item was not rendered.
+
+    A lexical word is a run of >=2 letters containing at least one vowel. The
+    vowel requirement is a generic, language-agnostic filter that drops OCR
+    noise and consonant-cluster onomatopoeia (e.g. "MM", "PSST", "GRR") while
+    keeping actual dialogue words, so a phantom read never forces a review.
+    """
+    text = str(item.get("clean_text") or item.get("raw_text") or "")
+    return [
+        word
+        for word in re.findall(r"[A-Za-zÀ-ÿ]{2,}", text)
+        if re.search(r"[aeiouyAEIOUYÀ-ÿ]", word)
+    ]
+
+
+_PARTIAL_RECOGNITION_MIN_CONFIDENCE = 0.8
+
+
+def _item_is_partially_recognized(item):
+    """A box far wider than the glyphs the engine returned still holds unread text.
+
+    When recognition collapses a whole word to one or two glyphs, the text stays
+    on the art but carries too few letters for the lexical test. The mismatch
+    between the box width and the recognised glyph count is a generic, language
+    agnostic signal that source text in the region was never read, so the region
+    must not be reported as complete.
+
+    Confidence separates this from a phantom read: a genuine partial recognition
+    means the engine was sure of the glyphs it returned and simply did not return
+    the rest, whereas noise picked up from balloon borders or art comes back with
+    low confidence and must not force a review.
+    """
+    box = item.get("bounding_box") or []
+    if len(box) != 4:
+        return False
+    try:
+        _, _, width, height = (float(v) for v in box)
+    except (TypeError, ValueError):
+        return False
+    try:
+        confidence = float(item.get("confidence") or 0.0)
+    except (TypeError, ValueError):
+        confidence = 0.0
+    if confidence < _PARTIAL_RECOGNITION_MIN_CONFIDENCE:
+        return False
+    text = str(item.get("clean_text") or item.get("raw_text") or "")
+    if width <= 0 or height <= 0 or not re.search(r"[A-Za-zÀ-ÿ]", text):
+        return False
+    glyphs = len(re.sub(r"\s", "", text))
+    if glyphs <= 0:
+        return False
+    return width > height * 1.15 * glyphs
+
+
+def _item_is_unassigned_residue_candidate(item):
+    """Visible OCR residue with no terminal outcome near rendered story text.
+
+    Some physical leftovers are no longer readable English by the time OCR sees
+    them again (for example a word edge read as digits/punctuation).  They still
+    cannot disappear from the quality ledger when they sit in the same story
+    block as translated text.  This predicate does not make them translatable; it
+    only makes the surrounding block require review.
+    """
+    if str(item.get("translation_final_state") or ""):
+        return False
+    text = str(item.get("clean_text") or item.get("raw_text") or "").strip()
+    if len(re.sub(r"\s", "", text)) < 2:
+        return False
+    if item.get("confidence") is not None:
+        try:
+            confidence = float(item.get("confidence") or 0.0)
+        except (TypeError, ValueError):
+            confidence = 0.0
+        if confidence < _PARTIAL_RECOGNITION_MIN_CONFIDENCE:
+            return False
+    if str(item.get("classification") or "") not in {"unknown", "decorative"}:
+        return False
+    policy = region_taxonomy.resolve_region_policy(
+        original_classification=str(item.get("classification") or ""),
+        source_text=text,
+        preserve_as_name=bool(item.get("preserve_as_name")),
+        evidence={"confidence": item.get("confidence") or 0.0},
+    )
+    if policy["semantic_role"] in {"credit", "promo", "logo", "sfx"}:
+        return False
+    return bool(re.search(r"[A-Za-z0-9!?',.]", text))
+
+
+def _item_is_rendered(item):
+    return (
+        str(item.get("translation_final_state") or "") == "translated"
+        and bool(item.get("redrawn"))
+    )
+
+
+def _boxes_form_one_speech_block(a, b, *, allow_small_residual=False):
+    """True when two boxes read as one balloon block (stacked or same line).
+
+    Uses only generic geometry: comparable text height, strong overlap on one
+    axis and a small gap on the other. This associates split lines of the same
+    balloon without any chapter-, word- or coordinate-specific rule.
+    """
+    try:
+        ax, ay, aw, ah = (float(v) for v in a)
+        bx, by, bw, bh = (float(v) for v in b)
+    except (TypeError, ValueError):
+        return False
+    if min(aw, ah, bw, bh) <= 0:
+        return False
+    height_ratio = min(ah, bh) / max(ah, bh)
+    if height_ratio < 0.4 and not (
+        allow_small_residual and height_ratio >= 0.18
+    ):
+        # Very different font scale is normally not a sibling.  The exception is
+        # a small OCR-partial residue directly attached to a rendered story block:
+        # this is exactly how a leftover word/fragment can survive at the edge of
+        # a translated balloon while the main region looks complete.
+        return False
+    avg_height = (ah + bh) / 2.0
+    horizontal_overlap = max(0.0, min(ax + aw, bx + bw) - max(ax, bx))
+    vertical_overlap = max(0.0, min(ay + ah, by + bh) - max(ay, by))
+    horizontal_ratio = horizontal_overlap / min(aw, bw)
+    vertical_ratio = vertical_overlap / min(ah, bh)
+    vertical_gap = max(ay, by) - min(ay + ah, by + bh)
+    horizontal_gap = max(ax, bx) - min(ax + aw, bx + bw)
+    stacked = horizontal_ratio >= 0.35 and vertical_gap <= 0.8 * avg_height
+    same_line = vertical_ratio >= 0.35 and horizontal_gap <= 0.8 * avg_height
+    return stacked or same_line
+
+
+def _box_covers_with_tolerance(outer, inner, *, tolerance=6):
+    try:
+        ox, oy, ow, oh = (float(v) for v in outer)
+        ix, iy, iw, ih = (float(v) for v in inner)
+    except (TypeError, ValueError):
+        return False
+    if min(ow, oh, iw, ih) <= 0:
+        return False
+    return (
+        ix >= ox - tolerance
+        and iy >= oy - tolerance
+        and ix + iw <= ox + ow + tolerance
+        and iy + ih <= oy + oh + tolerance
+    )
+
+
+def _residual_is_covered_by_render_cleanup(rendered_item, residual_item):
+    residual_box = residual_item.get("bounding_box")
+    if not residual_box:
+        return False
+    for cleanup_box in rendered_item.get("cleanup_line_boxes") or []:
+        if _box_covers_with_tolerance(cleanup_box, residual_box):
+            return True
+    return False
+
+
+def _incomplete_speech_region_coverage(states):
+    """Rendered speech/narration lines whose balloon still shows source text.
+
+    A region is incomplete when a translated-and-rendered speech/narration line
+    shares a balloon block with another line that still carries source words but
+    was never rendered (dropped, decorative, SFX, manual review, preserved).
+    """
+    violations = []
+    for state in states:
+        items = [
+            item
+            for item in state.get("debug_data", {}).get("items", [])
+            if item.get("bounding_box")
+        ]
+        rendered = [
+            item
+            for item in items
+            if _story_translation_required(item)
+            and _item_is_rendered(item)
+        ]
+        residual = [
+            item
+            for item in items
+            if not _item_is_rendered(item)
+            and (
+                _region_source_lexical_words(item)
+                or _item_is_partially_recognized(item)
+                or _item_is_unassigned_residue_candidate(item)
+            )
+        ]
+        for line in rendered:
+            for other in residual:
+                if other is line:
+                    continue
+                # The work's own title plate, drawn next to the credits it heads, is a logo kept
+                # on purpose, not source text left behind in the credits' block.
+                other_text = _item_source_text(other)
+                if (
+                    region_taxonomy.looks_like_series_title(other_text)
+                    or region_taxonomy.looks_like_strong_credit(other_text)
+                    or region_taxonomy.looks_like_watermark(other_text)
+                    or region_taxonomy.looks_like_url(other_text)
+                ):
+                    continue
+                if _boxes_form_one_speech_block(
+                    line["bounding_box"],
+                    other["bounding_box"],
+                    allow_small_residual=(
+                        _item_is_partially_recognized(other)
+                        or _item_is_unassigned_residue_candidate(other)
+                    ),
+                ):
+                    if _residual_is_covered_by_render_cleanup(line, other):
+                        continue
+                    violations.append(
+                        {
+                            "page": state.get("index"),
+                            "rendered_id": line.get("id"),
+                            "residual_id": other.get("id"),
+                            "residual_text": str(
+                                other.get("clean_text")
+                                or other.get("raw_text")
+                                or ""
+                            ),
+                        }
+                    )
+                    break
+    return violations
+
+
+def _item_source_text(item):
+    return str(item.get("clean_text") or item.get("raw_text") or "").strip()
+
+
+def _story_translation_required(item):
+    """Whether this visible text is story-bearing and must reach a terminal outcome.
+
+    Legacy labels are too coarse: real dialogue/system text can arrive as
+    ``unknown`` or ``decorative`` when the font/container is unusual, while scan
+    credits and promo pages can arrive as ``speech``/``narration``.  The
+    denominator therefore follows the semantic taxonomy, not the old visual
+    bucket alone.
+    """
+    classification = str(item.get("classification") or "")
+    if classification == "sfx" and not config.TRANSLATE_SFX:
+        return False
+    policy = region_taxonomy.resolve_region_policy(
+        original_classification=classification,
+        source_text=_item_source_text(item),
+        preserve_as_name=bool(item.get("preserve_as_name")),
+        evidence={"confidence": item.get("confidence") or 0.0},
+    )
+    if not region_taxonomy.is_translatable(policy["normalized_classification"]):
+        return False
+    return region_taxonomy.weak_label_semantic_promotion_allowed(
+        classification,
+        _item_source_text(item),
+    )
+
+
+def _ordinary_story_residual_required(item):
+    """Whether a residual is an ordinary-story product blocker.
+
+    The physical ledger intentionally keeps every visible retained source.  This
+    narrower subgate separates story content a Beta reader expects in PT-BR from
+    short SFX/garbled review remnants that may keep the global physical gate in
+    review without being ordinary dialogue/narration.
+    """
+
+    if str(item.get("classification") or "") == "sfx":
+        return False
+    if not _story_translation_required(item):
+        return False
+    text = _item_source_text(item)
+    compact = re.sub(r"[^A-Za-zÀ-ÿ]", "", text)
+    final_reason = str(item.get("translation_final_reason") or "")
+    if final_reason in {
+        "untranslated_source_after_retries",
+        "translation_not_selected",
+    } and len(compact) <= 7:
+        return False
+    return True
+
+
+# The four things a physically retained source region can actually be. Only the
+# first is a product blocker: a reader who never gets "TAK" in Portuguese has
+# lost nothing, a reader who never gets a line of dialogue has lost the story.
+RESIDUAL_ORDINARY_STORY = "ordinary_story"
+RESIDUAL_SFX_EFFECT = "sfx_effect"
+RESIDUAL_PROMO = "promo"
+RESIDUAL_CREDIT_LOGO = "credit_logo"
+PHYSICAL_RESIDUAL_CLASSES = (
+    RESIDUAL_ORDINARY_STORY,
+    RESIDUAL_SFX_EFFECT,
+    RESIDUAL_PROMO,
+    RESIDUAL_CREDIT_LOGO,
+)
+
+
+def _physical_residual_class(item):
+    """Which of the four classes this retained source region belongs to.
+
+    #84F13 shipped exactly three physical residuals - ``TAK``, ``TUR`` and
+    ``TRNDGE`` - and the balloon detector had labelled all three ``speech``,
+    because they sit inside balloon-like containers.  They are onomatopoeia, and
+    the chapter hard-failed its physical gate for them.  Classifying by the
+    *shape of the text* rather than by the container label is what tells an
+    effect remnant apart from a lost line of dialogue, and it is the same
+    taxonomy the translation policy already uses - no new detector, and no
+    per-page exception.
+    """
+
+    text = _item_source_text(item)
+    if region_taxonomy.looks_like_watermark(text) or region_taxonomy.looks_like_url(text):
+        return RESIDUAL_PROMO
+    if region_taxonomy.looks_like_strong_credit(text):
+        return RESIDUAL_CREDIT_LOGO
+    if _ordinary_story_residual_required(item):
+        return RESIDUAL_ORDINARY_STORY
+    return RESIDUAL_SFX_EFFECT
+
+
+def _physically_rendered_without_source(item):
+    """Whether the shipped page shows PT-BR and no source English for this region.
+
+    The review verdict and the physical fact are different questions.  A region
+    that shipped under ``RENDER_WITH_REVIEW`` passed the source-removal axis by
+    construction - ``render_disposition`` returns ``do_not_render`` when the
+    source survives - and had its Portuguese drawn, so it is still a structured
+    review item everywhere else, but it is not a source residual.  #84F9 listed
+    several such regions as ordinary-story residuals purely because they kept a
+    review terminal state.  The two art reasons that literally mean "source
+    lettering survived the cleanup" stay residual.
+    """
+
+    if not item.get("redrawn"):
+        return False
+    if str(item.get("render_disposition") or "") not in {
+        RENDER_CLEAN,
+        RENDER_WITH_REVIEW,
+    }:
+        return False
+    if str(item.get("art_reconstruction_reason") or "") in (
+        RESIDUAL_SOURCE_LETTERING_REASONS
+    ):
+        return False
+    return bool(str(item.get("translation") or "").strip())
+
+
+def _translation_quality_accounting(states):
+    terminal_counts = {
+        state: 0 for state in sorted(TRANSLATION_TERMINAL_STATES)
+    }
+    result = {
+        "detected_translatable": 0,
+        "sent_to_translation": 0,
+        "translated": 0,
+        "translated_rendered": 0,
+        "rejected": 0,
+        "manual_review": 0,
+        "preserved_original": 0,
+        "translation_failed": 0,
+        "translation_unresolved": 0,
+        "translation_attempts_exhausted": 0,
+        "translation_review_required": 0,
+        "source_fallback_prevented": 0,
+        "trusted_translation_missing": 0,
+        "skipped_with_reason": 0,
+        "source_language_residual": 0,
+        "missing_candidate": 0,
+        "candidate_equals_source": 0,
+        "proper_name_preserved": 0,
+        "ocr_unintelligible_source": 0,
+        "invalid_candidate": 0,
+        # SEMANTIC-RUNTIME-001: the semantic verdict is accounted for explicitly, so a
+        # region carrying a review reason can never also be counted as semantically
+        # clean. Every checked region lands in exactly one of the three buckets.
+        "semantic_checked": 0,
+        "semantic_clean": 0,
+        "semantic_review": 0,
+        "semantic_rejected": 0,
+        "semantic_review_ids": [],
+        "translation_not_applied": 0,
+        "missing_terminal_state": 0,
+        "incomplete_region_coverage": 0,
+        "terminal_state_counts": terminal_counts,
+        "accounting_closed": False,
+        "requires_review": False,
+        "quality_passed": False,
+    }
+    coverage_violations = _incomplete_speech_region_coverage(states)
+    result["incomplete_region_coverage"] = len(coverage_violations)
+    result["incomplete_region_coverage_details"] = coverage_violations[:50]
+    translatable_items = [
+        item
+        for state in states
+        for item in state.get("debug_data", {}).get("items", [])
+        if _story_translation_required(item)
+    ]
+    result["detected_translatable"] = len(translatable_items)
+    for item in translatable_items:
+        state = str(item.get("translation_final_state") or "")
+        reason = str(
+            item.get("translation_final_reason")
+            or item.get("translation_validation_reason")
+            or ""
+        )
+        source = re.sub(r"\s+", " ", str(item.get("clean_text") or "")).strip()
+        candidate = re.sub(
+            r"\s+", " ", str(item.get("translation_candidate") or "")
+        ).strip()
+        if item.get("sent_to_nvidia"):
+            result["sent_to_translation"] += 1
+        if state not in terminal_counts:
+            result["missing_terminal_state"] += 1
+            continue
+        terminal_counts[state] += 1
+        if state != "preserved_original":
+            result[state] += 1
+        if state == "translated" and item.get("redrawn"):
+            result["translated_rendered"] += 1
+        if item.get("translation_unresolved"):
+            result["translation_unresolved"] += 1
+        if item.get("translation_attempts_exhausted"):
+            result["translation_attempts_exhausted"] += 1
+        if item.get("manual_review_required"):
+            result["translation_review_required"] += 1
+        if item.get("source_fallback_prevented"):
+            result["source_fallback_prevented"] += 1
+        if item.get("trusted_translation_missing"):
+            result["trusted_translation_missing"] += 1
+        if item.get("preserved_original"):
+            result["preserved_original"] += 1
+        # A balloon holding only a character's name has no sentence to translate:
+        # the name itself is the correct output. Counting it as an untranslated
+        # source held whole chapters in review over text that was already right.
+        proper_name_only = reason == PROPER_NAME_ONLY_REASON
+        if proper_name_only:
+            result["proper_name_preserved"] += 1
+        # An unread source is held for review like any other defect, but it is a read
+        # failure, not dialogue the translator skipped: counting it as untranslated
+        # source overstates the translator's residual and hides the real defect.
+        if reason == OCR_UNINTELLIGIBLE_SOURCE_REASON:
+            result["ocr_unintelligible_source"] += 1
+        if not candidate:
+            result["missing_candidate"] += 1
+        if (
+            not proper_name_only
+            and source
+            and candidate
+            and source.casefold() == candidate.casefold()
+        ):
+            result["candidate_equals_source"] += 1
+        if not item.get("translation_valid", False):
+            result["invalid_candidate"] += 1
+        if reason.startswith(
+            (
+                "residual_source_language",
+                "untranslated_source",
+                "missing_translation_candidate",
+            )
+        ) or _is_mixed_language_validation_reason(reason):
+            result["source_language_residual"] += 1
+        # SEMANTIC-RUNTIME-001: one canonical bucket per checked region. The review
+        # reason is written by the same gate that writes the rejection, so the two can
+        # never disagree here, and a region with a reason can never count as clean.
+        if item.get("sent_to_nvidia") and candidate:
+            result["semantic_checked"] += 1
+            semantic_reason = str(item.get("semantic_review_reason") or "")
+            semantic_rejected = reason == "semantic_fidelity_failed_after_retries" or (
+                semantic_fidelity.is_fidelity_reason(
+                    item.get("translation_validation_reason")
+                )
+            )
+            if semantic_rejected:
+                result["semantic_rejected"] += 1
+            elif semantic_reason:
+                result["semantic_review"] += 1
+                result["semantic_review_ids"].append(
+                    f"p{int(item.get('page') or 0):03}:"
+                    f"{item.get('region_id') or item.get('id') or ''}:{semantic_reason}"
+                )
+            else:
+                result["semantic_clean"] += 1
+
+    result["translation_not_applied"] = (
+        result["detected_translatable"] - result["translated_rendered"]
+    )
+    terminal_total = sum(terminal_counts.values())
+    result["accounting_closed"] = bool(
+        result["missing_terminal_state"] == 0
+        and terminal_total == result["detected_translatable"]
+    )
+    result["requires_review"] = bool(
+        result["manual_review"]
+        or result["rejected"]
+        or result["translation_failed"]
+        or result["translation_unresolved"]
+        or result["trusted_translation_missing"]
+        or result["missing_candidate"]
+        or result["candidate_equals_source"]
+        or result["source_language_residual"]
+        or result["invalid_candidate"]
+        or result["incomplete_region_coverage"]
+        # A region the semantic gate marked for review is rendered but not clean:
+        # the chapter cannot pass quality with one still outstanding.
+        or result["semantic_review"]
+        or result["semantic_rejected"]
+        or not result["accounting_closed"]
+    )
+    result["quality_passed"] = bool(
+        result["accounting_closed"] and not result["requires_review"]
+    )
+    return result
+
+
+def _item_region_id(state, item):
+    page = int(state.get("index") or item.get("page") or 0)
+    group_id = str(item.get("id") or "")
+    return f"p{page:03}:{group_id}" if group_id else f"p{page:03}"
+
+
+def _render_plan_accounting(states):
+    """Reconcile story regions through render-plan terminal output paths.
+
+    This is deliberately an accounting layer, not a new renderer.  The renderer can
+    keep failing closed, but every story-bearing region must now be explainable as
+    exactly one of: clean render, rendered-with-residual, structured review,
+    proper-name preservation, or unaccounted defect.  That prevents the split-brain
+    state where translation/physical validation expect a story region while the
+    render path silently never selects it.
+    """
+
+    coverage = _incomplete_speech_region_coverage(states)
+    residual_by_rendered = {
+        f"p{int(item.get('page') or 0):03}:{item.get('rendered_id')}"
+        for item in coverage
+        if item.get("page") and item.get("rendered_id")
+    }
+    residual_ids = {
+        f"p{int(item.get('page') or 0):03}:{item.get('residual_id')}"
+        for item in coverage
+        if item.get("page") and item.get("residual_id")
+    }
+    result = {
+        "story_expected_ids": [],
+        "story_with_valid_candidate_ids": [],
+        "render_selected_ids": [],
+        "render_skipped_ids": [],
+        "rendered_clean_ids": [],
+        "rendered_with_residual_ids": [],
+        "structured_review_ids": [],
+        "semantic_review_ids": [],
+        "proper_noun_preserved_ids": [],
+        "unaccounted_ids": [],
+        "render_skipped_reasons": {},
+        "skipped_without_reason": 0,
+        "coverage_residual_ids": sorted(residual_ids),
+    }
+    for state in states:
+        for item in state.get("debug_data", {}).get("items", []):
+            if not _story_translation_required(item):
+                continue
+            region_id = _item_region_id(state, item)
+            result["story_expected_ids"].append(region_id)
+            candidate = re.sub(
+                r"\s+",
+                " ",
+                str(
+                    item.get("translation_candidate")
+                    or item.get("translation")
+                    or item.get("raw_provider_candidate")
+                    or item.get("rejected_translation")
+                    or ""
+                ),
+            ).strip()
+            final_state = str(item.get("translation_final_state") or "")
+            final_reason = str(
+                item.get("translation_final_reason")
+                or item.get("translation_validation_reason")
+                or item.get("ignore_reason")
+                or ""
+            )
+            translated = bool(str(item.get("translation") or "").strip())
+            valid = bool(item.get("translation_valid"))
+            redrawn = bool(item.get("redrawn"))
+            if candidate and valid:
+                result["story_with_valid_candidate_ids"].append(region_id)
+            render_selected = bool(
+                redrawn
+                or item.get("visual_attempts")
+                or item.get("visual_validation")
+                or item.get("mask_metrics")
+            )
+            if render_selected:
+                result["render_selected_ids"].append(region_id)
+            else:
+                result["render_skipped_ids"].append(region_id)
+                result["render_skipped_reasons"][region_id] = (
+                    final_reason or "missing_render_skipped_reason"
+                )
+                if not final_reason:
+                    result["skipped_without_reason"] += 1
+
+            semantic_reason = str(item.get("semantic_review_reason") or "")
+            if semantic_reason:
+                # SEMANTIC-RUNTIME-001: RENDER_WITH_REVIEW. The Portuguese is drawn -
+                # holding it would put the English source back on the page - but the
+                # region is a structured review item, never a clean render.
+                result["structured_review_ids"].append(region_id)
+                result["semantic_review_ids"].append(region_id)
+            elif final_state == "translated" and translated and valid and redrawn:
+                if region_id in residual_by_rendered:
+                    result["rendered_with_residual_ids"].append(region_id)
+                else:
+                    result["rendered_clean_ids"].append(region_id)
+            elif final_reason == PROPER_NAME_ONLY_REASON:
+                result["proper_noun_preserved_ids"].append(region_id)
+            elif final_reason or item.get("manual_review_required"):
+                result["structured_review_ids"].append(region_id)
+            else:
+                result["unaccounted_ids"].append(region_id)
+
+    for key in (
+        "story_expected_ids",
+        "story_with_valid_candidate_ids",
+        "render_selected_ids",
+        "render_skipped_ids",
+        "rendered_clean_ids",
+        "rendered_with_residual_ids",
+        "structured_review_ids",
+        "semantic_review_ids",
+        "proper_noun_preserved_ids",
+        "unaccounted_ids",
+    ):
+        result[key] = sorted(dict.fromkeys(result[key]))
+    result["counts"] = {
+        "story_expected": len(result["story_expected_ids"]),
+        "valid_candidate": len(result["story_with_valid_candidate_ids"]),
+        "render_selected": len(result["render_selected_ids"]),
+        "render_skipped": len(result["render_skipped_ids"]),
+        "rendered_clean": len(result["rendered_clean_ids"]),
+        "rendered_with_residual": len(result["rendered_with_residual_ids"]),
+        "structured_review": len(result["structured_review_ids"]),
+        "semantic_review": len(result["semantic_review_ids"]),
+        "proper_noun_preserved": len(result["proper_noun_preserved_ids"]),
+        "unaccounted": len(result["unaccounted_ids"]),
+        "skipped_without_reason": int(result["skipped_without_reason"]),
+    }
+    return result
+
+
+def _physical_residual_accounting(states, *, translation_applicable=True):
+    """Account final-render source retention separately from logical quality."""
+
+    result = {
+        "physical_regions_expected": 0,
+        "physical_regions_translated": 0,
+        "physical_regions_clean_verified": 0,
+        "physical_regions_preserved": 0,
+        "physical_regions_review_source_retained": 0,
+        "physical_regions_rendered_with_review": 0,
+        "physical_regions_render_failed": 0,
+        "physical_regions_other_explicit": 0,
+        "physical_source_residual_count": 0,
+        "physical_source_residual_group_ids": [],
+        "physical_gate_passed": False,
+    }
+    # A denominator is only evidence if the text analysis that produces it ran.
+    # Counting pages by upstream outcome is what lets a zero expected-region
+    # count be read as "no source text" or as "the text stage never worked",
+    # instead of collapsing both into a vacuous pass.
+    population = {
+        "pages_total": 0,
+        "pages_no_text_proven": 0,
+        "pages_text_analyzed": 0,
+        "pages_upstream_failed": 0,
+        "pages_unresolved": 0,
+    }
+    # Nested and optional: a manifest written before this contract simply omits
+    # the block and stays schema-valid instead of gaining fabricated zeros.
+    completeness_counts = {
+        "checked": 0,
+        "pass": 0,
+        "review": 0,
+        "fail": 0,
+        "unavailable": 0,
+    }
+    residual_ids = []
+    ordinary_story_residual_ids = []
+    residual_class_counts = {name: 0 for name in PHYSICAL_RESIDUAL_CLASSES}
+    residual_class_ids = {name: [] for name in PHYSICAL_RESIDUAL_CLASSES}
+    clean_certified_pages = set()
+    if not translation_applicable:
+        for state in states:
+            valid, _reason = _clean_page_certificate_valid(state)
+            if valid:
+                clean_certified_pages.add(int(state.get("index") or 0))
+
+    def record_residual(region_id, item):
+        """File one retained source region under its class, once."""
+        from komyst.translation.residual_validator import classify_source_residual
+        residual_reason = classify_source_residual(item)
+        if residual_reason:
+            item["residual_reason"] = residual_reason
+        residual_class = _physical_residual_class(item)
+        residual_class_counts[residual_class] += 1
+        residual_class_ids[residual_class].append(region_id)
+        if residual_class == RESIDUAL_ORDINARY_STORY:
+            ordinary_story_residual_ids.append(region_id)
+
+    completeness_ids = []
+    missing_tokens = set()
+    for state in states:
+        page = int(state.get("index") or 0)
+        population["pages_total"] += 1
+        if state.get("ocr_error") or state.get("status") == "completed_with_error":
+            population["pages_upstream_failed"] += 1
+        elif (state.get("precheck") or {}).get("skip"):
+            population["pages_no_text_proven"] += 1
+        elif state.get("status") == "completed":
+            population["pages_text_analyzed"] += 1
+        else:
+            population["pages_unresolved"] += 1
+        for item in state.get("debug_data", {}).get("items", []):
+            if not _story_translation_required(item):
+                continue
+            result["physical_regions_expected"] += 1
+            group_id = str(item.get("id") or "")
+            region_id = f"p{page:03}:{group_id}" if group_id else f"p{page:03}"
+            final_state = str(item.get("translation_final_state") or "")
+            final_reason = str(item.get("translation_final_reason") or "")
+            translated = bool(str(item.get("translation") or "").strip())
+            valid = bool(item.get("translation_valid"))
+            redrawn = bool(item.get("redrawn"))
+            preserved = bool(item.get("preserved_original"))
+            review = bool(item.get("manual_review_required"))
+
+            # Source completeness is a separate guard from the render outcome: a
+            # group whose owned source content went missing upstream cannot be a
+            # fully passing physical region even when the render itself succeeded.
+            completeness = str(item.get("source_completeness_status") or "")
+            if completeness in completeness_counts:
+                completeness_counts["checked"] += 1
+                completeness_counts[completeness] += 1
+            if completeness in {"fail", "review"}:
+                completeness_ids.append(region_id)
+                missing_tokens.update(
+                    (item.get("source_completeness") or {}).get(
+                        "unexplained_missing_tokens"
+                    )
+                    or []
+                )
+                result["physical_regions_review_source_retained"] += 1
+                residual_ids.append(region_id)
+                record_residual(region_id, item)
+                continue
+
+            if not translation_applicable and page in clean_certified_pages:
+                result["physical_regions_clean_verified"] += 1
+                continue
+
+            if final_state == "translated" and translated and valid and redrawn:
+                result["physical_regions_translated"] += 1
+                continue
+            # A name-shaped echo (a lone token the provider handed back: a name, branding or a
+            # stylised vocalisation) is rendered as a clean, no-review preserve, so counting it
+            # as retained English story was the gate contradicting the render decision. An echo
+            # that still needs review (ordinary story text) is not preserved and stays residual.
+            if final_reason == PROPER_NAME_ONLY_REASON or (
+                final_reason == "source_echo_preserved_original" and preserved and not review
+            ):
+                result["physical_regions_preserved"] += 1
+                continue
+            # The final rendered state is authoritative for *physical* retention:
+            # review status routes the region to the review queue, it does not put
+            # English pixels back on the page.
+            if _physically_rendered_without_source(item):
+                result["physical_regions_rendered_with_review"] += 1
+                continue
+
+            if final_state == "translated" and translated and valid and not redrawn:
+                result["physical_regions_render_failed"] += 1
+            elif review or preserved or final_state in {
+                "manual_review",
+                "skipped_with_reason",
+                "translation_failed",
+                "translation_unresolved",
+                "translation_attempts_exhausted",
+            }:
+                result["physical_regions_review_source_retained"] += 1
+            else:
+                result["physical_regions_other_explicit"] += 1
+            residual_ids.append(region_id)
+            record_residual(region_id, item)
+
+    incomplete_coverage = _incomplete_speech_region_coverage(states)
+    if incomplete_coverage:
+        result["physical_incomplete_region_coverage_count"] = len(incomplete_coverage)
+        result["physical_incomplete_region_coverage_details"] = incomplete_coverage[:50]
+        for violation in incomplete_coverage:
+            page = int(violation.get("page") or 0)
+            residual_id = str(violation.get("residual_id") or "")
+            region_id = (
+                f"p{page:03}:{residual_id}"
+                if page and residual_id
+                else residual_id or f"p{page:03}"
+            )
+            if region_id and region_id not in residual_ids:
+                residual_ids.append(region_id)
+            # A *rendered* PT-BR line whose own balloon still shows source words
+            # is an ordinary-story defect whatever the leftover says: the reader
+            # sees Portuguese and English stacked in one bubble. This invariant
+            # is about the rendered line, not about the remnant's class.
+            if region_id and region_id not in ordinary_story_residual_ids:
+                ordinary_story_residual_ids.append(region_id)
+                residual_class_counts[RESIDUAL_ORDINARY_STORY] += 1
+                residual_class_ids[RESIDUAL_ORDINARY_STORY].append(region_id)
+
+    result["physical_residual_classes"] = residual_class_counts
+    result["physical_residual_class_ids"] = {
+        name: ids[:200] for name, ids in residual_class_ids.items()
+    }
+    result["physical_source_residual_count"] = len(residual_ids)
+    result["physical_source_residual_group_ids"] = residual_ids[:200]
+    result["ordinary_story_physical_residual_count"] = len(
+        ordinary_story_residual_ids
+    )
+    result["ordinary_story_physical_residual_ids"] = (
+        ordinary_story_residual_ids[:200]
+    )
+    if completeness_counts["checked"]:
+        result["source_completeness"] = {
+            **completeness_counts,
+            # Named, not implied: these counts are scored against the group's
+            # provenance ancestry, including predecessors a retry superseded,
+            # not against the lines the last pass happened to leave behind.
+            "basis": source_completeness.EXPECTED_SOURCE_BASIS,
+            "group_ids": completeness_ids[:200],
+            "missing_tokens": sorted(missing_tokens)[:50],
+        }
+    # #84F14: the gate used to require *zero* physical residuals, which made an
+    # onomatopoeia remnant fail the chapter exactly as hard as a lost line of
+    # dialogue - #84F13 was held back by "TAK", "TUR" and "TRNDGE" alone. The
+    # residual ledger is unchanged and still lists all of them; what changed is
+    # who may block. A retained SFX/promo/credit region is an accounted outcome
+    # that routes to review, ordinary story English is still a hard failure.
+    non_story_residuals = sum(
+        residual_class_counts[name]
+        for name in PHYSICAL_RESIDUAL_CLASSES
+        if name != RESIDUAL_ORDINARY_STORY
+    )
+    regions_accounted = (
+        result["physical_regions_expected"]
+        == result["physical_regions_translated"]
+        + result["physical_regions_clean_verified"]
+        + result["physical_regions_preserved"]
+        + result["physical_regions_rendered_with_review"]
+        + non_story_residuals
+        and result["ordinary_story_physical_residual_count"] == 0
+    )
+    # A recorded upstream failure means the chapter was only partially examined:
+    # whatever regions survived describe the pages that worked, never the whole
+    # chapter. This is a population invariant above the per-region residual and
+    # source-completeness checks, which stay exactly as they were.
+    coverage_complete = population["pages_upstream_failed"] == 0
+    # Zero expected regions is a positive claim about the source, so it needs
+    # positive evidence: every page either proved it had no text or was actually
+    # analysed. Pages with no recorded outcome prove nothing, so 0/0 stops being
+    # a pass by default and becomes a question the run has to answer.
+    zero_denominator_proven = bool(population["pages_total"]) and (
+        population["pages_unresolved"] == 0
+    )
+    result["physical_population"] = population
+    result["physical_population_status"] = (
+        "complete" if coverage_complete else "incomplete"
+    )
+    if result["physical_regions_expected"] == 0:
+        if not coverage_complete:
+            reason = "upstream_text_analysis_incomplete"
+        elif not zero_denominator_proven:
+            reason = "source_text_evidence_missing"
+        else:
+            reason = "no_translatable_source_text"
+        result["zero_denominator_reason"] = reason
+        decision = "pass" if reason == "no_translatable_source_text" else "review"
+    elif not coverage_complete or not regions_accounted:
+        decision = "review"
+    else:
+        decision = "pass"
+    result["physical_decision"] = decision
+    result["physical_gate_passed"] = decision == "pass"
+    return result
+
+
+def _user_visible_output_accounting(states):
+    """What a Beta reader actually sees, counted in the terms that block Setup.
+
+    The physical ledger answers "is the English gone"; the translation ledger
+    answers "did every region reach a terminal state".  Neither answers the only
+    question Setup cares about: is what is printed on the page readable
+    Portuguese.  #84F13 shipped three regions whose Portuguese still carried the
+    corrupt source token ("UM RATO DO SLLM") and passed every existing gate,
+    because ``review`` was one bucket and every member of it renders.
+
+    So ``review`` is split.  ``review_renderable`` may remain in a Beta build -
+    it is honest doubt over usable output.  ``review_unusable`` may not: the
+    finding itself proves the reader is looking at garbage.
+    """
+
+    physical = _physical_residual_accounting(states)
+    ordinary_residual_ids = set(physical["ordinary_story_physical_residual_ids"])
+    result = {
+        "ordinary_story_english_visible": 0,
+        "missing_ptbr": 0,
+        "semantic_clean": 0,
+        "semantic_review_renderable": 0,
+        "semantic_review_unusable": 0,
+        "semantic_reject": 0,
+        "semantic_bad_clean": 0,
+        "art_bad_clean": 0,
+        "semantic_review_unusable_ids": [],
+        "semantic_bad_clean_ids": [],
+    }
+    for state in states:
+        page = int(state.get("index") or 0)
+        for item in state.get("debug_data", {}).get("items", []):
+            if not _story_translation_required(item):
+                continue
+            group_id = str(item.get("id") or "")
+            region_id = f"p{page:03}:{group_id}" if group_id else f"p{page:03}"
+            if region_id in ordinary_residual_ids:
+                result["ordinary_story_english_visible"] += 1
+                continue
+            if not _physically_rendered_without_source(item):
+                # A non-story residual: accounted physically, nothing to read.
+                continue
+            if not str(item.get("translation") or "").strip():
+                result["missing_ptbr"] += 1
+                continue
+
+            review_reason = str(item.get("semantic_review_reason") or "")
+            final_state = str(item.get("translation_final_state") or "")
+            if final_state in {"rejected", "unresolved"}:
+                result["semantic_reject"] += 1
+            elif review_reason or final_state in REVIEW_TERMINAL_STATES:
+                usability = semantic_fidelity.review_usability(
+                    review_reason or str(item.get("translation_final_reason") or "")
+                )
+                if usability == semantic_fidelity.REVIEW_UNUSABLE:
+                    result["semantic_review_unusable"] += 1
+                    result["semantic_review_unusable_ids"].append(region_id)
+                else:
+                    result["semantic_review_renderable"] += 1
+            else:
+                # Shipped as clean. It is only *proven* bad when the run itself
+                # recorded a blocking finding or surviving source lettering and
+                # rendered anyway - a wrong word sense nothing detected cannot be
+                # counted here, and is not silently turned into a zero.
+                proven_bad = semantic_fidelity.is_fidelity_reason(
+                    str(item.get("translation_validation_reason") or "")
+                )
+                if proven_bad:
+                    result["semantic_bad_clean"] += 1
+                    result["semantic_bad_clean_ids"].append(region_id)
+                else:
+                    result["semantic_clean"] += 1
+            if str(item.get("art_reconstruction_reason") or "") in (
+                RESIDUAL_SOURCE_LETTERING_REASONS
+            ):
+                result["art_bad_clean"] += 1
+
+    result["setup_ready"] = not any(
+        result[name]
+        for name in (
+            "ordinary_story_english_visible",
+            "missing_ptbr",
+            "semantic_bad_clean",
+            "semantic_review_unusable",
+            "art_bad_clean",
+        )
+    )
+    return result
+
+
+def _build_quality_report(report, states, translation_retry_records):
+    pages = []
+    translation_applicable = bool(_plan_pipeline_flags().get("want_translate", True))
+    translation_accounting = _translation_quality_accounting(states)
+    clean_accounting = _clean_output_accounting(states)
+    physical_accounting = _physical_residual_accounting(
+        states, translation_applicable=translation_applicable,
+    )
+    render_plan_accounting = _render_plan_accounting(states)
+    totals = {
+        "groups_detected": 0,
+        "groups_suspicious": 0,
+        "selective_fallback_attempts": 0,
+        "selective_fallbacks_used": 0,
+        "rapidocr_region_retry_requested": 0,
+        "rapidocr_region_retry_selected": 0,
+        "rapidocr_region_retry_failed": 0,
+        "fallbacks_to_paddle_mobile": 0,
+        "fallbacks_to_paddle_full": 0,
+        "ocr_repairs": 0,
+        "ocr_repairs_rejected": 0,
+        "groups_reverted_for_visual_safety": 0,
+        "manual_review_required_groups": 0,
+        "translation_unresolved": 0,
+        "translation_attempts_exhausted": 0,
+        "source_fallback_prevented": 0,
+        "trusted_translation_missing": 0,
+        "translations_retried": len(translation_retry_records),
+        "translations_rejected": 0,
+        "external_narrations_translated": 0,
+        "sfx_preserved": 0,
+        "pages_reprocessed": 0,
+        "pages_visual_validation_failed": 0,
+        "mixed_language_items": 0,
+        "text_overflow_items": 0,
+        "white_patch_rejections": 0,
+        "broad_mask_rejections": 0,
+        "reconstruction_regions_expected": 0,
+        "reconstruction_clean": 0,
+        "reconstruction_review": 0,
+        "flat_patch_suspected": 0,
+        "seam_suspected": 0,
+        "rectangular_line_mask_rejections": 0,
+        "background_type_counts": {},
+        "residual_sweep_auto_fix_groups": 0,
+        "inpaint_regions_measured": 0,
+        "inpaint_regions_accepted": 0,
+        "inpaint_regions_accepted_with_review": 0,
+        "inpaint_regions_rejected_or_reviewed": 0,
+        "inpaint_mask_pixels_sum": 0,
+        "inpaint_fill_mask_pixels_sum": 0,
+        "translation_accounting": translation_accounting,
+        "clean_quality": clean_accounting,
+        "translation_quality_applicable": translation_applicable,
+        "render_plan_accounting": render_plan_accounting,
+        "physical_quality": physical_accounting,
+        "physical_regions_expected": physical_accounting["physical_regions_expected"],
+        "physical_regions_translated": physical_accounting["physical_regions_translated"],
+        "physical_regions_clean_verified": physical_accounting["physical_regions_clean_verified"],
+        "physical_regions_preserved": physical_accounting["physical_regions_preserved"],
+        "physical_regions_review_source_retained": physical_accounting[
+            "physical_regions_review_source_retained"
+        ],
+        "physical_regions_render_failed": physical_accounting[
+            "physical_regions_render_failed"
+        ],
+        "physical_source_residual_count": physical_accounting[
+            "physical_source_residual_count"
+        ],
+        "physical_source_residual_group_ids": physical_accounting[
+            "physical_source_residual_group_ids"
+        ],
+        "ordinary_story_physical_residual_count": physical_accounting[
+            "ordinary_story_physical_residual_count"
+        ],
+        "ordinary_story_physical_residual_ids": physical_accounting[
+            "ordinary_story_physical_residual_ids"
+        ],
+        "physical_residual_classes": physical_accounting["physical_residual_classes"],
+        "physical_residual_class_ids": physical_accounting[
+            "physical_residual_class_ids"
+        ],
+        "user_visible_output": _user_visible_output_accounting(states),
+        "physical_gate_passed": physical_accounting["physical_gate_passed"],
+        "physical_decision": physical_accounting["physical_decision"],
+        "physical_population_status": physical_accounting[
+            "physical_population_status"
+        ],
+        "physical_population": physical_accounting["physical_population"],
+        "zero_denominator_reason": physical_accounting.get(
+            "zero_denominator_reason", ""
+        ),
+        "source_completeness": physical_accounting.get("source_completeness", {}),
+        "speech_container_reocr": summarize_speech_container_reocr(
+            [
+                record
+                for state in states
+                for record in state.get("speech_container_reocr", []) or []
+            ]
+        ),
+    }
+
+    for state in sorted(states, key=lambda item: item["index"]):
+        auto_fix = dict(state.get("residual_sweep_auto_fix") or {})
+        totals["residual_sweep_auto_fix_groups"] += int(auto_fix.get("accepted", 0) or 0)
+        debug = state.get("debug_data", {})
+        items = debug.get("items", [])
+        inpaint_regions = []
+        for item in items:
+            metrics = dict(item.get("mask_metrics") or {})
+            attempts = list(item.get("visual_attempts") or [])
+            attempt_metrics = [
+                {
+                    "method": attempt.get("inpaint_method") or attempt.get("strategy"),
+                    "mask_pixels": attempt.get("mask_pixels"),
+                    "mask_page_area_ratio": attempt.get("mask_page_area_ratio"),
+                    "fill_mask_pixels": attempt.get("fill_mask_pixels"),
+                    "fill_mask_page_area_ratio": attempt.get("fill_mask_page_area_ratio"),
+                    "mask_to_text_area_ratio": attempt.get("mask_to_text_area_ratio"),
+                    "changed_pixels_in_mask": attempt.get("changed_pixels_in_mask"),
+                    "changed_pixels_outside_mask": attempt.get("changed_pixels_outside_mask"),
+                    "changed_pixels_inside_fill_mask": attempt.get("changed_pixels_inside_fill_mask"),
+                    "changed_pixels_outside_fill_mask": attempt.get("changed_pixels_outside_fill_mask"),
+                    "changed_fraction_in_fill_mask": attempt.get("changed_fraction_in_fill_mask"),
+                    "changed_fraction_in_mask": attempt.get("changed_fraction_in_mask"),
+                    "visual_validation_passed": attempt.get("visual_validation_passed"),
+                    "reason": attempt.get("reason") or attempt.get("reconstruction_gate_failure"),
+                }
+                for attempt in attempts
+            ]
+            measured_pixels = int(metrics.get("mask_pixels") or 0)
+            measured_fill_pixels = int(metrics.get("fill_mask_pixels") or 0)
+            if not measured_pixels and not measured_fill_pixels:
+                measured_pixels = max((int(a.get("mask_pixels") or 0) for a in attempt_metrics), default=0)
+                measured_fill_pixels = max(
+                    (int(a.get("fill_mask_pixels") or a.get("mask_pixels") or 0) for a in attempt_metrics),
+                    default=0,
+                )
+            if not measured_pixels and not measured_fill_pixels:
+                continue
+            visual = dict(item.get("visual_validation") or {})
+            rendered = bool(item.get("redrawn") and visual.get("visual_validation_passed"))
+            art_status = str(item.get("art_reconstruction_status") or "")
+            decision = (
+                "accepted" if rendered and art_status == "clean"
+                else "accepted_with_review" if rendered
+                else "rejected_or_preserved"
+            )
+            decision_reason = (
+                item.get("art_reconstruction_reason")
+                or visual.get("reason")
+                or metrics.get("reason")
+                or decision
+            )
+            inpaint_regions.append({
+                "id": item.get("id") or item.get("region_id"),
+                "background_type": metrics.get("background_type") or item.get("background_type"),
+                "mask_pixels": measured_pixels,
+                "mask_page_area_pixels": metrics.get("mask_page_area_pixels"),
+                "mask_page_area_ratio": metrics.get("mask_page_area_ratio"),
+                "mask_to_text_area_ratio": metrics.get("mask_to_text_area_ratio"),
+                "fill_mask_pixels": measured_fill_pixels,
+                "fill_mask_page_area_ratio": metrics.get("fill_mask_page_area_ratio"),
+                "fill_mask_to_text_area_ratio": metrics.get("fill_mask_to_text_area_ratio"),
+                "fill_mask_expansion_pixels": metrics.get("fill_mask_expansion_pixels"),
+                "fill_mask_expansion_ratio": metrics.get("fill_mask_expansion_ratio"),
+                "mask_refine_reduction_ratio": metrics.get("mask_refine_reduction_ratio"),
+                "mask_area_change_ratio": metrics.get("mask_area_change_ratio"),
+                "changed_pixels_in_mask": metrics.get("changed_pixels_in_mask"),
+                "changed_pixels_outside_mask": metrics.get("changed_pixels_outside_mask"),
+                "changed_fraction_in_mask": metrics.get("changed_fraction_in_mask"),
+                "changed_pixels_inside_fill_mask": metrics.get("changed_pixels_inside_fill_mask"),
+                "changed_pixels_outside_fill_mask": metrics.get("changed_pixels_outside_fill_mask"),
+                "changed_pixels_in_fill_halo": metrics.get("changed_pixels_in_fill_halo"),
+                "changed_fraction_in_fill_mask": metrics.get("changed_fraction_in_fill_mask"),
+                "method": metrics.get("inpaint_method") or metrics.get("strategy") or visual.get("strategy"),
+                "decision": decision,
+                "reason": decision_reason,
+                "attempts": attempt_metrics,
+            })
+        totals["inpaint_regions_measured"] += len(inpaint_regions)
+        totals["inpaint_regions_accepted"] += sum(
+            1 for region in inpaint_regions if region["decision"] == "accepted"
+        )
+        totals["inpaint_regions_accepted_with_review"] += sum(
+            1 for region in inpaint_regions if region["decision"] == "accepted_with_review"
+        )
+        totals["inpaint_regions_rejected_or_reviewed"] += sum(
+            1 for region in inpaint_regions if region["decision"] == "rejected_or_preserved"
+        )
+        totals["inpaint_mask_pixels_sum"] += sum(
+            int(region.get("mask_pixels") or 0) for region in inpaint_regions
+        )
+        totals["inpaint_fill_mask_pixels_sum"] += sum(
+            int(region.get("fill_mask_pixels") or 0) for region in inpaint_regions
+        )
+        fallback_records = debug.get("selective_ocr_fallbacks", [])
+        rapidocr_records = debug.get("rapidocr_region_recovery", [])
+        suspicious = [
+            item
+            for item in items
+            if item.get("quality_reasons")
+            or float(item.get("quality_score") or 1.0) < config.OCR_GROUP_MIN_QUALITY_SCORE
+        ]
+        mixed = [
+            item
+            for item in items
+            if _is_mixed_language_validation_reason(
+                item.get("translation_validation_reason")
+            )
+        ]
+        visual_failures = [
+            item
+            for item in items
+            if (item.get("visual_validation") or {})
+            and not (item.get("visual_validation") or {}).get(
+                "visual_validation_passed",
+                True,
+            )
+        ]
+        overflow = [
+            item
+            for item in items
+            if float(item.get("text_overflow_ratio") or 0.0)
+            > config.MAX_TEXT_OVERFLOW_RATIO
+        ]
+        narrations = [
+            item
+            for item in items
+            if item.get("classification") == "narration"
+            and item.get("translation_final_state") == "translated"
+        ]
+        sfx = [
+            item
+            for item in items
+            if item.get("classification") == "sfx"
+            and item.get("ignored")
+            and not item.get("sent_to_nvidia")
+        ]
+
+        totals["groups_detected"] += debug.get("group_count", 0)
+        totals["groups_suspicious"] += len(suspicious)
+        totals["selective_fallback_attempts"] += len(fallback_records)
+        totals["selective_fallbacks_used"] += sum(
+            1 for record in fallback_records if record.get("fallback_used")
+        )
+        totals["rapidocr_region_retry_requested"] += len(rapidocr_records)
+        totals["rapidocr_region_retry_selected"] += sum(
+            1 for record in rapidocr_records if record.get("selection") == "attempt_2"
+        )
+        totals["rapidocr_region_retry_failed"] += sum(
+            1
+            for record in rapidocr_records
+            if record.get("selection") != "attempt_2"
+        )
+        totals["fallbacks_to_paddle_mobile"] += sum(
+            1
+            for record in fallback_records
+            if record.get("fallback_used")
+            and record.get("fallback_variant") == "paddle_mobile"
+        )
+        totals["fallbacks_to_paddle_full"] += sum(
+            1
+            for record in fallback_records
+            if record.get("fallback_used")
+            and record.get("fallback_variant") == "paddle_full"
+        )
+        totals["ocr_repairs"] += len(debug.get("text_repairs", []))
+        totals["ocr_repairs_rejected"] += len(
+            debug.get("rejected_text_repairs", [])
+        )
+        totals["groups_reverted_for_visual_safety"] += sum(
+            1
+            for item in items
+            if item.get("sent_to_nvidia") and not item.get("redrawn")
+        )
+        totals["manual_review_required_groups"] += sum(
+            1 for item in items if item.get("manual_review_required")
+        )
+        totals["translation_unresolved"] += sum(
+            1 for item in items if item.get("translation_unresolved")
+        )
+        totals["translation_attempts_exhausted"] += sum(
+            1 for item in items if item.get("translation_attempts_exhausted")
+        )
+        totals["source_fallback_prevented"] += sum(
+            1 for item in items if item.get("source_fallback_prevented")
+        )
+        totals["trusted_translation_missing"] += sum(
+            1 for item in items if item.get("trusted_translation_missing")
+        )
+        totals["white_patch_rejections"] += sum(
+            1
+            for item in items
+            if (item.get("mask_metrics") or {}).get("white_patch_rejected")
+        )
+        # Art reconstruction quality is accounted separately from story-text
+        # coverage: a region can have every source glyph removed and still be a
+        # destroyed piece of artwork, so the two verdicts never share a counter.
+        totals["reconstruction_regions_expected"] += sum(
+            1 for item in items if item.get("art_reconstruction_status")
+        )
+        totals["reconstruction_clean"] += sum(
+            1 for item in items
+            if item.get("art_reconstruction_status") == "clean"
+        )
+        totals["reconstruction_review"] += sum(
+            1 for item in items
+            if item.get("art_reconstruction_status") == "review"
+        )
+        totals["flat_patch_suspected"] += sum(
+            1
+            for item in items
+            if (item.get("mask_metrics") or {}).get("flat_patch_rejected")
+        )
+        totals["seam_suspected"] += sum(
+            1
+            for item in items
+            if (item.get("mask_metrics") or {}).get("seam_suspected")
+        )
+        totals["rectangular_line_mask_rejections"] += sum(
+            1
+            for item in items
+            if (item.get("mask_metrics") or {}).get("uniform_light_line_rejected")
+            or (item.get("mask_metrics") or {}).get("uniform_dark_line_rejected")
+        )
+        totals["broad_mask_rejections"] += sum(
+            1
+            for item in items
+            if (item.get("mask_metrics") or {}).get("broad_rectangular_mask")
+            and item.get("background_type") not in {"white_balloon", "narration_box"}
+        )
+        for item in items:
+            background_type = item.get("background_type")
+            if background_type:
+                totals["background_type_counts"][background_type] = (
+                    totals["background_type_counts"].get(background_type, 0) + 1
+                )
+        totals["translations_rejected"] += sum(
+            1 for item in items if item.get("rejected_translation")
+        )
+        totals["external_narrations_translated"] += len(narrations)
+        totals["sfx_preserved"] += len(sfx)
+        totals["pages_reprocessed"] += int(any(record.get("fallback_used") for record in fallback_records))
+        totals["pages_visual_validation_failed"] += int(bool(visual_failures))
+        totals["mixed_language_items"] += len(mixed)
+        totals["text_overflow_items"] += len(overflow)
+
+        pages.append(
+            {
+                "index": state["index"],
+                "sequence_index": state.get("sequence_index"),
+                "original_index": state.get("original_index", state["index"]),
+                "status": state.get("status"),
+                "output_path": state.get("output_path"),
+                "image_path": state.get("image_path"),
+                "groups": debug.get("group_count", 0),
+                "translated": debug.get("translated_group_count", 0),
+                "suspicious_groups": [
+                    _quality_item_summary(item) for item in suspicious[:12]
+                ],
+                "selective_ocr_fallbacks": fallback_records,
+                "rapidocr_region_recovery": rapidocr_records,
+                "speech_container_reocr": state.get("speech_container_reocr", []),
+                "text_repairs": debug.get("text_repairs", []),
+                "rejected_text_repairs": debug.get("rejected_text_repairs", []),
+                "translation_retries": [
+                    record
+                    for record in translation_retry_records
+                    if record.get("group_id")
+                    in {item.get("id") for item in items}
+                ],
+                "translation_terminal_items": [
+                    _quality_item_summary(item)
+                    for item in items
+                    if _story_translation_required(item)
+                ],
+                "mixed_language_items": [_quality_item_summary(item) for item in mixed],
+                "text_overflow_items": [_quality_item_summary(item) for item in overflow],
+                "narrations_translated": [_quality_item_summary(item) for item in narrations],
+                "sfx_preserved": [_quality_item_summary(item) for item in sfx],
+                "residual_sweep": list(state.get("residual_sweep") or []),
+                "residual_sweep_auto_fix": auto_fix,
+                "inpaint_summary": {
+                    "regions_measured": len(inpaint_regions),
+                    "mask_pixels_sum": sum(int(region.get("mask_pixels") or 0) for region in inpaint_regions),
+                    "fill_mask_pixels_sum": sum(int(region.get("fill_mask_pixels") or 0) for region in inpaint_regions),
+                    "regions": inpaint_regions,
+                },
+                "visual_validation_failures": [
+                    _quality_item_summary(item) for item in visual_failures
+                ],
+                "timings": state.get("timings", {}),
+            }
+        )
+
+    return {
+        "summary": {
+            "url": report.get("url"),
+            "mode": report.get("mode"),
+            "ocr_engine": report.get("ocr_engine"),
+            "ocr_fallback_engine": report.get("ocr_fallback_engine"),
+            "processed_images": report.get("processed_images"),
+            "available_valid_images": report.get("available_valid_images"),
+            "selected_page_indices": report.get("selected_page_indices"),
+            "missing_page_indices": report.get("missing_page_indices"),
+            "total_seconds": report.get("total_seconds"),
+            "stage_seconds": report.get("stage_seconds"),
+            "pdf_path": report.get("pdf_path"),
+            "artifact_sha256": report.get("artifact_sha256"),
+            "artifact_size_bytes": report.get("artifact_size_bytes"),
+            "preview_contact_sheet": report.get("preview_contact_sheet"),
+            "preview_compare_sheet": report.get("preview_compare_sheet"),
+            "quality_validation": report.get("quality_validation"),
+        },
+        "totals": totals,
+        "translation_retry_records": translation_retry_records,
+        "pages": pages,
+    }
+
+
+def _professional_psd_regions(state):
+    """Region specs for the professional PSD exporter from a page's own render items.
+
+    ``translate_mode`` is derived from the render outcome: a region that was sent to
+    translation, produced a non-empty translation and was not preserved is ``translate``
+    (gets a layer in ON); preserved/SFX/empty regions are ``ignore`` (no layer).
+    """
+    regions = []
+    for item in (state.get("debug_data") or {}).get("items", []) or []:
+        if not isinstance(item, dict):
+            continue
+        box = item.get("draw_box") or item.get("bounding_box")
+        if not box:
+            continue
+        translation = str(item.get("translation") or "")
+        # A region carries translated glyphs when the renderer actually drew them
+        # (redrawn / translation_final_state == "translated"); preserved/SFX/empty
+        # regions are ignore -> no layer.
+        drawn = bool(item.get("redrawn") or item.get("translated")
+                     or item.get("translation_final_state") == "translated")
+        translate_mode = (
+            "translate" if (drawn and translation.strip()
+                            and not item.get("preserved_original")) else "ignore")
+        regions.append({
+            "region_id": str(item.get("region_id") or item.get("id") or ""),
+            "bbox": list(box),
+            "source_text": str(item.get("clean_text") or item.get("text") or ""),
+            "target": translation,
+            "region_type": str(item.get("classification") or ""),
+            "translate_mode": translate_mode, "manual": False, "active": True,
+        })
+    return regions
+
+
+def _quality_item_summary(item):
+    return {
+        "id": item.get("id"),
+        "region_id": item.get("region_id"),
+        "classification": item.get("classification"),
+        "background_type": item.get("background_type"),
+        "background_metrics": item.get("background_metrics"),
+        "source_engine": item.get("source_engine") or item.get("engine"),
+        "text": item.get("clean_text"),
+        "translation": item.get("translation"),
+        "confidence": item.get("confidence"),
+        "quality_score": item.get("quality_score"),
+        "quality_reasons": item.get("quality_reasons"),
+        "fallback_used": item.get("fallback_used"),
+        "canonical_source_text": item.get("canonical_source_text"),
+        "source_repairs": item.get("source_repairs"),
+        "source_recovery": item.get("source_recovery"),
+        "translation_valid": item.get("translation_valid"),
+        "translation_validation_reason": item.get("translation_validation_reason"),
+        "translation_retry_count": item.get("translation_retry_count"),
+        "translation_candidate": item.get("translation_candidate"),
+        "translation_final_state": item.get("translation_final_state"),
+        "translation_final_reason": item.get("translation_final_reason"),
+        "translation_quality_impact": item.get("translation_quality_impact"),
+        "preserved_original": item.get("preserved_original"),
+        "render_font_size": item.get("render_font_size"),
+        "render_font_class": item.get("render_font_class"),
+        "render_alignment": item.get("render_alignment"),
+        "font_size_from_source_ink": item.get("font_size_from_source_ink"),
+        "source_line_height_px": item.get("source_line_height_px"),
+        "text_overflow_ratio": item.get("text_overflow_ratio"),
+        "visual_validation": item.get("visual_validation"),
+        "visual_attempts": item.get("visual_attempts"),
+        "mask_metrics": item.get("mask_metrics"),
+        "redrawn": item.get("redrawn"),
+        "manual_review_required": item.get("manual_review_required"),
+        "art_reconstruction_status": item.get("art_reconstruction_status"),
+        "art_reconstruction_reason": item.get("art_reconstruction_reason"),
+        "safe_area": item.get("safe_area"),
+        "translation_box": item.get("translation_box"),
+        "bounding_box": item.get("bounding_box"),
+    }
+
+
+def _quality_report_html(report):
+    summary = report["summary"]
+    totals = report["totals"]
+    rows = []
+    for page in report["pages"]:
+        rows.append(
+            "<tr>"
+            f"<td>{page['index']:03}</td>"
+            f"<td>{page['groups']}</td>"
+            f"<td>{page['translated']}</td>"
+            f"<td>{len(page['suspicious_groups'])}</td>"
+            f"<td>{sum(1 for r in page['selective_ocr_fallbacks'] if r.get('fallback_used'))}</td>"
+            f"<td>{len(page['mixed_language_items'])}</td>"
+            f"<td>{len(page['text_overflow_items'])}</td>"
+            f"<td>{len(page['visual_validation_failures'])}</td>"
+            f"<td><a href=\"pages/{Path(page['output_path']).name}\">final</a></td>"
+            "</tr>"
+        )
+    return f"""<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Komyst - Quality Report</title>
+<style>
+body {{ font-family: Segoe UI, Arial, sans-serif; background:#15171c; color:#eee; margin:24px; }}
+a {{ color:#ff9b6b; }}
+.card {{ background:#22252d; border:1px solid #343946; border-radius:12px; padding:16px; margin:16px 0; }}
+table {{ border-collapse:collapse; width:100%; font-size:14px; }}
+th,td {{ border-bottom:1px solid #343946; padding:8px; text-align:left; vertical-align:top; }}
+th {{ color:#ffb088; }}
+.preview {{ max-width:100%; border-radius:10px; border:1px solid #343946; }}
+code {{ color:#ffd1bd; }}
+</style>
+</head>
+<body>
+<h1>Komyst — Quality Report</h1>
+<div class="card">
+<p><strong>URL:</strong> {summary.get('url')}</p>
+<p><strong>OCR:</strong> {summary.get('ocr_engine')} → fallback {summary.get('ocr_fallback_engine')}</p>
+<p><strong>Páginas:</strong> {summary.get('processed_images')} &nbsp; <strong>Tempo:</strong> {summary.get('total_seconds')}s</p>
+<p><strong>PDF:</strong> <a href="{Path(summary.get('pdf_path', '')).name}">{summary.get('pdf_path')}</a></p>
+</div>
+<div class="card">
+<h2>Totais</h2>
+<pre>{json.dumps(totals, ensure_ascii=False, indent=2)}</pre>
+</div>
+<div class="card">
+<h2>Contact sheet</h2>
+<img class="preview" src="contact_sheet.jpg" alt="contact sheet">
+</div>
+<div class="card">
+<h2>Compare sheet</h2>
+<img class="preview" src="compare_sheet.jpg" alt="compare sheet">
+</div>
+<div class="card">
+<h2>Páginas</h2>
+<table>
+<thead><tr><th>Página</th><th>Grupos</th><th>Trad.</th><th>Suspeitos</th><th>Fallbacks</th><th>Misto</th><th>Overflow</th><th>Visual fail</th><th>Link</th></tr></thead>
+<tbody>{''.join(rows)}</tbody>
+</table>
+</div>
+</body>
+</html>
+"""
+
+
+def _chapter_download_items(manifest):
+    items = manifest.get("downloaded", [])
+    chapter_items = []
+    excluded = []
+    for item in items:
+        # New reports mark the classified reader pages explicitly.  The old hostname check
+        # silently discarded every generic reader and also could not survive URL sanitising.
+        # Keep it only as a compatibility fallback for legacy cached manifests.
+        host = (urlparse(item.get("url", "")).hostname or "").lower()
+        if item.get("is_chapter_candidate") or "webtoons.com" in host or "webtoon-phinf.pstatic.net" in host:
+            chapter_items.append(item)
+        else:
+            excluded.append(item)
+    manifest["excluded_non_chapter"] = excluded
+    return chapter_items
+
+
+def _valid_download_paths(manifest):
+    items = _chapter_download_items(manifest)
+    paths = [item.get("path") for item in items]
+    if not paths:
+        return []
+    for item, path in zip(items, paths):
+        if not _valid_download_item(item, path):
+            return []
+        expected_hash = item.get("sha256")
+        if not expected_hash or file_sha256(path) != expected_hash:
+            return []
+    return paths
+
+
+def _valid_download_item(item, path):
+    if not path or not os.path.isfile(path):
+        return False
+    if not item.get("is_chapter_candidate"):
+        return valid_image(path, 480, 220)
+    try:
+        with Image.open(path) as image:
+            image.load()
+            return image.width >= 480 and image.height >= 1
+    except Exception:
+        return False
+
+
+def _reuse_completed_page(state, previous, force):
+    if force:
+        return False
+
+    if (
+        previous
+        and previous.get("status") == "completed"
+        and previous.get("process_key") == state["process_key"]
+        and valid_image(previous.get("output_path"))
+    ):
+        if Path(previous["output_path"]).resolve() != Path(state["output_path"]).resolve():
+            atomic_copy(previous["output_path"], state["output_path"])
+        state.update(
+            {
+                "status": "completed",
+                "cache_source": "resume",
+                "debug_data": previous.get("debug_data", {}),
+                "timings": previous.get("timings", {}),
+                # carry the prior cleaned buffer so a resumed text page keeps a correct-seam
+                # clean artifact; if the file is gone, canonical export falls back to source.
+                "cleaned_path": previous.get("cleaned_path"),
+            }
+        )
+        return True
+
+    if not config.ENABLE_IMAGE_PROCESS_CACHE:
+        return False
+    cached = load_processed_cache(state["process_key"])
+    if cached is None:
+        return False
+    cached_image, metadata = cached
+    atomic_copy(cached_image, state["output_path"])
+    state.update(
+        {
+            "status": "completed",
+            "cache_source": "processed_cache",
+            "debug_data": metadata.get("debug_data", {}),
+            "timings": metadata.get("timings", {}),
+        }
+    )
+    return True
+
+
+def _save_page_processed_cache(state):
+    if not config.ENABLE_IMAGE_PROCESS_CACHE:
+        return
+    if state.get("status") != "completed":
+        return
+    save_processed_cache(
+        state["process_key"],
+        state["output_path"],
+        {
+            "process_key": state["process_key"],
+            "image_hash": state["image_hash"],
+            "debug_data": state.get("debug_data", {}),
+            "timings": state.get("timings", {}),
+            "precheck": state.get("precheck", {}),
+        },
+    )
+
+
+PAGE_ANALYSIS_ERROR_CODE = "page_analysis_error"
+PAGE_ANALYSIS_UNRESOLVED_CODE = "page_analysis_unresolved"
+PAGE_SOURCE_MISSING_CODE = "source_page_missing_from_accounting"
+
+
+def _page_error_traceback(error):
+    """The local technical trace for a page failure, or ``""`` for a plain reason."""
+
+    if not isinstance(error, BaseException) or error.__traceback__ is None:
+        return ""
+    return sanitize_diagnostic_text(
+        "".join(
+            traceback.format_exception(type(error), error, error.__traceback__)
+        )
+    )
+
+
+def _page_error_record(error, *, stage, index, retryable=False):
+    """PAGE-ERROR-OBSERVABILITY-001: structured, secret-free page diagnostics.
+
+    Real run #84F9 persisted the single word ``"str"`` for five failed pages: the
+    caller flattened the exception with ``str(exc)`` first, so the persistence
+    layer asked a *string* for its ``code``/type and dutifully wrote down the type
+    of the message.  The exception class, the stage and the reason were all gone
+    before anything was written.  The record below keeps them, and keeps them
+    safe: messages are run through the repository's own diagnostic sanitizer, so
+    a provider URL or an API key in an exception text never reaches disk.
+    """
+
+    page = int(index or 0)
+    if isinstance(error, BaseException):
+        exception_type = type(error).__name__
+        code = str(getattr(error, "code", "") or "") or exception_type
+        message = str(error)
+    else:
+        exception_type = ""
+        code = str(error or "").strip() or "unknown_page_error"
+        message = code
+    return {
+        "stage": str(stage or "page_analysis"),
+        "page": page,
+        "page_id": f"p{page:03}",
+        "code": sanitize_diagnostic_text(code)[:200],
+        "exception_type": exception_type,
+        "message": sanitize_diagnostic_text(message)[:400],
+        "retryable": bool(retryable),
+        "traceback_available": bool(_page_error_traceback(error)),
+    }
+
+
+def _complete_page_with_error(
+    state,
+    error,
+    errors_folder,
+    stage_seconds,
+    *,
+    stage="page_analysis",
+):
+    record = _page_error_record(error, stage=stage, index=state.get("index"))
+    state["page_error"] = record
+    state["error"] = record["code"]
+    state["status"] = "error"
+    state["cache_source"] = "error_original"
+    state["debug_data"] = _empty_debug_data(
+        state["image_path"],
+        precheck_reason="ocr_or_processing_error",
+    )
+    save_started = time.perf_counter()
+    if os.path.isfile(state["image_path"]):
+        atomic_copy(state["image_path"], state["output_path"])
+        state["status"] = "completed_with_error"
+    elapsed = time.perf_counter() - save_started
+    state["timings"]["image_save"] = elapsed
+    stage_seconds["image_save"] += elapsed
+    page_folder = errors_folder / f"page_{state['index']:03}"
+    page_folder.mkdir(parents=True, exist_ok=True)
+    (page_folder / "error.txt").write_text(record["code"], encoding="utf-8")
+    (page_folder / "error.json").write_text(dumps_json(record), encoding="utf-8")
+    # The traceback is a local diagnostic artefact only: it never reaches the UI,
+    # and it is sanitized like every other persisted diagnostic.
+    trace = _page_error_traceback(error)
+    if trace:
+        (page_folder / "traceback.txt").write_text(trace, encoding="utf-8")
+
+
+def _source_page_accounting(states, expected_pages=None):
+    """PAGE-ANALYSIS-FAILURE-GATE-001: reconcile source pages, not just regions.
+
+    Region accounting is structurally blind to a page that produced no regions:
+    an exception before OCR leaves nothing to count, and "nothing counted" is not
+    "nothing there".  Real run #84F9 lost five pages that way, one of which
+    (p032) carried ordinary narration and shipped in English.  Source pages are
+    therefore reconciled on their own axis: expected == analysed + unverified,
+    with every unverified page named in an explicit finding.
+    """
+
+    states = list(states)
+    expected = int(expected_pages or 0) or len(states)
+    result = {
+        "source_pages_expected": expected,
+        "source_pages_analyzed": 0,
+        "source_pages_completed_with_error": 0,
+        "source_pages_missing": 0,
+        "source_pages_unverified": 0,
+        "source_pages_unverified_ids": [],
+        "findings": [],
+    }
+    for state in states:
+        index = int(state.get("index") or 0)
+        page_id = f"p{index:03}"
+        status = str(state.get("status") or "")
+        page_error = state.get("page_error") or {}
+        failed = bool(state.get("ocr_error")) or status in {
+            "error",
+            "completed_with_error",
+            "failed",
+        }
+        if not failed and status == "completed":
+            result["source_pages_analyzed"] += 1
+            continue
+        if failed:
+            result["source_pages_completed_with_error"] += 1
+        result["source_pages_unverified_ids"].append(page_id)
+        result["findings"].append({
+            "code": (
+                PAGE_ANALYSIS_ERROR_CODE if failed
+                else PAGE_ANALYSIS_UNRESOLVED_CODE
+            ),
+            "page": index,
+            "page_id": page_id,
+            "status": status or "unknown",
+            # Pre-#84F10 states carry no structured record; ``ocr_error`` still
+            # says which stage refused the page.
+            "stage": str(
+                page_error.get("stage")
+                or ("ocr" if state.get("ocr_error") else "page_analysis")
+            ),
+            "exception_type": str(page_error.get("exception_type") or ""),
+            "error_code": str(
+                page_error.get("code") or state.get("ocr_error") or state.get("error") or ""
+            ),
+            # The page never finished analysis, so nothing is known about the
+            # story content it carries. Unknown is not absent.
+            "story_content_verified": False,
+            "quality": "review_required",
+        })
+    result["source_pages_missing"] = max(
+        0, expected - result["source_pages_analyzed"] - len(result["source_pages_unverified_ids"])
+    )
+    if result["source_pages_missing"]:
+        result["findings"].append({
+            "code": PAGE_SOURCE_MISSING_CODE,
+            "page": 0,
+            "page_id": "",
+            "status": "absent",
+            "stage": "page_analysis",
+            "exception_type": "",
+            "error_code": "",
+            "missing_count": result["source_pages_missing"],
+            "story_content_verified": False,
+            "quality": "review_required",
+        })
+    result["source_pages_unverified"] = (
+        len(result["source_pages_unverified_ids"]) + result["source_pages_missing"]
+    )
+    result["accounting_closed"] = expected == (
+        result["source_pages_analyzed"] + result["source_pages_unverified"]
+    )
+    result["page_gate_passed"] = bool(
+        result["accounting_closed"] and result["source_pages_unverified"] == 0
+    )
+    # A chapter with an unverified page cannot claim its user-visible story output
+    # was checked; the PDF may still exist, but only as a review artefact.
+    result["story_output_verified"] = result["page_gate_passed"]
+    result["status"] = "passed" if result["page_gate_passed"] else "review_required"
+    return result
+
+
+def _mark_fast_ocr_review(state, reason, trigger):
+    """Preserve a difficult OCR page and make the bounded fallback visible to review."""
+
+    safe_reason = str(reason or "fast_ocr_fallback_budget_exhausted")
+    for group in state.get("groups", []) or []:
+        if getattr(group, "classification", "") in {"speech", "narration", "unknown"}:
+            group.manual_review_required = True
+            group.fallback_reason = safe_reason
+            if safe_reason not in group.quality_reasons:
+                group.quality_reasons.append(safe_reason)
+    state["fast_ocr_fallback"] = {
+        "reason": safe_reason,
+        "trigger": str(trigger or ""),
+        "action": "preserve_original_and_review",
+    }
+
+
+def _write_progress(
+    path,
+    run_signature,
+    args,
+    total_images,
+    states,
+    status="running",
+    pdf_path=None,
+    force=False,
+):
+    serializable = [_json_safe(_serializable_state(state)) for state in states]
+    payload = {
+            "status": status,
+            "run_signature": run_signature,
+            "job_id": str(
+                getattr(args, "checkpoint_job_id", "")
+                or getattr(args, "job_id", "")
+                or os.getenv("KOMYST_CHECKPOINT_JOB_ID", "")
+                or ""
+            ),
+            "url": sanitize_source_url(args.url),
+            "full": bool(args.full),
+            "fast": bool(args.fast),
+            "force": bool(args.force),
+            "page_indices": _parse_page_indices(getattr(args, "page_indices", "")),
+            "total_images": total_images,
+            "completed_images": sum(
+                state.get("status") in {"completed", "completed_with_error"}
+                for state in serializable
+            ),
+            "ocr_completed_images": sum(
+                bool(state.get("ocr_completed")) for state in serializable
+            ),
+            "error_images": sum(
+                state.get("status") == "completed_with_error"
+                for state in serializable
+            ),
+        "pdf_path": pdf_path,
+        "pages": serializable,
+    }
+    payload = _json_safe(payload)
+    # Deduplicate semantically identical checkpoints while retaining atomic
+    # persistence for every meaningful transition. The lock covers fingerprint
+    # comparison and write so concurrent page workers cannot stale-overwrite a
+    # newer snapshot.
+    fingerprint = hashlib.sha256(
+        json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+    key = str(path)
+    with _PROGRESS_WRITE_LOCK:
+        if not force and _PROGRESS_FINGERPRINTS.get(key) == fingerprint:
+            return False
+        atomic_write_json(path, payload)
+        _PROGRESS_FINGERPRINTS[key] = fingerprint
+    return True
+
+
+def _checkpoint_identity_matches(progress, checkpoint_job_id, *, resume=False):
+    """Require a checkpoint from the same logical job lineage."""
+    if not isinstance(progress, dict) or not checkpoint_job_id:
+        return False
+    stored = str(progress.get("job_id") or "").strip()
+    if stored:
+        return stored == str(checkpoint_job_id).strip()
+    # Legacy checkpoints lack job_id. They are eligible only when the caller
+    # explicitly supplied a lineage-bound resume and the output path is already
+    # owned by that job; ordinary runs never consume them.
+    return bool(resume)
+
+
+def _serializable_state(state):
+    allowed = {
+        "index",
+        "sequence_index",
+        "original_index",
+        "image_path",
+        "image_hash",
+        "process_key",
+        "output_path",
+        "ocr_lang",
+        "ocr_source",
+        "ocr_cache_key",
+        "ocr_error",
+        "ocr_metadata",
+        "ocr_completed",
+        "precheck",
+        "status",
+        "cache_source",
+        "debug_data",
+        "selective_ocr_fallbacks",
+        "rapidocr_region_recovery",
+        "speech_container_reocr",
+        "fast_ocr_fallback",
+        "fast_ocr_fallback_metadata",
+        "timings",
+        "error",
+        "page_error",
+    }
+    return {key: value for key, value in state.items() if key in allowed}
+
+
+def _json_safe(value):
+    """Normalize numpy/path scalars nested in page state before JSON writes."""
+    if isinstance(value, np.generic):
+        return value.item()
+    if isinstance(value, Path):
+        return str(value)
+    if isinstance(value, dict):
+        return {str(key): _json_safe(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple, set)):
+        return [_json_safe(item) for item in value]
+    return value
+
+
+def _grouping_fallback_reason(state, groups):
+    if not (
+        config.OCR_ENGINE == "rapidocr"
+        and config.OCR_HYBRID_FALLBACK
+        and config.OCR_FALLBACK_ENGINE == "paddle"
+        and bool(getattr(config, "OCR_LEGACY_PADDLE_FALLBACK", False))
+    ):
+        return ""
+
+    if (
+        state.get("raw_lines")
+        and not groups
+        and not state.get("ocr_metadata", {}).get("fallback_used")
+    ):
+        return "zero_groups_from_ocr_lines"
+
+    for group in groups:
+        words = re.findall(r"[A-Za-zÀ-ÿ]+", group.text)
+        useful_letters = re.sub(r"[^A-Za-zÀ-ÿ]", "", group.text)
+        if (
+            group.classification in {"speech", "narration"}
+            and group.quality_score < 0.35
+            and group.cleanup_lines
+        ):
+            return "incomplete_group_after_selective_fallback"
+        if (
+            group.ignored
+            and len(words) >= 4
+            and len(useful_letters) >= 18
+            and group.classification not in {"decorative", "sfx"}
+            and group.ignore_reason not in {
+                "decorative_text",
+                "sfx_translation_disabled",
+            }
+        ):
+            return "high_content_group_ignored"
+        if (
+            group.classification == "sfx"
+            and len(words) >= 1
+            and len(useful_letters) >= 8
+            and group.text.upper().strip(" .!?") not in {
+                "BANG",
+                "BOOM",
+                "BUMP",
+                "CLANG",
+                "CRASH",
+                "GONG",
+                "GRR",
+                "GULP",
+                "HISS",
+                "KNOCK",
+                "SLAM",
+                "SNIFF",
+                "SNIFFLE",
+                "SOB",
+                "THUD",
+                "UGH",
+                "WHAM",
+                "WHOOSH",
+            }
+        ):
+            return "sentence_like_text_classified_as_sfx"
+    return ""
+
+
+def _preserve_selected_regional_ocr(page_lines, selected_lines):
+    """Keep regional OCR winners when a later page fallback is required.
+
+    A full-page fallback may be needed for an unrelated group. It must not
+    overwrite a regional candidate that already won the multi-engine quality
+    comparison. Only page lines that substantially overlap those selected
+    regional lines are replaced.
+    """
+    regional_lines = [
+        line
+        for line in selected_lines
+        if (line.metadata or {}).get("selective_fallback_used")
+    ]
+    if not regional_lines:
+        return list(page_lines), 0
+
+    merged = [
+        line
+        for line in page_lines
+        if not any(
+            _boxes_substantially_overlap(line.box, regional.box)
+            for regional in regional_lines
+        )
+    ]
+    merged.extend(regional_lines)
+    merged.sort(key=lambda line: (line.box[1], line.box[0]))
+    return merged, len(regional_lines)
+
+
+def _session_terminology_terms(session_context):
+    """Source terms the chapter ledger already vouches for, or nothing."""
+    if session_context is None or not hasattr(session_context, "term_bindings"):
+        return ()
+    try:
+        bindings = session_context.term_bindings() or {}
+    except Exception:  # noqa: BLE001 - a missing ledger must never sink a page.
+        return ()
+    return tuple(
+        str(entry.get("source") or key)
+        for key, entry in bindings.items()
+        if isinstance(entry, dict)
+    )
+
+
+def _fallback_discards_source_text(current_lines, fallback_lines):
+    """True when the page-level escalation returns less text than it replaces.
+
+    The escalation exists to read *one* badly-read region better; it is never a
+    licence to erase the page.  When the fallback engine finds nothing (or
+    almost nothing) where the current engine found readable lettering, taking
+    its answer drops every group, so nothing is translated, nothing is
+    inpainted, and the untouched source page is what reaches the PDF - the
+    worst possible outcome, produced by a step meant to improve quality.
+    """
+
+    def letters(lines):
+        return sum(
+            len(re.sub(r"[^A-Za-zÀ-ÿ]", "", str(getattr(line, "text", "") or "")))
+            for line in lines or []
+        )
+
+    current = letters(current_lines)
+    return current > 0 and letters(fallback_lines) < current * 0.6
+
+
+def _boxes_substantially_overlap(left, right):
+    lx, ly, lw, lh = left
+    rx, ry, rw, rh = right
+    intersection_width = max(0, min(lx + lw, rx + rw) - max(lx, rx))
+    intersection_height = max(0, min(ly + lh, ry + rh) - max(ly, ry))
+    intersection = intersection_width * intersection_height
+    if intersection <= 0:
+        return False
+    smaller_area = max(1, min(lw * lh, rw * rh))
+    return intersection / smaller_area >= 0.35
+
+
+def _applied_text_repairs(ocr_metadata):
+    if ocr_metadata.get("final_engine") != "rapidocr":
+        return []
+    return [
+        repair
+        for repair in ocr_metadata.get("text_repairs", [])
+        if repair.get("accepted", True)
+    ]
+
+
+def _rejected_text_repairs(ocr_metadata):
+    return [
+        repair
+        for repair in ocr_metadata.get("text_repairs", [])
+        if not repair.get("accepted", True)
+    ]
+
+
+def _group_text_repairs(groups):
+    records = []
+    for group in groups:
+        if not group.repair_reason or group.repaired_text == group.original_text:
+            continue
+        candidate = next(
+            (
+                (line.metadata or {}).get("group_repair_candidate")
+                for line in group.lines
+                if (line.metadata or {}).get("group_repair_candidate")
+            ),
+            {},
+        )
+        records.append(
+            {
+                "original_text": group.original_text,
+                "repaired_text": group.repaired_text,
+                "repair_reason": group.repair_reason,
+                "group_id": group.group_id,
+                **candidate,
+            }
+        )
+    return records
+
+
+def _aggregate_debug_data(states):
+    result = {
+        "ocr_detected_lines": 0,
+        "groups_formed": 0,
+        "groups_translated": 0,
+        "groups_ignored_sfx_decorative": 0,
+        "ocr_page_fallbacks": 0,
+        "ocr_region_fallbacks": 0,
+        "ocr_region_fallback_attempts": 0,
+        "rapidocr_region_retry_requested": 0,
+        "rapidocr_region_retry_selected": 0,
+        "rapidocr_region_retry_failed": 0,
+        "paddle_mobile_region_fallbacks": 0,
+        "paddle_full_region_fallbacks": 0,
+        "paddle_full_calls": 0,
+        "paddle_full_total_seconds": 0.0,
+        "paddle_full_accepted": 0,
+        "paddle_full_rejected": 0,
+        "paddle_full_no_change": 0,
+        "paddle_full_worse": 0,
+        "paddle_full_duplicate": 0,
+        "paddle_full_required": 0,
+        "paddle_full_useful": 0,
+        "paddle_full_after_mobile_candidate": 0,
+        "paddle_full_after_mobile_sufficient": 0,
+        "paddle_full_after_mobile_failure": 0,
+        "paddle_full_for_speech": 0,
+        "paddle_full_for_narration": 0,
+        "paddle_full_for_sfx": 0,
+        "paddle_full_for_decorative": 0,
+        "paddle_full_for_unknown": 0,
+        "ocr_text_repairs": 0,
+        "ocr_text_repairs_rejected": 0,
+        "groups_reverted_for_visual_safety": 0,
+        "manual_review_required_groups": 0,
+        "translation_retries": 0,
+        "translation_rejections": 0,
+        "mixed_language_items": 0,
+        "text_overflow_items": 0,
+        "visual_validation_failures": 0,
+        "NVIDIA_INITIAL_REGIONS": 0,
+        "RAPIDOCR_INITIAL_REGIONS": 0,
+        "NVIDIA_REGIONS_RECOVERED_BY_RAPIDOCR": 0,
+        "RAPIDOCR_INITIAL_REGIONS_RECOVERED": 0,
+        "MIXED_ENGINE_GROUPS": 0,
+        "classification_counts": {
+            "speech": 0,
+            "narration": 0,
+            "sfx": 0,
+            "decorative": 0,
+            "unknown": 0,
+        },
+    }
+    for state in states:
+        debug_data = state.get("debug_data", {})
+        result["ocr_detected_lines"] += debug_data.get("ocr_line_count", 0)
+        result["groups_formed"] += debug_data.get("group_count", 0)
+        result["groups_translated"] += debug_data.get("translated_group_count", 0)
+        for name in result["classification_counts"]:
+            result["classification_counts"][name] += debug_data.get(
+                "classification_counts", {}
+            ).get(name, 0)
+        result["groups_ignored_sfx_decorative"] += sum(
+            1
+            for item in debug_data.get("items", [])
+            if item.get("ignored")
+            and item.get("classification") in {"sfx", "decorative"}
+        )
+        ocr_metadata = debug_data.get("ocr_metadata", {})
+        result["ocr_page_fallbacks"] += int(
+            bool(ocr_metadata.get("fallback_used"))
+        )
+        fallback_records = debug_data.get("selective_ocr_fallbacks", [])
+        result["ocr_region_fallback_attempts"] += len(fallback_records)
+        rapidocr_records = debug_data.get("rapidocr_region_recovery", [])
+        result["rapidocr_region_retry_requested"] += len(rapidocr_records)
+        result["rapidocr_region_retry_selected"] += sum(
+            1 for record in rapidocr_records if record.get("selection") == "attempt_2"
+        )
+        result["rapidocr_region_retry_failed"] += sum(
+            1
+            for record in rapidocr_records
+            if record.get("selection") != "attempt_2"
+        )
+        for record in fallback_records:
+            for full_call in record.get("paddle_full_calls", []) or []:
+                result["paddle_full_calls"] += 1
+                result["paddle_full_total_seconds"] += float(
+                    full_call.get("elapsed_seconds") or 0.0
+                )
+                if full_call.get("full_accepted"):
+                    result["paddle_full_accepted"] += 1
+                else:
+                    result["paddle_full_rejected"] += 1
+                classification = str(full_call.get("call_classification") or "")
+                if classification == "FULL_NO_CHANGE":
+                    result["paddle_full_no_change"] += 1
+                elif classification == "FULL_WORSE":
+                    result["paddle_full_worse"] += 1
+                elif classification == "FULL_DUPLICATE":
+                    result["paddle_full_duplicate"] += 1
+                elif classification == "FULL_REQUIRED":
+                    result["paddle_full_required"] += 1
+                elif classification == "FULL_USEFUL":
+                    result["paddle_full_useful"] += 1
+                if full_call.get("mobile_candidate_exists"):
+                    result["paddle_full_after_mobile_candidate"] += 1
+                if full_call.get("mobile_candidate_sufficient"):
+                    result["paddle_full_after_mobile_sufficient"] += 1
+                reasons = set(full_call.get("mobile_rejection_reasons") or [])
+                if "mobile_no_candidate" in reasons or "mobile_error" in reasons:
+                    result["paddle_full_after_mobile_failure"] += 1
+                group_classification = str(
+                    full_call.get("classification_before") or "unknown"
+                )
+                key = f"paddle_full_for_{group_classification}"
+                if key in result:
+                    result[key] += 1
+            if not record.get("fallback_used"):
+                continue
+            result["ocr_region_fallbacks"] += 1
+            if record.get("fallback_variant") == "paddle_mobile":
+                result["paddle_mobile_region_fallbacks"] += 1
+            elif record.get("fallback_variant") == "paddle_full":
+                result["paddle_full_region_fallbacks"] += 1
+        result["ocr_text_repairs"] += len(
+            debug_data.get("text_repairs", [])
+        )
+        result["ocr_text_repairs_rejected"] += len(
+            debug_data.get("rejected_text_repairs", [])
+        )
+        for item in debug_data.get("items", []):
+            retry_count = int(item.get("translation_retry_count") or 0)
+            result["translation_retries"] += retry_count
+            if item.get("rejected_translation"):
+                result["translation_rejections"] += 1
+            reason = str(item.get("translation_validation_reason") or "")
+            if _is_mixed_language_validation_reason(reason):
+                result["mixed_language_items"] += 1
+            if float(item.get("text_overflow_ratio") or 0.0) > config.MAX_TEXT_OVERFLOW_RATIO:
+                result["text_overflow_items"] += 1
+            visual = item.get("visual_validation") or {}
+            if visual and not visual.get("visual_validation_passed", True):
+                result["visual_validation_failures"] += 1
+            if item.get("manual_review_required"):
+                result["manual_review_required_groups"] += 1
+            if item.get("sent_to_nvidia") and not item.get("redrawn"):
+                result["groups_reverted_for_visual_safety"] += 1
+            provenance_engines = item.get("ocr_provenance_engines") or []
+            if item.get("mixed_ocr_provenance"):
+                result["MIXED_ENGINE_GROUPS"] += 1
+            elif provenance_engines == ["nvidia"]:
+                result["NVIDIA_INITIAL_REGIONS"] += 1
+                if item.get("recovered") and item.get("recovery_engine") == "rapidocr":
+                    result["NVIDIA_REGIONS_RECOVERED_BY_RAPIDOCR"] += 1
+            elif provenance_engines == ["rapidocr"]:
+                result["RAPIDOCR_INITIAL_REGIONS"] += 1
+                if item.get("recovered") and item.get("recovery_engine") == "rapidocr":
+                    result["RAPIDOCR_INITIAL_REGIONS_RECOVERED"] += 1
+    return result
+
+
+def _empty_debug_data(image_path, precheck_reason):
+    return {
+        "image_path": str(image_path),
+        "ocr_line_count": 0,
+        "ignored_line_count": 0,
+        "ignored_group_count": 0,
+        "group_count": 0,
+        "translated_group_count": 0,
+        "redrawn_group_count": 0,
+        "classification_counts": {
+            "speech": 0,
+            "narration": 0,
+            "sfx": 0,
+            "decorative": 0,
+            "unknown": 0,
+        },
+        "items": [],
+        "ocr_metadata": {},
+        "text_repairs": [],
+        "rejected_text_repairs": [],
+        "precheck_reason": precheck_reason,
+    }
+
+
+def _translation_enabled_from_env():
+    return str(os.getenv("TRANSLATION_ENABLED", "true") or "").strip().lower() not in {
+        "0", "false", "no", "off", "disabled"
+    }
+
+
+def _relevant_output_config(pipeline_fingerprint):
+    font_signature = config.FONT_PATH
+    if config.FONT_PATH and os.path.isfile(config.FONT_PATH):
+        font_signature = file_sha256(config.FONT_PATH)
+    return {
+        "pipeline_fingerprint": pipeline_fingerprint,
+        "ocr_engine": config.OCR_ENGINE,
+        "ocr_fallback": config.OCR_FALLBACK_ENGINE,
+        "ocr_hybrid_fallback": config.OCR_HYBRID_FALLBACK,
+        "fast_ocr_mode": bool(getattr(config, "FAST_OCR_MODE", False)),
+        "fast_ocr_heavy_fallback": bool(
+            getattr(config, "FAST_OCR_HEAVY_FALLBACK", False)
+        ),
+        "fast_ocr_page_timeout_seconds": float(
+            getattr(config, "FAST_OCR_PAGE_TIMEOUT_SECONDS", 0.0)
+        ),
+        "fast_ocr_region_timeout_seconds": float(
+            getattr(config, "FAST_OCR_REGION_TIMEOUT_SECONDS", 0.0)
+        ),
+        "fast_ocr_full_fallback_max_pages": int(
+            getattr(config, "FAST_OCR_FULL_FALLBACK_MAX_PAGES", 0)
+        ),
+        "fast_ocr_full_fallback_max_regions": int(
+            getattr(config, "FAST_OCR_FULL_FALLBACK_MAX_REGIONS", 0)
+        ),
+        "rapidocr_enabled": config.RAPIDOCR_ENABLED,
+        "rapidocr_min_confidence": config.RAPIDOCR_MIN_CONFIDENCE,
+        "rapidocr_page_fallback": config.RAPIDOCR_PAGE_FALLBACK,
+        "rapidocr_suspicious_text_fallback": (
+            config.RAPIDOCR_SUSPICIOUS_TEXT_FALLBACK
+        ),
+        "ocr_text_repair": config.OCR_TEXT_REPAIR,
+        "ocr_text_repair_mode": config.OCR_TEXT_REPAIR_MODE,
+        "ocr_quality_control": config.OCR_QUALITY_CONTROL,
+        "ocr_region_selective_fallback": config.OCR_REGION_SELECTIVE_FALLBACK,
+        "ocr_group_min_quality_score": config.OCR_GROUP_MIN_QUALITY_SCORE,
+        "translation_validation": config.TRANSLATION_VALIDATION,
+        # A page processed without translation (provider off for that run) must never be
+        # served to a run that translates: it rendered the source text back.
+        "translation_enabled": _translation_enabled_from_env(),
+        "text_mask_padding": config.TEXT_MASK_PADDING,
+        "max_mask_expansion": config.MAX_MASK_EXPANSION,
+        "strict_mask_bounds": config.STRICT_MASK_BOUNDS,
+        "mask_component_based": config.MASK_COMPONENT_BASED,
+        "allow_large_rectangle_mask": config.ALLOW_LARGE_RECTANGLE_MASK,
+        "white_balloon_flat_fill": config.WHITE_BALLOON_FLAT_FILL,
+        "text_safe_padding": config.TEXT_SAFE_PADDING,
+        "visual_diff_validation": config.VISUAL_DIFF_VALIDATION,
+        "visual_qa_strict": config.VISUAL_QA_STRICT,
+        "max_outside_change_ratio": config.MAX_OUTSIDE_CHANGE_RATIO,
+        "max_outside_component_area": config.MAX_OUTSIDE_COMPONENT_AREA,
+        "max_mask_to_text_area_ratio": config.MAX_MASK_TO_TEXT_AREA_RATIO,
+        "reject_balloon_border_damage": config.REJECT_BALLOON_BORDER_DAMAGE,
+        "reject_text_overflow": config.REJECT_TEXT_OVERFLOW,
+        "white_background_min_brightness": config.WHITE_BACKGROUND_MIN_BRIGHTNESS,
+        "white_background_max_std": config.WHITE_BACKGROUND_MAX_STD,
+        "white_background_max_saturation": config.WHITE_BACKGROUND_MAX_SATURATION,
+        "white_background_min_ratio": config.WHITE_BACKGROUND_MIN_RATIO,
+        "white_background_max_texture": config.WHITE_BACKGROUND_MAX_TEXTURE,
+        "white_background_max_edge_density": config.WHITE_BACKGROUND_MAX_EDGE_DENSITY,
+        "white_background_max_diagonal_lines": config.WHITE_BACKGROUND_MAX_DIAGONAL_LINES,
+        "white_enclosure_min_brightness": config.WHITE_ENCLOSURE_MIN_BRIGHTNESS,
+        "white_enclosure_min_ratio": config.WHITE_ENCLOSURE_MIN_RATIO,
+        "white_enclosure_max_dark_ratio": config.WHITE_ENCLOSURE_MAX_DARK_RATIO,
+        "white_enclosure_max_saturation": config.WHITE_ENCLOSURE_MAX_SATURATION,
+        "white_stylized_enclosure_min_brightness": config.WHITE_STYLIZED_ENCLOSURE_MIN_BRIGHTNESS,
+        "white_stylized_enclosure_min_ratio": config.WHITE_STYLIZED_ENCLOSURE_MIN_RATIO,
+        "white_stylized_enclosure_max_dark_ratio": config.WHITE_STYLIZED_ENCLOSURE_MAX_DARK_RATIO,
+        "white_stylized_enclosure_max_saturation": config.WHITE_STYLIZED_ENCLOSURE_MAX_SATURATION,
+        "max_textured_mask_group_ratio": config.MAX_TEXTURED_MASK_GROUP_RATIO,
+        "max_textured_mask_component_ratio": config.MAX_TEXTURED_MASK_COMPONENT_RATIO,
+        "reject_white_patch_outside_balloon": config.REJECT_WHITE_PATCH_OUTSIDE_BALLOON,
+        "translate_sfx": config.TRANSLATE_SFX,
+        "prioritize_enclosed_text": config.PRIORITIZE_ENCLOSED_TEXT,
+        "translation_model": config.NVIDIA_TRANSLATION_MODEL,
+        "translation_prompt_version": PROMPT_VERSION,
+        "font_signature": font_signature,
+        "no_text_conservative": config.NO_TEXT_SKIP_CONSERVATIVE,
+        "smart_webtoon_pdf_split": config.SMART_WEBTOON_PDF_SPLIT,
+        "smart_pdf_target_height": config.SMART_PDF_TARGET_HEIGHT,
+        "smart_pdf_min_height": config.SMART_PDF_MIN_HEIGHT,
+        "smart_pdf_max_height": config.SMART_PDF_MAX_HEIGHT,
+    }
+
+
+def _reset_generated_folders(*folders):
+    for folder in folders:
+        if folder.exists():
+            force_remove(str(folder))
+
+
+def _font(size, bold=False):
+    candidates = (
+        [r"C:\Windows\Fonts\georgiab.ttf", r"C:\Windows\Fonts\segoeuib.ttf"]
+        if bold
+        else [r"C:\Windows\Fonts\segoeui.ttf", r"C:\Windows\Fonts\arial.ttf"]
+    )
+    for candidate in candidates:
+        if os.path.isfile(candidate):
+            return ImageFont.truetype(candidate, size)
+    return ImageFont.load_default()
+
+
+def _create_preview_contact_sheet(states, target):
+    selected = _select_preview_states(states)
+    canvas_width = 1000
+    header_height = 150
+    columns = 2
+    card_width = 460
+    card_height = 620
+    gutter = 24
+    rows = math.ceil(len(selected) / columns)
+    canvas_height = header_height + rows * (card_height + gutter) + 32
+    background = (20, 22, 27)
+    surface = (244, 239, 231)
+    accent = (225, 102, 62)
+    canvas = Image.new("RGB", (canvas_width, canvas_height), background)
+    draw = ImageDraw.Draw(canvas)
+    draw.rectangle((0, 0, 18, header_height), fill=accent)
+    draw.text((48, 30), "KOMYST / QUALITY STRIP", font=_font(34, True), fill=surface)
+    draw.text(
+        (50, 88),
+        "Amostras finais — ordem, legibilidade e consistência",
+        font=_font(20),
+        fill=(180, 184, 190),
+    )
+
+    for position, state in enumerate(selected):
+        row, column = divmod(position, columns)
+        x = 24 + column * (card_width + gutter)
+        y = header_height + row * (card_height + gutter)
+        draw.rounded_rectangle(
+            (x, y, x + card_width, y + card_height),
+            radius=12,
+            fill=surface,
+        )
+        image = Image.open(state["output_path"]).convert("RGB")
+        thumb = ImageOps.contain(image, (card_width - 32, card_height - 88))
+        image.close()
+        image_x = x + (card_width - thumb.width) // 2
+        image_y = y + 18
+        canvas.paste(thumb, (image_x, image_y))
+        translated = state.get("debug_data", {}).get("translated_group_count", 0)
+        label = f"PÁGINA {state['index']:03}  /  {translated} traduções"
+        draw.text(
+            (x + 18, y + card_height - 48),
+            label,
+            font=_font(17, True),
+            fill=(31, 34, 40),
+        )
+
+    target.parent.mkdir(parents=True, exist_ok=True)
+    canvas.save(target, "JPEG", quality=82, optimize=True, progressive=True)
+    return selected
+
+
+def _select_preview_states(states):
+    ordered = sorted(states, key=lambda state: state["index"])
+    required = [
+        ordered[0],
+        ordered[min(1, len(ordered) - 1)],
+        ordered[len(ordered) // 2],
+        ordered[-1],
+    ]
+    top_translated = sorted(
+        ordered,
+        key=lambda state: state.get("debug_data", {}).get(
+            "translated_group_count", 0
+        ),
+        reverse=True,
+    )[:3]
+    randomizer = random.Random(42)
+    random_states = randomizer.sample(ordered, min(3, len(ordered)))
+    selected = []
+    seen = set()
+    for state in required + top_translated + random_states:
+        if state["index"] in seen:
+            continue
+        seen.add(state["index"])
+        selected.append(state)
+    for state in ordered:
+        if len(selected) >= 10:
+            break
+        if state["index"] not in seen:
+            selected.append(state)
+            seen.add(state["index"])
+    return selected[:10]
+
+
+def _create_preview_compare_sheet(selected_states, target):
+    candidates = sorted(
+        selected_states,
+        key=lambda state: state.get("debug_data", {}).get(
+            "translated_group_count", 0
+        ),
+        reverse=True,
+    )[:3]
+    canvas_width = 1000
+    header_height = 140
+    row_height = 600
+    canvas = Image.new(
+        "RGB",
+        (canvas_width, header_height + row_height * len(candidates) + 28),
+        (239, 235, 226),
+    )
+    draw = ImageDraw.Draw(canvas)
+    draw.rectangle((0, 0, canvas_width, header_height), fill=(20, 22, 27))
+    draw.text((36, 28), "ORIGINAL / FINAL", font=_font(36, True), fill=(244, 239, 231))
+    draw.text(
+        (38, 88),
+        "Comparação leve das páginas com mais tradução",
+        font=_font(19),
+        fill=(183, 186, 191),
+    )
+
+    for row, state in enumerate(candidates):
+        y = header_height + row * row_height
+        draw.text(
+            (24, y + 18),
+            f"PÁGINA {state['index']:03}",
+            font=_font(17, True),
+            fill=(31, 34, 40),
+        )
+        for column, path in enumerate((state["image_path"], state["output_path"])):
+            image = Image.open(path).convert("RGB")
+            thumb = ImageOps.contain(image, (452, row_height - 82))
+            image.close()
+            x = 24 + column * 488 + (452 - thumb.width) // 2
+            image_y = y + 52 + (row_height - 82 - thumb.height) // 2
+            canvas.paste(thumb, (x, image_y))
+            draw.text(
+                (24 + column * 488, y + row_height - 26),
+                "ORIGINAL" if column == 0 else "FINAL",
+                font=_font(15, True),
+                fill=(225, 102, 62) if column else (86, 89, 95),
+            )
+
+    target.parent.mkdir(parents=True, exist_ok=True)
+    canvas.save(target, "JPEG", quality=82, optimize=True, progressive=True)
+
+
+def _validate_quality(states, pdf_path, expected_page_count=None, full=False, *, pdf_expected=True):
+    invalid_pages = []
+    for state in states:
+        if not _reconstructed_page_is_valid(state.get("output_path"), state.get("image_path", "")):
+            invalid_pages.append(state["index"])
+
+    # ``expected_page_count`` used to be the LOGICAL page count (one per output
+    # PNG), but ``_count_pdf_pages`` counts PHYSICAL PDF pages - a tall logical page
+    # is written as several. Comparing the two failed every tall strip. The expected
+    # physical count is derived from the same segmentation rule the exporter uses
+    # (``pdf.pdf_page_manifest``), so the gate compares physical against physical.
+    page_manifest = pdf_page_manifest([state["output_path"] for state in states])
+    expected_page_count = int(page_manifest["pdf_physical_page_count"])
+    # A plan without a PDF (clean-only / translate+clean) must not be failed for a missing
+    # PDF: the page-count gate is satisfied by construction when no PDF was requested.
+    pdf_pages = _count_pdf_pages(pdf_path) if pdf_expected else expected_page_count
+    high_translation_pages = sorted(
+        states,
+        key=lambda state: state.get("debug_data", {}).get(
+            "translated_group_count", 0
+        ),
+        reverse=True,
+    )[:3]
+    high_translation_valid = all(
+        valid_image(state["output_path"]) for state in high_translation_pages
+    )
+
+    all_items = [
+        item
+        for state in states
+        for item in state.get("debug_data", {}).get("items", [])
+    ]
+    preserved_sfx_items = [
+        item
+        for item in all_items
+        if item.get("classification") == "sfx"
+    ]
+    # The policy is TRANSLATE_SFX. Translated sound effects are the configured
+    # behaviour, not a violation; only with it off must every sound stay out of the
+    # provider. (Treating translation itself as the violation failed every chapter.)
+    sfx_policy_ok = bool(config.TRANSLATE_SFX) or all(
+        item.get("classification") == "sfx"
+        and item.get("ignored")
+        and not item.get("sent_to_nvidia")
+        for item in preserved_sfx_items
+    )
+    visual_failures = [
+        item
+        for item in all_items
+        if (item.get("visual_validation") or {})
+        and not (item.get("visual_validation") or {}).get(
+            "visual_validation_passed",
+            True,
+        )
+    ]
+    manual_review_items = [
+        item for item in all_items if item.get("manual_review_required")
+    ]
+    overflow_items = [
+        item
+        for item in all_items
+        if float(item.get("text_overflow_ratio") or 0.0)
+        > config.MAX_TEXT_OVERFLOW_RATIO
+    ]
+    return {
+        "passed": (
+            not invalid_pages
+            and pdf_pages == expected_page_count
+            and high_translation_valid
+            and sfx_policy_ok
+            and not visual_failures
+            and not manual_review_items
+            and not overflow_items
+        ),
+        "pdf_pages": pdf_pages,
+        "expected_pdf_pages": expected_page_count,
+        "logical_page_count": int(page_manifest["logical_source_pages"]),
+        "pdf_physical_page_count": expected_page_count,
+        "pdf_pages_per_source": list(page_manifest["pdf_pages_per_source"]),
+        "invalid_or_blank_pages": invalid_pages,
+        "high_translation_pages_valid": high_translation_valid,
+        "translate_sfx_disabled": config.TRANSLATE_SFX is False,
+        "preserved_sfx_groups": len(preserved_sfx_items),
+        "sfx_policy_valid": sfx_policy_ok,
+        "visual_validation_failures": len(visual_failures),
+        "manual_review_required_groups": len(manual_review_items),
+        "text_overflow_groups": len(overflow_items),
+    }
+
+
+def _count_pdf_pages(path):
+    try:
+        data = Path(path).read_bytes()
+        return len(re.findall(rb"/Type\s*/Page(?!s)", data))
+    except OSError:
+        return 0
+
+
+def _timing_report_text(report):
+    stage = report["stage_seconds"]
+    reduction = report["reduction_from_baseline_percent"]
+    comparison = (
+        f"{abs(reduction):.2f}% mais rapido"
+        if reduction >= 0
+        else f"{abs(reduction):.2f}% mais lento"
+    )
+    lines = [
+        "Komyst - Benchmark de performance",
+        f"Modo: {report['mode']}",
+        f"Force: {report['force']}",
+        f"Total de imagens: {report['total_images']}",
+        f"Imagens processadas: {report['processed_images']}",
+        f"Imagens puladas por cache: {report['images_skipped_by_cache']}",
+        (
+            "Imagens puladas por no-text precheck: "
+            f"{report['images_skipped_by_no_text_precheck']}"
+        ),
+        f"OCR executados: {report['ocr_runs']}",
+        f"OCR do cache: {report['ocr_cache_hits']}",
+        f"Fallbacks OCR para Paddle: {report['ocr_page_fallbacks']}",
+        f"Fallbacks OCR por regiao: {report.get('ocr_region_fallbacks', 0)}",
+        f"Textos OCR reparados: {report['ocr_text_repairs']}",
+        f"Retries de traducao: {report.get('translation_retries', 0)}",
+        f"Traducoes rejeitadas: {report.get('translation_rejections', 0)}",
+        (
+            "Retries por JSON invalido do provedor: "
+            f"{report.get('translation_invalid_json_retries', 0)}"
+        ),
+        f"Itens com texto misturado: {report.get('mixed_language_items', 0)}",
+        f"Falhas de validacao visual: {report.get('visual_validation_failures', 0)}",
+        f"Textos enviados ao provedor: {report['translation_api_texts']}",
+        f"Traducoes do cache: {report['translation_cache_hits']}",
+        "",
+        f"Tempo total: {report['total_seconds']:.2f}s",
+        f"Download/coleta: {stage['download_collection']:.2f}s",
+        f"Validacao: {stage['image_validation']:.2f}s",
+        f"Reconstrucao/smart split: {stage.get('smart_pdf_split', 0.0):.2f}s",
+        f"No-text precheck: {stage['no_text_precheck']:.2f}s",
+        f"OCR (parede): {stage['ocr']:.2f}s",
+        f"OCR (soma por pagina): {stage['ocr_cpu']:.2f}s",
+        f"OCR fallback seletivo: {stage.get('ocr_selective_fallback', 0.0):.2f}s",
+        (
+            "Classificacao/filtro/agrupamento: "
+            f"{stage['classification_grouping']:.2f}s"
+        ),
+        f"Traducao: {stage['translation']:.2f}s",
+        f"Inpainting: {stage['inpainting']:.2f}s",
+        f"Redesenho: {stage['redraw']:.2f}s",
+        f"Salvamento: {stage['image_save']:.2f}s",
+        f"PDF: {stage['pdf']:.2f}s",
+        f"Media por imagem: {report['average_seconds_per_image']:.2f}s",
+        (
+            "Media por imagem sem cache: "
+            f"{report['average_seconds_per_image_without_cache']:.2f}s"
+        ),
+        (
+            "Media por imagem com cache: "
+            f"{report['average_seconds_per_image_with_cache']:.4f}s"
+        ),
+        f"Etapa mais lenta: {report['slowest_stage']}",
+        f"Comparacao com 35min29s: {comparison}",
+        "",
+        f"PDF: {report['pdf_path']}",
+        f"Contact sheet: {report['preview_contact_sheet']}",
+        f"Compare sheet: {report['preview_compare_sheet']}",
+    ]
+    return "\n".join(lines) + "\n"

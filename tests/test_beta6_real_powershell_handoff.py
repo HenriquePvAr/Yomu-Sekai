@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-import yomu.runtime.installer_update as installer_update
+import komyst.runtime.installer_update as installer_update
 
 
 pytestmark = pytest.mark.skipif(os.name != "nt", reason="Windows PowerShell integration")

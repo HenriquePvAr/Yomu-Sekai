@@ -19,8 +19,8 @@ import re
 import unittest
 from pathlib import Path
 
-import yomu.ocr.source_completeness as source_completeness
-from yomu.ocr.ocr_balloon import (
+import komyst.ocr.source_completeness as source_completeness
+from komyst.ocr.ocr_balloon import (
     DO_NOT_RENDER,
     RENDER_WITH_REVIEW,
     TextGroup,
@@ -288,7 +288,7 @@ class ReaderAuthorizationTests(unittest.TestCase):
 
     def test_the_metadata_request_carries_the_session_bearer(self):
         self.assertIn("Authorization", self.source)
-        self.assertIn("__tradutorGetCanonicalAccessToken", self.source)
+        self.assertIn("__komystGetCanonicalAccessToken", self.source)
 
     def test_pages_and_thumbnails_are_fetched_not_hotlinked(self):
         # `<img src="/api/...">` cannot carry a header, so the bytes have to be

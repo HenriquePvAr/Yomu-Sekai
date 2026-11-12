@@ -11,9 +11,9 @@ import numpy as np
 from psd_tools import PSDImage
 from psd_tools.constants import Resource
 
-import yomu.runtime.artifact_contract as ac
-import yomu.export.editable_psd_writer as ew
-from yomu.export.editable_psd_writer import EditableTextRegion as R, EditablePsdError
+import komyst.runtime.artifact_contract as ac
+import komyst.export.editable_psd_writer as ew
+from komyst.export.editable_psd_writer import EditableTextRegion as R, EditablePsdError
 
 
 def _img(w, h, v=200):

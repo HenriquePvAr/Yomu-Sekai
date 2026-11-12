@@ -6,7 +6,7 @@ from pathlib import Path
 
 from PIL import Image
 
-from yomu.core.json_utils import to_json_safe
+from komyst.core.json_utils import to_json_safe
 
 
 def _load_json(path):
@@ -239,7 +239,7 @@ def _render_html(payload, output_path):
   <header class="hero">
     <div class="hero-inner">
       <div>
-        <p class="kicker">Tradutor.Ia · auditoria visual</p>
+        <p class="kicker">Komyst · auditoria visual</p>
         <h1>Treze grupos, sem esconder o risco.</h1>
         <p class="lede">Registro dos grupos inicialmente revertidos, com o recorte original, a saída corrigida e a decisão A/B. A regra de produção permanece genérica: interior branco dominante e evidência visual de balão.</p>
       </div>

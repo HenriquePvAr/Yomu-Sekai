@@ -1,6 +1,6 @@
 // Wires the minimal auth UI (masthead status + full-page auth surface) to the Supabase SDK module.
 // Loaded as an ES module so it can import the SDK. Keeps the current access token in a
-// window field that the classic tradutor_ui.js reads to attach the Bearer header.
+// window field that the classic komyst_ui.js reads to attach the Bearer header.
 // Never logs a token, session, or password.
 const $ = (sel) => document.querySelector(sel);
 
@@ -25,8 +25,8 @@ function setError(msg) {
   if (!el) return;
   el.textContent = msg || '';
   el.hidden = !msg;
-  if (window.__tradutorAuthDiagnosticsEnabled === true && msg === 'Não foi possível verificar sua sessão.') {
-    authTrace('SESSION_ERROR_BANNER_SET', {source: 'setError', reason: window.__tradutorAuthBootstrapFailureStage || 'UNKNOWN'});
+  if (window.__komystAuthDiagnosticsEnabled === true && msg === 'Não foi possível verificar sua sessão.') {
+    authTrace('SESSION_ERROR_BANNER_SET', {source: 'setError', reason: window.__komystAuthBootstrapFailureStage || 'UNKNOWN'});
   }
 }
 
@@ -38,12 +38,12 @@ function setNote(msg) {
 }
 
 function setShellState(state) {
-  if (window.__tradutorVisualTestEnabled === true && document.documentElement.dataset.visualBootTest === '1') return;
+  if (window.__komystVisualTestEnabled === true && document.documentElement.dataset.visualBootTest === '1') return;
   document.documentElement.dataset.shellState = state;
 }
 
 function showLoginSurface() {
-  if (window.__tradutorVisualTestEnabled === true && document.documentElement.dataset.visualBootTest === '1') return;
+  if (window.__komystVisualTestEnabled === true && document.documentElement.dataset.visualBootTest === '1') return;
   const surface = $('#authSurface');
   if (surface) surface.hidden = false;
   setAuthSceneActive(true);
@@ -57,7 +57,7 @@ function hideLoginSurface() {
 }
 
 function dismissBootSurface() {
-  if (window.__tradutorVisualTestEnabled === true && document.documentElement.dataset.visualBootTest === '1') return;
+  if (window.__komystVisualTestEnabled === true && document.documentElement.dataset.visualBootTest === '1') return;
   $('#boot')?.classList.add('hide');
 }
 
@@ -133,12 +133,12 @@ let recoveryErrorKind = '';
 let recoveryFixtureMode = '';
 let recoveryCooldownTimer = 0;
 const RECOVERY_COOLDOWN_SECONDS = 60;
-const RECOVERY_COOLDOWN_KEY = 'yomu_recovery_last_request_at';
-const RECOVERY_PENDING_KEY = 'yomu_recovery_pending_at';
+const RECOVERY_COOLDOWN_KEY = 'komyst_recovery_last_request_at';
+const RECOVERY_PENDING_KEY = 'komyst_recovery_pending_at';
 // localStorage is shared by tabs, unlike sessionStorage.  Keep only a short-lived
 // timestamp so a recovery request can be handed off when the email opens a new tab.
-const RECOVERY_DURABLE_KEY = 'yomu_recovery_pending_at_durable';
-const DESKTOP_HANDOFF_KEY = 'yomu_desktop_recovery_handoff';
+const RECOVERY_DURABLE_KEY = 'komyst_recovery_pending_at_durable';
+const DESKTOP_HANDOFF_KEY = 'komyst_desktop_recovery_handoff';
 const RECOVERY_INTENT_TTL_MS = 10 * 60 * 1000;
 let isPasswordRecoveryFlow = false;
 let recoveryUpdateInProgress = false;
@@ -146,18 +146,18 @@ let recoveryUpdateSucceeded = false;
 let recoveryInvalidIntent = false;
 const AUTH_MODE_PARAM = 'auth_mode';
 try {
-  const intent = sessionStorage.getItem('yomu_recovery_intent') === '1'
-    || localStorage.getItem('yomu_recovery_intent') === '1';
+  const intent = sessionStorage.getItem('komyst_recovery_intent') === '1'
+    || localStorage.getItem('komyst_recovery_intent') === '1';
   const pendingAt = Number(sessionStorage.getItem(RECOVERY_PENDING_KEY)
     || localStorage.getItem(RECOVERY_DURABLE_KEY) || 0);
   isPasswordRecoveryFlow = intent && (!pendingAt || Date.now() - pendingAt < RECOVERY_INTENT_TTL_MS);
   if (intent && !isPasswordRecoveryFlow) {
-    sessionStorage.removeItem('yomu_recovery_intent');
-    localStorage.removeItem('yomu_recovery_intent');
+    sessionStorage.removeItem('komyst_recovery_intent');
+    localStorage.removeItem('komyst_recovery_intent');
     localStorage.removeItem(RECOVERY_DURABLE_KEY);
   }
 } catch (_) { /* optional */ }
-try { recoveryInvalidIntent = sessionStorage.getItem('yomu_recovery_invalid') === '1'; } catch (_) { /* optional */ }
+try { recoveryInvalidIntent = sessionStorage.getItem('komyst_recovery_invalid') === '1'; } catch (_) { /* optional */ }
 // The callback uses a fixed auth_mode handoff. Treat it as a recovery hint,
 // while still requiring the session marker/TTL before routing to the password
 // form in the normal runtime.
@@ -195,7 +195,7 @@ const desktopHandoffState = {
 };
 function publishDesktopHandoffState() {
   // DEV-only, sanitized observability: never expose the capability itself.
-  window.__tradutorDesktopHandoffState = {
+  window.__komystDesktopHandoffState = {
     pending: desktopHandoffState.pending,
     flow: desktopHandoffState.pending ? desktopHandoffState.flowType : 'NONE',
     ageSeconds: desktopHandoffState.startedAt ? Math.max(0, Math.floor((Date.now() - desktopHandoffState.startedAt) / 1000)) : 0,
@@ -206,24 +206,24 @@ function publishDesktopHandoffState() {
     error: desktopHandoffState.lastError,
     errorStatus: desktopHandoffState.lastErrorStatus,
   };
-  if (new URLSearchParams(window.location.search || '').get('desktop') === '1' || window.__yomuDesktopRuntime === true) {
-    const snapshot = window.__tradutorDesktopHandoffState;
+  if (new URLSearchParams(window.location.search || '').get('desktop') === '1' || window.__komystDesktopRuntime === true) {
+    const snapshot = window.__komystDesktopHandoffState;
     void fetch('/api/auth/desktop/client-state', {
       method: 'POST', cache: 'no-store', headers: {'content-type': 'application/json'},
-      body: JSON.stringify({...snapshot, authMode: mode, sessionState: window.__tradutorAuthState || 'LOADING'}),
+      body: JSON.stringify({...snapshot, authMode: mode, sessionState: window.__komystAuthState || 'LOADING'}),
     }).catch(() => {});
   }
 }
-window.__tradutorAuthScriptExecuted = true;
-window.__tradutorAuthBuild = `auth_ui:${new URL(import.meta.url).searchParams.get('v') || 'unversioned'}`;
-window.__tradutorAuthBuildId = window.__tradutorAuthBuild;
+window.__komystAuthScriptExecuted = true;
+window.__komystAuthBuild = `auth_ui:${new URL(import.meta.url).searchParams.get('v') || 'unversioned'}`;
+window.__komystAuthBuildId = window.__komystAuthBuild;
 // The shell must not infer "visitor" while the backend session is still being
 // resolved.  The backend response is authoritative for local-session and Supabase
 // providers alike; the SDK session only supplies the bearer when applicable.
-window.__tradutorAuthState = 'auth_loading';
-window.__tradutorCommunityUserId = '';
-window.__tradutorAuthTrace = Array.isArray(window.__tradutorAuthTrace)
-  ? window.__tradutorAuthTrace : [];
+window.__komystAuthState = 'auth_loading';
+window.__komystCommunityUserId = '';
+window.__komystAuthTrace = Array.isArray(window.__komystAuthTrace)
+  ? window.__komystAuthTrace : [];
 let authDiagnosticSequence = 0;
 
 function authTrace(event, fields = {}) {
@@ -231,18 +231,18 @@ function authTrace(event, fields = {}) {
   for (const key of ['status', 'code', 'name', 'message', 'authenticated', 'source', 'token_present', 'token_length', 'elapsed_ms', 'expires_at', 'reason', 'meta', 'destination', 'auth_event', 'recovery_intent_present', 'recovery_intent_valid', 'session_present_before_login', 'app_open_reason', 'build_id', 'caller', 'window_role', 'session_fingerprint', 'session_present', 'user_present', 'request_trace_id', 'generation']) {
     if (fields[key] !== undefined) safe[key] = fields[key];
   }
-  window.__tradutorAuthTrace.push(safe);
+  window.__komystAuthTrace.push(safe);
   try {
-    document.documentElement.dataset.tradutorAuthLastEvent = safe.event;
-    if (safe.code) document.documentElement.dataset.tradutorAuthLastCode = String(safe.code).slice(0, 80);
-    if (safe.status !== undefined) document.documentElement.dataset.tradutorAuthLastStatus = String(safe.status);
+    document.documentElement.dataset.komystAuthLastEvent = safe.event;
+    if (safe.code) document.documentElement.dataset.komystAuthLastCode = String(safe.code).slice(0, 80);
+    if (safe.status !== undefined) document.documentElement.dataset.komystAuthLastStatus = String(safe.status);
   } catch (_) { /* diagnostics never affect auth */ }
-  if (window.__tradutorAuthTrace.length > 40) window.__tradutorAuthTrace.shift();
+  if (window.__komystAuthTrace.length > 40) window.__komystAuthTrace.shift();
   // Keep a small local-only breadcrumb trail across callback redirects/reloads.
   // Persist only this explicit allowlist; bearer material and session fingerprints
   // are intentionally excluded even though the in-memory trace has richer fields.
   try {
-    const key = 'tradutor_auth_event_trace_v1';
+    const key = 'komyst_auth_event_trace_v1';
     const persisted = JSON.parse(localStorage.getItem(key) || '[]');
     const entry = {event: safe.event, at: safe.at, seq: safe.seq};
     for (const field of ['status', 'code', 'name', 'authenticated', 'source', 'elapsed_ms', 'reason', 'destination', 'auth_event', 'caller', 'request_trace_id']) {
@@ -251,7 +251,7 @@ function authTrace(event, fields = {}) {
     const next = (Array.isArray(persisted) ? persisted : []).concat(entry).slice(-40);
     localStorage.setItem(key, JSON.stringify(next));
   } catch (_) { /* storage is optional; never block authentication */ }
-  if (window.__tradutorAuthDiagnosticsEnabled === true) {
+  if (window.__komystAuthDiagnosticsEnabled === true) {
     void fetch('/api/internal/auth-diagnostics', {
       method: 'POST', cache: 'no-store', headers: {'content-type': 'application/json'},
       body: JSON.stringify(safe),
@@ -259,9 +259,9 @@ function authTrace(event, fields = {}) {
   }
 }
 
-authTrace('AUTH_UI_BUILD_LOADED', {build_id: window.__tradutorAuthBuildId});
+authTrace('AUTH_UI_BUILD_LOADED', {build_id: window.__komystAuthBuildId});
 
-if (window.__tradutorAuthDiagnosticsEnabled === true) {
+if (window.__komystAuthDiagnosticsEnabled === true) {
   document.addEventListener('click', (event) => {
     const button = event.target?.closest?.('#authSubmit, #authOpenBtn, #authRecoveryLink, [data-authmode-link="login"]');
     if (!button) return;
@@ -286,9 +286,9 @@ document.addEventListener('submit', (event) => {
   if (!form) return;
   event.preventDefault();
   authTrace('LOGIN_SUBMIT_DEFAULT_PREVENTED', {source: 'auth_capture'});
-  const handler = window.__tradutorCanonicalAuthSubmit;
-  if (typeof handler === 'function' && !event.__tradutorCanonicalDispatched) {
-    event.__tradutorCanonicalDispatched = true;
+  const handler = window.__komystCanonicalAuthSubmit;
+  if (typeof handler === 'function' && !event.__komystCanonicalDispatched) {
+    event.__komystCanonicalDispatched = true;
     void handler(event);
   }
 }, true);
@@ -297,7 +297,7 @@ document.addEventListener('submit', (event) => {
 // fails.  The concrete implementation is installed later, but this stable
 // wrapper is available immediately after the module is evaluated and can
 // retry the bootstrap on an explicit user action.
-window.__tradutorCanonicalAuthSubmit = async (event) => {
+window.__komystCanonicalAuthSubmit = async (event) => {
   event?.preventDefault?.();
   if (canonicalAuthSubmitImpl) return canonicalAuthSubmitImpl(event);
   authTrace('LOGIN_HANDLER_ENTERED', {source: AUTH_HANDLER_ID, reason: 'bootstrap_retry'});
@@ -321,14 +321,14 @@ window.__tradutorCanonicalAuthSubmit = async (event) => {
   }
 };
 
-window.__tradutorAuthTraceEvent = authTrace;
+window.__komystAuthTraceEvent = authTrace;
 
 function recoveryIntentSnapshot() {
   let marker = false;
   let pendingAt = 0;
   try {
-    marker = sessionStorage.getItem('yomu_recovery_intent') === '1'
-      || localStorage.getItem('yomu_recovery_intent') === '1';
+    marker = sessionStorage.getItem('komyst_recovery_intent') === '1'
+      || localStorage.getItem('komyst_recovery_intent') === '1';
     pendingAt = Number(sessionStorage.getItem(RECOVERY_PENDING_KEY)
       || localStorage.getItem(RECOVERY_DURABLE_KEY) || 0);
   } catch (_) { /* optional */ }
@@ -359,7 +359,7 @@ function resolveAuthDestination({session = null, recoveryIntent = recoveryIntent
 
 // Development-only durable recovery diagnostics.  Keep this deliberately
 // narrow: no email, password, tokens, headers, or serialized Error objects.
-const AUTH_RECOVERY_DIAGNOSTIC_KEY = 'tradutor_auth_password_recovery_last_error';
+const AUTH_RECOVERY_DIAGNOSTIC_KEY = 'komyst_auth_password_recovery_last_error';
 function sanitizeRecoveryMessage(value) {
   return String(value ?? '')
     .replace(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi, '[email]')
@@ -377,19 +377,19 @@ function persistRecoveryDiagnostic(error, outcome = 'error') {
       message: error ? sanitizeRecoveryMessage(error.message) : (outcome === 'success' ? null : 'recovery_failed'),
     };
     localStorage.setItem(AUTH_RECOVERY_DIAGNOSTIC_KEY, JSON.stringify(record));
-    window.__tradutorAuthRecoveryDiagnostic = record;
+    window.__komystAuthRecoveryDiagnostic = record;
   } catch (_) { /* diagnostics must never affect auth */ }
 }
 function clearRecoveryDiagnostic() {
   try {
     localStorage.removeItem(AUTH_RECOVERY_DIAGNOSTIC_KEY);
-    window.__tradutorAuthRecoveryDiagnostic = null;
+    window.__komystAuthRecoveryDiagnostic = null;
   } catch (_) { /* diagnostics must never affect auth */ }
 }
-window.__tradutorAuthRecoveryDiagnosticKey = AUTH_RECOVERY_DIAGNOSTIC_KEY;
+window.__komystAuthRecoveryDiagnosticKey = AUTH_RECOVERY_DIAGNOSTIC_KEY;
 let authPresentation = null;
 const presentationVisualTestDisabled = (
-  window.__tradutorVisualTestEnabled === true
+  window.__komystVisualTestEnabled === true
   && ['127.0.0.1', 'localhost', '::1'].includes(window.location.hostname)
   && new URLSearchParams(window.location.search).get('visual_auth_without_presentation') === '1'
 );
@@ -399,7 +399,7 @@ if (presentationVisualTestDisabled) {
   void import('./auth_presentation.js')
     .then(({initAuthPresentation}) => {
       authPresentation = initAuthPresentation({root: document, windowRef: window});
-      authPresentation.reflectAuthState(window.__tradutorAuthState);
+      authPresentation.reflectAuthState(window.__komystAuthState);
     })
     .catch(() => {
       authTrace('auth_presentation_unavailable', {code: 'optional_module_unavailable'});
@@ -407,9 +407,9 @@ if (presentationVisualTestDisabled) {
 }
 
 function setAuthState(state, userId = '') {
-  window.__tradutorAuthState = state;
-  window.__tradutorCommunityUserId = state === 'authenticated' ? String(userId || '') : '';
-  window.__tradutorAuthStore = {
+  window.__komystAuthState = state;
+  window.__komystCommunityUserId = state === 'authenticated' ? String(userId || '') : '';
+  window.__komystAuthStore = {
     status: state,
     authenticated: state === 'authenticated',
     user_id: state === 'authenticated' ? String(userId || '') : '',
@@ -424,14 +424,14 @@ function setAuthState(state, userId = '') {
 // authoritative state back into the auth shell exactly once; otherwise the
 // login error surface remains visible even though the app is authenticated.
 let lateAuthShellGeneration = 0;
-window.addEventListener('tradutor-control-plane-updated', event => {
+window.addEventListener('komyst-control-plane-updated', event => {
   const snapshot = event?.detail?.state || {};
   if (snapshot.authenticated !== true) return;
-  const generation = Number(window.__yomuAuthGeneration || 0);
+  const generation = Number(window.__komystAuthGeneration || 0);
   authTrace('AUTH_UI_RECONCILE_RECEIVED', {
     authenticated: true, generation, reason: 'control_plane_authenticated',
   });
-  if (window.__tradutorAuthState === 'authenticated' && lateAuthShellGeneration === generation) {
+  if (window.__komystAuthState === 'authenticated' && lateAuthShellGeneration === generation) {
     authTrace('AUTH_UI_RECONCILE_IGNORED', {authenticated: true, generation, reason: 'already_authenticated'});
     return;
   }
@@ -440,8 +440,8 @@ window.addEventListener('tradutor-control-plane-updated', event => {
     return;
   }
   lateAuthShellGeneration = generation || lateAuthShellGeneration + 1;
-  window.__tradutorCommunityAuthenticated = true;
-  setAuthState('authenticated', snapshot.user_id || window.__tradutorCommunityUserId || '');
+  window.__komystCommunityAuthenticated = true;
+  setAuthState('authenticated', snapshot.user_id || window.__komystCommunityUserId || '');
   authTrace('AUTH_UI_RECONCILE_APPLY', {authenticated: true, generation: lateAuthShellGeneration, reason: 'late_authoritative_auth'});
   renderAuthShell('authenticated');
   authTrace('AUTH_UI_RECONCILE_RESULT', {authenticated: true, generation: lateAuthShellGeneration, reason: 'shell_authenticated'});
@@ -450,7 +450,7 @@ window.addEventListener('tradutor-control-plane-updated', event => {
 function startAuthHeartbeat() {
   if (authHeartbeatTimer) return;
   authHeartbeatTimer = window.setInterval(async () => {
-    if (authHeartbeatBusy || window.__tradutorAuthState !== 'authenticated' || !authApi) return;
+    if (authHeartbeatBusy || window.__komystAuthState !== 'authenticated' || !authApi) return;
     authHeartbeatBusy = true;
     try {
       const token = await authApi.currentAccessToken();
@@ -471,7 +471,7 @@ function renderAuthShell(state, message = '') {
   area.hidden = false;
   // Keep the verified bearer during the authenticated shell transition.  Community
   // requests run immediately after login and must see the current provider token.
-  if (state !== 'authenticated') window.__tradutorAccessToken = '';
+  if (state !== 'authenticated') window.__komystAccessToken = '';
   openBtn.hidden = state === 'auth_loading' || state === 'authenticated';
   logoutBtn.hidden = state !== 'authenticated';
   if (state === 'auth_loading') status.textContent = 'Verificando sessão…';
@@ -504,8 +504,8 @@ function withTimeout(promise, timeoutMs = AUTH_BOOTSTRAP_TIMEOUT_MS) {
 
 async function syncBackendSession(accessToken = '', {signal, caller = 'unknown'} = {}) {
   const hadAuthenticatedSession = Boolean(
-    window.__tradutorCommunityAuthenticated
-    || window.__tradutorAuthState === 'authenticated'
+    window.__komystCommunityAuthenticated
+    || window.__komystAuthState === 'authenticated'
     || accessToken
   );
   const headers = {};
@@ -513,13 +513,13 @@ async function syncBackendSession(accessToken = '', {signal, caller = 'unknown'}
   try {
     if (accessToken) authTrace('local_session_exchange_started', {source: 'bearer'});
     authTrace('canonical_session_request', {source: accessToken ? 'bearer' : 'cookie'});
-    headers['X-Yomu-Auth-Caller'] = String(caller || 'unknown').slice(0, 60);
-    headers['X-Yomu-Window-Role'] = 'auth';
+    headers['X-Komyst-Auth-Caller'] = String(caller || 'unknown').slice(0, 60);
+    headers['X-Komyst-Window-Role'] = 'auth';
     const fingerprint = accessToken ? await fingerprintSession(accessToken) : '';
     const requestTraceId = (window.crypto?.randomUUID?.() || `auth-${Date.now()}-${authDiagnosticSequence}`)
       .replace(/[^A-Za-z0-9_.-]/g, '').slice(0, 80);
-    headers['X-Yomu-Request-Trace'] = requestTraceId;
-    if (fingerprint) headers['X-Yomu-Session-Fingerprint'] = fingerprint;
+    headers['X-Komyst-Request-Trace'] = requestTraceId;
+    if (fingerprint) headers['X-Komyst-Session-Fingerprint'] = fingerprint;
     authTrace('CANONICAL_CALL_DISPATCHED', {
       caller: String(caller || 'unknown').slice(0, 60),
       window_role: 'auth',
@@ -553,11 +553,11 @@ async function syncBackendSession(accessToken = '', {signal, caller = 'unknown'}
       }
       if (accessToken) authTrace('local_session_exchange_finished', {status: response.status, authenticated: true, source: 'bearer'});
       setAuthState('authenticated', payload.user_id);
-      window.__tradutorCommunityAuthenticated = true;
+      window.__komystCommunityAuthenticated = true;
       authTrace('canonical_session_confirmed', {authenticated: true});
       authTrace('backend_session_sync_completed', {authenticated: true, destination: 'AUTHENTICATED_APP'});
       renderAuthShell('authenticated');
-      window.dispatchEvent(new CustomEvent('tradutor-auth-changed', {
+      window.dispatchEvent(new CustomEvent('komyst-auth-changed', {
         detail: {authenticated: true, user_id: String(payload.user_id || ''), state: 'authenticated'},
       }));
       return payload;
@@ -569,7 +569,7 @@ async function syncBackendSession(accessToken = '', {signal, caller = 'unknown'}
       // A secondary API failure is not proof that the Supabase session is gone.
       // Retain the authenticated shell unless canonical validation explicitly
       // rejects the bearer with 401; record the degraded check for diagnosis.
-      setAuthState('authenticated', window.__tradutorCommunityUserId || '');
+      setAuthState('authenticated', window.__komystCommunityUserId || '');
       renderAuthShell('authenticated');
       authTrace('canonical_session_check_degraded', {
         status: response.status, authenticated: true, caller: String(caller || 'unknown').slice(0, 60),
@@ -578,16 +578,16 @@ async function syncBackendSession(accessToken = '', {signal, caller = 'unknown'}
       return payload;
     } else if (response.status === 403) setAuthState('auth_error');
     else setAuthState('unauthenticated');
-    window.__tradutorCommunityAuthenticated = false;
-    renderAuthShell(window.__tradutorAuthState, payload.message || '');
+    window.__komystCommunityAuthenticated = false;
+    renderAuthShell(window.__komystAuthState, payload.message || '');
     authTrace('canonical_session_rejected', {status: response.status, code: payload.reason_code || 'authentication_required', authenticated: false});
-    window.dispatchEvent(new CustomEvent('tradutor-auth-changed', {
-      detail: {authenticated: false, state: window.__tradutorAuthState},
+    window.dispatchEvent(new CustomEvent('komyst-auth-changed', {
+      detail: {authenticated: false, state: window.__komystAuthState},
     }));
     return payload;
   } catch (_) {
     if (hadAuthenticatedSession) {
-      setAuthState('authenticated', window.__tradutorCommunityUserId || '');
+      setAuthState('authenticated', window.__komystCommunityUserId || '');
       renderAuthShell('authenticated');
       authTrace('canonical_session_check_degraded', {
         authenticated: true, caller: String(caller || 'unknown').slice(0, 60),
@@ -596,10 +596,10 @@ async function syncBackendSession(accessToken = '', {signal, caller = 'unknown'}
       return null;
     }
     setAuthState('auth_error');
-    window.__tradutorCommunityAuthenticated = false;
+    window.__komystCommunityAuthenticated = false;
     renderAuthShell('auth_error', 'Não foi possível verificar sua sessão.');
     authTrace('canonical_session_error', {code: 'network_or_timeout'});
-    window.dispatchEvent(new CustomEvent('tradutor-auth-changed', {
+    window.dispatchEvent(new CustomEvent('komyst-auth-changed', {
       detail: {authenticated: false, state: 'auth_error'},
     }));
     return null;
@@ -634,7 +634,7 @@ async function establishCanonicalSession(signal) {
 }
 
 async function completeLoginFlow(email, password, signal) {
-  window.__tradutorLoginStage = 'supabase_sign_in';
+  window.__komystLoginStage = 'supabase_sign_in';
   authTrace('LOGIN_HANDLER_STARTED', {source: AUTH_HANDLER_ID});
     authTrace('SIGN_IN_WITH_PASSWORD_STARTED', {source: 'supabase_auth'});
     authTrace('SIGN_IN_STARTED', {source: 'supabase_auth'});
@@ -655,7 +655,7 @@ async function completeLoginFlow(email, password, signal) {
     authTrace('SIGN_IN_SUCCESS', {source: 'supabase_auth'});
   authTrace('login_request_finished', {source: AUTH_HANDLER_ID});
   authTrace('canonical_session_refresh_started', {source: AUTH_HANDLER_ID});
-  window.__tradutorLoginStage = 'canonical_session';
+  window.__komystLoginStage = 'canonical_session';
   const canonical = await establishCanonicalSession(signal);
   authTrace('canonical_session_refresh_finished', {authenticated: true, source: AUTH_HANDLER_ID});
   if (!canonical?.authenticated) {
@@ -664,7 +664,7 @@ async function completeLoginFlow(email, password, signal) {
     throw error;
   }
   authTrace('auth_state_updated', {authenticated: true, source: AUTH_HANDLER_ID});
-  window.__tradutorAccessToken = await authApi.currentAccessToken();
+  window.__komystAccessToken = await authApi.currentAccessToken();
   explicitLoginSubmissionInProgress = false;
   requireExplicitLogin = false;
   renderAuthShell('authenticated');
@@ -936,9 +936,9 @@ function renderSession(session, authEvent = '') {
   // became a loop every 2 s. Same user, already confirmed: keep the fresh token,
   // change nothing else.
   if (session?.access_token && (authEvent === 'SIGNED_IN' || authEvent === 'TOKEN_REFRESHED')
-      && window.__tradutorAuthState === 'authenticated' && window.__tradutorCommunityAuthenticated === true
-      && String(session.user?.id || '') && String(session.user?.id || '') === String(window.__tradutorCommunityUserId || '')) {
-    window.__tradutorAccessToken = session.access_token;
+      && window.__komystAuthState === 'authenticated' && window.__komystCommunityAuthenticated === true
+      && String(session.user?.id || '') && String(session.user?.id || '') === String(window.__komystCommunityUserId || '')) {
+    window.__komystAccessToken = session.access_token;
     authTrace('sdk_session_unchanged', {auth_event: authEvent, authenticated: true});
     return;
   }
@@ -960,10 +960,10 @@ function renderSession(session, authEvent = '') {
       session_present_before_login: Boolean(session),
       reason: 'recovery_session_requires_explicit_login',
     });
-    window.__tradutorAccessToken = '';
+    window.__komystAccessToken = '';
     showLoginSurface();
     setAuthState('unauthenticated');
-    window.__tradutorCommunityAuthenticated = false;
+    window.__komystCommunityAuthenticated = false;
     renderAuthShell('unauthenticated');
     return;
   }
@@ -975,7 +975,7 @@ function renderSession(session, authEvent = '') {
   // authoritative.  An explicit SIGNED_OUT event still clears the UI.
   if (authEvent === 'PASSWORD_RECOVERY') {
     isPasswordRecoveryFlow = true;
-    try { sessionStorage.setItem('yomu_recovery_intent', '1'); } catch (_) { /* optional */ }
+    try { sessionStorage.setItem('komyst_recovery_intent', '1'); } catch (_) { /* optional */ }
     showLoginSurface();
     showRecoveryView('password');
     setAuthState('unauthenticated');
@@ -984,7 +984,7 @@ function renderSession(session, authEvent = '') {
   }
   if (recoveryInvalidIntent) {
     recoveryInvalidIntent = false;
-    try { sessionStorage.removeItem('yomu_recovery_invalid'); } catch (_) { /* optional */ }
+    try { sessionStorage.removeItem('komyst_recovery_invalid'); } catch (_) { /* optional */ }
     showLoginSurface();
     showRecoveryView('invalid');
     setAuthState('unauthenticated');
@@ -1013,7 +1013,7 @@ function renderSession(session, authEvent = '') {
   // the red error state for an actual provider/network failure.
   if (!session && (authEvent === 'INITIAL_SESSION' || authEvent === 'INITIAL_SESSION_RESTORED')) {
     setAuthState('unauthenticated');
-    window.__tradutorCommunityAuthenticated = false;
+    window.__komystCommunityAuthenticated = false;
     renderAuthShell('unauthenticated');
     return;
   }
@@ -1026,7 +1026,7 @@ function renderSession(session, authEvent = '') {
       reason: 'provider_session_absent',
     });
     setAuthState('unauthenticated');
-    window.__tradutorCommunityAuthenticated = false;
+    window.__komystCommunityAuthenticated = false;
     renderAuthShell('unauthenticated');
     return;
   }
@@ -1038,19 +1038,19 @@ function renderSession(session, authEvent = '') {
     // tab sits idle authenticated - falls through to the immediate clear below
     // instead of being deferred behind a stale bearer re-check.
     authTrace('sdk_signout_deferred', {authenticated: true, source: 'memory_session'});
-    if (window.__tradutorAccessToken) {
-      void syncBackendSession(window.__tradutorAccessToken, {caller: 'auth-ui-sdk-signout-recovery'});
+    if (window.__komystAccessToken) {
+      void syncBackendSession(window.__komystAccessToken, {caller: 'auth-ui-sdk-signout-recovery'});
     }
     return;
   }
-  window.__tradutorAccessToken = session?.access_token || '';
+  window.__komystAccessToken = session?.access_token || '';
   authTrace('sdk_session_changed', {
     authenticated: Boolean(session), auth_event: authEvent || 'NONE',
     source: 'supabase_on_auth_state_change',
   });
   startAuthHeartbeat();
   setAuthState('auth_loading');
-  const displayName = String(window.__tradutorDisplayName || '').trim();
+  const displayName = String(window.__komystDisplayName || '').trim();
   if (session) {
     // Account identity comes from the authenticated session, not a social profile.
     status.textContent = displayName || session.user?.email || 'Conta';
@@ -1064,12 +1064,12 @@ function renderSession(session, authEvent = '') {
       return;
     }
   } else {
-    window.__tradutorDisplayName = '';
+    window.__komystDisplayName = '';
     status.textContent = 'visitante';
     openBtn.hidden = false;
     logoutBtn.hidden = true;
   }
-  void syncBackendSession(window.__tradutorAccessToken, {caller: 'auth-ui-sdk-session-change'});
+  void syncBackendSession(window.__komystAccessToken, {caller: 'auth-ui-sdk-session-change'});
 }
 
 function initRealProductPreview() {
@@ -1129,11 +1129,11 @@ function clearRecoveryContext({cleanUrl = true} = {}) {
   recoveryView = 'form';
   requireExplicitLogin = false;
   try {
-    sessionStorage.removeItem('yomu_recovery_intent');
+    sessionStorage.removeItem('komyst_recovery_intent');
     sessionStorage.removeItem(RECOVERY_PENDING_KEY);
     sessionStorage.removeItem(DESKTOP_HANDOFF_KEY);
-    sessionStorage.removeItem('yomu_recovery_invalid');
-    localStorage.removeItem('yomu_recovery_intent');
+    sessionStorage.removeItem('komyst_recovery_invalid');
+    localStorage.removeItem('komyst_recovery_intent');
     localStorage.removeItem(RECOVERY_DURABLE_KEY);
   } catch (_) { /* optional */ }
   desktopHandoffState.pending = false;
@@ -1156,7 +1156,7 @@ function clearRecoveryContext({cleanUrl = true} = {}) {
 
 function isDesktopRuntime() {
   return new URLSearchParams(window.location.search || '').get('desktop') === '1'
-    || window.__yomuDesktopRuntime === true;
+    || window.__komystDesktopRuntime === true;
 }
 
 async function startDesktopRecoveryHandoff() {
@@ -1221,7 +1221,7 @@ async function pollDesktopRecoveryHandoff() {
     desktopHandoffState.polling = false;
     publishDesktopHandoffState();
     if (desktopHandoffPollTimer) { window.clearInterval(desktopHandoffPollTimer); desktopHandoffPollTimer = 0; }
-    sessionStorage.setItem('yomu_recovery_intent', '1');
+    sessionStorage.setItem('komyst_recovery_intent', '1');
     if (typeof authApi.exchangeCodeForSession !== 'function') throw new Error('auth_exchange_unavailable');
     await withTimeout(authApi.exchangeCodeForSession(code), AUTH_LOGIN_TIMEOUT_MS);
     isPasswordRecoveryFlow = true;
@@ -1263,13 +1263,13 @@ function handleRecoverySuccessEnter() {
   showLoginSurface();
   setMode('login');
   setAuthState('unauthenticated');
-  window.__tradutorCommunityAuthenticated = false;
+  window.__komystCommunityAuthenticated = false;
   renderAuthShell('unauthenticated');
   authTrace('recovery_success_exit_to_login', {destination: 'LOGIN'});
 }
 
 async function init() {
-  window.__tradutorAuthInitStarted = true;
+  window.__komystAuthInitStarted = true;
   initRealProductPreview();
   const visualParams = new URLSearchParams(window.location.search || '');
   const debugState = visualParams.get('auth_debug_state');
@@ -1278,7 +1278,7 @@ async function init() {
     applyRecoveryFixture(debugState);
     return;
   }
-  const visualReducedMotion = window.__tradutorVisualTestEnabled === true
+  const visualReducedMotion = window.__komystVisualTestEnabled === true
     && ['127.0.0.1', 'localhost', '::1'].includes(window.location.hostname)
     && visualParams.get('visual_auth_reduced_motion') === '1';
   if (visualReducedMotion) document.documentElement.dataset.visualReducedMotion = '1';
@@ -1343,12 +1343,12 @@ async function init() {
       status: Number(error?.status || 0),
       source: AUTH_HANDLER_ID,
     });
-    window.__tradutorAuthBootstrapFailureStage = bootstrapStage;
+    window.__komystAuthBootstrapFailureStage = bootstrapStage;
     setAuthState('auth_error');
-    window.__tradutorCommunityAuthenticated = false;
+    window.__komystCommunityAuthenticated = false;
     renderAuthShell('auth_error');
     setError('Não foi possível verificar sua sessão.');
-    window.dispatchEvent(new CustomEvent('tradutor-auth-changed', {
+    window.dispatchEvent(new CustomEvent('komyst-auth-changed', {
       detail: {authenticated: false, state: 'auth_error'},
     }));
     return;
@@ -1372,14 +1372,14 @@ async function init() {
   }
   if (!client) {
     // Local-session provider: resolve the HttpOnly cookie through the backend.
-    window.__tradutorAccessToken = '';
+    window.__komystAccessToken = '';
     setAuthState('auth_loading');
     await syncBackendSession('', {caller: 'auth-ui-explicit-refresh'});
     return;
   }
   startDesktopRecoveryPolling();
-  window.__tradutorGetCanonicalAccessToken = authApi.getCanonicalAccessToken;
-  if (window.__tradutorAuthHandlersBound) return;
+  window.__komystGetCanonicalAccessToken = authApi.getCanonicalAccessToken;
+  if (window.__komystAuthHandlersBound) return;
   document.querySelectorAll('.auth-tab').forEach((tab) => {
     tab.addEventListener('click', () => setMode(tab.dataset.authmode));
   });
@@ -1409,11 +1409,11 @@ async function init() {
     try { await withTimeout(authApi.signOut(), AUTH_BOOTSTRAP_TIMEOUT_MS); } catch (_) { /* local cleanup below is authoritative */ }
     clearRecoveryContext();
     clearAuthCredentialFields();
-    window.__tradutorAccessToken = '';
-    window.__tradutorCommunityAuthenticated = false;
+    window.__komystAccessToken = '';
+    window.__komystCommunityAuthenticated = false;
     setAuthState('unauthenticated');
     renderAuthShell('unauthenticated');
-    window.dispatchEvent(new CustomEvent('tradutor-auth-changed', {
+    window.dispatchEvent(new CustomEvent('komyst-auth-changed', {
       detail: {authenticated: false, state: 'unauthenticated'},
     }));
   });
@@ -1459,8 +1459,8 @@ async function init() {
           isPasswordRecoveryFlow = false;
           authTrace('RECOVERY_INTENT_CLEANUP_STARTED', {source: AUTH_HANDLER_ID});
           try {
-            sessionStorage.removeItem('yomu_recovery_intent'); sessionStorage.removeItem(RECOVERY_PENDING_KEY);
-            localStorage.removeItem('yomu_recovery_intent'); localStorage.removeItem(RECOVERY_DURABLE_KEY);
+            sessionStorage.removeItem('komyst_recovery_intent'); sessionStorage.removeItem(RECOVERY_PENDING_KEY);
+            localStorage.removeItem('komyst_recovery_intent'); localStorage.removeItem(RECOVERY_DURABLE_KEY);
           } catch (_) { /* optional */ }
           authTrace('RECOVERY_INTENT_CLEANUP_COMPLETED', {source: AUTH_HANDLER_ID});
           showRecoveryView('success');
@@ -1553,7 +1553,7 @@ async function init() {
     }
     const attemptId = ++loginAttemptCounter;
     const controller = new AbortController();
-    window.__tradutorActiveLoginController = controller;
+    window.__komystActiveLoginController = controller;
     const timeoutId = setTimeout(() => controller.abort(), AUTH_LOGIN_TIMEOUT_MS);
     // Keep a UI-level escape hatch independent of the promise returned by a
     // provider SDK.  A misbehaving thenable must never leave the button locked.
@@ -1562,7 +1562,7 @@ async function init() {
       controller.abort();
       const message = 'O login demorou para responder. Tente novamente.';
       setAuthState('auth_timeout');
-      window.__tradutorCommunityAuthenticated = false;
+      window.__komystCommunityAuthenticated = false;
       renderAuthShell('auth_error', message);
       setError(message);
       recoverLoginFormAfterFailure('timeout');
@@ -1576,7 +1576,7 @@ async function init() {
     setAuthState('auth_submitting');
     explicitLoginSubmissionInProgress = mode !== 'signup';
     authTrace('LOGIN_HANDLER_ENTERED', {source: AUTH_HANDLER_ID});
-    authTrace('LOGIN_SUBMIT_CLICKED', {source: AUTH_HANDLER_ID, session_present_before_login: Boolean(window.__tradutorAccessToken)});
+    authTrace('LOGIN_SUBMIT_CLICKED', {source: AUTH_HANDLER_ID, session_present_before_login: Boolean(window.__komystAccessToken)});
     authTrace('login_submit_received', {source: AUTH_HANDLER_ID});
     authTrace('login_request_started', {source: AUTH_HANDLER_ID});
     try {
@@ -1595,13 +1595,13 @@ async function init() {
         } catch (signInError) {
           controller.abort();
           if (signInError?.message === 'auth_bootstrap_timeout') {
-            signInError.code = `${window.__tradutorLoginStage || 'supabase_sign_in'}_timeout`;
+            signInError.code = `${window.__komystLoginStage || 'supabase_sign_in'}_timeout`;
             authTrace('sign_in_timeout', {code: signInError.code});
           }
           throw signInError;
         }
         hideLoginSurface();
-        if (typeof window.__tradutorToast === 'function') window.__tradutorToast('Login realizado.', 'ok');
+        if (typeof window.__komystToast === 'function') window.__komystToast('Login realizado.', 'ok');
         authTrace('auth_surface_hidden', {authenticated: true, source: AUTH_HANDLER_ID});
         authTrace('login_completed', {authenticated: true});
       }
@@ -1609,7 +1609,7 @@ async function init() {
       if (attemptId !== loginAttemptCounter) return;
       // A stale confirmation failure must not put the UI back into auth_error
       // after a newer authoritative control-plane event opened the shell.
-      if (window.__tradutorAuthState === 'authenticated' || window.__tradutorCommunityAuthenticated === true) {
+      if (window.__komystAuthState === 'authenticated' || window.__komystCommunityAuthenticated === true) {
         authTrace('LOGIN_FAILURE_IGNORED_AFTER_AUTH_RECONCILE', {authenticated: true, reason: 'late_session_failure'});
         return;
       }
@@ -1639,7 +1639,7 @@ async function init() {
             : status >= 500 ? 'Não foi possível concluir o login.'
               : 'Não foi possível conectar ao serviço de autenticação.';
       setAuthState(controller.signal.aborted ? 'auth_timeout' : status === 401 ? 'invalid_credentials' : 'auth_error');
-      window.__tradutorCommunityAuthenticated = false;
+      window.__komystCommunityAuthenticated = false;
       renderAuthShell('auth_error', message);
       setError(message);
       recoverLoginFormAfterFailure(status === 400 || status === 401 ? 'invalid_credentials' : 'request_failed');
@@ -1649,7 +1649,7 @@ async function init() {
       clearTimeout(watchdogId);
       explicitLoginSubmissionInProgress = false;
       if (ownLoginAttemptId === attemptId) ownLoginAttemptId = 0;
-      if (window.__tradutorActiveLoginController === controller) window.__tradutorActiveLoginController = null;
+      if (window.__komystActiveLoginController === controller) window.__komystActiveLoginController = null;
       if (attemptId === loginAttemptCounter) {
         submit.dataset.busy = '';
         setSubmitLoading(submit, false, mode === 'signup' ? 'Criar conta' : 'Entrar no painel');
@@ -1659,7 +1659,7 @@ async function init() {
     }
   }
   canonicalAuthSubmitImpl = handleAuthSubmit;
-  window.__tradutorAuthHandlersBound = true;
+  window.__komystAuthHandlersBound = true;
   authTrace('AUTH_HANDLER_BIND_READY', {source: AUTH_HANDLER_ID});
   $('#authTogglePassword')?.addEventListener('click', () => {
     const input = $('#authPassword');
@@ -1699,16 +1699,16 @@ async function init() {
   setMode('login');
   // Keeps token fresh across login, logout and SDK auto-refresh.
   await withTimeout(authApi.onAuthChange((session, event) => renderSession(session, event)));
-  window.__tradutorAuthInitCompleted = true;
+  window.__komystAuthInitCompleted = true;
 }
 
 authInitInFlight = init();
 authInitInFlight.catch(() => {
   setAuthState('auth_error');
-  window.__tradutorCommunityAuthenticated = false;
+  window.__komystCommunityAuthenticated = false;
   renderAuthShell('auth_error');
   setError('Não foi possível verificar sua sessão.');
-  window.dispatchEvent(new CustomEvent('tradutor-auth-changed', {
+  window.dispatchEvent(new CustomEvent('komyst-auth-changed', {
     detail: {authenticated: false, state: 'auth_error'},
   }));
 });

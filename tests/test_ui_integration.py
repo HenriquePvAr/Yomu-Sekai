@@ -10,10 +10,10 @@ import tempfile
 from pathlib import Path
 from unittest.mock import patch
 
-from yomu.ui.ui_helpers import build_run_command, suggest_chapter_details
-from yomu.runtime.job_store import JobStore
-from yomu.ui.ui_history import UIHistoryStore
-from yomu.ui.ui_bridge import UiBridge
+from komyst.ui.ui_helpers import build_run_command, suggest_chapter_details
+from komyst.runtime.job_store import JobStore
+from komyst.ui.ui_history import UIHistoryStore
+from komyst.ui.ui_bridge import UiBridge
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -25,19 +25,19 @@ URL = (
 
 class UiIntegrationTests(unittest.TestCase):
     def test_reference_shell_is_split_from_python(self):
-        app_source = (ROOT / "yomu/ui/app.py").read_text(encoding="utf-8")
+        app_source = (ROOT / "komyst/ui/app.py").read_text(encoding="utf-8")
         self.assertTrue((ROOT / "ui" / "ui_shell.html").is_file())
-        self.assertTrue((ROOT / "static" / "tradutor_ui.css").is_file())
-        self.assertTrue((ROOT / "static" / "tradutor_ui.js").is_file())
+        self.assertTrue((ROOT / "static" / "komyst_ui.css").is_file())
+        self.assertTrue((ROOT / "static" / "komyst_ui.js").is_file())
         self.assertNotIn("<section class=", app_source)
 
-    def test_tradutor_asset_is_versioned_to_avoid_stale_browser_cache(self):
-        source = (ROOT / "yomu/ui/app.py").read_text(encoding="utf-8")
+    def test_komyst_asset_is_versioned_to_avoid_stale_browser_cache(self):
+        source = (ROOT / "komyst/ui/app.py").read_text(encoding="utf-8")
         for marker in (
-            "_asset_url(TRADUTOR_UI_ASSET)",
+            "_asset_url(KOMYST_UI_ASSET)",
             "_asset_url(AUTH_UI_ASSET)",
             "_asset_url(SOCIAL_COMMUNITY_ASSET)",
-            "_asset_url(TRADUTOR_CSS_ASSET)",
+            "_asset_url(KOMYST_CSS_ASSET)",
         ):
             self.assertIn(marker, source, marker)
 
@@ -75,7 +75,7 @@ class UiIntegrationTests(unittest.TestCase):
         self.assertNotIn("--max-images", command)
 
     def test_frontend_contains_no_pipeline_or_queue_simulation(self):
-        source = (ROOT / "static" / "tradutor_ui.js").read_text(encoding="utf-8")
+        source = (ROOT / "static" / "komyst_ui.js").read_text(encoding="utf-8")
         forbidden = (
             "simulateQueueItem",
             "runStage(",
@@ -87,12 +87,12 @@ class UiIntegrationTests(unittest.TestCase):
             self.assertNotIn(marker, source)
 
     def test_frontend_labels_review_required_status(self):
-        source = (ROOT / "static" / "tradutor_ui.js").read_text(encoding="utf-8")
+        source = (ROOT / "static" / "komyst_ui.js").read_text(encoding="utf-8")
         self.assertIn("review_required", source)
         self.assertIn("concluído — revisão recomendada", source)
 
     def test_history_publication_is_explicit_and_metadata_driven(self):
-        source = (ROOT / "static" / "tradutor_ui.js").read_text(encoding="utf-8")
+        source = (ROOT / "static" / "komyst_ui.js").read_text(encoding="utf-8")
         shell = (ROOT / "ui" / "ui_shell.html").read_text(encoding="utf-8")
         for marker in (
             "publicationEligibility",
@@ -108,7 +108,7 @@ class UiIntegrationTests(unittest.TestCase):
         self.assertNotIn("window.prompt", source)
 
     def test_publication_click_has_visible_validation_trace_and_finally(self):
-        source = (ROOT / "static" / "tradutor_ui.js").read_text(encoding="utf-8")
+        source = (ROOT / "static" / "komyst_ui.js").read_text(encoding="utf-8")
         for marker in (
             "publish_click_received",
             "publication_request_started",
@@ -118,13 +118,13 @@ class UiIntegrationTests(unittest.TestCase):
             "loading_cleared",
             "validatePublicationForm",
             "publicationError",
-            "X-Tradutor-Correlation-ID",
+            "X-Komyst-Correlation-ID",
         ):
             self.assertIn(marker, source)
         self.assertNotIn("if (!$('#publicationConfirm')?.checked) return;", source)
 
     def test_publication_requires_distinct_publish_consent_in_ui_payload(self):
-        source = (ROOT / "static" / "tradutor_ui.js").read_text(encoding="utf-8")
+        source = (ROOT / "static" / "komyst_ui.js").read_text(encoding="utf-8")
         shell = (ROOT / "ui" / "ui_shell.html").read_text(encoding="utf-8")
         self.assertIn('id="publicationPublishConsent" required', shell)
         self.assertIn('id="publicationSubmit" disabled', shell)
@@ -134,22 +134,22 @@ class UiIntegrationTests(unittest.TestCase):
         self.assertIn("publish_consent: $('#publicationPublishConsent')?.checked === true", source)
 
     def test_publication_waits_for_owner_and_exposes_claim_state(self):
-        source = (ROOT / "static" / "tradutor_ui.js").read_text(encoding="utf-8")
+        source = (ROOT / "static" / "komyst_ui.js").read_text(encoding="utf-8")
         self.assertIn("artifact_has_no_owner", source)
         self.assertIn("community_ownership", source)
         self.assertIn("claim_completed", source)
         self.assertIn("ownerReady", source)
 
     def test_community_feed_includes_unreviewed_published_posts(self):
-        source = (ROOT / "yomu/community/community_service.py").read_text(encoding="utf-8")
-        store = (ROOT / "yomu/community/community_store.py").read_text(encoding="utf-8")
-        authorization = (ROOT / "yomu/community/community_authorization.py").read_text(encoding="utf-8")
+        source = (ROOT / "komyst/community/community_service.py").read_text(encoding="utf-8")
+        store = (ROOT / "komyst/community/community_store.py").read_text(encoding="utf-8")
+        authorization = (ROOT / "komyst/community/community_authorization.py").read_text(encoding="utf-8")
         self.assertIn("require_moderation=False", source)
         self.assertIn("moderation_status IN (?, ?)", store)
         self.assertIn("Moderation.PENDING", authorization)
 
     def test_community_pdf_uses_authenticated_blob_flow(self):
-        source = (ROOT / "static" / "tradutor_ui.js").read_text(encoding="utf-8")
+        source = (ROOT / "static" / "komyst_ui.js").read_text(encoding="utf-8")
         for marker in (
             "openAuthenticatedCommunityPdf",
             "rawResponse",
@@ -165,19 +165,19 @@ class UiIntegrationTests(unittest.TestCase):
         self.assertNotIn('target="_blank"', source[source.index("function renderCommunityCard"):source.index("function loadRecordIntoForm")])
 
     def test_auth_surface_preserves_account_gate_without_profile_view(self):
-        source = (ROOT / "static" / "tradutor_ui.js").read_text(encoding="utf-8")
+        source = (ROOT / "static" / "komyst_ui.js").read_text(encoding="utf-8")
         for marker in ("applyCanonicalAuthSurface", "#view-community"):
             self.assertIn(marker, source, marker)
         self.assertNotIn("#view-profile", source)
         self.assertNotIn("id=\"view-profile\"", (ROOT / "ui" / "ui_shell.html").read_text(encoding="utf-8"))
 
     def test_pdf_reader_checks_private_inline_pdf_signature(self):
-        source = (ROOT / "static" / "tradutor_ui.js").read_text(encoding="utf-8")
+        source = (ROOT / "static" / "komyst_ui.js").read_text(encoding="utf-8")
         for marker in ("Content-Disposition", "Cache-Control", "invalid_pdf_headers", "invalid_pdf_signature", "%PDF-"):
             self.assertIn(marker, source, marker)
 
     def test_history_artifact_actions_are_compact_accessible_svg_controls(self):
-        source = (ROOT / "static" / "tradutor_ui.js").read_text(encoding="utf-8")
+        source = (ROOT / "static" / "komyst_ui.js").read_text(encoding="utf-8")
         self.assertIn("icon-action", source)
         self.assertIn("aria-label=", source)
         self.assertIn("class=\"sr-only\"", source)
@@ -187,7 +187,7 @@ class UiIntegrationTests(unittest.TestCase):
         self.assertIn("localDeleteModalOverlay", (ROOT / "ui" / "ui_shell.html").read_text(encoding="utf-8"))
 
     def test_community_tabs_are_functional_not_decorative(self):
-        source = (ROOT / "static" / "tradutor_ui.js").read_text(encoding="utf-8")
+        source = (ROOT / "static" / "komyst_ui.js").read_text(encoding="utf-8")
         shell = (ROOT / "ui" / "ui_shell.html").read_text(encoding="utf-8")
         for marker in (
             "data-community-tab=\"explore\"",
@@ -220,16 +220,16 @@ class UiIntegrationTests(unittest.TestCase):
         self.assertIn('id="feedbackSubmit"', common)
 
     def test_publication_payload_has_no_local_or_secret_fields(self):
-        source = (ROOT / "static" / "tradutor_ui.js").read_text(encoding="utf-8")
+        source = (ROOT / "static" / "komyst_ui.js").read_text(encoding="utf-8")
         publish = source[source.index("async function publishToCommunity"):source.index("async function loadCommunityFeed")]
         for forbidden in ("output_folder", "pdf_path", "NVIDIA_API_KEY", "cookie", "local_path"):
             self.assertNotIn(forbidden, publish, forbidden)
         self.assertIn("source_job_id", publish)
 
     def test_frontend_has_a_sanitized_source_review_confirmation_path(self):
-        source = (ROOT / "static" / "tradutor_ui.js").read_text(encoding="utf-8")
+        source = (ROOT / "static" / "komyst_ui.js").read_text(encoding="utf-8")
         shell = (ROOT / "ui" / "ui_shell.html").read_text(encoding="utf-8")
-        app_source = (ROOT / "yomu/ui/app.py").read_text(encoding="utf-8")
+        app_source = (ROOT / "komyst/ui/app.py").read_text(encoding="utf-8")
         self.assertIn("awaiting_source_review", source)
         self.assertIn("/api/ui/source/confirm", source)
         self.assertIn("data-source-candidate-id", source)
@@ -249,10 +249,10 @@ class UiIntegrationTests(unittest.TestCase):
         self.assertNotIn("item.url", source[source.index("function renderSourceReview"):source.index("function renderResult")])
 
     def test_frontend_submits_local_folder_only_as_an_explicit_source_type(self):
-        source = (ROOT / "static" / "tradutor_ui.js").read_text(encoding="utf-8")
+        source = (ROOT / "static" / "komyst_ui.js").read_text(encoding="utf-8")
         shell = (ROOT / "ui" / "ui_shell.html").read_text(encoding="utf-8")
-        bridge = (ROOT / "yomu/ui/ui_bridge.py").read_text(encoding="utf-8")
-        app_source = (ROOT / "yomu/ui/app.py").read_text(encoding="utf-8")
+        bridge = (ROOT / "komyst/ui/ui_bridge.py").read_text(encoding="utf-8")
+        app_source = (ROOT / "komyst/ui/app.py").read_text(encoding="utf-8")
         self.assertIn('data-source-type="local_folder"', shell)
         self.assertIn('id="localFolderInput"', shell)
         self.assertIn("source_type: appState.selectedSourceType", source)
@@ -264,7 +264,7 @@ class UiIntegrationTests(unittest.TestCase):
         self.assertNotIn("snapshot_ref", source)
 
     def test_frontend_never_uses_presentation_record_id_as_source_job(self):
-        source = (ROOT / "static" / "tradutor_ui.js").read_text(encoding="utf-8")
+        source = (ROOT / "static" / "komyst_ui.js").read_text(encoding="utf-8")
         self.assertNotIn("record.job_id || record.id", source)
         self.assertIn("if (trustedJobId) payload.source_job_id = trustedJobId", source)
 
@@ -277,9 +277,9 @@ class UiIntegrationTests(unittest.TestCase):
         sources = "\n".join(
             (ROOT / path).read_text(encoding="utf-8")
             for path in (
-                "yomu/ui/app.py",
-                "yomu/ui/ui_bridge.py",
-                "static/tradutor_ui.js",
+                "komyst/ui/app.py",
+                "komyst/ui/ui_bridge.py",
+                "static/komyst_ui.js",
                 "ui/ui_shell.html",
             )
         )
@@ -288,11 +288,11 @@ class UiIntegrationTests(unittest.TestCase):
 
     def test_profile_social_media_surfaces_and_transport_are_absent(self):
         """Local product runtime has no profile-media UI, bridge, or HTTP transport."""
-        js_source = (ROOT / "static" / "tradutor_ui.js").read_text(encoding="utf-8")
-        css_source = (ROOT / "static" / "tradutor_ui.css").read_text(encoding="utf-8")
+        js_source = (ROOT / "static" / "komyst_ui.js").read_text(encoding="utf-8")
+        css_source = (ROOT / "static" / "komyst_ui.css").read_text(encoding="utf-8")
         shell = (ROOT / "ui" / "ui_shell.html").read_text(encoding="utf-8")
-        backend = (ROOT / "yomu/ui/app.py").read_text(encoding="utf-8")
-        bridge = (ROOT / "yomu/ui/ui_bridge.py").read_text(encoding="utf-8")
+        backend = (ROOT / "komyst/ui/app.py").read_text(encoding="utf-8")
+        bridge = (ROOT / "komyst/ui/ui_bridge.py").read_text(encoding="utf-8")
         for removed in ("profileFromForm", "uploadProfileMedia", "removeProfileMedia", "profileSave",
                         "/api/ui/profile/media", "/api/community/profiles/", "/functions/v1/profile-media"):
             self.assertNotIn(removed, js_source)
@@ -326,7 +326,7 @@ class UiIntegrationTests(unittest.TestCase):
             bridge.store = JobStore(root / "jobs.sqlite3")
             bridge.history = []
             bridge.history_revision = 1
-            with patch("yomu.ui.ui_bridge.OUTPUT_ROOT", output_root):
+            with patch("komyst.ui.ui_bridge.OUTPUT_ROOT", output_root):
                 result = bridge.delete_local_artifact("fixture", delete_files=True, confirm="EXCLUIR")
             self.assertEqual(result["code"], "local_artifact_deleted")
             self.assertEqual(result["local_artifact_id"], "fixture")
@@ -357,7 +357,7 @@ class UiIntegrationTests(unittest.TestCase):
             bridge.store = JobStore(root / "jobs.sqlite3")
             bridge.history = []
             bridge.history_revision = 1
-            with patch("yomu.ui.ui_bridge.OUTPUT_ROOT", output_root):
+            with patch("komyst.ui.ui_bridge.OUTPUT_ROOT", output_root):
                 result = bridge.delete_local_artifact("job-123", delete_files=False, confirm="EXCLUIR")
             self.assertEqual(result["code"], "local_history_item_hidden")
             self.assertEqual(result["local_artifact_id"], "history-id")
@@ -456,7 +456,7 @@ class UiIntegrationTests(unittest.TestCase):
             root = Path(folder) / "chapter"
             root.mkdir()
             (root / "page.png").write_bytes(b"fixture")
-            original = __import__("yomu.ui.ui_bridge", fromlist=["shutil"]).shutil.rmtree
+            original = __import__("komyst.ui.ui_bridge", fromlist=["shutil"]).shutil.rmtree
             attempts = {"count": 0}
             locked = OSError(32, "sharing violation")
             locked.winerror = 32
@@ -467,7 +467,7 @@ class UiIntegrationTests(unittest.TestCase):
                     raise locked
                 return original(path, **kwargs)
 
-            with patch("yomu.ui.ui_bridge.shutil.rmtree", side_effect=flaky):
+            with patch("komyst.ui.ui_bridge.shutil.rmtree", side_effect=flaky):
                 removed, code = UiBridge._remove_confined_tree(root)
             self.assertTrue(removed)
             self.assertEqual(code, "removed")
@@ -555,7 +555,7 @@ class UiIntegrationTests(unittest.TestCase):
             bridge.store = JobStore(root / "jobs.sqlite3")
             bridge.history = []
             bridge.history_revision = 1
-            with patch("yomu.ui.ui_bridge.OUTPUT_ROOT", output_root):
+            with patch("komyst.ui.ui_bridge.OUTPUT_ROOT", output_root):
                 result = bridge.delete_local_artifact("legacy-zero", delete_files=True, confirm="EXCLUIR")
             self.assertEqual(result["code"], "local_history_item_hidden")
             self.assertEqual(result["files_state"], "unsafe_path_preserved")
@@ -585,7 +585,7 @@ class UiIntegrationTests(unittest.TestCase):
             bridge.store = JobStore(root / "jobs.sqlite3")
             bridge.history = []
             bridge.history_revision = 1
-            with patch("yomu.ui.ui_bridge.OUTPUT_ROOT", output_root):
+            with patch("komyst.ui.ui_bridge.OUTPUT_ROOT", output_root):
                 result = bridge.delete_local_artifact("foreign-hide", delete_files=False, confirm="EXCLUIR")
             self.assertEqual(result["code"], "local_history_item_hidden")
             self.assertEqual(result["files_state"], "preserved")
@@ -614,7 +614,7 @@ class UiIntegrationTests(unittest.TestCase):
             bridge.store = JobStore(root / "jobs.sqlite3")
             bridge.history = []
             bridge.history_revision = 1
-            with patch("yomu.ui.ui_bridge.OUTPUT_ROOT", output_root):
+            with patch("komyst.ui.ui_bridge.OUTPUT_ROOT", output_root):
                 result = bridge.delete_local_artifact("traversal", delete_files=True, confirm="EXCLUIR")
             self.assertEqual(result["files_state"], "unsafe_path_preserved")
             self.assertTrue((sentinel / "precious.txt").exists())
@@ -634,14 +634,14 @@ class UiIntegrationTests(unittest.TestCase):
             bridge.store = JobStore(root / "jobs.sqlite3")
             bridge.history = []
             bridge.history_revision = 1
-            with patch("yomu.ui.ui_bridge.OUTPUT_ROOT", output_root), self.assertRaisesRegex(ValueError, "local_artifact_not_found"):
+            with patch("komyst.ui.ui_bridge.OUTPUT_ROOT", output_root), self.assertRaisesRegex(ValueError, "local_artifact_not_found"):
                 bridge.delete_local_artifact("ghost", delete_files=False, confirm="EXCLUIR")
             bridge.store.close()
 
     def test_history_delete_route_authenticates_without_requiring_store_job(self):
         # Gate #1 regression: the route must not require a live store job -- legacy
         # local cards have no job row and were 404'd before reaching the bridge.
-        src = (Path(__file__).resolve().parents[1] / "yomu/ui/app.py").read_text(encoding="utf-8")
+        src = (Path(__file__).resolve().parents[1] / "komyst/ui/app.py").read_text(encoding="utf-8")
         route = src.split('@app.post("/api/ui/history/delete")', 1)[1].split("\n@app.", 1)[0]
         self.assertIn("_ui_principal(request, mutate=True)", route)
         self.assertNotIn("_owned_ui_job", route)
@@ -674,7 +674,7 @@ class UiIntegrationTests(unittest.TestCase):
             bridge.store = JobStore(root / "jobs.sqlite3")
             bridge.history = []
             bridge.history_revision = 1
-            with patch("yomu.ui.ui_bridge.OUTPUT_ROOT", output_root), self.assertRaisesRegex(ValueError, "local_artifact_published"):
+            with patch("komyst.ui.ui_bridge.OUTPUT_ROOT", output_root), self.assertRaisesRegex(ValueError, "local_artifact_published"):
                 bridge.delete_local_artifact("published", delete_files=True, confirm="EXCLUIR")
             self.assertTrue(fixture.exists())
             bridge.store.close()
@@ -696,7 +696,7 @@ class UiIntegrationTests(unittest.TestCase):
             )
             (fixture / "chapter.pdf").write_bytes(b"%PDF-1.4\nx\n%%EOF\n")
             history = UIHistoryStore(root / "ui_history.json", output_root=output_root)
-            with patch("yomu.ui.ui_history.OUTPUT_ROOT", output_root):
+            with patch("komyst.ui.ui_history.OUTPUT_ROOT", output_root):
                 discovered = history.discover_outputs()
                 self.assertEqual([item["id"] for item in discovered], ["discovered-manifest_like_chapter"])
                 history.hide_record(discovered[0])
@@ -704,18 +704,18 @@ class UiIntegrationTests(unittest.TestCase):
                 self.assertTrue(fixture.exists())
 
     def test_profile_routes_require_canonical_authentication(self):
-        source = (ROOT / "yomu/ui/app.py").read_text(encoding="utf-8")
+        source = (ROOT / "komyst/ui/app.py").read_text(encoding="utf-8")
         for marker in ("def _ui_principal", "AUTH.require_authenticated"):
             self.assertIn(marker, source, marker)
         for removed in ("api_profile_media", "profile_for_user", "/api/ui/profile/media", "/api/community/profiles/"):
             self.assertNotIn(removed, source, removed)
 
     def test_profile_media_actions_use_canonical_api_transport(self):
-        source = (ROOT / "static" / "tradutor_ui.js").read_text(encoding="utf-8")
+        source = (ROOT / "static" / "komyst_ui.js").read_text(encoding="utf-8")
         self.assertNotIn("/api/ui/profile/media", source)
         self.assertNotIn("uploadProfileMedia", source)
         self.assertNotIn("removeProfileMedia", source)
-        backend = (ROOT / "yomu/ui/app.py").read_text(encoding="utf-8")
+        backend = (ROOT / "komyst/ui/app.py").read_text(encoding="utf-8")
         self.assertNotIn("api_profile_media", backend)
         self.assertNotIn("profile_media_provider_factory", backend)
 
@@ -729,7 +729,7 @@ class UiIntegrationTests(unittest.TestCase):
         self.assertNotIn("vídeo para o banner", shell)
 
     def test_community_actions_use_canonical_publication_endpoints(self):
-        source = (ROOT / "static" / "tradutor_ui.js").read_text(encoding="utf-8")
+        source = (ROOT / "static" / "komyst_ui.js").read_text(encoding="utf-8")
         self.assertIn("post.publication_id || post.post_id", source)
         self.assertIn("/api/community/publications/${encodeURIComponent(postId)}/favorite", source)
         self.assertIn("{method: pressed ? 'DELETE' : 'POST'}", source)
@@ -737,18 +737,18 @@ class UiIntegrationTests(unittest.TestCase):
         self.assertIn("Ainda não há comentários.", source)
 
     def test_private_profile_media_uses_authenticated_blob_flow(self):
-        source = (ROOT / "static" / "tradutor_ui.js").read_text(encoding="utf-8")
+        source = (ROOT / "static" / "komyst_ui.js").read_text(encoding="utf-8")
         self.assertNotIn("loadAuthenticatedMediaElement", source)
         self.assertNotIn("/api/ui/profile/media", source)
         self.assertNotIn("profile_media_load_failed", source)
 
     def test_profile_media_remove_requires_confirmation(self):
-        source = (ROOT / "static" / "tradutor_ui.js").read_text(encoding="utf-8")
+        source = (ROOT / "static" / "komyst_ui.js").read_text(encoding="utf-8")
         self.assertNotIn("async function removeProfileMedia", source)
         self.assertNotIn("/api/ui/profile/media", source)
 
     def test_community_feed_errors_are_human_not_raw_reason_codes(self):
-        source = (ROOT / "static" / "tradutor_ui.js").read_text(encoding="utf-8")
+        source = (ROOT / "static" / "komyst_ui.js").read_text(encoding="utf-8")
         self.assertIn("function humanCommunityError", source)
         self.assertIn("Sua sessão expirou. Entre novamente.", source)
         feed_block = source[
@@ -763,7 +763,7 @@ class UiIntegrationTests(unittest.TestCase):
         self.assertNotIn("escapeHtml(error.message)", feed_block)
 
     def test_community_author_initial_mark_uses_public_identity_only(self):
-        source = (ROOT / "static" / "tradutor_ui.js").read_text(encoding="utf-8")
+        source = (ROOT / "static" / "komyst_ui.js").read_text(encoding="utf-8")
         card_block = source[
             source.index("function renderCommunityCard")
             :source.index("function loadRecordIntoForm")
@@ -776,7 +776,7 @@ class UiIntegrationTests(unittest.TestCase):
         self.assertNotIn("loadAuthenticatedMediaElement", card_block)
 
     def test_community_card_visuals_avoid_motion_heavy_hover(self):
-        css = (ROOT / "static" / "tradutor_ui.css").read_text(encoding="utf-8")
+        css = (ROOT / "static" / "komyst_ui.css").read_text(encoding="utf-8")
         card_css = css[
             css.index(".community-publication-card")
             :css.index("/* série folders */")
@@ -786,8 +786,8 @@ class UiIntegrationTests(unittest.TestCase):
         self.assertNotRegex(card_css, r"(?<!text-)transform:")
 
     def test_dashboard_metric_cards_remain_static_on_hover_and_focus(self):
-        css = (ROOT / "static" / "tradutor_ui.css").read_text(encoding="utf-8")
-        source = (ROOT / "static" / "tradutor_ui.js").read_text(encoding="utf-8")
+        css = (ROOT / "static" / "komyst_ui.css").read_text(encoding="utf-8")
+        source = (ROOT / "static" / "komyst_ui.js").read_text(encoding="utf-8")
         shell = (ROOT / "ui" / "ui_shell.html").read_text(encoding="utf-8")
         stat_css = css[
             css.index(".dash-stats")
@@ -834,8 +834,8 @@ class UiIntegrationTests(unittest.TestCase):
         )
 
     def test_community_profile_join_is_public_metadata_only(self):
-        source = (ROOT / "yomu/community/community_service.py").read_text(encoding="utf-8")
-        store = (ROOT / "yomu/community/community_store.py").read_text(encoding="utf-8")
+        source = (ROOT / "komyst/community/community_service.py").read_text(encoding="utf-8")
+        store = (ROOT / "komyst/community/community_store.py").read_text(encoding="utf-8")
         for marker in ("author_display_name", "author_public_role"):
             self.assertIn(marker, source + store, marker)
         for marker in ("author_avatar_object_key", "avatar_url", "avatar_object_key", "banner_object_key"):
@@ -848,77 +848,77 @@ class UiIntegrationTests(unittest.TestCase):
         for marker in ("display_name_normalized", "profiles_display_name_normalized_uq", "normalize_profile_identity", "display_name_reserved"):
             self.assertIn(marker, migration, marker)
         self.assertIn("if not exists (select 1 from pg_constraint", migration)
-        public_fields = (ROOT / "yomu/community/supabase_social.py").read_text(encoding="utf-8").split("PROFILE_PUBLIC_FIELDS", 1)[1].split("WORK_FIELDS", 1)[0]
+        public_fields = (ROOT / "komyst/community/supabase_social.py").read_text(encoding="utf-8").split("PROFILE_PUBLIC_FIELDS", 1)[1].split("WORK_FIELDS", 1)[0]
         self.assertNotIn("avatar_object_key", public_fields)
         self.assertNotIn("banner_object_key", public_fields)
 
     def test_community_card_uses_public_author_and_no_private_identity(self):
-        source = (ROOT / "static" / "tradutor_ui.js").read_text(encoding="utf-8")
+        source = (ROOT / "static" / "komyst_ui.js").read_text(encoding="utf-8")
         for marker in ("post.author", "author.display_name", "community-author-mark"):
             self.assertIn(marker, source, marker)
         self.assertNotIn("author.email", source)
         auth_source = (ROOT / "static" / "auth_ui.js").read_text(encoding="utf-8")
         community_source = (ROOT / "static" / "social_community.js").read_text(encoding="utf-8")
-        self.assertIn("__tradutorDisplayName", auth_source)
-        self.assertIn("__tradutorDisplayName", community_source)
+        self.assertIn("__komystDisplayName", auth_source)
+        self.assertIn("__komystDisplayName", community_source)
         self.assertIn("session.user?.email", auth_source)
         self.assertNotIn("session.user.email", community_source)
 
     def test_enter_and_real_progress_surfaces_remain_structural(self):
         shell = (ROOT / "ui" / "ui_shell.html").read_text(encoding="utf-8")
-        source = (ROOT / "static" / "tradutor_ui.js").read_text(encoding="utf-8")
+        source = (ROOT / "static" / "komyst_ui.js").read_text(encoding="utf-8")
         self.assertIn('<form id="authForm"', shell)
         self.assertIn("progress.stage_key", source)
         self.assertIn("terminalRunStatuses", source)
 
     def test_history_series_headers_are_accessible_accordions(self):
-        source = (ROOT / "static" / "tradutor_ui.js").read_text(encoding="utf-8")
-        css = (ROOT / "static" / "tradutor_ui.css").read_text(encoding="utf-8")
+        source = (ROOT / "static" / "komyst_ui.js").read_text(encoding="utf-8")
+        css = (ROOT / "static" / "komyst_ui.css").read_text(encoding="utf-8")
         for marker in ("series-panel-", "aria-expanded", "aria-controls", "role=\"region\"", "expandedFolders", "toggleHistoryFolder", "keydown"):
             self.assertIn(marker, source, marker)
         self.assertIn('class="cf-header"', source)
         self.assertIn("width:100%; border:0", css)
         self.assertNotIn("groups.size === 1", source)
         self.assertNotIn("const statusLabels", source)  # legacy profile status presentation
-        self.assertLess(source.index("function applyCanonicalAuthSurface"), source.index("applyCanonicalAuthSurface(getGlobal('__tradutorAuthState')"))
+        self.assertLess(source.index("function applyCanonicalAuthSurface"), source.index("applyCanonicalAuthSurface(getGlobal('__komystAuthState')"))
 
     def test_existing_publication_is_joined_to_history_by_run_and_sha(self):
-        app_source = (ROOT / "yomu/ui/app.py").read_text(encoding="utf-8")
-        ui_source = (ROOT / "static" / "tradutor_ui.js").read_text(encoding="utf-8")
+        app_source = (ROOT / "komyst/ui/app.py").read_text(encoding="utf-8")
+        ui_source = (ROOT / "static" / "komyst_ui.js").read_text(encoding="utf-8")
         for marker in ("_enrich_history_publications", "source_run_id", "publication_pdf_sha256", "publication_id"):
             self.assertIn(marker, app_source, marker)
         for marker in ("open-publication", "Abrir publicação existente", "Publicado"):
             self.assertIn(marker, ui_source, marker)
 
     def test_bootstrap_reconciles_canonical_community_auth_state(self):
-        source = (ROOT / "static" / "tradutor_ui.js").read_text(encoding="utf-8")
+        source = (ROOT / "static" / "komyst_ui.js").read_text(encoding="utf-8")
         for marker in (
             "syncCanonicalAuthFromBootstrap(data)",
             "bootstrapCommunityAuthenticated",
-            "setGlobal('__tradutorAuthState', 'authenticated')",
-            "setGlobal('__tradutorCommunityAuthenticated', true)",
-            "setGlobal('__tradutorAuthStore', {status: 'authenticated'",
+            "setGlobal('__komystAuthState', 'authenticated')",
+            "setGlobal('__komystCommunityAuthenticated', true)",
+            "setGlobal('__komystAuthStore', {status: 'authenticated'",
             "canonical_auth_bootstrap_applied",
             "applyCanonicalAuthSurface(authState)",
         ):
             self.assertIn(marker, source, marker)
 
     def test_backend_unauthenticated_bootstrap_clears_stale_identity(self):
-        source = (ROOT / "static" / "tradutor_ui.js").read_text(encoding="utf-8")
+        source = (ROOT / "static" / "komyst_ui.js").read_text(encoding="utf-8")
         unauth_block = source[
             source.index("if (backendUnauthenticated")
             :source.index("return currentCanonicalAuthState();")
         ]
         for marker in (
-            "setGlobal('__tradutorAuthState', 'unauthenticated')",
-            "setGlobal('__tradutorCommunityAuthenticated', false)",
-            "setGlobal('__tradutorCommunityUserId', '')",
-            "setGlobal('__tradutorAuthStore', {status: 'unauthenticated'",
+            "setGlobal('__komystAuthState', 'unauthenticated')",
+            "setGlobal('__komystCommunityAuthenticated', false)",
+            "setGlobal('__komystCommunityUserId', '')",
+            "setGlobal('__komystAuthStore', {status: 'unauthenticated'",
         ):
             self.assertIn(marker, unauth_block, marker)
 
     def test_existing_publication_pdf_never_fails_silently_without_auth(self):
-        source = (ROOT / "static" / "tradutor_ui.js").read_text(encoding="utf-8")
+        source = (ROOT / "static" / "komyst_ui.js").read_text(encoding="utf-8")
         pdf_block = source[
             source.index("async function openAuthenticatedCommunityPdf")
             :source.index("async function loadCommunityFeed")
@@ -935,12 +935,12 @@ class UiIntegrationTests(unittest.TestCase):
     def test_standard_emoji_are_not_embedded_in_ui(self):
         sources = "\n".join(
             (ROOT / path).read_text(encoding="utf-8")
-            for path in ("ui/ui_shell.html", "static/tradutor_ui.js", "static/tradutor_ui.css")
+            for path in ("ui/ui_shell.html", "static/komyst_ui.js", "static/komyst_ui.css")
         )
         self.assertFalse(any(ord(character) >= 0x1F000 for character in sources))
 
     def test_local_ui_bootstrap_does_not_reference_external_font_hosts(self):
-        source = (ROOT / "yomu/ui/app.py").read_text(encoding="utf-8")
+        source = (ROOT / "komyst/ui/app.py").read_text(encoding="utf-8")
         self.assertNotIn("fonts.googleapis.com", source)
         self.assertNotIn("fonts.gstatic.com", source)
 
@@ -956,8 +956,8 @@ class ServiceHealthTruthfulnessTests(unittest.TestCase):
     """
 
     def setUp(self) -> None:
-        self.app_ui = (ROOT / "yomu/ui/app.py").read_text(encoding="utf-8")
-        self.ui_js = (ROOT / "static" / "tradutor_ui.js").read_text(encoding="utf-8")
+        self.app_ui = (ROOT / "komyst/ui/app.py").read_text(encoding="utf-8")
+        self.ui_js = (ROOT / "static" / "komyst_ui.js").read_text(encoding="utf-8")
         self.shell = (ROOT / "ui" / "ui_shell.html").read_text(encoding="utf-8")
         self.health_js = (ROOT / "static" / "service_health.js").read_text(encoding="utf-8")
 
@@ -974,7 +974,7 @@ class ServiceHealthTruthfulnessTests(unittest.TestCase):
         code = "\n".join(line for line in render.splitlines()
                          if not line.lstrip().startswith("//"))
         self.assertNotIn("railApiStatus", code)
-        self.assertIn("tradutorApiConfigured", code)
+        self.assertIn("komystApiConfigured", code)
         # Only the health module may write the badge.
         self.assertEqual(self.ui_js.count("railApiStatus"), 0)
 

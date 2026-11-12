@@ -22,20 +22,20 @@ from test_support.offline_test_guard import install_offline_network_guard
 
 install_offline_network_guard()
 
-import yomu.ocr.ocr_line_provenance as ocr_line_provenance
-import yomu.ocr.source_completeness as source_completeness
-from yomu.ocr.ocr_balloon import _render_analyzed_image, analyze_image_array, validate_translation_text
-from yomu.ocr.ocr_engine import OCRLine
+import komyst.ocr.ocr_line_provenance as ocr_line_provenance
+import komyst.ocr.source_completeness as source_completeness
+from komyst.ocr.ocr_balloon import _render_analyzed_image, analyze_image_array, validate_translation_text
+from komyst.ocr.ocr_engine import OCRLine
 
 
 RUN_DIR = Path(
-    r"C:\Projetos\Tradutor.Ia-main-promotion\output\shadow_slave_chapter_1_5"
+    r"C:\Projetos\Komyst-main-promotion\output\shadow_slave_chapter_1_5"
     r"\871412d9-2151-4aa3-8804-a2fb8ee699be"
 )
 
 
 def _artifact_available() -> bool:
-    if os.environ.get("TRADUTOR_ALLOW_FORENSIC_ARTIFACT_TESTS") != "1":
+    if os.environ.get("KOMYST_ALLOW_FORENSIC_ARTIFACT_TESTS") != "1":
         return False
     return (
         (RUN_DIR / "quality_report.json").exists()
@@ -45,7 +45,7 @@ def _artifact_available() -> bool:
 
 @unittest.skipUnless(
     _artifact_available(),
-    "#69 local artifact test is opt-in; set TRADUTOR_ALLOW_FORENSIC_ARTIFACT_TESTS=1",
+    "#69 local artifact test is opt-in; set KOMYST_ALLOW_FORENSIC_ARTIFACT_TESTS=1",
 )
 class Final69ForensicLedgerTests(unittest.TestCase):
     @classmethod

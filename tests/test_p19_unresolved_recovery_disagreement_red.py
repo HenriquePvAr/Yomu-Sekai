@@ -10,15 +10,15 @@ from unittest.mock import patch
 
 import numpy as np
 
-import yomu.config.settings as config
-import yomu.ocr.ocr_balloon as ocr_balloon
-from yomu.ocr.ocr_balloon import (
+import komyst.config.settings as config
+import komyst.ocr.ocr_balloon as ocr_balloon
+from komyst.ocr.ocr_balloon import (
     TextGroup,
     apply_rapidocr_region_recovery,
     enforce_rapidocr_quality_gate,
     score_group_ocr_quality,
 )
-from yomu.ocr.ocr_engine import OCRLine
+from komyst.ocr.ocr_engine import OCRLine
 
 
 def _line(text, confidence, box=(20, 20, 300, 40)):

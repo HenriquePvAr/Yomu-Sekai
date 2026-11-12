@@ -1,7 +1,7 @@
 """Run one offline Big-LaMa CPU smoke on a deterministic synthetic fixture.
 
 This research-only script never downloads weights or reads manga pages. It
-requires the exact checkpoint already configured in Yomu and writes evidence
+requires the exact checkpoint already configured in Komyst and writes evidence
 to a fresh temporary directory unless --output is explicitly supplied.
 """
 from __future__ import annotations
@@ -25,7 +25,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from yomu.clean.inpainting.advanced_art_inpainting import (
+from komyst.clean.inpainting.advanced_art_inpainting import (
     ANIME_MANGA_LAMA_LARGE_JIT,
     AdvancedArtInpainter,
 )
@@ -76,7 +76,7 @@ def main() -> int:
     args = parser.parse_args()
 
     if args.output is None:
-        out = Path(tempfile.mkdtemp(prefix="yomu-big-lama-cpu-"))
+        out = Path(tempfile.mkdtemp(prefix="komyst-big-lama-cpu-"))
     else:
         out = args.output
         out.mkdir(parents=True, exist_ok=False)

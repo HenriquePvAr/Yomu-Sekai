@@ -13,8 +13,8 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-import yomu.runtime.artifact_contract as ac
-import yomu.pipeline.benchmark_pipeline as bp
+import komyst.runtime.artifact_contract as ac
+import komyst.pipeline.benchmark_pipeline as bp
 
 
 def _png(path, w=800, h=200, value=127):
@@ -235,15 +235,15 @@ class ArtifactPersistenceTests(unittest.TestCase):
             ac.OutputProfile.PROFESSIONAL_QC)
         self.assertEqual(bp._resolve_output_profile(_Args(output_profile="nonsense")),
                          ac.OutputProfile.AUTOMATIC)
-        old = os.environ.get("YOMU_OUTPUT_PROFILE")
+        old = os.environ.get("KOMYST_OUTPUT_PROFILE")
         try:
-            os.environ["YOMU_OUTPUT_PROFILE"] = "professional_qc"
+            os.environ["KOMYST_OUTPUT_PROFILE"] = "professional_qc"
             self.assertEqual(bp._resolve_output_profile(None), ac.OutputProfile.PROFESSIONAL_QC)
         finally:
             if old is None:
-                os.environ.pop("YOMU_OUTPUT_PROFILE", None)
+                os.environ.pop("KOMYST_OUTPUT_PROFILE", None)
             else:
-                os.environ["YOMU_OUTPUT_PROFILE"] = old
+                os.environ["KOMYST_OUTPUT_PROFILE"] = old
 
 
 if __name__ == "__main__":

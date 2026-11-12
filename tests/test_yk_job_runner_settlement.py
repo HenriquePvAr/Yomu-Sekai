@@ -13,10 +13,10 @@ import unittest
 import json
 from pathlib import Path
 
-import yomu.runtime.job_runner as job_runner
-import yomu.runtime.yk_reservation as ykr
-from yomu.translation.providers.yomu_backend_provider import BatchItem, BatchRequest, MockBackendClient, ResultStore
-from yomu.runtime.job_store import JobStatus, JobStore
+import komyst.runtime.job_runner as job_runner
+import komyst.runtime.yk_reservation as ykr
+from komyst.translation.providers.komyst_backend_provider import BatchItem, BatchRequest, MockBackendClient, ResultStore
+from komyst.runtime.job_store import JobStatus, JobStore
 
 AUTH = "jwt.test"
 ITEMS = [{"item_id": "translation:00000", "text": "hello"}]

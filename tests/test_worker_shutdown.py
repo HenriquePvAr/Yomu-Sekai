@@ -15,8 +15,8 @@ import time
 import unittest
 from pathlib import Path
 
-import yomu.runtime.process_tree as process_tree
-from yomu.runtime.job_store import JobStatus, JobStore
+import komyst.runtime.process_tree as process_tree
+from komyst.runtime.job_store import JobStatus, JobStore
 
 REPO = Path(__file__).resolve().parents[1]
 

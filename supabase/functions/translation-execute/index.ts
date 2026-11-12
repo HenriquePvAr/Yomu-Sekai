@@ -4,8 +4,8 @@ import { callRpc } from "../_shared/rpc.ts";
 
 const ALLOWED_BASES = new Set(["https://api-free.deepl.com", "https://api.deepl.com"]);
 const safeCode = (value: unknown, fallback: string) => String(value || fallback).replace(/[^a-zA-Z0-9_.-]/g, "_").slice(0, 80);
-const localTestRuntime = ["local", "test"].includes(String(Deno.env.get("YOMU_ENV") || "").toLowerCase());
-const faultMode = localTestRuntime ? String(Deno.env.get("YOMU_FAULT_MODE") || "").toLowerCase() : "";
+const localTestRuntime = ["local", "test"].includes(String(Deno.env.get("KOMYST_ENV") || "").toLowerCase());
+const faultMode = localTestRuntime ? String(Deno.env.get("KOMYST_FAULT_MODE") || "").toLowerCase() : "";
 
 async function serverRpc(name: string, body: unknown) {
   const url = Deno.env.get("SUPABASE_URL");
@@ -80,10 +80,10 @@ Deno.serve(async (req) => {
   const started = await serverRpc("mark_translation_provider_started", { p_request_id: requestId, p_claim_token: claimToken });
   if (!started.configured || !started.ok) return json({ code: "stale_claim", request_id: requestId }, 409);
   if (faultMode === "crash_after_provider_started") return json({ code: "provider_outcome_unknown", request_id: requestId }, 503);
-  if (Deno.env.get("YOMU_TRANSLATION_PROVIDER") === "mock" && !localTestRuntime) {
+  if (Deno.env.get("KOMYST_TRANSLATION_PROVIDER") === "mock" && !localTestRuntime) {
     return json({ code: "provider_configuration_invalid" }, 503);
   }
-  if (Deno.env.get("YOMU_TRANSLATION_PROVIDER") === "mock" && localTestRuntime) {
+  if (Deno.env.get("KOMYST_TRANSLATION_PROVIDER") === "mock" && localTestRuntime) {
     if (faultMode === "timeout") return json({ code: "provider_timeout", request_id: requestId }, 504);
     if (faultMode === "429") return json({ code: "rate_limited", request_id: requestId }, 429);
     if (faultMode === "500") return json({ code: "provider_rejected", request_id: requestId }, 502);

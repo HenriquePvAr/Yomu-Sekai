@@ -23,10 +23,10 @@ from pathlib import Path
 
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
-import yomu.runtime.update_installer as update_installer
-import yomu.runtime.update_manifest as update_manifest
+import komyst.runtime.update_installer as update_installer
+import komyst.runtime.update_manifest as update_manifest
 from scripts.sign_release import public_key_material, sign_manifest
-from yomu.runtime.update_manifest import (
+from komyst.runtime.update_manifest import (
     ManifestInvalid,
     PackageHashMismatch,
     PackageSizeMismatch,
@@ -38,7 +38,7 @@ from yomu.runtime.update_manifest import (
     WrongApplication,
 )
 
-APP_ID = "tradutor-ia"
+APP_ID = "komyst"
 KEY_ID = "beta-test"
 
 
@@ -51,8 +51,8 @@ def _payload(**overrides) -> dict:
         "minimum_version": "1.0.0",
         "published_at": "2026-08-20T12:00:00+00:00",
         "package": {
-            "filename": "tradutor-ia-1.1.0.zip",
-            "url": "https://releases.example.invalid/tradutor-ia-1.1.0.zip",
+            "filename": "komyst-1.1.0.zip",
+            "url": "https://releases.example.invalid/komyst-1.1.0.zip",
             "sha256": "0" * 64,
             "size": 1234,
         },
@@ -362,7 +362,7 @@ class PackageIntegrityTests(unittest.TestCase):
         self.root = Path(self._tmp.name)
         self.addCleanup(self._tmp.cleanup)
         self.package = self.root / "package.zip"
-        self.package.write_bytes(b"tradutor-ia release payload")
+        self.package.write_bytes(b"komyst release payload")
         self.sha256 = update_manifest.sha256_file(self.package)
         self.size = self.package.stat().st_size
 
@@ -455,7 +455,7 @@ class ArchiveSafetyTests(unittest.TestCase):
 class InstallLifecycleTests(unittest.TestCase):
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
-        self.root = Path(self._tmp.name) / "TradutorIA"
+        self.root = Path(self._tmp.name) / "Komyst"
         self.addCleanup(self._tmp.cleanup)
         self.private_key = Ed25519PrivateKey.generate()
         self.trusted = {KEY_ID: public_key_material(self.private_key)}
@@ -646,7 +646,7 @@ class OfflineGuaranteeTests(unittest.TestCase):
         repo = Path(__file__).resolve().parents[1]
         self.assertFalse((repo / "versions").exists())
         self.assertFalse((repo / "current.json").exists())
-        self.assertEqual(os.environ.get("TRADUTOR_IA_HERMETIC_TEST_ENV", "1"), "1")
+        self.assertEqual(os.environ.get("KOMYST_HERMETIC_TEST_ENV", "1"), "1")
 
 
 if __name__ == "__main__":

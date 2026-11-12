@@ -16,8 +16,8 @@ install_offline_network_guard()
 
 import unittest
 
-import yomu.ocr.ocr_line_provenance as provenance
-import yomu.ocr.source_completeness as completeness
+import komyst.ocr.ocr_line_provenance as provenance
+import komyst.ocr.source_completeness as completeness
 
 
 def line(text, box, line_id=None, parent_ids=(), raw_text=None):
@@ -558,7 +558,7 @@ class PhysicalExpectationSourceTest(unittest.TestCase):
 
 class PhysicalRegionAccountingTest(unittest.TestCase):
     def test_completeness_violation_blocks_the_physical_gate(self):
-        import yomu.pipeline.benchmark_pipeline as benchmark_pipeline
+        import komyst.pipeline.benchmark_pipeline as benchmark_pipeline
 
         states = [
             {
@@ -590,7 +590,7 @@ class PhysicalRegionAccountingTest(unittest.TestCase):
         self.assertEqual(result["source_completeness"]["group_ids"], ["p002:BALAO_3"])
 
     def test_a_clean_group_still_passes_the_physical_gate(self):
-        import yomu.pipeline.benchmark_pipeline as benchmark_pipeline
+        import komyst.pipeline.benchmark_pipeline as benchmark_pipeline
 
         states = [
             {
@@ -617,7 +617,7 @@ class PhysicalRegionAccountingTest(unittest.TestCase):
         self.assertEqual(result["source_completeness"]["pass"], 1)
 
     def test_a_legacy_run_without_provenance_adds_no_completeness_block(self):
-        import yomu.pipeline.benchmark_pipeline as benchmark_pipeline
+        import komyst.pipeline.benchmark_pipeline as benchmark_pipeline
 
         states = [
             {
@@ -652,7 +652,7 @@ class PhysicalSourceTruthTest(unittest.TestCase):
     def setUp(self):
         import numpy as np
 
-        import yomu.ocr.ocr_balloon as ocr_balloon
+        import komyst.ocr.ocr_balloon as ocr_balloon
 
         self.ocr_balloon = ocr_balloon
         self.rendered = np.zeros((3000, 1000, 3), dtype="uint8")

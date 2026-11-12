@@ -17,7 +17,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from starlette.requests import Request
 
-from yomu.community.community_auth import (
+from komyst.community.community_auth import (
     AuthConfigurationError,
     AuthorizationDenied,
     CSRF_COOKIE_NAME,
@@ -25,7 +25,7 @@ from yomu.community.community_auth import (
     SESSION_COOKIE_NAME,
     build_auth_provider,
 )
-from yomu.community.community_http import create_community_router
+from komyst.community.community_http import create_community_router
 
 
 def _env(tmp_path: Path, **overrides) -> dict[str, str]:
@@ -33,7 +33,7 @@ def _env(tmp_path: Path, **overrides) -> dict[str, str]:
         "AUTH_PROVIDER": "local_test",
         "APP_ENV": "test",
         "ALLOW_LOCAL_TEST_IDENTITIES": "1",
-        "TRADUTOR_UI_HOST": "127.0.0.1",
+        "KOMYST_UI_HOST": "127.0.0.1",
         "LOCAL_TEST_AUTH_DB": str(tmp_path / "local_test_auth.sqlite3"),
         "LOCAL_TEST_AUTH_SESSION_SECRET": "session-pepper-" + ("x" * 40),
         "SUPABASE_URL": "",
@@ -106,7 +106,7 @@ def test_local_test_is_blocked_outside_test_or_development(tmp_path, environment
 @pytest.mark.parametrize("host", ["0.0.0.0", "192.168.1.2", "example.test"])
 def test_local_test_is_blocked_on_public_or_non_loopback_bind(tmp_path, host):
     with pytest.raises(AuthConfigurationError):
-        build_auth_provider(_env(tmp_path, TRADUTOR_UI_HOST=host))
+        build_auth_provider(_env(tmp_path, KOMYST_UI_HOST=host))
 
 
 def test_local_test_rejects_external_auth_configuration(tmp_path):
@@ -212,7 +212,7 @@ def test_supabase_mode_has_no_local_test_login_endpoint(tmp_path):
             return {"provider": "supabase"}
 
         def authenticate_request(self, request):
-            from yomu.community.community_auth import RequestPrincipal
+            from komyst.community.community_auth import RequestPrincipal
             return RequestPrincipal.anonymous()
 
         require_authenticated = authenticate_request
@@ -275,7 +275,7 @@ def test_cli_bootstrap_is_idempotent_without_rotating_credentials(tmp_path):
 def test_local_test_ui_adapter_is_explicit_and_has_no_identity_shortcut():
     provider_js = Path("static/auth_provider.js").read_text(encoding="utf-8")
     auth_js = Path("static/auth_ui.js").read_text(encoding="utf-8")
-    app_source = Path("yomu/ui/app.py").read_text(encoding="utf-8")
+    app_source = Path("komyst/ui/app.py").read_text(encoding="utf-8")
     assert "localTestAdapter" in provider_js
     assert "/api/community/auth/local-test/login" in provider_js
     assert "local_test_environment" in auth_js
