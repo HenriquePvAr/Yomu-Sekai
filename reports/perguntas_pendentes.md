@@ -86,3 +86,5 @@ Abertos para a Fase 3:
 | Monitor | | | 2,94 s de amostragem em 518,8 s (0,57%) |
 
 Os 7 resíduos do REF-B e os 15 `target_or_ownership_incomplete` seguem para a Fase 3.
+
+**Suíte completa final** (OpenCV 5.0.0, Paddle funcionando, commit `9c43d6f`): 6.502 passaram, 1 falhou, 141 ignorados, 1 xfailed, 787 subtests. A falha é a antiga `test_text_touching_a_balloon_border_is_cleaned_without_erasing_the_border` (F3.0). As outras três falhas antigas de máscara eram do OpenCV 4.10.0 e não ocorrem mais.
