@@ -12003,7 +12003,40 @@ def _inpaint_change_metrics(before_bgr, after_bgr, mask) -> dict:
     }
 
 
-def _refine_lettering_mask(cleanup_mask, group, mask_metrics):
+def _long_stroke_halo_barrier(original_bgr, group, base_mask):
+    """Long dark strokes (balloon and panel borders) a lettering halo must not grow into.
+
+    Only for dark ink: a long stroke of the same polarity as the lettering is
+    structure, not fringe, and a blind halo would paint over it. Light lettering on
+    a dark container has no such stroke, so nothing is protected there. The base mask
+    is never reduced: pixels it already owns stay owned.
+    """
+    if original_bgr is None or base_mask is None or not np.any(base_mask):
+        return None
+    border = _balloon_border_mask(original_bgr, _cleanup_lines_for_group(group))
+    if border is None:
+        return None
+    gray, long_strokes = border
+    if gray.shape != np.asarray(base_mask).shape[:2]:
+        return None
+    owned = np.asarray(base_mask) > 0
+    owned_u8 = owned.astype(np.uint8)
+    near = cv2.dilate(owned_u8, np.ones((11, 11), np.uint8)) > 0
+    far = cv2.dilate(owned_u8, np.ones((27, 27), np.uint8)) > 0
+    ring = far & ~near
+    if int(np.count_nonzero(ring)) < 30:
+        ring = ~owned
+    background = float(np.median(gray[ring]))
+    low, high = np.percentile(gray[owned], [10, 90])
+    if (background - float(low)) <= (float(high) - background):
+        return None  # light lettering: no same-polarity structure to protect
+    # Only pixels as dark as the ink itself are structure. A lighter pixel on a stroke
+    # is the glyph's own anti-alias fringe, which the halo exists to cover.
+    full_ink = gray <= float(low) + 0.25 * (background - float(low))
+    return long_strokes & full_ink & ~owned
+
+
+def _refine_lettering_mask(cleanup_mask, group, mask_metrics, halo_barrier=None):
     """Grow a lettering mask only by a small, line-height-scaled halo.
 
     Add a small halo scaled to source line height. Complex backgrounds get a
@@ -12048,6 +12081,8 @@ def _refine_lettering_mask(cleanup_mask, group, mask_metrics):
         # Keep the observed component mask and drop only the added halo. The
         # normal removal/visual gates decide whether that tighter attempt worked.
         refined = mask.copy()
+    if halo_barrier is not None and np.asarray(halo_barrier).shape == refined.shape:
+        refined[np.asarray(halo_barrier, dtype=bool)] = 0
     return (refined * 255).astype(np.uint8)
 
 
@@ -14463,7 +14498,10 @@ def _remove_text_for_group(
         return current_bgr.copy(), cleanup_mask, metrics
 
     metrics["mask_pixels_before_lettering_refine"] = int(np.count_nonzero(cleanup_mask))
-    cleanup_mask = _refine_lettering_mask(cleanup_mask, group, metrics)
+    cleanup_mask = _refine_lettering_mask(
+        cleanup_mask, group, metrics,
+        halo_barrier=_long_stroke_halo_barrier(original_bgr, group, cleanup_mask),
+    )
     metrics["lettering_refined_before_fill"] = True
     metrics["mask_pixels"] = int(np.count_nonzero(cleanup_mask))
     metrics["mask_to_text_area_ratio"] = round(metrics["mask_pixels"] / text_area, 4)

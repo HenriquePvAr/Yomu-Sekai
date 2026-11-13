@@ -623,3 +623,21 @@ def test_interjections_and_names_echoed_by_the_provider_are_kept():
     for text, cls in (("A-AH...", "speech"), ("RYU KANG-MIN?", "speech"), ("THROB", "sfx")):
         assert ob._echo_is_name_shaped(_group(text, (0, 0, 50, 20), classification=cls)), text
     assert not ob._echo_is_name_shaped(_group("WHAT ARE YOU DOING?", (0, 0, 50, 20), classification="speech"))
+
+
+def test_halo_barrier_protects_long_dark_strokes_only_for_dark_lettering():
+    """A lettering halo must not grow into a long stroke of the lettering's own polarity."""
+    page = np.full((120, 400, 3), 245, np.uint8)
+    cv2.line(page, (0, 80), (399, 80), (10, 10, 10), 3)          # balloon-like border
+    group = ob.TextGroup(group_id="h", lines=[_line("HI", (40, 30, 60, 30), line_id="l0")], text="HI")
+    base = np.zeros(page.shape[:2], np.uint8)
+    base[35:55, 45:95] = 255
+    page[35:55, 45:95] = 10                                        # dark ink under the mask
+    barrier = ob._long_stroke_halo_barrier(page, group, base)
+    assert barrier is not None and barrier[80, 200] and not barrier[45, 60]
+    assert not np.any(barrier & (base > 0))                        # owned pixels stay owned
+
+    light = np.full((120, 400, 3), 12, np.uint8)
+    cv2.line(light, (0, 80), (399, 80), (10, 10, 10), 3)
+    light[35:55, 45:95] = 245                                      # light ink on a dark container
+    assert ob._long_stroke_halo_barrier(light, group, base) is None
