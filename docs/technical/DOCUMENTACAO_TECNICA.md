@@ -5,7 +5,7 @@
 > tipografia) e §25 (paralelismo por página) conferidos contra `komyst/ocr/ocr_balloon.py`,
 > `komyst/pipeline/benchmark_pipeline.py` e `komyst/clean/ownership/font_fidelity.py`. O restante do
 > documento foi verificado sobre `5f482ce1` (2026-10-24); §16 e §25 antes sobre `c994426f`.
-> Seções marcadas como *snapshot histórico* (§28.1, §29, parte da §30) não foram revalidadas.
+> Seções marcadas como histórico (§28.1 e parte da §29) não foram revalidadas.
 > Multi-idioma OCR (§14) reverificado sobre `dev` em 2026-11-03; glossário de nomes (§15)
 > verificado sobre `22f595d` (feat/GLOSSARY-01), integrado em `dev`/`main`.
 > §17, "Auditoria linguística e taxonomia semântica", item 5 (retry pelo backend) verificado sobre `885a237` (branch `dev`) em 2026-11-03.
@@ -60,7 +60,7 @@ Os marcadores distinguem o que existe no código do que está disponível no pro
 26. [Logs, saúde e diagnóstico](#26-logs-saúde-e-diagnóstico)
 27. [Ambiente de desenvolvimento e comandos](#27-ambiente-de-desenvolvimento-e-comandos)
 28. [Troubleshooting técnico](#28-troubleshooting-técnico)
-29. [Snapshot histórico de dívida técnica](#29-snapshot-histórico-de-dívida-técnica-não-revalidado-na-m18)
+29. [Dívida técnica conhecida](#29-dívida-técnica-conhecida-parcialmente-revalidada)
 30. [Empacotamento, updater e prontidão para Beta](#30-empacotamento-updater-e-prontidão-para-beta)
 31. [Economia de YK e anúncios](#31-economia-de-yk-e-anúncios--parcial)
 32. [Glossário](#32-glossário)
@@ -3820,9 +3820,9 @@ npm run typecheck; npm test; npm run build
 
 Guia mais amplo: [`docs/TROUBLESHOOTING.md`](../TROUBLESHOOTING.md).
 
-### 28.1 Snapshot histórico das frentes — 2026-09-27 (superado)
+### 28.1 Histórico das frentes Quality Review, Auth e YK (superado)
 
-Registro do estado verificado em 2026-09-27, antes da conclusão das missões M16/M17. É mantido
+Registro do estado anterior à conclusão das missões M16/M17. É mantido
 para contexto histórico; estados de PSD, Auth, YK, artifacts e gates abaixo não descrevem o
 produto presente quando conflitarem com seções posteriores ou com [M15 — compatibilidade PSD](../PSD_COMPATIBILITY_MATRIX.md),
 [M17 — performance PSD](../PSD_PERFORMANCE_REPORT.md) e [Saídas e artefatos](../OUTPUT_ARTIFACTS.md).
@@ -3902,14 +3902,15 @@ limpa/updater · `YK_POSTGRES_VALIDATION`.
 
 <a id="29-dívida-técnica-conhecida"></a>
 
-## 29. Snapshot histórico de dívida técnica (não revalidado na M18)
+## 29. Dívida técnica conhecida (parcialmente revalidada)
 
-> **Superado em `5f482ce1` (verificado no código):** `UPDATE-TRUST-ROOT-EMPTY` (a chave
-> `beta-2026-10` está em `TRUSTED_PUBLIC_KEYS`); a parte "canal" e "UI" de
-> `UPDATER-RELEASE-CHANNEL-PENDING` (URL de manifest padrão e aba **Atualizações** existem —
-> §23); `UI-COPY-NAMES-NVIDIA` e `PROVIDER-HTTP-TELEMETRY-GAP` não foram reconferidos. A
-> evidência `config.py` dos itens abaixo corresponde hoje a `komyst/config/settings.py`; os
-> demais módulos citados vivem sob `komyst/` (§3).
+> Itens de instalador, canal/chave do updater e instalação limpa foram removidos desta lista:
+> o código atual tem `packaging/komyst.spec`, `packaging/Komyst.iss`, `tools/build_installer.py`,
+> a chave `beta-2026-10` em `update_manifest.TRUSTED_PUBLIC_KEYS`, `DEFAULT_MANIFEST_URL` em
+> `update_bootstrap.py` e a aba **Atualizações**; instalador, licença Beta e instalação limpa da
+> `v0.9.1-beta.18` foram **validados por beta tester, informado pelo dono** (data não informada).
+> `UI-COPY-NAMES-NVIDIA` e `PROVIDER-HTTP-TELEMETRY-GAP` não foram reconferidos. Os módulos
+> citados vivem sob `komyst/` (§3).
 
 Esta lista foi auditada contra um commit anterior às missões M16/M17. Ela é mantida para
 histórico, não constitui inventário atual de blockers. Em especial, status de Auth/licença,
@@ -3920,13 +3921,7 @@ documentação de produto, mas não executou auditoria de release nem nova regre
 | --- | --- | --- | --- | --- |
 | `UI-COPY-NAMES-NVIDIA` | Baixa | A mensagem `environment_not_configured` no frontend diz "Configure o arquivo .env e a `NVIDIA_API_KEY`", mas o provider padrão é DeepL. Copy desatualizada visível ao usuário. | `static/komyst_ui.js` (`reasonMessages`) | TDD futuro: mensagem neutra de provider |
 | `PROVIDER-HTTP-TELEMETRY-GAP` | Baixa | Não há telemetria HTTP unificada entre providers (latência, taxa de erro, retries) — cada provider mantém suas próprias `stats`. | `translator_deepl.py`, `translator_nvidia.py` | TDD futuro, se a Beta exigir observabilidade de provider |
-| `INSTALLER-FINAL-PENDING` | Alta (bloqueia Beta externa) | Spec PyInstaller, perfil de produção e plumbing do Inno Setup existem; installer final assinado e validado ainda não foram gerados. | `packaging/`, specs e `tools/build_installer.py` | Finalizar signing, installer e E2E em VM limpa |
-| `UPDATER-RELEASE-CHANNEL-PENDING` | Alta (bloqueia Beta externa) | Transporte HTTPS, verificação remota e seam do launcher existem, mas ainda não há hospedagem/canal de release, chave pública de produção embutida nem UI. | `update_transport.py`, `update_bootstrap.py`, `start_tradutor.py`, `update_manifest.py` | Definir junto com Setup/release operacional |
 | `LAUNCHER-SELF-UPDATE-DEFERRED` | Média | Um launcher em execução não se sobrescreve; o update atual faz handoff entre payloads versionados e bloqueia payload que exige bootstrap mais novo. Self-update do bootstrap depende do formato do Setup. | `update_bootstrap.py`, `start_tradutor.py` | Resolver na missão de Setup/bootstrapper |
-| `UPDATE-TRUST-ROOT-EMPTY` | Média | `update_manifest.TRUSTED_PUBLIC_KEYS` está vazio de propósito (não existe chave de release de produção); o updater falha fechado. | `update_manifest.py` | Preencher quando a chave de release existir, fora do repositório |
-| `FIRST-TESTER-GRANT-PENDING` | Alta (bloqueia Beta externa) | Schema/RLS/RPC remotos e correção local existem; nenhum LIC-001 remoto foi concluído. | `beta_license.py`, migrations `2026082412/13/14`, `tests/test_beta_tester_licensing.py`, `999231d` | Executar LIC-001 com uma única conta controlada |
-| `BETA-AUTHORIZER-REMOTE-PENDING` | Alta (bloqueia Beta externa) | O authorizer local foi corrigido para resolver o entitlement ativo; deploy remoto e validação autenticada ainda não foram executados. | `ui_bridge.py`, `beta_license.py`, `999231d` | Repetir diagnóstico de Auth e executar LIC-001 após autorização |
-| `CLEAN-VM-VALIDATION-PENDING` | Alta (bloqueia Beta externa) | Nenhuma evidência de validação em VM Windows limpa. | — | Executar após o empacotamento existir |
 | `TESTER-CONFIG-PROVISIONING-PENDING` | Alta (bloqueia Beta externa) | Não há caminho de provisionamento de configuração: um tester precisa criar `.env` manualmente com `DEEPL_API_KEY`, `SUPABASE_URL` e `SUPABASE_PUBLISHABLE_KEY` para a aplicação funcionar. | `.env.example`, `config.py`, `docs/DEVELOPMENT.md#variáveis-de-ambiente` | Definir junto com o Setup: config pública embutida, provisionamento pelo login ou entrega controlada pelo owner |
 | `YK-ADS-MIGRATION-NOT-APPLIED` | Alta (bloqueia Beta comercial) | A fundação de YK+ads (expiração simétrica do diário, alvo por plano, preferência de anúncios, hardening de privilégios) existe apenas como migration local; o remoto ainda roda `claim_daily_yk` com literal `5`, `finalize_translation_job` com débito diário eterno e `finalize_yk_reservation` acessível por `authenticated`. | `supabase/migrations/20260915140000_yk_ads_foundation.sql`, §31 | Owner revisar e aplicar; até lá o bucket diário remoto continua contaminável |
 | `PASSIVE-ADS-UI-PLACEHOLDER` | Média | `#passiveAdsSettings` é um placeholder "Em breve"; o backend já tem `set_passive_ads_enabled`, mas nenhuma tela liga/desliga a preferência. | `ui/ui_shell.html`, §31 | TDD de UI após a migration ser aplicada |
@@ -4014,44 +4009,38 @@ Scrapling e fica como trabalho futuro.
 
 ## 30. Empacotamento, updater e prontidão para Beta
 
-### Snapshot de empacotamento/updater/tester — histórico anterior à Beta 17
+### Estado atual
 
-Os estados abaixo registram uma avaliação antiga. O owner confirmou a distribuição da Beta 17
-pelo updater e usou conta/licença no E2E M16; os itens de release continuam fora do escopo M18 e
-precisam de verificação própria antes de qualquer decisão operacional.
+Instalador, licença Beta e instalação limpa em Windows da versão `v0.9.1-beta.18` foram
+**validados por beta tester, informado pelo dono**; a data da validação não foi informada e esta
+documentação não a reexecutou. Fora dessa versão, confira o código e os artefatos antes de
+qualquer decisão de release.
 
-### Empacotamento — PARCIAL
+### Empacotamento — IMPLEMENTADO
 
-O plumbing existe: `packaging/komyst.spec` (PyInstaller onedir, executável `Komyst`
-a partir de `desktop_app.py`), perfis `packaging/runtime_profile_*.py`, script Inno Setup
-`packaging/komyst.iss` (instala por usuário em `{localappdata}\Programs\Komyst`, saída
-`Komyst-<versão>-Setup-x64`) e `tools/build_installer.py`. Nenhum instalador validado em VM
-limpa nem artefato publicado consta do repositório; para desenvolvimento a distribuição continua
-sendo clone + venv + `.env`.
+`packaging/komyst.spec` (PyInstaller onedir, executável `Komyst`), perfis
+`packaging/runtime_profile_*.py`, script Inno Setup `packaging/Komyst.iss` (instala por usuário em
+`{localappdata}\Programs\Komyst`, saída `Komyst-<versão>-Setup-x64`) e `tools/build_installer.py`.
+O caminho do usuário final é o instalador; clone + venv + `.env` fica só para desenvolvimento.
 
-### Updater — PARCIAL
+### Updater — IMPLEMENTADO (código e UI)
 
-O núcleo de confiança está fechado e documentado em
-[§23 › Updater assinado](#updater-assinado--parcial-tdd-5758--superfície-de-ui): manifest assinado, verificação
-Ed25519, SHA-256 do pacote, política de versão/versão mínima, versão canônica do produto,
+Manifest assinado, verificação Ed25519, SHA-256 do pacote, política de versão/versão mínima,
 transporte HTTPS, extração segura, staging, ativação atômica, selftest, handoff pelo launcher e
-rollback — hermético e testado.
+rollback estão documentados em
+[§23 › Updater assinado](#updater-assinado--parcial-tdd-5758--superfície-de-ui). A chave pública
+`beta-2026-10`, `DEFAULT_MANIFEST_URL` e a aba **Atualizações** existem. Publicar o manifest
+assinado no canal é gate externo; o Guia do Usuário não deve prometer atualização automática além
+do que for verificado.
 
-Estado em `5f482ce1`: chave pública `beta-2026-10`, URL de manifest padrão e a aba
-**Atualizações** existem (§23). Falta prova ponta a ponta de atualização a partir do canal e um
-Setup final validado. O Guia do Usuário não deve prometer atualização automática além do que
-for verificado.
+**Limite de empacotamento:** um launcher em execução não pode se sobrescrever com segurança no
+Windows; a auto-atualização do próprio launcher exige bootstrapper estável ou helper externo.
 
-**Bloqueador de empacotamento:** um launcher em execução não pode se sobrescrever com segurança
-no Windows. A auto-atualização do próprio launcher exige bootstrapper estável ou helper externo
-e só pode ser decidida junto com o formato do Setup.
+### Licenciamento de tester — IMPLEMENTADO
 
-### Licenciamento de tester — PARCIAL
-
-Implementado no cliente e no schema remoto (§19: `beta_license.py`, gate em
-`UiBridge.start()`/`resume()`, reforço no runner, RPC `authorize_beta_tester_device`). A
-concessão real de entitlements a testers é operação administrativa fora do cliente e não foi
-verificada nesta revisão. Nenhum segredo administrativo em nenhum documento.
+Cliente e schema remoto (§19: `beta_license.py`, gate em `UiBridge.start()`/`resume()`, reforço no
+runner, RPC `authorize_beta_tester_device`). A concessão de entitlements a testers é operação
+administrativa fora do cliente. Nenhum segredo administrativo em nenhum documento.
 
 ### Checklist de release da Beta externa
 
@@ -4064,12 +4053,12 @@ verificada nesta revisão. Nenhum segredo administrativo em nenhum documento.
 | Detecção de crash duro do worker | ✅ fechada |
 | Supervisão do launcher | ✅ fechada |
 | Documentação técnica + guia do usuário | ✅ (este documento) |
-| Instalador para usuário final | 🟨 plumbing de build existe; instalador validado pendente |
+| Instalador para usuário final | ✅ `v0.9.1-beta.18` validada por beta tester, informado pelo dono (data não informada) |
 | Updater assinado — núcleo de confiança (manifest, assinatura, SHA, staging, ativação, rollback) | ✅ fechado (TDD #57) |
 | Updater assinado — transporte remoto + seam do launcher | ✅ fechado (TDD #58) |
-| Updater assinado — chave, URL de canal e aba Atualizações | 🟨 configurados; prova ponta a ponta pendente |
-| Licenciamento de tester | 🟨 parcial (§19) |
-| Validação em VM Windows limpa | ⬜ pendente |
+| Updater assinado — chave, URL de canal e aba Atualizações | ✅ implementados; manifest publicado no canal é gate externo |
+| Licenciamento de tester | ✅ `v0.9.1-beta.18` validada por beta tester, informado pelo dono (§19) |
+| Instalação limpa em Windows | ✅ `v0.9.1-beta.18` validada por beta tester, informado pelo dono (data não informada) |
 | Screenshots reais no guia do usuário | ⬜ pendente |
 
 ## 31. Economia de YK e anúncios — PARCIAL

@@ -351,7 +351,7 @@ window.BOARD = {
           "path": "komyst/runtime/worker_service.py"
         },
         {
-          "label": "tradutor_ui.js",
+          "label": "komyst_ui.js",
           "path": "static/komyst_ui.js"
         },
         {
@@ -596,7 +596,7 @@ window.BOARD = {
       ],
       "links": [
         {
-          "label": "tradutor_ui.js",
+          "label": "komyst_ui.js",
           "path": "static/komyst_ui.js"
         },
         {
@@ -832,7 +832,7 @@ window.BOARD = {
           "path": "komyst/translation/sfx_glossary.py"
         },
         {
-          "label": "tradutor_ui.js",
+          "label": "komyst_ui.js",
           "path": "static/komyst_ui.js"
         }
       ]

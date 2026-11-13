@@ -242,7 +242,7 @@ Exemplos resolvidos, para calibrar o julgamento.
 
 ## 14. Contratos de atualização futura
 
-> Estado em `5f482ce1`: o núcleo do updater (`komyst/runtime/update_manifest.py`,
+> Estado atual (confira no código): o núcleo do updater (`komyst/runtime/update_manifest.py`,
 > `update_transport.py`, `update_installer.py`, `update_bootstrap.py`) e a licença Beta
 > (`komyst/auth/beta_license.py`) já existem; specs de build (`packaging/`) e
 > `tools/build_installer.py` também. Os contratos abaixo valem a partir de cada superfície

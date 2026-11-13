@@ -3,7 +3,6 @@
 Instruções permanentes para agentes (Claude, Codex e equivalentes) que trabalham neste
 repositório.
 
-> **Criado em:** 2026-08-19, sobre o commit `c81c798`.
 > Estado do projeto descrito pelo código e pelos relatórios de validação identificados abaixo.
 > Este arquivo é aditivo. Ao editá-lo, **preserve** as seções existentes; não substitua
 > instruções de agente não relacionadas.
