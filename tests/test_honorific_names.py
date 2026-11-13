@@ -8,9 +8,9 @@ import test_support._test_bootstrap as _test_bootstrap  # noqa: F401
 import json
 import unittest
 
-import yomu.ocr.ocr_balloon as ob
-from yomu.translation import honorific_names
-from yomu.translation.providers.translator_deepl import DeepLTranslator
+import komyst.ocr.ocr_balloon as ob
+from komyst.translation import honorific_names
+from komyst.translation.providers.translator_deepl import DeepLTranslator
 
 
 class HonorificNameTests(unittest.TestCase):

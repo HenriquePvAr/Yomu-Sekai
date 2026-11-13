@@ -1,11 +1,11 @@
 {
   "version": 1,
   "python": {
-    "app_ui.py": "Historical UI entrypoint; thin shim to yomu.ui.app.",
+    "app_ui.py": "Historical UI entrypoint; thin shim to komyst.ui.app.",
     "conftest.py": "Pytest startup hook discovered at repository root.",
-    "desktop_app.py": "PyInstaller and historical desktop entrypoint; thin shim to yomu.desktop.app.",
-    "down.py": "Historical downloader import/CLI compatibility shim to yomu.download.down.",
-    "main.py": "Historical GUI command compatibility shim to yomu.commands.legacy_gui.",
+    "desktop_app.py": "PyInstaller and historical desktop entrypoint; thin shim to komyst.desktop.app.",
+    "down.py": "Historical downloader import/CLI compatibility shim to komyst.download.down.",
+    "main.py": "Historical GUI command compatibility shim to komyst.commands.legacy_gui.",
     "run_local_folder.py": "Historical local-folder CLI entrypoint; thin shim.",
     "run_webtoon.py": "Documented public CLI entrypoint; thin shim.",
     "sitecustomize.py": "Python startup hook required for hermetic test guards.",

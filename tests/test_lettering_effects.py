@@ -7,8 +7,8 @@ from types import SimpleNamespace
 import cv2
 import numpy as np
 
-from yomu.clean.ownership import lettering_effects as le
-from yomu.ocr import ocr_balloon as ob
+from komyst.clean.ownership import lettering_effects as le
+from komyst.ocr import ocr_balloon as ob
 
 
 def scene():
@@ -117,8 +117,8 @@ def test_sfx_never_uses_caption_glow_repair(monkeypatch):
 
 
 def test_cached_pixels_cannot_bypass_current_source_completeness(monkeypatch):
-    from yomu.clean.inpainting import flux_edit
-    from yomu.ocr.ocr_engine import OCRLine
+    from komyst.clean.inpainting import flux_edit
+    from komyst.ocr.ocr_engine import OCRLine
     source = np.zeros((120, 180, 3), np.uint8)
     member = OCRLine(text="SOURCE", raw_text="SOURCE", confidence=.99,
         box=(20, 30, 130, 48), polygon=np.array([[20,30],[150,30],[150,78],[20,78]]),

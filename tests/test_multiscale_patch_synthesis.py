@@ -4,7 +4,7 @@ import unittest
 
 import numpy as np
 
-import yomu.clean.inpainting.multiscale_patch_synthesis as mps
+import komyst.clean.inpainting.multiscale_patch_synthesis as mps
 
 
 class MultiscalePatchSynthesisTests(unittest.TestCase):

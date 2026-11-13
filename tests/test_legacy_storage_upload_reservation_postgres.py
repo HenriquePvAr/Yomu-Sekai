@@ -30,8 +30,8 @@ import psycopg
 import pytest
 from psycopg.rows import dict_row
 
-from yomu.community.legacy.legacy_publication_postgres_adapter import LocalPostgresConnectionSettings
-from yomu.community.legacy.legacy_storage_upload_reservation import (
+from komyst.community.legacy.legacy_publication_postgres_adapter import LocalPostgresConnectionSettings
+from komyst.community.legacy.legacy_storage_upload_reservation import (
     PostgresLegacyStorageUploadReservationBackend,
     ReservedLegacyArtifactStorage,
 )
@@ -64,13 +64,13 @@ def _postgres_container():
     if not _docker_available():
         pytest.skip("Docker daemon is not available for reservation SQL integration tests")
     port = _free_local_port()
-    name = f"tradutor-legacy-reservation-{uuid.uuid4().hex[:12]}"
+    name = f"komyst-legacy-reservation-{uuid.uuid4().hex[:12]}"
     local_password = f"local-{uuid.uuid4().hex}"
     run = subprocess.run(
         [
             "docker", "run", "--rm", "-d", "--name", name,
             "-e", f"POSTGRES_PASSWORD={local_password}",
-            "-e", "POSTGRES_DB=tradutor_local_reservation",
+            "-e", "POSTGRES_DB=komyst_local_reservation",
             "-p", f"127.0.0.1:{port}:5432",
             POSTGRES_IMAGE,
         ],
@@ -79,7 +79,7 @@ def _postgres_container():
     if run.returncode != 0:
         pytest.skip(f"local postgres container unavailable: {run.stderr.strip()}")
     try:
-        settings = LocalPostgresConnectionSettings(host="127.0.0.1", port=port, dbname="tradutor_local_reservation", user="postgres", password=local_password)
+        settings = LocalPostgresConnectionSettings(host="127.0.0.1", port=port, dbname="komyst_local_reservation", user="postgres", password=local_password)
         deadline = time.time() + 45
         while True:
             try:
@@ -557,8 +557,8 @@ def test_end_to_end_race_closure_with_fake_drive_and_real_concurrent_connections
     unmodified GoogleDriveLegacyArtifactStorage/FakeDriveClient, only one worker is ever
     permitted to reach the Drive create call at all: create_count == 1.
     """
-    from yomu.community.legacy.legacy_publication_drive_adapter import GoogleDriveLegacyArtifactStorage
-    from yomu.community.legacy.legacy_publication_postgres_adapter import PostgresLegacyProvenanceBackend
+    from komyst.community.legacy.legacy_publication_drive_adapter import GoogleDriveLegacyArtifactStorage
+    from komyst.community.legacy.legacy_publication_postgres_adapter import PostgresLegacyProvenanceBackend
     from tests.test_legacy_publication_drive_adapter import FOLDER_ID, TEST_CREATE_DEADLINE_SECONDS, FakeDriveClient, _draft_input_and_plan
 
     migration_input, plan = _draft_input_and_plan(tmp_path)

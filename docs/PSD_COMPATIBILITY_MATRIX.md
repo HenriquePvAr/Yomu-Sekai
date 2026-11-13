@@ -1,8 +1,8 @@
 # PSD editor compatibility matrix — Mission 15
 
 > **Registro histórico de 2026-09-29 (Missão 15).** O writer citado vive hoje em
-> `yomu/export/editable_psd_writer.py` (`write_editable_psd`); o caminho legacy é
-> `yomu/export/professional_psd.py`. Contrato atual do PSD:
+> `komyst/export/editable_psd_writer.py` (`write_editable_psd`); o caminho legacy é
+> `komyst/export/professional_psd.py`. Contrato atual do PSD:
 > [Documentação Técnica §26.3](technical/DOCUMENTACAO_TECNICA.md#263-psd-profissional-editável-v2--type-layers-nativas-missão-6).
 > Os PSDs atuais vêm do CLEAN reescrito em 2026-10-23/24, não revalidado neste registro. **Revisado em:** 2026-10-24 · **Base verificada:** `5f482ce1`
 
@@ -30,7 +30,7 @@ stroke effect; this was not changed by M15.
 ## Synthetic fixture set
 
 Generated outside the repository at
-`%LOCALAPPDATA%\Temp\yomu-m15-psd-fixtures\`:
+`%LOCALAPPDATA%\Temp\komyst-m15-psd-fixtures\`:
 
 | Fixture | Coverage | Structural result |
 |---|---|---|

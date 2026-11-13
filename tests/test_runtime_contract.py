@@ -2,8 +2,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from yomu.runtime.job_store import JobStore
-from yomu.runtime.runtime_contract import canonical_runtime_identity, current_runtime_contract
+from komyst.runtime.job_store import JobStore
+from komyst.runtime.runtime_contract import canonical_runtime_identity, current_runtime_contract
 
 
 class RuntimeContractTests(unittest.TestCase):
@@ -29,7 +29,7 @@ class RuntimeContractTests(unittest.TestCase):
     def test_same_build_and_identity_share_contract(self):
         with tempfile.TemporaryDirectory() as raw:
             root = Path(raw)
-            exe = root / "YomuSekai.exe"
+            exe = root / "Komyst.exe"
             exe.write_bytes(b"same product payload")
             self.assertEqual(
                 current_runtime_contract(exe, frozen=True),

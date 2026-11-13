@@ -22,14 +22,14 @@ function emailHtml(kind: string, who: string, email: string, url: string, messag
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr><td align="center">
 <table role="presentation" width="560" cellpadding="0" cellspacing="0" style="max-width:560px;background:#17161b;border:1px solid #2c2a30">
 <tr><td style="height:4px;background:#c5372c"></td></tr>
-<tr><td style="padding:28px 32px 8px;font:700 22px Arial,sans-serif;color:#efe7d8">YOMU <span style="color:#c5372c">SEKAI</span></td></tr>
+<tr><td style="padding:28px 32px 8px;font:700 22px Arial,sans-serif;color:#efe7d8">KOMYST</td></tr>
 <tr><td style="padding:0 32px 20px;color:#c9a227;font:11px monospace;letter-spacing:.14em;text-transform:uppercase">${escapeHtml(SUBJECTS[kind])}</td></tr>
 <tr><td style="padding:0 32px 24px"><table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-top:1px solid #2c2a30">
 ${row("Enviado por", escapeHtml(who))}${row("E-mail", escapeHtml(email))}
 ${row("Fonte", url ? `<a href="${escapeHtml(url)}" style="color:#e0c981">${escapeHtml(url)}</a>` : "")}
 ${row(kind === "feedback" ? "Mensagem" : "Observação", escapeHtml(message).replace(/\n/g, "<br>"))}
 </table></td></tr>
-<tr><td style="padding:16px 32px;border-top:1px solid #2c2a30;color:#8a8377;font:12px Arial,sans-serif">Enviado pelo aplicativo Yomu Sekai.</td></tr>
+<tr><td style="padding:16px 32px;border-top:1px solid #2c2a30;color:#8a8377;font:12px Arial,sans-serif">Enviado pelo aplicativo Komyst.</td></tr>
 </table></td></tr></table></body></html>`;
 }
 
@@ -68,7 +68,7 @@ Deno.serve(async (req) => {
       method: "POST",
       headers: { Authorization: `Bearer ${apiKey}`, "content-type": "application/json" },
       body: JSON.stringify({
-        from: Deno.env.get("CONTACT_FROM_EMAIL") || "Yomu Sekai <onboarding@resend.dev>",
+        from: Deno.env.get("CONTACT_FROM_EMAIL") || "Komyst <onboarding@resend.dev>",
         to: [inbox],
         reply_to: identity.email || undefined,
         subject: `${SUBJECTS[kind]} · ${who}`,

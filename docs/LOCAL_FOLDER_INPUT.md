@@ -109,8 +109,8 @@ entrada inteira é recusada antes de enfileirar o processamento.
 ## Snapshot, proveniência e materialização
 
 Ao aceitar a pasta, o adaptador copia os bytes validados para um filho novo de
-`local_sources/` dentro da raiz de runtime (`%LOCALAPPDATA%\TradutorIA
-untime\local_sources\` por padrão, ou `TRADUTOR_RUNTIME_ROOT`). Os nomes são gerados (`0001.png`, por exemplo), e o manifesto
+`local_sources/` dentro da raiz de runtime (`%LOCALAPPDATA%\Komyst
+untime\local_sources\` por padrão, ou `KOMYST_RUNTIME_ROOT`). Os nomes são gerados (`0001.png`, por exemplo), e o manifesto
 interno contém hashes, dimensões, formato, tamanho, IDs opacos e uma impressão digital da origem.
 Ele não contém o caminho original nem os nomes originais das páginas.
 

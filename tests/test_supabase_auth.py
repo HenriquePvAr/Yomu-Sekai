@@ -17,15 +17,15 @@ import jwt as pyjwt
 from cryptography.hazmat.primitives.asymmetric import ec
 from jwt.algorithms import ECAlgorithm
 
-from yomu.community.community_auth import (
+from komyst.community.community_auth import (
     AuthConfigurationError,
     AuthenticationRequired,
     RequestPrincipal,
     build_auth_provider,
     LocalSessionAuthProvider,
 )
-import yomu.auth.supabase_auth as supabase_auth
-from yomu.auth.supabase_auth import SupabaseAuthConfig, SupabaseAuthProvider, JwksCache
+import komyst.auth.supabase_auth as supabase_auth
+from komyst.auth.supabase_auth import SupabaseAuthConfig, SupabaseAuthProvider, JwksCache
 
 ISSUER = "https://proj.supabase.co/auth/v1"
 JWKS_URL = "https://proj.supabase.co/auth/v1/.well-known/jwks.json"
@@ -315,7 +315,7 @@ class JwksCacheTests(unittest.TestCase):
     def test_jwks_timeout_fails_closed(self):
         class _Boom:
             def request(self, *a, **k):
-                from yomu.community.community_storage import StorageError
+                from komyst.community.community_storage import StorageError
                 raise StorageError("http_transport_error: Timeout", transient=True)
 
         provider = SupabaseAuthProvider(CONFIG, transport=_Boom())

@@ -16,9 +16,9 @@ from unittest import mock
 import cv2
 import numpy as np
 
-import yomu.ocr.ocr_balloon as ob
-import yomu.translation.semantic_fidelity as semantic_fidelity
-from yomu.ocr.ocr_engine import OCRLine
+import komyst.ocr.ocr_balloon as ob
+import komyst.translation.semantic_fidelity as semantic_fidelity
+from komyst.ocr.ocr_engine import OCRLine
 
 
 P65_SOURCE = "..YOU BE COME AGATETHROUGHWHICH AMONSTERAPPEARSIN THEREALWORLD."

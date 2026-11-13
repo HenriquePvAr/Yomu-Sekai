@@ -18,12 +18,12 @@ import unittest
 import cv2
 import numpy as np
 
-import yomu.clean.inpainting.advanced_art_inpainting as advanced_art_inpainting
-import yomu.config.settings as config
-import yomu.ocr.ocr_balloon as ob
-import yomu.ocr.ocr_line_provenance as ocr_line_provenance
-import yomu.ocr.source_completeness as source_completeness
-from yomu.ocr.ocr_engine import OCRLine
+import komyst.clean.inpainting.advanced_art_inpainting as advanced_art_inpainting
+import komyst.config.settings as config
+import komyst.ocr.ocr_balloon as ob
+import komyst.ocr.ocr_line_provenance as ocr_line_provenance
+import komyst.ocr.source_completeness as source_completeness
+from komyst.ocr.ocr_engine import OCRLine
 
 
 _REAL_RUN = os.path.join(

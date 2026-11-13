@@ -1,6 +1,6 @@
 # Desenvolvimento
 
-> **Base verificada:** `5f482ce1` (branch `main`) · **Revisado em:** 2026-10-24
+> **Setup verificado:** `7879bad2` (`dev`), 2026-11-12.
 >
 > [Voltar ao índice](README.md)
 
@@ -42,8 +42,8 @@ Outros sistemas operacionais não fazem parte do contrato validado atual.
 ## Instalação
 
 ```powershell
-git clone https://github.com/HenriquePvAr/Tradutor.Ia.git
-cd Tradutor.Ia
+git clone --branch dev https://github.com/HenriquePvAr/Komyst.git
+cd Komyst
 
 py -3.11 -m venv .venv
 .\.venv\Scripts\Activate.ps1
@@ -89,7 +89,7 @@ quando o `cv2` realmente importado não é o declarado.
 ## Variáveis de ambiente
 
 - **Fonte de verdade dos nomes:** `.env.example`.
-- **Fonte de verdade dos defaults:** `yomu/config/settings.py` (e `yomu/ui/ui_helpers.py`
+- **Fonte de verdade dos defaults:** `komyst/config/settings.py` (e `komyst/ui/ui_helpers.py`
   para o rótulo de provider de tradução).
 - **Referência comentada:** [Configuração](CONFIGURATION.md).
 
@@ -107,9 +107,9 @@ Copy-Item .env.example .env
 
 Mínimo para uma execução completa: as variáveis públicas do Supabase (`SUPABASE_URL`,
 `SUPABASE_PUBLISHABLE_KEY`) exigidas pelo login e um usuário com licença Beta. Todo job com
-tradução habilitada passa pelo provider interno `yomu_backend` (motor remoto DeepL na Edge
+tradução habilitada passa pelo provider interno `komyst_backend` (motor remoto DeepL na Edge
 Function `supabase/functions/translation-execute`); o cliente não chama a DeepL diretamente e
-`DEEPL_API_KEY` é segredo do servidor. Com `YOMU_ENV=local`/`test` e `YOMU_TEST_BACKEND`
+`DEEPL_API_KEY` é segredo do servidor. Com `KOMYST_ENV=local`/`test` e `KOMYST_TEST_BACKEND`
 vazio ou `mock`, o pipeline usa um backend mock (`MockBackendClient`) — útil para
 desenvolvimento offline. As demais variáveis têm defaults conservadores.
 
@@ -123,8 +123,8 @@ python start_tradutor.py status     # saúde do worker e da fila
 python start_tradutor.py stop       # parada graciosa do worker
 ```
 
-A aplicação escuta em `http://127.0.0.1:8080` por padrão (`TRADUTOR_UI_PORT`, lido em
-`yomu/ui/app.py`; `app_ui.py` é shim de compatibilidade). No Windows há também `start_tradutor.bat`.
+A aplicação escuta em `http://127.0.0.1:8080` por padrão (`KOMYST_UI_PORT`, lido em
+`komyst/ui/app.py`; `app_ui.py` é shim de compatibilidade). No Windows há também `start_tradutor.bat`.
 
 `python app_ui.py` sobe **apenas** a interface. Sem worker, os capítulos ficam `queued`.
 
@@ -182,7 +182,7 @@ Get-ChildItem tests/test_*.mjs | ForEach-Object { node --experimental-vm-modules
 Verificação de sintaxe (o que a CI faz):
 
 ```powershell
-node --check static/tradutor_ui.js
+node --check static/komyst_ui.js
 ```
 
 ### Serviço Better Auth
@@ -202,21 +202,23 @@ Python 3.11 e Node 24, instala `requirements/requirements-beta.txt` +
 `requirements/requirements-dev.txt`, roda `scripts/check_runtime_profile.py`, confirma que
 nenhum opt-in de smoke de rede está autorizado, roda `pytest` (timeout de 50 min; JUnit
 publicado como artifact), `node --check` dos scripts de `static/` (incluindo `static/i18n/`),
-o serviço Better Auth e `python -m compileall` de `yomu/`, `test_support/` e dos entrypoints da
-raiz. Localmente, `python -m pytest -q` passa ~6160 testes com 0 falhas (~10 min) no snapshot
-`5f482ce1`. **A CI não executa as suítes `.mjs`** —
+o serviço Better Auth e `python -m compileall` de `komyst/`, `test_support/` e dos entrypoints da
+raiz. A última execução completa registrada em 2026-11-11 separou falhas ambientais e apontou
+quatro falhas de asserção em testes de máscara/reconstrução. Consulte o
+[relatório de falhas](../reports/falhas_preexistentes_20261111.md); o resultado desse snapshot
+não deve ser tratado como uma execução da branch atual. **A CI não executa as suítes `.mjs`** —
 elas são responsabilidade local.
 
 ## Estrutura de diretórios
 
-O runtime Python canônico vive no pacote `yomu/`; a raiz mantém apenas entrypoints de
+O runtime Python canônico vive no pacote `komyst/`; a raiz mantém apenas entrypoints de
 compatibilidade (`app_ui.py`, `desktop_app.py`, `run_webtoon.py`, `start_tradutor.py`,
 `worker_service.py`, `down.py`, `main.py`, `run_local_folder.py`) e o bootstrap de teste. A
 política completa está em [Estrutura do projeto](architecture/REPOSITORY_STRUCTURE.md).
 
 ```text
 <repo>/
-├── yomu/                    # runtime canônico (commands, runtime, ui, pipeline, ocr, clean, translation, export, ...)
+├── komyst/                    # runtime canônico (commands, runtime, ui, pipeline, ocr, clean, translation, export, ...)
 ├── *.py                     # shims/entrypoints de compatibilidade
 ├── requirements.txt         # stack base; perfis em requirements/
 ├── requirements/            # perfis beta, rapidocr, ui, dev, paddle, optional, gemini-vps
@@ -241,18 +243,18 @@ Quatro categorias distintas, todas fora do controle de versão exceto a primeira
 | Categoria | Onde | Versionado |
 | --- | --- | --- |
 | **Código-fonte** | raiz do repositório | sim |
-| **Cache** | `%LOCALAPPDATA%\TradutorIA\cache` (override `CACHE_ROOT`) | não |
-| **Runtime** | `%LOCALAPPDATA%\TradutorIA\runtime` (banco de jobs `jobs.sqlite3`, logs, `ui_history.json`, `auth/`; override `TRADUTOR_RUNTIME_ROOT`) | não |
-| **Saída do usuário** | `%LOCALAPPDATA%\TradutorIA\output\<slug>\...` (override `TRADUTOR_OUTPUT_ROOT`) | não |
+| **Cache** | `%LOCALAPPDATA%\Komyst\cache` (override `CACHE_ROOT`) | não |
+| **Runtime** | `%LOCALAPPDATA%\Komyst\runtime` (banco de jobs `jobs.sqlite3`, logs, `ui_history.json`, `auth/`; override `KOMYST_RUNTIME_ROOT`) | não |
+| **Saída do usuário** | `%LOCALAPPDATA%\Komyst\output\<slug>\...` (override `KOMYST_OUTPUT_ROOT`) | não |
 
 As raízes não ficam dentro do repositório: são resolvidas em
-`yomu/runtime/runtime_paths.py` a partir de `TRADUTOR_USER_DATA_ROOT` ou, sem ele, de
-`%LOCALAPPDATA%\TradutorIA` (`yomu/ui/ui_helpers.py` expõe `OUTPUT_ROOT` e `HISTORY_PATH`).
-Em testes herméticos, tudo é redirecionado para `TRADUTOR_TEST_RUNTIME_ROOT`. Modelos locais de reconstrução de arte ficam fora do
-repositório, sob `%LOCALAPPDATA%\TradutorIA\models` por padrão
+`komyst/runtime/runtime_paths.py` a partir de `KOMYST_USER_DATA_ROOT` ou, sem ele, de
+`%LOCALAPPDATA%\Komyst` (`komyst/ui/ui_helpers.py` expõe `OUTPUT_ROOT` e `HISTORY_PATH`).
+Em testes herméticos, tudo é redirecionado para `KOMYST_TEST_RUNTIME_ROOT`. Modelos locais de reconstrução de arte ficam fora do
+repositório, sob `%LOCALAPPDATA%\Komyst\models` por padrão
 (`ADVANCED_ART_INPAINT_MODEL_PATH`).
 
-O modelo de instalação previsto pelo updater (`yomu/runtime/update_installer.py`) mantém `data/` fora de
+O modelo de instalação previsto pelo updater (`komyst/runtime/update_installer.py`) mantém `data/` fora de
 `versions/` justamente para que ativação e rollback nunca alcancem dados do usuário.
 
 ## OpenCV: contrato e inconsistência conhecida
@@ -315,7 +317,7 @@ Diferencie o tipo antes de agir sobre qualquer item:
 | Chrome + chromedriver | OPCIONAL/FALLBACK | usado só quando a descoberta HTTP não se aplica à fonte |
 | Tesseract | OPCIONAL | caminho de OCR alternativo, fora do padrão Beta |
 | Modelo local de reconstrução de arte | OPCIONAL/RUNTIME | asset externo verificado por SHA256; ausência vira revisão, não render forçado |
-| Fontes do Windows | PACKAGING CONCERN | `yomu/clean/ownership/font_fidelity.py` `ROLE_FONT_FILES` resolve cadeias de fontes **locais** do sistema (Trebuchet, Comic Sans, Segoe Print, Calibri e similares). Nada é baixado. A disponibilidade dessas fontes numa instalação Windows limpa não foi provada — `NEEDS_VERIFICATION` |
+| Fontes do Windows | PACKAGING CONCERN | `komyst/clean/ownership/font_fidelity.py` `ROLE_FONT_FILES` resolve cadeias de fontes **locais** do sistema (Trebuchet, Comic Sans, Segoe Print, Calibri e similares). Nada é baixado. A disponibilidade dessas fontes numa instalação Windows limpa não foi provada — `NEEDS_VERIFICATION` |
 | Runtime MSVC | PACKAGING CONCERN | implícito nas wheels |
 
 Nada nesta tabela é uma instrução de instalação para usuário final. O objetivo declarado do
@@ -349,9 +351,9 @@ Perfil de runtime que a Beta 1 empacota. Declarado em `requirements/requirements
 | `opencv-contrib-python`, `opencv-python-headless` e variantes | **proibidos** — mesmo diretório `cv2/` | recusado pelo preflight |
 | Fallback de navegador (Selenium/Chrome) | separado/opcional; a descoberta HTTP não depende dele | `requirements.txt` + Chrome do sistema |
 
-Não empacotar Paddle **não** remove o suporte: `yomu/ocr/ocr_engine.py` importa `paddleocr` de forma
+Não empacotar Paddle **não** remove o suporte: `komyst/ocr/ocr_engine.py` importa `paddleocr` de forma
 preguiçosa, a disponibilidade é sondada por `importlib.util.find_spec` e
-`_configure_mode` (`yomu/commands/run_webtoon.py`) trata a escalação Paddle como recuperação opcional nos dois
+`_configure_mode` (`komyst/commands/run_webtoon.py`) trata a escalação Paddle como recuperação opcional nos dois
 modos. Sem a biblioteca, a escalação é pulada e a leitura do RapidOCR é mantida; quando o
 próprio gate do RapidOCR recusa a página, a falha é fechada e contabilizada
 (`paddle_error:ModuleNotFoundError`), nunca silenciosa.
@@ -366,8 +368,8 @@ próprio gate do RapidOCR recusa a página, a falha é fechada e contabilizada
 | Perfil de runtime Beta | **DEFINIDO E PROVADO EM AMBIENTE LIMPO** — `requirements/requirements-beta.txt`, uma única distribuição de OpenCV, `pip check` limpo, preflight verde, E2E real executado (job `902b149e`: 35/35 páginas, PDF válido, zero Paddle carregado) |
 | Baseline de qualidade sob o runtime Beta | **NÃO PRESERVADA** — o E2E não reproduziu P28/P31/P32; ver [Quality Freeze](QUALITY_FREEZE.md) |
 | Instalação limpa em Windows | **NÃO PROVADA** — não existe validação em máquina limpa |
-| Instalador para usuário final | *(superado)* hoje: **PARCIAL** — `packaging/tradutor_ia.spec` (PyInstaller), `packaging/TradutorIA.iss` (Inno Setup, gera `YomuSekai-<versão>-Setup-x64.exe`) e `tools/build_installer.py` existem; nenhum `Setup.exe` versionado; instalação limpa não provada |
-| Modelo de atualização | **Implementação no código** — `yomu/runtime/update_installer.py`/`update_manifest.py`/`update_transport.py`/`installer_update.py`, mais a aba **Atualizações** da UI (ver [Update e signing](UPDATE_AND_SIGNING.md)); estado de distribuição e canal deve ser revalidado no checklist de release (o owner confirmou uso do updater para Beta 17) |
+| Instalador para usuário final | *(superado)* hoje: **PARCIAL** — `packaging/komyst.spec` (PyInstaller), `packaging/Komyst.iss` (Inno Setup, gera `Komyst-<versão>-Setup-x64.exe`) e `tools/build_installer.py` existem; nenhum `Setup.exe` versionado; instalação limpa não provada |
+| Modelo de atualização | **Implementação no código** — `komyst/runtime/update_installer.py`/`update_manifest.py`/`update_transport.py`/`installer_update.py`, mais a aba **Atualizações** da UI (ver [Update e signing](UPDATE_AND_SIGNING.md)); estado de distribuição e canal deve ser revalidado no checklist de release (o owner confirmou uso do updater para Beta 17) |
 | Distribuição Beta | **EM PREPARAÇÃO** |
 
 Pendente (2026-10-24): build e instalador finais validados, teste em Windows limpo,
@@ -399,8 +401,8 @@ processo filho**. Consequência medida:
 | `.venv-beta\Scripts\python.exe` | divergem |
 | `python.exe` base (sem stub) | iguais |
 
-Qualquer contabilidade por PID — o lease do worker em `yomu/runtime/job_store.py`, a supervisão em
-`yomu/runtime/worker_supervisor.py`, a identidade de runtime exposta na UI — registra o PID do processo
+Qualquer contabilidade por PID — o lease do worker em `komyst/runtime/job_store.py`, a supervisão em
+`komyst/runtime/worker_supervisor.py`, a identidade de runtime exposta na UI — registra o PID do processo
 Python real e compara com o PID devolvido pelo `Popen`. Sob o stub, os dois nunca batem.
 
 Isso reprova cinco testes (`test_worker_process_loss`, `test_worker_supervision`,
@@ -427,8 +429,8 @@ Pontos rápidos:
 ## Estrutura durante a closed beta
 
 > **Histórico.** Este parágrafo previa adiar a migração para um pacote; ela já ocorreu: o
-> runtime canônico está em `yomu/` e a raiz mantém shims de compatibilidade (ver
-> [Estrutura de diretórios](#estrutura-de-diretórios)). Não há plano ativo para `src/yomu_sekai/`.
+> runtime canônico está em `komyst/` e a raiz mantém shims de compatibilidade (ver
+> [Estrutura de diretórios](#estrutura-de-diretórios)). Não há plano ativo para `src/komyst/`.
 
 Os tools internos estão separados em `tools/release/`, `tools/admin/`, `tools/dev/` e
 `tools/harnesses/`. Mudanças de layout continuam exigindo atualização controlada de imports,

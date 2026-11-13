@@ -31,7 +31,7 @@ class DiskWalletProvider:
     """Disk-backed wrapper around the canonical deterministic wallet mock."""
 
     def __init__(self, state_path: Path):
-        from yomu.translation.providers.yomu_backend_provider import MockBackendClient
+        from komyst.translation.providers.komyst_backend_provider import MockBackendClient
         self.backend = MockBackendClient()
         self.backend.translate_invocation_count = 0
         self.path = state_path
@@ -79,9 +79,9 @@ class DiskWalletProvider:
 
 
 def _provider(runtime_root: Path):
-    from yomu.translation.providers.yomu_backend_provider import YomuBackendTranslationProvider
-    backend = DiskWalletProvider(Path(os.environ["YOMU_TEST_WALLET_STATE"]))
-    return YomuBackendTranslationProvider(runtime_root=runtime_root, backend=backend)
+    from komyst.translation.providers.komyst_backend_provider import KomystBackendTranslationProvider
+    backend = DiskWalletProvider(Path(os.environ["KOMYST_TEST_WALLET_STATE"]))
+    return KomystBackendTranslationProvider(runtime_root=runtime_root, backend=backend)
 
 
 def _token():
@@ -91,15 +91,15 @@ def _token():
 
 
 def _run_pipeline(manifest: Path, snapshot_root: Path, output: Path):
-    import yomu.pipeline.benchmark_pipeline as bp
-    import yomu.config.settings as config
-    import yomu.download.local.local_folder_input as local_folder_input
-    from yomu.download.local.local_folder_source import LocalFolderChapterAdapter, LocalFolderPolicy
-    from yomu.ocr.ocr_balloon import TextCandidate, TextGroup
-    from yomu.ocr.ocr_engine import OCRLine
-    from yomu.export.png_output import PngExportError
+    import komyst.pipeline.benchmark_pipeline as bp
+    import komyst.config.settings as config
+    import komyst.download.local.local_folder_input as local_folder_input
+    from komyst.download.local.local_folder_source import LocalFolderChapterAdapter, LocalFolderPolicy
+    from komyst.ocr.ocr_balloon import TextCandidate, TextGroup
+    from komyst.ocr.ocr_engine import OCRLine
+    from komyst.export.png_output import PngExportError
 
-    runtime = Path(os.environ["TRADUTOR_TEST_RUNTIME_ROOT"])
+    runtime = Path(os.environ["KOMYST_TEST_RUNTIME_ROOT"])
     old_snapshot_root = local_folder_input.LOCAL_SNAPSHOT_ROOT
     local_folder_input.LOCAL_SNAPSHOT_ROOT = snapshot_root
     output.mkdir(parents=True, exist_ok=True)
@@ -139,13 +139,13 @@ def _run_pipeline(manifest: Path, snapshot_root: Path, output: Path):
 
     original_png_export = bp.export_final_pages_png
     def fail_png_export_once(*args, **kwargs):
-        marker = Path(os.environ["YOMU_TEST_EXPORT_FAIL_MARKER"])
+        marker = Path(os.environ["KOMYST_TEST_EXPORT_FAIL_MARKER"])
         if not marker.exists():
-            wallet = json.loads(Path(os.environ["YOMU_TEST_WALLET_STATE"])
+            wallet = json.loads(Path(os.environ["KOMYST_TEST_WALLET_STATE"])
                                 .with_name("wallet_state.json").read_text(encoding="utf-8"))
             assert wallet["net_yk"] == 1
             marker.write_text("injected-after-translation-and-commit", encoding="utf-8")
-            raise PngExportError("YOMU_TEST_FAIL_EXPORT_ONCE")
+            raise PngExportError("KOMYST_TEST_FAIL_EXPORT_ONCE")
         return original_png_export(*args, **kwargs)
 
     class NoopMonitor:
@@ -157,15 +157,15 @@ def _run_pipeline(manifest: Path, snapshot_root: Path, output: Path):
         def stop(self): return {"enabled": False}
 
     args = SimpleNamespace(
-        url=os.environ["YOMU_TEST_SOURCE_REF"], max_images=3, full=True,
+        url=os.environ["KOMYST_TEST_SOURCE_REF"], max_images=3, full=True,
         debug_folder=str(output / "debug"), keep_debug=False, fast=True,
         benchmark=True, force=False, force_download=False, page_indices="",
         output_folder=str(output), ocr_engine="fixture", use_context=False,
         session_context_path=str(output / "session.json"), source_candidate_ids=[],
         local_manifest_path=str(manifest), translation_provider="deepl",
-        output_format="png", resume_checkpoint=os.getenv("TRADUTOR_RESUME_CHECKPOINT") == "1",
-        checkpoint_job_id=os.getenv("TRADUTOR_CHECKPOINT_JOB_ID", ""),
-        job_id=os.getenv("TRADUTOR_JOB_ID", ""),
+        output_format="png", resume_checkpoint=os.getenv("KOMYST_RESUME_CHECKPOINT") == "1",
+        checkpoint_job_id=os.getenv("KOMYST_CHECKPOINT_JOB_ID", ""),
+        job_id=os.getenv("KOMYST_JOB_ID", ""),
     )
     try:
         with mock.patch.object(bp, "_build_translation_provider", side_effect=test_build_provider), \
@@ -186,7 +186,7 @@ def _run_pipeline(manifest: Path, snapshot_root: Path, output: Path):
                  VISUAL_DIFF_VALIDATION=False, TRANSLATION_VALIDATION=False,
                  TRANSLATION_RETRY_ON_MIXED_LANGUAGE=False, TRANSLATE_SFX=False), \
              mock.patch.dict(os.environ, {"TRANSLATION_ENABLED": "true",
-                 "PIPELINE_PAGE_WORKERS": "1", "YOMU_CANCEL_TEST_MARKER_DIR": str(runtime / "markers")}, clear=False):
+                 "PIPELINE_PAGE_WORKERS": "1", "KOMYST_CANCEL_TEST_MARKER_DIR": str(runtime / "markers")}, clear=False):
             bp.run_benchmark(args)
         return 0
     finally:
@@ -201,12 +201,12 @@ def _child_main(argv):
 
 
 def test_local_folder_recovery_crosses_real_worker_processes(tmp_path, monkeypatch):
-    from yomu.runtime.job_store import JobStatus, JobStore
-    from yomu.download.local.local_folder_source import LocalFolderChapterAdapter, LocalFolderPolicy
-    from yomu.download.local.local_folder_input import local_source_reference
-    from yomu.auth.secure_auth_context import AuthEnvelopeStore
-    import yomu.ui.ui_bridge as ui_bridge
-    import yomu.runtime.yk_reservation as yk_reservation
+    from komyst.runtime.job_store import JobStatus, JobStore
+    from komyst.download.local.local_folder_source import LocalFolderChapterAdapter, LocalFolderPolicy
+    from komyst.download.local.local_folder_input import local_source_reference
+    from komyst.auth.secure_auth_context import AuthEnvelopeStore
+    import komyst.ui.ui_bridge as ui_bridge
+    import komyst.runtime.yk_reservation as yk_reservation
     from PIL import Image, ImageDraw
 
     runtime = tmp_path / "runtime"
@@ -228,15 +228,15 @@ def test_local_folder_recovery_crosses_real_worker_processes(tmp_path, monkeypat
             source, snapshot_root, snapshot_id="recovery-e2e")
     source_ref = local_source_reference(snapshot.analysis.source_fingerprint)
 
-    monkeypatch.setenv("TRADUTOR_TEST_RUNTIME_ROOT", str(runtime))
-    monkeypatch.setenv("TRADUTOR_OUTPUT_ROOT", str(runtime / "output"))
-    monkeypatch.setenv("YOMU_ENV", "test")
-    monkeypatch.setenv("YOMU_TEST_BACKEND", "mock")
-    monkeypatch.setenv("YOMU_RECOVERY_E2E", "1")
-    monkeypatch.setenv("YOMU_TEST_WALLET_STATE", str(runtime / "wallet_mock.pkl"))
-    monkeypatch.setenv("YOMU_TEST_EXPORT_FAIL_MARKER", str(runtime / "fail-once.marker"))
-    monkeypatch.setenv("YOMU_TEST_SOURCE_REF", source_ref)
-    monkeypatch.setenv("TRADUTOR_DEVICE_UUID", "550e8400-e29b-41d4-a716-446655440000")
+    monkeypatch.setenv("KOMYST_TEST_RUNTIME_ROOT", str(runtime))
+    monkeypatch.setenv("KOMYST_OUTPUT_ROOT", str(runtime / "output"))
+    monkeypatch.setenv("KOMYST_ENV", "test")
+    monkeypatch.setenv("KOMYST_TEST_BACKEND", "mock")
+    monkeypatch.setenv("KOMYST_RECOVERY_E2E", "1")
+    monkeypatch.setenv("KOMYST_TEST_WALLET_STATE", str(runtime / "wallet_mock.pkl"))
+    monkeypatch.setenv("KOMYST_TEST_EXPORT_FAIL_MARKER", str(runtime / "fail-once.marker"))
+    monkeypatch.setenv("KOMYST_TEST_SOURCE_REF", source_ref)
+    monkeypatch.setenv("KOMYST_DEVICE_UUID", "550e8400-e29b-41d4-a716-446655440000")
     bridge = ui_bridge.UiBridge()
     store = bridge.store
     command = [sys.executable, "-u", "-m", "tests.test_yk_recovery_process_e2e",

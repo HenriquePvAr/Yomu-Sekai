@@ -2,10 +2,10 @@
 
 > **Base verificada:** `5f482ce1` (branch `main`) · **Revisado em:** 2026-10-24
 
-> **Caminhos de módulo.** A implementação vive no pacote `yomu/`. Na raiz restam apenas shims
-> de compatibilidade (`app_ui.py` → `yomu.ui.app`, `run_webtoon.py` → `yomu.commands.run_webtoon`,
-> `worker_service.py` → `yomu.runtime.worker_service`, `start_tradutor.py` →
-> `yomu.commands.start_tradutor`, `down.py` → `yomu.download.down`, entre outros). Este
+> **Caminhos de módulo.** A implementação vive no pacote `komyst/`. Na raiz restam apenas shims
+> de compatibilidade (`app_ui.py` → `komyst.ui.app`, `run_webtoon.py` → `komyst.commands.run_webtoon`,
+> `worker_service.py` → `komyst.runtime.worker_service`, `start_tradutor.py` →
+> `komyst.commands.start_tradutor`, `down.py` → `komyst.download.down`, entre outros). Este
 > documento cita os shims somente quando eles são o comando público; os demais módulos aparecem
 > pelo caminho real. Mapa completo em [Estrutura do repositório](architecture/REPOSITORY_STRUCTURE.md).
 
@@ -32,64 +32,64 @@ Este documento descreve a arquitetura implementada no repositório. Ideias futur
 
 ## Visão geral
 
-O Tradutor.IA é um pipeline orientado a artefatos. Cada etapa recebe dados verificáveis, registra decisões relevantes e entrega sua saída à etapa seguinte. A execução não se resume à tradução textual: ela também controla download, OCR, classificação, reconstrução, PDF e quality gate.
+O Komyst é um pipeline orientado a artefatos. Cada etapa recebe dados verificáveis, registra decisões relevantes e entrega sua saída à etapa seguinte. A execução não se resume à tradução textual: ela também controla download, OCR, classificação, reconstrução, PDF e quality gate.
 
 ```mermaid
 flowchart LR
-    UI["yomu/ui/app.py<br/>(shim app_ui.py)"] --> Bridge["yomu/ui/ui_bridge.py"]
-    Bridge --> Queue[("yomu/runtime/job_store.py<br/>jobs.sqlite3")]
-    Queue --> Worker["yomu/runtime/worker_service.py<br/>(shim worker_service.py)"]
-    Worker --> Runner["yomu/runtime/job_runner.py"]
-    Runner --> CLI["run_webtoon.py<br/>(yomu/commands/run_webtoon.py)"]
-    CLI --> Orchestrator["yomu/pipeline/benchmark_pipeline.py"]
-    Launcher["yomu/runtime/process_launcher.py"] -. supervisão opcional .-> CLI
-    Orchestrator --> Discovery["yomu/download/sources/chapter_source.py<br/>+ yomu/download/http_source_discovery.py"]
-    Discovery --> Download["yomu/download/down.py"]
-    Download --> Split["yomu/export/pdf.py: smart split"]
-    Split --> OCR["yomu/ocr/ocr_engine.py"]
-    OCR --> Groups["yomu/ocr/ocr_balloon.py"]
-    Groups --> Translation["yomu/translation/providers/yomu_backend_provider.py<br/>(backend autenticado)"]
-    Translation --> Context["yomu/pipeline/session_context.py: ledger e entidades"]
-    Context --> Validation["yomu/translation/semantic_fidelity.py<br/>+ validação e retries"]
-    Validation --> Art["yomu/clean/inpainting/<br/>art_text_inpainting.py / advanced_art_inpainting.py"]
+    UI["komyst/ui/app.py<br/>(shim app_ui.py)"] --> Bridge["komyst/ui/ui_bridge.py"]
+    Bridge --> Queue[("komyst/runtime/job_store.py<br/>jobs.sqlite3")]
+    Queue --> Worker["komyst/runtime/worker_service.py<br/>(shim worker_service.py)"]
+    Worker --> Runner["komyst/runtime/job_runner.py"]
+    Runner --> CLI["run_webtoon.py<br/>(komyst/commands/run_webtoon.py)"]
+    CLI --> Orchestrator["komyst/pipeline/benchmark_pipeline.py"]
+    Launcher["komyst/runtime/process_launcher.py"] -. supervisão opcional .-> CLI
+    Orchestrator --> Discovery["komyst/download/sources/chapter_source.py<br/>+ komyst/download/http_source_discovery.py"]
+    Discovery --> Download["komyst/download/down.py"]
+    Download --> Split["komyst/export/pdf.py: smart split"]
+    Split --> OCR["komyst/ocr/ocr_engine.py"]
+    OCR --> Groups["komyst/ocr/ocr_balloon.py"]
+    Groups --> Translation["komyst/translation/providers/komyst_backend_provider.py<br/>(backend autenticado)"]
+    Translation --> Context["komyst/pipeline/session_context.py: ledger e entidades"]
+    Context --> Validation["komyst/translation/semantic_fidelity.py<br/>+ validação e retries"]
+    Validation --> Art["komyst/clean/inpainting/<br/>art_text_inpainting.py / advanced_art_inpainting.py"]
     Art --> Render[Tipografia e redraw]
     Render --> PostRender[Validação pós-render]
-    PostRender --> PDF["yomu/export/pdf.py: PDF e relatórios"]
+    PostRender --> PDF["komyst/export/pdf.py: PDF e relatórios"]
     PDF --> Gate[Quality gate]
-    Gate --> Reader["yomu/export/pdf_reader.py: Leitor e Histórico"]
+    Gate --> Reader["komyst/export/pdf_reader.py: Leitor e Histórico"]
 ```
 
 ## Entradas públicas
 
 ### Interface local
 
-`app_ui.py` (shim de `yomu.ui.app`) inicia uma aplicação NiceGUI na porta `8080` por padrão
-(`TRADUTOR_UI_PORT` sobrescreve). O frontend conversa com `yomu/ui/ui_bridge.py`, que:
+`app_ui.py` (shim de `komyst.ui.app`) inicia uma aplicação NiceGUI na porta `8080` por padrão
+(`KOMYST_UI_PORT` sobrescreve). O frontend conversa com `komyst/ui/ui_bridge.py`, que:
 
 - valida URLs, modos, plano de saída e nomes de saída;
-- cria o job persistido no `JobStore` (`yomu/runtime/job_store.py`) e monta o comando de
-  `run_webtoon.py` como lista de argumentos (`yomu.ui.ui_helpers.build_run_command`; no
+- cria o job persistido no `JobStore` (`komyst/runtime/job_store.py`) e monta o comando de
+  `run_webtoon.py` como lista de argumentos (`komyst.ui.ui_helpers.build_run_command`; no
   executável congelado, `--internal-child pipeline`);
 - acompanha progresso, histórico, revisão e cancelamento lendo o banco;
 - mascara segredos antes de expor logs à interface.
 
 > **A UI não executa o pipeline.** Ela cria linhas em `jobs.sqlite3` dentro do runtime root
-> (`yomu.runtime.runtime_paths.runtime_root()`: padrão `%LOCALAPPDATA%\TradutorIA\runtime\`;
-> `TRADUTOR_RUNTIME_ROOT` sobrescreve). Quem reivindica e executa é o worker
-> (`yomu/runtime/worker_service.py`), num processo independente, que por sua vez cria um runner
-> isolado por capítulo (`python -u -m yomu.runtime.job_runner`). Fechar o navegador ou
+> (`komyst.runtime.runtime_paths.runtime_root()`: padrão `%LOCALAPPDATA%\Komyst\runtime\`;
+> `KOMYST_RUNTIME_ROOT` sobrescreve). Quem reivindica e executa é o worker
+> (`komyst/runtime/worker_service.py`), num processo independente, que por sua vez cria um runner
+> isolado por capítulo (`python -u -m komyst.runtime.job_runner`). Fechar o navegador ou
 > reiniciar a UI não interrompe um capítulo em andamento. Veja
 > [Fila de worker persistente](WORKER_QUEUE.md) e
 > [Documentação Técnica §4–§9](technical/DOCUMENTACAO_TECNICA.md#4-arquitetura-de-execução).
 
 A UI tem seu próprio bridge assíncrono. Ela não usa automaticamente
-`yomu/runtime/process_launcher.py`.
+`komyst/runtime/process_launcher.py`.
 
 ### CLI
 
-`run_webtoon.py` (shim de `yomu.commands.run_webtoon`) é a entrada simplificada para o
+`run_webtoon.py` (shim de `komyst.commands.run_webtoon`) é a entrada simplificada para o
 pipeline atual. Ele valida os argumentos, configura o modo de OCR, resolve a pasta de saída e
-chama `yomu.pipeline.benchmark_pipeline.run_benchmark()`. Flags reais:
+chama `komyst.pipeline.benchmark_pipeline.run_benchmark()`. Flags reais:
 `python run_webtoon.py --help` (inclui `--local-folder`, `--output-format`,
 `--typesetting-mode`, `--download-only` e `--translation-provider`).
 
@@ -110,13 +110,13 @@ Sem `--force`, caches e progresso compatíveis podem ser reutilizados. `--downlo
 
 ### Launcher supervisionado
 
-`yomu/runtime/process_launcher.py` é o launcher rastreado para execuções CLI que precisam de
+`komyst/runtime/process_launcher.py` é o launcher rastreado para execuções CLI que precisam de
 supervisão fora da UI e de metadados claros de processo. Não há shim na raiz: ele é executado
-como módulo (`python -m yomu.runtime.process_launcher --help`).
+como módulo (`python -m komyst.runtime.process_launcher --help`).
 
 ```mermaid
 flowchart LR
-    L["yomu/runtime/process_launcher.py"] --> J[Windows Job Object]
+    L["komyst/runtime/process_launcher.py"] --> J[Windows Job Object]
     J --> P["Python: run_webtoon.py"]
     P --> D[Chrome, OCR e demais descendentes]
     L --> R[Diretório de runtime]
@@ -134,7 +134,7 @@ $repo = (Get-Location).Path
 $runtime = ".cache\e2e_runtime\minha_execucao"
 $python = "$repo\.venv\Scripts\python.exe"
 
-& $python -m yomu.runtime.process_launcher `
+& $python -m komyst.runtime.process_launcher `
   --runtime-directory $runtime `
   --cwd $repo `
   --stdout-path "$runtime\stdout.log" `
@@ -162,13 +162,13 @@ flowchart LR
     Browser --> Done
 ```
 
-`yomu.download.down.discover_chapter_source` é o ponto de entrada usado tanto pela análise
+`komyst.download.down.discover_chapter_source` é o ponto de entrada usado tanto pela análise
 pré-job da UI (`POST /api/ui/source/analyze` → `UiBridge.analyze_source_candidate` em
-`yomu/ui/ui_bridge.py`, executada numa thread do processo da UI com limite de 180 s) quanto
-pela fase de fonte do worker (`yomu/runtime/worker_service.py`). Ele:
+`komyst/ui/ui_bridge.py`, executada numa thread do processo da UI com limite de 180 s) quanto
+pela fase de fonte do worker (`komyst/runtime/worker_service.py`). Ele:
 
 1. seleciona o adapter por host e valida/normaliza a URL;
-2. chama `yomu.download.http_source_discovery.discover_via_http`, que faz **um GET limitado e
+2. chama `komyst.download.http_source_discovery.discover_via_http`, que faz **um GET limitado e
    sem cookies** e pede ao adapter para ler o HTML estático;
 3. só inicia Chrome/Selenium (`analyze_chapter_source`) quando o passo 2 retorna `None`.
    Na análise pré-job isso significa que o navegador pode subir no processo da UI; o
@@ -213,7 +213,7 @@ Hello.
 
 ## Download e validação de entrada
 
-Quando o caminho de navegador é usado, `yomu/download/down.py` opera Selenium e Chrome headless para
+Quando o caminho de navegador é usado, `komyst/download/down.py` opera Selenium e Chrome headless para
 coletar os recursos do viewer. O downloader:
 
 - deduplica URLs e preserva a ordem observada;
@@ -227,14 +227,14 @@ Quando habilitado, o cache de download evita nova coleta para a mesma origem. O 
 
 ### Fonte específica e fallback controlado
 
-`yomu/download/sources/chapter_source.py` sempre tenta primeiro um adapter específico. Quando não há adapter
+`komyst/download/sources/chapter_source.py` sempre tenta primeiro um adapter específico. Quando não há adapter
 registrado, uma URL HTTP(S) pública pode passar por `UniversalChapterAdapter`; isso é uma
 análise controlada, não uma declaração de suporte ao site. A URL, DNS e redirects são
 validados antes do navegador. Os recursos de imagem só são autorizados em memória depois
 de um cluster vencedor observado no leitor, e cada redirect de imagem volta a ser
 validado.
 
-O analisador em `yomu/download/sources/universal_chapter_adapter.py` observa DOM, lazy loading, recursos já
+O analisador em `komyst/download/sources/universal_chapter_adapter.py` observa DOM, lazy loading, recursos já
 vistos pelo navegador, JSON inline, metadados CDP/performance sanitizados e canvas capturável.
 JSON pequeno e reconhecido de respostas que o navegador já recebeu pode ser analisado em memória;
 texto não é executado nem persistido. A decisão é explícita: score
@@ -264,7 +264,7 @@ derivada de imagem DOM já carregada. Leitores que dependam desses mecanismos pe
 específico. A validação protege a navegação e as imagens selecionadas, mas não é
 um sandbox de todos os subrecursos que o navegador pode carregar ao renderizar uma página.
 Os transportes `requests` fixam o socket TCP na resposta DNS pública validada
-(`yomu/download/pinned_requests.py`), mas isso não cobre o tráfego do navegador; para URLs
+(`komyst/download/pinned_requests.py`), mas isso não cobre o tráfego do navegador; para URLs
 não confiáveis, o deploy precisaria de uma política de egress/interceptação adicional. Consulte [Adaptador universal de capítulos](UNIVERSAL_CHAPTER_ADAPTER.md)
 para limites, perfis de evidência e limitações.
 
@@ -279,8 +279,8 @@ adapter/host seguro e classe de falha. O shell normal da aba "Nova tradução" p
 a superfície azul de processamento não deve aparecer em erro pré-job.
 
 Para Webtoons, a análise específica resolve slots lazy antes de formar `source_selection`.
-`yomu/download/webtoons_reader_bridge.py` adapta o driver Selenium já aberto para
-`yomu.download.lazy_slot_resolver.resolve_lazy_reader_slots`, relendo apenas imagens descendentes do reader e
+`komyst/download/webtoons_reader_bridge.py` adapta o driver Selenium já aberto para
+`komyst.download.lazy_slot_resolver.resolve_lazy_reader_slots`, relendo apenas imagens descendentes do reader e
 rolando somente dentro dos bounds do container. Placeholders 1x1 permanecem pendentes, nunca
 autorizam o host `webtoons-static.pstatic.net` e nunca entram no manifesto. Se a resolução fica
 incompleta, a fase de fonte termina como `incomplete_source_coverage`, sem iniciar runner e sem
@@ -297,21 +297,21 @@ normais do pipeline. Consulte [Entrada por pasta local](LOCAL_FOLDER_INPUT.md).
 
 ## Páginas lógicas
 
-Webtoons podem fornecer fatias muito altas ou com divisões inadequadas para OCR e PDF. `yomu/export/pdf.py` implementa o smart split (`prepare_smart_webtoon_pages`; a variante incremental fica em `yomu/ocr/splitting/smart_split_incremental.py`), que reconstrói páginas lógicas com limites configuráveis de altura e preserva um relatório das fronteiras escolhidas.
+Webtoons podem fornecer fatias muito altas ou com divisões inadequadas para OCR e PDF. `komyst/export/pdf.py` implementa o smart split (`prepare_smart_webtoon_pages`; a variante incremental fica em `komyst/ocr/splitting/smart_split_incremental.py`), que reconstrói páginas lógicas com limites configuráveis de altura e preserva um relatório das fronteiras escolhidas.
 
 Essa transformação ocorre antes do OCR quando `SMART_WEBTOON_PDF_SPLIT=True` (padrão).
 
 ## OCR híbrido
 
-`yomu/ocr/ocr_engine.py` fornece uma interface comum para RapidOCR, PaddleOCR completo, PaddleOCR Mobile e o caminho opcional de Tesseract.
+`komyst/ocr/ocr_engine.py` fornece uma interface comum para RapidOCR, PaddleOCR completo, PaddleOCR Mobile e o caminho opcional de Tesseract.
 
 Nos modos `fast` e `quality`, RapidOCR é o OCR primário da configuração Beta. O modo `quality`
 mantém os recursos de recuperação e validação mais caros, mas Paddle só participa como fallback
 opcional se o pacote estiver disponível e se a política de fallback o selecionar. Um fallback
 vazio ou destrutivo não pode apagar uma leitura útil do RapidOCR.
 
-O engine primário não depende do modo: `yomu.config.settings.effective_ocr_engine()` retorna
-`BETA_OCR_ENGINE` (`"rapidocr"`) a menos que `TRADUTOR_OCR_ENGINE_OVERRIDE` nomeie
+O engine primário não depende do modo: `komyst.config.settings.effective_ocr_engine()` retorna
+`BETA_OCR_ENGINE` (`"rapidocr"`) a menos que `KOMYST_OCR_ENGINE_OVERRIDE` nomeie
 explicitamente outro engine do conjunto suportado (`BETA_OCR_ENGINES`, hoje só `rapidocr`).
 `run_webtoon.py` aplica essa resolução antes do
 download e falha fechado se o engine primário não estiver disponível — em vez de coletar o
@@ -321,7 +321,7 @@ No caminho RapidOCR:
 
 1. RapidOCR processa a página;
 2. reparos conservadores podem normalizar problemas estruturais sem traduzir o texto;
-3. grupos individuais recebem score em `yomu/ocr/ocr_balloon.py`;
+3. grupos individuais recebem score em `komyst/ocr/ocr_balloon.py`;
 4. uma região com leitura duvidosa pode executar **recuperação regional limitada com
    RapidOCR** sobre o recorte da própria região;
 5. se a leitura continuar ambígua, a região vai para revisão em vez de render;
@@ -332,12 +332,12 @@ O escalonamento legacy para Paddle (página ou região) é opt-in por
 regiões suspeitas e não é requisito para fechar qualidade Beta.
 
 Os metadados registram engine original, engine final, confidences, motivos de fallback,
-reparos e scores (`yomu/ocr/ocr_line_provenance.py`). O fallback solicita comparação; ele não fabrica
+reparos e scores (`komyst/ocr/ocr_line_provenance.py`). O fallback solicita comparação; ele não fabrica
 a leitura correta.
 
 ## Agrupamento e classificação
 
-`yomu/ocr/ocr_balloon.py` agrupa linhas visualmente relacionadas e classifica o grupo usando evidências textuais e de container. As classes principais são:
+`komyst/ocr/ocr_balloon.py` agrupa linhas visualmente relacionadas e classifica o grupo usando evidências textuais e de container. As classes principais são:
 
 - `speech`;
 - `narration`;
@@ -346,7 +346,7 @@ a leitura correta.
 - `unknown`, quando a evidência não permite decisão segura.
 
 SFX são preservados no original por padrão (`TRANSLATE_SFX=False`). Quando habilitada,
-`yomu/translation/sfx_glossary.py` aplica o glossário local
+`komyst/translation/sfx_glossary.py` aplica o glossário local
 `assets/lexicon/sfx_en_pt.json` ("BANG" → "BAM"); sons desconhecidos podem seguir para o
 provider. `TRANSLATE_SFX=0` mantém todos os SFX originais.
 
@@ -358,8 +358,8 @@ tokens curtos só aceitam substituição de mesmo comprimento ou omissão de vog
 — recupera esses casos sem custo de runtime mensurável e sem depender de uma
 segunda engine OCR. Um som grande em splash de página inteira (classificado
 `decorative`/`group_too_large`) mas reconhecido pelo glossário é promovido à
-tradução via `known_sound_translation_target` (`yomu/ocr/ocr_balloon.py`).
-Termos do enredo são protegidos por `yomu/translation/terms_glossary.py`
+tradução via `known_sound_translation_target` (`komyst/ocr/ocr_balloon.py`).
+Termos do enredo são protegidos por `komyst/translation/terms_glossary.py`
 (`assets/lexicon/terms_en_pt.json`): nomes como GEHENNA/EST/TU'UMLIM são
 reparados pós-provider ("GEENOM" → "GEHENNA") no funil `apply_group_translations`,
 com guarda de ambiguidade (dois candidatos na mesma distância = sem toque).
@@ -369,30 +369,30 @@ estratégia de máscara e redraw.
 ## Tradução e contexto
 
 **IMPLEMENTADO — tradução sempre pelo backend autenticado.** Um job com tradução habilitada
-sempre atravessa o provider `yomu_backend` (`YomuBackendTranslationProvider`,
-`yomu/translation/providers/yomu_backend_provider.py`), injetado em
+sempre atravessa o provider `komyst_backend` (`KomystBackendTranslationProvider`,
+`komyst/translation/providers/komyst_backend_provider.py`), injetado em
 `get_translator("3", translation_provider=...)` por
-`yomu.pipeline.benchmark_pipeline._resolve_translation_runtime`. O backend chama o provider do
+`komyst.pipeline.benchmark_pipeline._resolve_translation_runtime`. O backend chama o provider do
 lado do servidor (a Edge Function `supabase/functions/translation-execute` usa a chave DeepL do
 servidor); a chave DeepL nunca fica no cliente. Se o backend não puder ser montado, o job falha
-com `yomu_backend_provider_unavailable` — não há fallback para um tradutor local. Jobs Quality
+com `komyst_backend_provider_unavailable` — não há fallback para um tradutor local. Jobs Quality
 exigem o UUID do dispositivo comercial verificado; sem ele a UI recusa o job antes de persistir
 (`commercial_device_id_missing`). Download-only e o plano `Apenas Clean` não traduzem e não
 inicializam provider.
 
-`deepl` (`yomu.ui.ui_helpers.DEFAULT_TRANSLATION_PROVIDER`) é o rótulo do *motor remoto*
+`deepl` (`komyst.ui.ui_helpers.DEFAULT_TRANSLATION_PROVIDER`) é o rótulo do *motor remoto*
 registrado na proveniência; `--translation-provider` e `NVIDIA_TRANSLATION_PROVIDER` viraram
-metadado do pedido. `normalize_translation_provider_provenance` aceita `deepl` → `yomu_backend` e
+metadado do pedido. `normalize_translation_provider_provenance` aceita `deepl` → `komyst_backend` e
 falha com `provider_mismatch` para qualquer outra combinação divergente.
 
 **DEPRECIADO para jobs habilitados:** `translator_deepl.py`, `translator_nvidia.py`
-(`nemotron`/`riva`) e `translator_nllb.py` (Google/NLLB), em `yomu/translation/providers/`,
+(`nemotron`/`riva`) e `translator_nllb.py` (Google/NLLB), em `komyst/translation/providers/`,
 continuam no código, mas a fábrica legada não é usada por um job habilitado. `TRANSLATION_MODE`
 (default `nvidia`) só afeta esses caminhos legados.
 
-Quando o contexto está habilitado, `yomu/pipeline/session_context.py` mantém informações do capítulo em `session_context.json`. `--no-context` desativa esse comportamento; `--delete-context-after` remove o arquivo somente após a geração bem-sucedida do PDF.
+Quando o contexto está habilitado, `komyst/pipeline/session_context.py` mantém informações do capítulo em `session_context.json`. `--no-context` desativa esse comportamento; `--delete-context-after` remove o arquivo somente após a geração bem-sucedida do PDF.
 
-O refinamento natural PT-BR (`yomu/translation/natural_ptbr_refinement.py`, provider NVIDIA/Nemotron) **não
+O refinamento natural PT-BR (`komyst/translation/natural_ptbr_refinement.py`, provider NVIDIA/Nemotron) **não
 faz parte do fluxo automático**. Ele é exposto como uma sugestão linguística explícita na
 superfície de revisão (`POST /api/ui/human-translation/refinement`), exige autorização
 explícita do dono do job e nunca aplica uma tradução por conta própria.
@@ -400,7 +400,7 @@ explícita do dono do job e nunca aplica uma tradução por conta própria.
 ## Memória de capítulo: terminologia e entidades
 
 Um capítulo não é uma sequência de regiões independentes: o mesmo nome precisa sair com a
-mesma forma da primeira à última página. `yomu/pipeline/session_context.py` mantém duas memórias
+mesma forma da primeira à última página. `komyst/pipeline/session_context.py` mantém duas memórias
 deliberadamente separadas, com autoridades distintas.
 
 **Ledger de terminologia.** Um mapa compacto `origem → alvo`, uma entrada por termo único,
@@ -454,12 +454,12 @@ sequência de gates independentes:
 | --- | --- |
 | Qualidade lexical | candidato vazio, truncado, malformado ou fora do formato pedido |
 | Resíduo de origem | texto-fonte remanescente (inglês/espanhol) ou fragmento parcialmente traduzido |
-| Fidelidade semântica | `yomu/translation/semantic_fidelity.py`: se o alvo preserva o sentido da fonte; um veredito inutilizável (`REVIEW_UNUSABLE`) impede o render |
+| Fidelidade semântica | `komyst/translation/semantic_fidelity.py`: se o alvo preserva o sentido da fonte; um veredito inutilizável (`REVIEW_UNUSABLE`) impede o render |
 | Terminologia | conflito com uma ligação autoritativa do ledger do capítulo |
 | Nome próprio e entidade | alteração de uma entidade já estabelecida no registro de personagens |
 | Proveniência de OCR | de qual engine e de qual recuperação veio a fonte que originou o candidato |
 
-Candidatos inválidos podem receber retries seletivos (`yomu/clean/ownership/selective_review_retry.py`). Se
+Candidatos inválidos podem receber retries seletivos (`komyst/clean/ownership/selective_review_retry.py`). Se
 continuarem inválidos, o texto-fonte é preservado e o grupo é marcado para revisão. Não há
 reescrita silenciosa da resposta do provider.
 
@@ -467,11 +467,11 @@ reescrita silenciosa da resposta do provider.
 
 A reconstrução ocorre em duas camadas, com uma política de preservação acima de ambas.
 
-1. **Remoção do lettering de origem** (`yomu/clean/inpainting/art_text_inpainting.py` e o
-   caminho de limpeza em `yomu/ocr/ocr_balloon.py`): máscara restrita ao texto,
+1. **Remoção do lettering de origem** (`komyst/clean/inpainting/art_text_inpainting.py` e o
+   caminho de limpeza em `komyst/ocr/ocr_balloon.py`): máscara restrita ao texto,
    análise de background, e preenchimento compatível ou inpainting local. `STRICT_MASK_BOUNDS`
    e os limites de expansão impedem que a máscara cresça sobre a arte.
-2. **Reconstrução avançada** (`yomu/clean/inpainting/advanced_art_inpainting.py`): para regiões
+2. **Reconstrução avançada** (`komyst/clean/inpainting/advanced_art_inpainting.py`): para regiões
    texturizadas difíceis, um modelo local do tipo LaMa
    (`ADVANCED_ART_INPAINT_MODEL_ID`, hoje `anime_manga_lama_large_jit`). Contrato de runtime:
    os arquivos de modelo são **assets externos**, nunca código versionado; o modelo só é
@@ -496,8 +496,8 @@ original visível a uma página com um alvo inseguro apresentado como correto.
 A tipografia é derivada da fonte, não escolhida arbitrariamente:
 
 - o estilo é inferido da lettering de origem da região
-  (`yomu/clean/ownership/source_glyph_envelope.py`: envelope determinístico e fail-closed a partir dos pixels);
-- a seleção de fonte é consciente do papel da região (`yomu.clean.ownership.font_fidelity.ROLE_FONT_FILES`): cada
+  (`komyst/clean/ownership/source_glyph_envelope.py`: envelope determinístico e fail-closed a partir dos pixels);
+- a seleção de fonte é consciente do papel da região (`komyst.clean.ownership.font_fidelity.ROLE_FONT_FILES`): cada
   papel semântico tem sua própria cadeia de candidatos de fonte **local**, em vez de
   colapsar num único bucket compartilhado, preservando hierarquia visual;
 - `font_fidelity` nunca baixa fonte e nunca chama provider: ele resolve apenas os
@@ -520,9 +520,9 @@ Isto **não** é reprodução pixel-perfect da tipografia original, e o pipeline
 
 ## PDF
 
-`yomu/export/pdf.py` reúne as páginas finais válidas. A contagem do PDF é comparada com a contagem
-esperada pelo quality gate. `yomu/export/pdf_naming.py` é a única fonte do nome do arquivo, e
-`yomu/export/pdf_reader.py` lê as páginas de volta para o leitor interno sem nenhuma dependência de
+`komyst/export/pdf.py` reúne as páginas finais válidas. A contagem do PDF é comparada com a contagem
+esperada pelo quality gate. `komyst/export/pdf_naming.py` é a única fonte do nome do arquivo, e
+`komyst/export/pdf_reader.py` lê as páginas de volta para o leitor interno sem nenhuma dependência de
 renderização de PDF — o PDF é gerado com uma forma estreita e conhecida (uma imagem
 `/DCTDecode` por página), e servir uma página é entregar ao navegador o JPEG que já está
 dentro do artefato. Qualquer coisa fora dessa forma levanta `UnsupportedPdf` e o chamador cai
@@ -530,7 +530,7 @@ para o visualizador de PDF do próprio navegador.
 
 ## Cache e resume
 
-`yomu/pipeline/pipeline_cache.py` separa os caches de download, precheck sem texto, OCR, tradução e página renderizada. As chaves incorporam hashes de imagem, engine, configuração relevante e versões internas do formato.
+`komyst/pipeline/pipeline_cache.py` separa os caches de download, precheck sem texto, OCR, tradução e página renderizada. As chaves incorporam hashes de imagem, engine, configuração relevante e versões internas do formato.
 
 Os JSONs críticos usam escrita atômica. O `run_signature` em `progress.json` permite reutilizar páginas concluídas apenas quando a execução é compatível. `--force` ignora os caches de download, OCR, tradução e renderização; ele não apaga o cache global.
 
@@ -554,8 +554,8 @@ Uma execução completa cria, conforme a configuração:
 └── *.pdf                        # documento final
 ```
 
-`<output_root>` é `yomu.runtime.runtime_paths.output_root()`: padrão
-`%LOCALAPPDATA%\TradutorIA\output`, sobrescrito por `TRADUTOR_OUTPUT_ROOT`. Novos jobs da UI
+`<output_root>` é `komyst.runtime.runtime_paths.output_root()`: padrão
+`%LOCALAPPDATA%\Komyst\output`, sobrescrito por `KOMYST_OUTPUT_ROOT`. Novos jobs da UI
 usam o nível `<run_id>` para manter reprocessamentos do mesmo capítulo separados. Saídas legadas
 em `<output_root>/<slug>/` permanecem aceitas pelo histórico.
 
@@ -573,23 +573,23 @@ O PDF de um capítulo completo é nomeado pela obra e pelo capítulo, de modo qu
 <obra>_capitulo_<numero>.pdf
 ```
 
-`yomu/export/pdf_naming.py` é a única fonte do nome. A obra vem do título da série quando o pipeline o conhece e, caso contrário, do slug da série na URL do capítulo — o segmento do episódio nunca é usado como nome da obra. O número vem da metadata do capítulo, depois da URL, e só recorre ao identificador da execução quando o capítulo não tem número. O nome é sanitizado para o Windows: minúsculas, sem acentos, sem caracteres inválidos, sem travessia de caminho, sem nomes reservados e com tamanho limitado.
+`komyst/export/pdf_naming.py` é a única fonte do nome. A obra vem do título da série quando o pipeline o conhece e, caso contrário, do slug da série na URL do capítulo — o segmento do episódio nunca é usado como nome da obra. O número vem da metadata do capítulo, depois da URL, e só recorre ao identificador da execução quando o capítulo não tem número. O nome é sanitizado para o Windows: minúsculas, sem acentos, sem caracteres inválidos, sem travessia de caminho, sem nomes reservados e com tamanho limitado.
 
 A execução registra o caminho do PDF no `run_manifest.json` (`pdf_path`, `pdf_filename`), e a UI abre o arquivo por esse caminho em vez de remontar o nome. Saídas antigas continuam funcionando: elas usavam um nome genérico e são descobertas pelo caminho persistido ou pelo PDF presente na pasta. A convenção nova vale apenas para novas execuções — nenhum PDF existente é renomeado.
 
 ## Recursos e paralelismo
 
-`yomu/ocr/ocr_parallel.py` coordena workers de OCR. `yomu/runtime/adaptive_scheduler.py` pode ajustar concorrência a partir da memória e CPU observadas, enquanto `yomu/runtime/resource_monitor.py` registra amostras e relatórios. Os defaults mantêm paralelismo adaptativo e monitoramento detalhado desativados; ambos são opt-in pelo `.env`.
+`komyst/ocr/ocr_parallel.py` coordena workers de OCR. `komyst/runtime/adaptive_scheduler.py` pode ajustar concorrência a partir da memória e CPU observadas, enquanto `komyst/runtime/resource_monitor.py` registra amostras e relatórios. Os defaults mantêm paralelismo adaptativo e monitoramento detalhado desativados; ambos são opt-in pelo `.env`.
 
 ## Ciclo de vida do job
 
 A UI **não executa o pipeline**. Ela grava um job em `jobs.sqlite3` no runtime root
-(`yomu/runtime/job_store.py`); o worker (`yomu/runtime/worker_service.py`), num processo
+(`komyst/runtime/job_store.py`); o worker (`komyst/runtime/worker_service.py`), num processo
 independente, reivindica esse job atomicamente e cria um runner isolado por capítulo
-(`yomu/runtime/job_runner.py`), que por sua vez executa `run_webtoon.py` como subprocesso com
+(`komyst/runtime/job_runner.py`), que por sua vez executa `run_webtoon.py` como subprocesso com
 log próprio, progresso e heartbeat.
 
-`yomu.runtime.job_store.JobStatus` define **15 estados**, dos quais 4 são terminais
+`komyst.runtime.job_store.JobStatus` define **15 estados**, dos quais 4 são terminais
 (`finished`, `review_required`, `failed`, `cancelled`). As transições permitidas estão em
 `ALLOWED_TRANSITIONS`; qualquer outra é rejeitada:
 
@@ -609,7 +609,7 @@ Consequências arquiteturais:
 - fechar o navegador ou reiniciar `app_ui.py` não interrompe um capítulo em andamento;
 - um worker que morre deixa o job em estado reconciliável, não em `running` fantasma;
 - a supervisão do worker pelo launcher é limitada por política (2s/5s/15s, 3 tentativas,
-  depois `degraded`; `yomu/runtime/worker_supervisor.py`), e `yomu/runtime/process_launcher.py`
+  depois `degraded`; `komyst/runtime/worker_supervisor.py`), e `komyst/runtime/process_launcher.py`
   persiste o exit code real controlando a árvore de processos no Windows;
 - **IMPLEMENTADO:** a retomada usa `POST /api/ui/resume` e aparece na interface como o botão
   **Retomar** no painel `#interruptedJobsPanel`, exibido só quando o backend marca `can_resume`.

@@ -16,8 +16,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from yomu.runtime.job_store import JobStatus, JobStore
-from yomu.runtime.worker_service import Worker
+from komyst.runtime.job_store import JobStatus, JobStore
+from komyst.runtime.worker_service import Worker
 
 URL = "https://www.webtoons.com/en/drama/serie/episode-1/viewer?title_no=1&episode_no=1"
 
@@ -142,7 +142,7 @@ class WorkerSourceFailureDiagnosticTests(unittest.TestCase):
         self.assertTrue(evidence["reason_classifier_source"])
 
     def test_a_classified_exception_is_marked_as_classified(self):
-        from yomu.download.sources.chapter_source import SourceError
+        from komyst.download.sources.chapter_source import SourceError
 
         row, evidence = self.fail_with(SourceError("source_not_ready", "no_driver"))
 
@@ -172,7 +172,7 @@ class WorkerSourceFailureDiagnosticTests(unittest.TestCase):
     def test_an_ordinary_failure_keeps_the_information_needed_to_diagnose_it(self):
         _, evidence = self.fail_with(FileNotFoundError(
             2, "No such file or directory",
-            r"C:\\Projetos\\Tradutor.Ia\\.cache\\drivers\\chromedriver.exe"))
+            r"C:\\Projetos\\Komyst\\.cache\\drivers\\chromedriver.exe"))
 
         self.assertEqual(evidence["exception_class"], "FileNotFoundError")
         self.assertIn("chromedriver", evidence["safe_message"])
@@ -213,7 +213,7 @@ class WorkerSourceFailureDiagnosticTests(unittest.TestCase):
         self.assertTrue(row["finished_at"])
 
     def test_a_cancellation_is_not_recorded_as_a_failure_diagnostic(self):
-        from yomu.download.sources.chapter_source import SourceError
+        from komyst.download.sources.chapter_source import SourceError
 
         job = self.queued_url_job()
         worker = _Worker(self.store, self.log_dir, SourceError("cancelled", "test_cancel"))
@@ -232,7 +232,7 @@ class WorkerSourceFailureDiagnosticTests(unittest.TestCase):
 
     # ---- legacy runs -------------------------------------------------------
     def test_a_run_without_a_diagnostic_reports_it_as_unavailable(self):
-        from yomu.runtime.job_failure_diagnostic import load_failure_diagnostic
+        from komyst.runtime.job_failure_diagnostic import load_failure_diagnostic
 
         job = self.queued_url_job()
         row = self.store.transition(
@@ -246,7 +246,7 @@ class WorkerSourceFailureDiagnosticTests(unittest.TestCase):
         self.assertIsNone(evidence["exception_class"])
 
     def test_a_recorded_diagnostic_is_readable_back_from_the_job_row(self):
-        from yomu.runtime.job_failure_diagnostic import load_failure_diagnostic
+        from komyst.runtime.job_failure_diagnostic import load_failure_diagnostic
 
         row, _ = self.fail_with(RuntimeError("synthetic failure"))
         evidence = load_failure_diagnostic(row)
@@ -259,7 +259,7 @@ class UiFailureDisplayContract(unittest.TestCase):
     """The user sees a short coded reason; never a traceback or a diagnostic path."""
 
     def setUp(self):
-        self.js = (Path(__file__).resolve().parents[1] / "static" / "tradutor_ui.js").read_text(
+        self.js = (Path(__file__).resolve().parents[1] / "static" / "komyst_ui.js").read_text(
             encoding="utf-8")
 
     def test_the_generic_source_analysis_reason_has_a_safe_user_message(self):

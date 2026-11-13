@@ -14,7 +14,7 @@ from pathlib import Path
 import pytest
 
 
-from yomu.community.legacy.legacy_publication_migrator import (
+from komyst.community.legacy.legacy_publication_migrator import (
     LegacyArtifactInput,
     LegacyMigrationInput,
     LegacyPublicationInput,
@@ -43,7 +43,7 @@ def _write_pdf(root: Path, name: str, data: bytes) -> dict[str, object]:
 
 def _source(source_instance_id: str = "10000000-0000-4000-8000-000000000001") -> dict[str, object]:
     return {
-        "source_system": "tradutor_ia_sqlite_synthetic_v1",
+        "source_system": "komyst_sqlite_synthetic_v1",
         "source_instance_id": source_instance_id,
         "source_schema_version": 3,
         "initial_snapshot_sha256": "a" * 64,
@@ -60,7 +60,7 @@ def _published_fixture(root: Path, **publication_overrides: object) -> dict[str,
     publication = {
         "legacy_publication_id": "TEST-PUB-PUBLISHED-001",
         "source_instance_id": "10000000-0000-4000-8000-000000000001",
-        "source_system": "tradutor_ia_sqlite_synthetic_v1",
+        "source_system": "komyst_sqlite_synthetic_v1",
         "owner_id": "30000000-0000-4000-8000-000000000001",
         "owner_resolution_state": "resolved",
         "source_job_id": "synthetic-job-published-001",
@@ -90,7 +90,7 @@ def _draft_fixture(root: Path, **publication_overrides: object) -> dict[str, obj
     publication = {
         "legacy_publication_id": "TEST-PUB-RECOVERY-001",
         "source_instance_id": "10000000-0000-4000-8000-000000000002",
-        "source_system": "tradutor_ia_sqlite_synthetic_v1",
+        "source_system": "komyst_sqlite_synthetic_v1",
         "owner_id": "30000000-0000-4000-8000-000000000002",
         "owner_resolution_state": "resolved",
         "source_job_id": "synthetic-job-recovery-001",
@@ -413,7 +413,7 @@ def test_cli_without_dry_run_is_rejected(tmp_path: Path):
     fixture = tmp_path / "fixture.json"
     fixture.write_text(json.dumps(_published_fixture(tmp_path)), encoding="utf-8")
     result = subprocess.run(
-        [sys.executable, "-m", "yomu.community.legacy.legacy_publication_migrator", "--fixture", str(fixture), "--artifact-root", str(tmp_path)],
+        [sys.executable, "-m", "komyst.community.legacy.legacy_publication_migrator", "--fixture", str(fixture), "--artifact-root", str(tmp_path)],
         cwd=Path(__file__).resolve().parents[1],
         text=True,
         capture_output=True,
@@ -427,7 +427,7 @@ def test_cli_dry_run_success(tmp_path: Path):
     fixture = tmp_path / "fixture.json"
     fixture.write_text(json.dumps(_published_fixture(tmp_path)), encoding="utf-8")
     result = subprocess.run(
-        [sys.executable, "-m", "yomu.community.legacy.legacy_publication_migrator", "--fixture", str(fixture), "--artifact-root", str(tmp_path), "--dry-run"],
+        [sys.executable, "-m", "komyst.community.legacy.legacy_publication_migrator", "--fixture", str(fixture), "--artifact-root", str(tmp_path), "--dry-run"],
         cwd=Path(__file__).resolve().parents[1],
         text=True,
         capture_output=True,
@@ -443,7 +443,7 @@ def test_cli_dry_run_invalid_input_returns_json_without_traceback(tmp_path: Path
     fixture = tmp_path / "fixture.json"
     fixture.write_text(json.dumps(_draft_fixture(tmp_path, remote_asset_verification="nonsense")), encoding="utf-8")
     result = subprocess.run(
-        [sys.executable, "-m", "yomu.community.legacy.legacy_publication_migrator", "--fixture", str(fixture), "--artifact-root", str(tmp_path), "--dry-run"],
+        [sys.executable, "-m", "komyst.community.legacy.legacy_publication_migrator", "--fixture", str(fixture), "--artifact-root", str(tmp_path), "--dry-run"],
         cwd=Path(__file__).resolve().parents[1],
         text=True,
         capture_output=True,

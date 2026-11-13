@@ -6,7 +6,7 @@ reported, so a Riva run could only be obtained by editing ``.env``.  Provider ch
 per-job execution configuration, so it belongs in the form.
 
 These tests execute the real ``syncSourceFormState`` / ``formPayload`` sources from
-``static/tradutor_ui.js`` under Node with stubbed boundaries, and drive the real bridge
+``static/komyst_ui.js`` under Node with stubbed boundaries, and drive the real bridge
 hermetically.  No provider is ever contacted.
 """
 
@@ -21,13 +21,13 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from yomu.review.source_readiness import SourceReadinessStore, default_workspace_id
-from yomu.ui.ui_helpers import build_run_command
+from komyst.review.source_readiness import SourceReadinessStore, default_workspace_id
+from komyst.ui.ui_helpers import build_run_command
 from tests.test_new_translation_source_policy_state import SourceStateBridge, source_payload
 from tests.test_translation_start import WEBTOON_URL, drive
 
 ROOT = Path(__file__).resolve().parents[1]
-UI_SOURCE = ROOT / "static" / "tradutor_ui.js"
+UI_SOURCE = ROOT / "static" / "komyst_ui.js"
 UI_SHELL = ROOT / "ui" / "ui_shell.html"
 NODE = shutil.which("node")
 
@@ -45,14 +45,14 @@ function balanced(text) {
 function extract(name) {
   const heads = [`  function ${name}(`, `  async function ${name}(`, `  const ${name} =`];
   const start = lines.findIndex(line => heads.some(head => line.startsWith(head)));
-  if (start < 0) throw new Error(`symbol not found in tradutor_ui.js: ${name}`);
+  if (start < 0) throw new Error(`symbol not found in komyst_ui.js: ${name}`);
   if (/;\s*$/.test(lines[start]) && balanced(lines[start])) return lines[start];
   const out = [lines[start]];
   for (let i = start + 1; i < lines.length; i += 1) {
     out.push(lines[i]);
     if (/^  \};?$/.test(lines[i])) return out.join('\n');
   }
-  throw new Error(`unterminated symbol in tradutor_ui.js: ${name}`);
+  throw new Error(`unterminated symbol in komyst_ui.js: ${name}`);
 }
 
 const SYMBOLS = ['normalizeTranslationProvider', 'syncSourceFormState', 'nameGlossaryPairs', 'formPayload'];

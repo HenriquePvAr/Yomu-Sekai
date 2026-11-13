@@ -15,7 +15,7 @@ import unittest
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
-from yomu.ocr.ocr_balloon import extract_glyph_style_profile, select_font_role_with_glyph_style
+from komyst.ocr.ocr_balloon import extract_glyph_style_profile, select_font_role_with_glyph_style
 
 
 def _render_bgr(font_file, text="Perfectly Fine Hamburg", size=72, fill=(20, 20, 20),

@@ -15,8 +15,8 @@ import tempfile
 import unittest
 from unittest import mock
 
-import yomu.download.readers.scrapling_reader_resolver as resolver
-from yomu.download.readers.scrapling_reader_resolver import DynamicReaderError
+import komyst.download.readers.scrapling_reader_resolver as resolver
+from komyst.download.readers.scrapling_reader_resolver import DynamicReaderError
 
 URL = "https://comix.to/title/qk31-example/11378175-chapter-70"
 
@@ -73,7 +73,7 @@ def _run_resolve_with(failure_sequence):
             mock.patch.object(resolver, "_resolution_failure_code", side_effect=list(failure_sequence)), \
             mock.patch.object(resolver, "_append_telemetry", side_effect=record), \
             mock.patch.object(resolver, "_resolve_in_child_process", side_effect=_inline_boundary(adapter)), \
-            mock.patch("yomu.download.sources.universal_chapter_adapter.analyse_candidates", return_value=mock.MagicMock()):
+            mock.patch("komyst.download.sources.universal_chapter_adapter.analyse_candidates", return_value=mock.MagicMock()):
         try:
             result = resolver.resolve(URL, adapter=adapter)
             return result, fake_fetcher.fetch.call_count, telemetry
@@ -212,7 +212,7 @@ class TelemetryAllowListTests(unittest.TestCase):
                     # a sensitive field must still be dropped by the allow-list
                     cookie="SECRET-should-not-persist",
                 )
-            written = (open(os.path.join(tmp, "YomuSekai", "diagnostics",
+            written = (open(os.path.join(tmp, "Komyst", "diagnostics",
                                          "scrapling_reader.jsonl"), encoding="utf-8")
                        .read())
         self.assertIn('"pending_count": 2', written)

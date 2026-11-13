@@ -5,8 +5,8 @@ from pathlib import Path
 from unittest import mock
 
 import tools.harnesses.performance_validation_harness as harness
-import yomu.commands.start_tradutor as start_tradutor
-import yomu.config.settings as config
+import komyst.commands.start_tradutor as start_tradutor
+import komyst.config.settings as config
 
 
 def test_performance_harness_parser_accepts_supported_modes():
@@ -91,7 +91,7 @@ def test_hybrid_preflight_valid_fake_config_has_two_lanes_without_http():
 
     with mock.patch.object(config, "NVIDIA_OCR_ENABLED", True), \
          mock.patch.object(config, "NVIDIA_API_KEY", "test-only-key"), \
-         mock.patch("yomu.ocr.nvidia_ocr_provider.NvidiaOCRProvider", FakeProvider):
+         mock.patch("komyst.ocr.nvidia_ocr_provider.NvidiaOCRProvider", FakeProvider):
         result = harness._hybrid_preflight(config)
     assert result["hybrid_two_lane_preflight"] is True
     assert result["nvidia_lane_enabled"] is True
@@ -123,7 +123,7 @@ def test_hybrid_preflight_rejects_unavailable_provider():
 
     with mock.patch.object(config, "NVIDIA_OCR_ENABLED", True), \
          mock.patch.object(config, "NVIDIA_API_KEY", "test-only-key"), \
-         mock.patch("yomu.ocr.nvidia_ocr_provider.NvidiaOCRProvider", UnavailableProvider):
+         mock.patch("komyst.ocr.nvidia_ocr_provider.NvidiaOCRProvider", UnavailableProvider):
         result = harness._hybrid_preflight(config)
     assert result["hybrid_two_lane_preflight"] is False
     assert result["disable_reason"] == "nvidia_provider_not_configured"

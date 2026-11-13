@@ -5,7 +5,7 @@ from pathlib import Path
 
 import numpy as np
 
-import yomu.clean.ownership.glyph_art_boundary_review as gabr
+import komyst.clean.ownership.glyph_art_boundary_review as gabr
 
 
 class ConflictArtifactTests(unittest.TestCase):
@@ -72,23 +72,23 @@ class ReviewDraftTests(unittest.TestCase):
 class BoundaryEditorUiContractTests(unittest.TestCase):
     def test_editor_has_layers_segments_opacity_and_fail_closed_copy(self):
         root = Path(__file__).resolve().parents[1]
-        script = (root / "static" / "tradutor_ui.js").read_text(
+        script = (root / "static" / "komyst_ui.js").read_text(
             encoding="utf-8")
-        css = (root / "static" / "tradutor_ui.css").read_text(
+        css = (root / "static" / "komyst_ui.css").read_text(
             encoding="utf-8")
         for token in (
             "REVISAR TEXTO × ARTE", "data-boundary-opacity",
             "data-boundary-segment", "MARCAR COMO TEXTO",
             "MARCAR COMO ARTE", "MANTER INCERTO",
             "data-boundary-tool=\"undo\"", "data-boundary-tool=\"redo\"",
-            "tradutor-boundary-review:",
+            "komyst-boundary-review:",
         ):
             self.assertIn(token, script)
         self.assertIn("image-rendering:pixelated", css)
 
     def test_bridge_exposes_content_addressed_conflict(self):
         source = Path(__file__).resolve().parents[1].joinpath(
-            "yomu/ui/ui_bridge.py").read_text(encoding="utf-8")
+            "komyst/ui/ui_bridge.py").read_text(encoding="utf-8")
         self.assertIn("build_conflict_artifact(", source)
         self.assertIn('"first_pending_segment_id"', source)
         self.assertNotIn('page_id == "p004"', source)

@@ -3,7 +3,7 @@
 from pathlib import Path
 from unittest import mock
 
-import yomu.ui.ui_bridge as ui_bridge
+import komyst.ui.ui_bridge as ui_bridge
 
 
 def test_default_and_isolated_runtime_roots_share_canonical_identity(tmp_path: Path):
@@ -22,7 +22,7 @@ def test_explicit_install_identity_override_remains_supported(tmp_path: Path):
     with mock.patch.object(ui_bridge.InstallIdentity, "device_id") as device_id:
         value = ui_bridge._read_or_create_install_id(
             tmp_path / "isolated",
-            {"TRADUTOR_INSTALL_ID": "hermetic-install"},
+            {"KOMYST_INSTALL_ID": "hermetic-install"},
         )
 
     assert value == "hermetic-install"

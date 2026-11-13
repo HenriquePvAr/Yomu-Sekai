@@ -21,9 +21,9 @@ import unittest
 
 import numpy as np
 
-import yomu.ocr.ocr_balloon as ocr_balloon
-from yomu.ocr.ocr_balloon import RECOVERY_RECONCILE, RECOVERY_REJECT, reconcile_recovery_lines
-from yomu.ocr.ocr_engine import OCRLine
+import komyst.ocr.ocr_balloon as ocr_balloon
+from komyst.ocr.ocr_balloon import RECOVERY_RECONCILE, RECOVERY_REJECT, reconcile_recovery_lines
+from komyst.ocr.ocr_engine import OCRLine
 
 
 def _line(text, box, confidence=0.95):

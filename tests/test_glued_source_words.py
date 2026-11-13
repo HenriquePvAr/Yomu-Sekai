@@ -7,8 +7,8 @@ import test_support._test_bootstrap as _test_bootstrap  # noqa: F401
 
 import unittest
 
-import yomu.ocr.ocr_balloon as ob
-from yomu.review.region_taxonomy import segment_words
+import komyst.ocr.ocr_balloon as ob
+from komyst.review.region_taxonomy import segment_words
 
 
 class SegmentWordsTests(unittest.TestCase):

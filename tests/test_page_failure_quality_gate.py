@@ -30,8 +30,8 @@ install_offline_network_guard()
 
 import unittest
 
-import yomu.pipeline.benchmark_pipeline as benchmark_pipeline
-import yomu.ocr.ocr_balloon as ocr_balloon
+import komyst.pipeline.benchmark_pipeline as benchmark_pipeline
+import komyst.ocr.ocr_balloon as ocr_balloon
 
 
 def _page(index, *, status="completed", items=(), **extra):

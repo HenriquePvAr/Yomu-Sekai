@@ -7,7 +7,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from yomu.review.source_support_report import (
+from komyst.review.source_support_report import (
     InMemorySourceSupportReporter,
     LocalOutboxSourceSupportReporter,
     build_source_support_report,

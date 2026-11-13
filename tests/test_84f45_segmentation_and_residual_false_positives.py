@@ -23,8 +23,8 @@ from unittest.mock import patch
 
 import numpy as np
 
-import yomu.translation.semantic_fidelity as semantic_fidelity
-from yomu.ocr.ocr_balloon import _post_render_source_text_check
+import komyst.translation.semantic_fidelity as semantic_fidelity
+from komyst.ocr.ocr_balloon import _post_render_source_text_check
 from tests.test_ocr_quality_regressions import _line, _scored_group
 
 
@@ -129,7 +129,7 @@ class PostRenderResidualEnglishTests(unittest.TestCase):
         group.safe_area = (0, 0, 220, 80)
         image = np.full((100, 240, 3), 255, dtype=np.uint8)
         with patch(
-            "yomu.ocr.ocr_balloon.OCREngine._detect_with_rapidocr",
+            "komyst.ocr.ocr_balloon.OCREngine._detect_with_rapidocr",
             return_value=[_line(observed)],
         ):
             return _post_render_source_text_check(

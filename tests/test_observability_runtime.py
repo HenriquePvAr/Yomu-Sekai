@@ -1,7 +1,7 @@
 import json
 from unittest.mock import patch
 
-import yomu.runtime.job_runner as job_runner
+import komyst.runtime.job_runner as job_runner
 
 
 def test_observability_client_requires_loopback_url():

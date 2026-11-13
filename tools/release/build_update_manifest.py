@@ -2,7 +2,7 @@
 from __future__ import annotations
 import argparse, hashlib, json
 from pathlib import Path
-from yomu.runtime.version import PRODUCT_VERSION
+from komyst.runtime.version import PRODUCT_VERSION
 
 def main() -> None:
     p = argparse.ArgumentParser()
@@ -13,7 +13,7 @@ def main() -> None:
     data = a.artifact.read_bytes()
     # This helper prepares the unsigned payload consumed by the release signer.  It intentionally
     # emits the same channel-bearing schema the client verifies; unsigned output is never trusted.
-    manifest = {"schema_version": 1, "app_id": "tradutor-ia", "channel": a.channel,
+    manifest = {"schema_version": 1, "app_id": "komyst", "channel": a.channel,
                 "artifact_type": a.artifact_type,
                 "version": a.version, "minimum_version": a.min_supported_version,
                 "published_at": None,

@@ -43,9 +43,9 @@ from unittest.mock import patch
 import cv2
 import numpy as np
 
-import yomu.ocr.ocr_balloon as ob
-from yomu.ocr.ocr_balloon import TextGroup
-from yomu.ocr.ocr_engine import OCRLine
+import komyst.ocr.ocr_balloon as ob
+from komyst.ocr.ocr_balloon import TextGroup
+from komyst.ocr.ocr_engine import OCRLine
 
 
 def _line(text, box):

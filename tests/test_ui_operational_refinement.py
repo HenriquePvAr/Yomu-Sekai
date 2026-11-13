@@ -17,12 +17,12 @@ from unittest import mock
 
 import test_support._test_bootstrap as _test_bootstrap  # noqa: F401
 
-import yomu.ui.ui_bridge as ui_bridge
-from yomu.runtime.job_store import JobStatus, JobStore
-from yomu.runtime.process_options import build_background_process_options
-from yomu.download.download_transport import preflight_browser_navigation
-from yomu.download.sources.chapter_source import SourceError
-from yomu.ui.ui_bridge import UiBridge
+import komyst.ui.ui_bridge as ui_bridge
+from komyst.runtime.job_store import JobStatus, JobStore
+from komyst.runtime.process_options import build_background_process_options
+from komyst.download.download_transport import preflight_browser_navigation
+from komyst.download.sources.chapter_source import SourceError
+from komyst.ui.ui_bridge import UiBridge
 
 
 class OperationalBridge(UiBridge):
@@ -365,7 +365,7 @@ class LifecycleAndProcessTests(unittest.TestCase):
 class FrontendOperationalContractsTests(unittest.TestCase):
     def test_frontend_exposes_review_cancel_eta_and_retry(self):
         root = Path(__file__).resolve().parents[1]
-        js = (root / "static" / "tradutor_ui.js").read_text(encoding="utf-8")
+        js = (root / "static" / "komyst_ui.js").read_text(encoding="utf-8")
         shell = (root / "ui" / "ui_shell.html").read_text(encoding="utf-8")
         for marker in (
             "qualityReviewPanel", "/api/ui/quality-review/action", "confirmQualityReview",
@@ -374,7 +374,7 @@ class FrontendOperationalContractsTests(unittest.TestCase):
             self.assertIn(marker, js + shell, marker)
 
     def test_frontend_uses_structured_human_messages_not_tracebacks(self):
-        js = (Path(__file__).resolve().parents[1] / "static" / "tradutor_ui.js").read_text(encoding="utf-8")
+        js = (Path(__file__).resolve().parents[1] / "static" / "komyst_ui.js").read_text(encoding="utf-8")
         self.assertIn("worker_unavailable", js)
         self.assertIn("user_cancelled", js)
         self.assertNotIn("traceback", js[js.index("function renderRunStatus"):])
@@ -383,7 +383,7 @@ class FrontendOperationalContractsTests(unittest.TestCase):
 class TranslatedHistoryReviewEntry(unittest.TestCase):
     def setUp(self):
         root = Path(__file__).resolve().parents[1]
-        self.js = (root / "static" / "tradutor_ui.js").read_text(encoding="utf-8")
+        self.js = (root / "static" / "komyst_ui.js").read_text(encoding="utf-8")
         self.shell = (root / "ui" / "ui_shell.html").read_text(encoding="utf-8")
 
     def test_history_card_exposes_explicit_review_action(self):
@@ -504,7 +504,7 @@ class TranslatedHistoryReviewEntry(unittest.TestCase):
         self.assertLess(action.index(validation), action.index(request))
 
     def test_review_editor_fields_do_not_shrink_inside_button_flex_row(self):
-        css = (Path(__file__).resolve().parents[1] / "static" / "tradutor_ui.css").read_text(
+        css = (Path(__file__).resolve().parents[1] / "static" / "komyst_ui.css").read_text(
             encoding="utf-8"
         )
         review_actions_start = self.js.index("const reviewActions = isReportOnly ?")
@@ -520,8 +520,8 @@ class TranslatedHistoryReviewEntry(unittest.TestCase):
 
     def test_developer_mode_toggle_is_a_real_ui_option(self):
         # No toggle in the user's Configurações any more; developers enable it with
-        # localStorage.tradutorDeveloperMode = '1'.
-        self.assertIn("tradutorDeveloperMode", self.js)
+        # localStorage.komystDeveloperMode = '1'.
+        self.assertIn("komystDeveloperMode", self.js)
         self.assertIn("updateQualityReviewDeveloperActions()", self.js)
 
 

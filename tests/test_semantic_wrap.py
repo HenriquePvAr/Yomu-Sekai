@@ -1,5 +1,5 @@
 """Semantic pt-BR line wrapping: no orphaned function words at line edges."""
-from yomu.ocr.ocr_balloon import _semantic_wrap_lines, _PT_BREAK_ORPHAN_WORDS
+from komyst.ocr.ocr_balloon import _semantic_wrap_lines, _PT_BREAK_ORPHAN_WORDS
 
 
 def _measure_factory(widths):

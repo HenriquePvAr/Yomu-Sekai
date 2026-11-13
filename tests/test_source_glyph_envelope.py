@@ -5,7 +5,7 @@ import unittest
 import cv2
 import numpy as np
 
-import yomu.clean.ownership.source_glyph_envelope as sge
+import komyst.clean.ownership.source_glyph_envelope as sge
 
 
 def fixture():

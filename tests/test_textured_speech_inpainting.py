@@ -18,16 +18,16 @@ import numpy as np
 
 from test_support import cv_text
 
-import yomu.config.settings as config
-import yomu.ocr.ocr_balloon as ocr_balloon
-import yomu.ocr.source_completeness as source_completeness
-from yomu.ocr.ocr_balloon import (
+import komyst.config.settings as config
+import komyst.ocr.ocr_balloon as ocr_balloon
+import komyst.ocr.source_completeness as source_completeness
+from komyst.ocr.ocr_balloon import (
     TextGroup,
     _build_text_mask,
     _remove_text_for_group,
     _source_scoped_speech_reason,
 )
-from yomu.ocr.ocr_engine import OCRLine
+from komyst.ocr.ocr_engine import OCRLine
 
 STRATEGIES = ("primary", "conservative", "glyph_overlay", "caption_overlay")
 FALLBACK = "source_scoped"

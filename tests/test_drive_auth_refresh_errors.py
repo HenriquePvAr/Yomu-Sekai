@@ -15,9 +15,9 @@ import tempfile
 import unittest
 from pathlib import Path
 
-import yomu.community.storage.drive_auth as drive_auth
-from yomu.community.community_storage import StorageError
-from yomu.community.storage.google_drive_storage import HttpResponse
+import komyst.community.storage.drive_auth as drive_auth
+from komyst.community.community_storage import StorageError
+from komyst.community.storage.google_drive_storage import HttpResponse
 
 TEST_ACCESS_TOKEN = "TEST_ACCESS_TOKEN_DO_NOT_LOG"
 TEST_REFRESH_TOKEN = "TEST_REFRESH_TOKEN_DO_NOT_LOG"

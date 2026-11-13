@@ -10,8 +10,8 @@ import json
 import time
 import unittest
 
-from yomu.auth.secure_auth_context import AuthContextError, require_token_lifetime
-from yomu.ui.ui_bridge import UiBridge
+from komyst.auth.secure_auth_context import AuthContextError, require_token_lifetime
+from komyst.ui.ui_bridge import UiBridge
 
 
 def _jwt(exp):

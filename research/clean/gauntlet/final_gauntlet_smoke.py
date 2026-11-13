@@ -2,7 +2,7 @@ import json, sys, time
 from pathlib import Path
 import cv2, numpy as np, torch
 
-ROOT = Path(r"C:\Users\henri\YomuExperimental\clean-final-model-gauntlet-v1")
+ROOT = Path(r"C:\Users\henri\KomystExperimental\clean-final-model-gauntlet-v1")
 REPO = ROOT / "third_party" / "contemporary_manga_text_seg"
 WEIGHT = ROOT / "models" / "contemporary_manga_seg" / "model.pth"
 MANIFEST = Path("reports/bakeoff_dataset_manifest.json")

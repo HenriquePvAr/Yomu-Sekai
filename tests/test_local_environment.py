@@ -11,10 +11,10 @@ from pathlib import Path
 
 import pytest
 
-import yomu.community.community_publish_runner as community_publish_runner
-import yomu.runtime.local_environment as local_environment
-import yomu.commands.start_tradutor as start_tradutor
-import yomu.runtime.worker_service as worker_service
+import komyst.community.community_publish_runner as community_publish_runner
+import komyst.runtime.local_environment as local_environment
+import komyst.commands.start_tradutor as start_tradutor
+import komyst.runtime.worker_service as worker_service
 
 
 ENV_KEYS = (
@@ -29,7 +29,7 @@ ENV_KEYS = (
     "GOOGLE_OAUTH_TOKEN_PATH",
     "GOOGLE_OAUTH_SCOPES",
     "LOCAL_ENV_TEST_VALUE",
-    "TRADUTOR_ALLOW_DRIVER_DOWNLOAD",
+    "KOMYST_ALLOW_DRIVER_DOWNLOAD",
     "LOCAL_ENV_CANARY",
     "LOCAL_ENV_LOCAL_CANARY",
 )
@@ -80,25 +80,25 @@ def test_env_local_can_enable_local_driver_policy(tmp_path, monkeypatch):
     env_path = tmp_path / ".env"
     env_path.write_text("LOCAL_ENV_TEST_VALUE=from-base\n", encoding="utf-8")
     (tmp_path / ".env.local").write_text(
-        "TRADUTOR_ALLOW_DRIVER_DOWNLOAD=1\n", encoding="utf-8"
+        "KOMYST_ALLOW_DRIVER_DOWNLOAD=1\n", encoding="utf-8"
     )
     _select(monkeypatch, env_path)
 
     assert local_environment.load_local_environment(env_path) is True
     assert os.environ["LOCAL_ENV_TEST_VALUE"] == "from-base"
-    assert os.environ["TRADUTOR_ALLOW_DRIVER_DOWNLOAD"] == "1"
+    assert os.environ["KOMYST_ALLOW_DRIVER_DOWNLOAD"] == "1"
 
 
 def test_env_local_does_not_override_process_values(tmp_path, monkeypatch):
     env_path = tmp_path / ".env"
     (tmp_path / ".env.local").write_text(
-        "TRADUTOR_ALLOW_DRIVER_DOWNLOAD=1\n", encoding="utf-8"
+        "KOMYST_ALLOW_DRIVER_DOWNLOAD=1\n", encoding="utf-8"
     )
     _select(monkeypatch, env_path)
-    monkeypatch.setenv("TRADUTOR_ALLOW_DRIVER_DOWNLOAD", "0")
+    monkeypatch.setenv("KOMYST_ALLOW_DRIVER_DOWNLOAD", "0")
 
     assert local_environment.load_local_environment(env_path) is True
-    assert os.environ["TRADUTOR_ALLOW_DRIVER_DOWNLOAD"] == "0"
+    assert os.environ["KOMYST_ALLOW_DRIVER_DOWNLOAD"] == "0"
 
 
 def test_env_example_is_never_loaded(tmp_path, monkeypatch):
@@ -128,7 +128,7 @@ def test_loading_is_independent_of_current_working_directory(tmp_path, monkeypat
 
 def test_windows_path_is_preserved(tmp_path, monkeypatch):
     env_path = tmp_path / ".env"
-    windows_path = r"C:\Users\Example User\AppData\Local\TradutorIA\drive_token.json"
+    windows_path = r"C:\Users\Example User\AppData\Local\Komyst\drive_token.json"
     env_path.write_text(f"GOOGLE_OAUTH_TOKEN_PATH={windows_path}\n", encoding="utf-8")
     _select(monkeypatch, env_path)
 
@@ -222,7 +222,7 @@ def test_drive_auth_import_does_not_open_browser(tmp_path):
     code = (
         "import webbrowser\n"
         "webbrowser.open = lambda *a, **k: (_ for _ in ()).throw(RuntimeError('browser'))\n"
-        "from yomu.community.storage import drive_auth\n"
+        "from komyst.community.storage import drive_auth\n"
         "print('import-ok')\n"
     )
     result = subprocess.run(
@@ -238,7 +238,7 @@ def test_drive_auth_import_does_not_open_network(tmp_path):
     code = (
         "import socket\n"
         "socket.create_connection = lambda *a, **k: (_ for _ in ()).throw(RuntimeError('network'))\n"
-        "from yomu.community.storage import drive_auth\n"
+        "from komyst.community.storage import drive_auth\n"
         "print('import-ok')\n"
     )
     result = subprocess.run(
@@ -271,6 +271,6 @@ def test_publish_runner_fails_safely_when_local_environment_is_invalid(monkeypat
 
 
 def test_app_ui_loads_environment_before_reading_port():
-    source = (local_environment.PROJECT_ROOT / "yomu/ui/app.py").read_text(encoding="utf-8")
+    source = (local_environment.PROJECT_ROOT / "komyst/ui/app.py").read_text(encoding="utf-8")
 
     assert source.index("load_local_environment_for_entrypoint()") < source.index("APP_PORT =")

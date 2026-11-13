@@ -29,8 +29,8 @@ def test_canonical_backend_success_marks_destination_confirmed():
 
 
 def test_bootstrap_does_not_promote_unconfirmed_persisted_token():
-    source = (Path(__file__).resolve().parents[1] / "static" / "tradutor_ui.js").read_text(encoding="utf-8")
-    assert "getGlobal('__tradutorAuthState') === 'authenticated'" in source
+    source = (Path(__file__).resolve().parents[1] / "static" / "komyst_ui.js").read_text(encoding="utf-8")
+    assert "getGlobal('__komystAuthState') === 'authenticated'" in source
 
 
 def test_explicit_login_owns_canonical_verification_during_sdk_event():
@@ -40,9 +40,9 @@ def test_explicit_login_owns_canonical_verification_during_sdk_event():
 
 
 def test_stale_bearer_is_blocked_until_canonical_auth_state():
-    source = (Path(__file__).resolve().parents[1] / "static" / "tradutor_ui.js").read_text(encoding="utf-8")
+    source = (Path(__file__).resolve().parents[1] / "static" / "komyst_ui.js").read_text(encoding="utf-8")
     assert "let bearer = authState === 'authenticated'" in source
-    assert "let bearer = getGlobal('__tradutorAccessToken') || ''" not in source
+    assert "let bearer = getGlobal('__komystAccessToken') || ''" not in source
 
 
 def test_historical_boot_condition_would_have_sent_stale_bearer():

@@ -10,7 +10,7 @@ from unittest import mock
 
 import numpy as np
 
-import yomu.ocr.ocr_engine as oe
+import komyst.ocr.ocr_engine as oe
 
 
 class NoAngleClassifierTests(unittest.TestCase):

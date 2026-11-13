@@ -1,7 +1,7 @@
 from pathlib import Path
 
-from yomu.download.sources.chapter_source import looks_like_challenge
-from yomu.runtime.job_store import JobStatus, transition_allowed
+from komyst.download.sources.chapter_source import looks_like_challenge
+from komyst.runtime.job_store import JobStatus, transition_allowed
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -21,7 +21,7 @@ def test_claimed_source_challenge_enters_waiting_state_and_can_resume_same_job()
 
 def test_ui_removes_redundant_format_selector_and_keeps_output_plan_authority():
     shell = (ROOT / "ui" / "ui_shell.html").read_text(encoding="utf-8")
-    script = (ROOT / "static" / "tradutor_ui.js").read_text(encoding="utf-8")
+    script = (ROOT / "static" / "komyst_ui.js").read_text(encoding="utf-8")
     assert 'id="outputFormatSelect"' not in shell
     assert 'id="outputPlanField"' in shell
     assert "source_verification_pending: true" in script

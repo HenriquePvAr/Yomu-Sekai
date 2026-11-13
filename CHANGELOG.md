@@ -1,6 +1,6 @@
 # Changelog
 
-All notable changes to Komyst (Tradutor IA) are recorded here. Dates are ISO-8601.
+All notable changes to Komyst are recorded here. Dates are ISO-8601.
 This file records source-level changes; it is not a release/tag log.
 
 ## [Unreleased] — main — 2026-10-24 (`5f482ce1`)
@@ -8,7 +8,7 @@ This file records source-level changes; it is not a release/tag log.
 ### Changed — clean, render & SFX
 - Sound effects are translated by default (`TRANSLATE_SFX=True`) using a pt-BR onomatopoeia
   glossary (`assets/lexicon/sfx_en_pt.json`); unknown sounds keep their original lettering.
-- New render flags (default `True`, code-only in `yomu/config/settings.py`):
+- New render flags (default `True`, code-only in `komyst/config/settings.py`):
   `RENDER_FIT_BALLOON_SHAPE` (wrap to the balloon shape) and `RENDER_MATCH_SOURCE_SLANT`
   (match measured source slant).
 - Evidence-based cleanup/reconstruction gates; `tests/test_cleanup_fixed_mask_reconstruction_red.py`
@@ -21,7 +21,7 @@ This file records source-level changes; it is not a release/tag log.
   removed; canonical copies live in `docs/operations/` and `docs/architecture/`.
 
 ### Notes
-- Enabled translation jobs always go through the authenticated `yomu_backend` provider; the
+- Enabled translation jobs always go through the authenticated `komyst_backend` provider; the
   CLI never calls DeepL directly (`--translation-provider` is metadata/guard).
 - Hermetic suite: ~6160 passed, 0 failed (`python -m pytest -q`).
 
@@ -37,7 +37,7 @@ the production behavior contract of the freeze is preserved. See
 - Partial page scope: the download gate is graded against the **selected** pages, not the
   whole canonical chapter, so any `1 ≤ N ≤ total` completes (proven physically at N=5).
 - Runtime root resolution: a job's trusted state (auth envelope, queue DB, diagnostics)
-  follows the explicit `TRADUTOR_RUNTIME_ROOT` / DB parent and is never relocated by
+  follows the explicit `KOMYST_RUNTIME_ROOT` / DB parent and is never relocated by
   `output_dir`; fixes `auth_context_missing_or_corrupt` in the translation runner.
 
 ### Fixed — output contract

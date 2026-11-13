@@ -15,10 +15,10 @@ from unittest import mock
 
 import numpy as np
 
-import yomu.config.settings as config
-import yomu.ocr.ocr_balloon as ob
-import yomu.translation.semantic_fidelity as semantic_fidelity
-from yomu.ocr.ocr_engine import OCRLine
+import komyst.config.settings as config
+import komyst.ocr.ocr_balloon as ob
+import komyst.translation.semantic_fidelity as semantic_fidelity
+from komyst.ocr.ocr_engine import OCRLine
 
 
 P65_RAW = "..YOU BE COME AGATETHROUGHWHICH AMONSTERAPPEARSIN THEREALWORLD."
@@ -186,7 +186,7 @@ class RapidOCRFallbackPolicyTests(unittest.TestCase):
             mock.patch.object(config, "OCR_HYBRID_FALLBACK", True),
             mock.patch.object(config, "OCR_FALLBACK_ENGINE", "paddle"),
             mock.patch.object(config, "OCR_LEGACY_PADDLE_FALLBACK", False, create=True),
-            mock.patch("yomu.ocr.ocr_balloon.OCREngine") as engine_cls,
+            mock.patch("komyst.ocr.ocr_balloon.OCREngine") as engine_cls,
         ):
             _lines, records = ob.apply_selective_ocr_fallbacks(
                 image,
@@ -216,9 +216,9 @@ class RapidOCRFallbackPolicyTests(unittest.TestCase):
             mock.patch.object(config, "OCR_HYBRID_FALLBACK", True),
             mock.patch.object(config, "OCR_FALLBACK_ENGINE", "paddle"),
             mock.patch.object(config, "OCR_LEGACY_PADDLE_FALLBACK", True, create=True),
-            mock.patch("yomu.ocr.ocr_balloon.OCREngine") as engine_cls,
+            mock.patch("komyst.ocr.ocr_balloon.OCREngine") as engine_cls,
             mock.patch(
-                "yomu.ocr.ocr_balloon._candidate_groups_for_fallback",
+                "komyst.ocr.ocr_balloon._candidate_groups_for_fallback",
                 return_value=[
                     ob.TextGroup(
                         group_id="candidate",

@@ -35,7 +35,7 @@ import threading
 import unittest
 from pathlib import Path
 
-from yomu.runtime.job_store import JobStatus, JobStore
+from komyst.runtime.job_store import JobStatus, JobStore
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -43,7 +43,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def read(rel: str) -> str:
     if rel == "ui_bridge.py":
-        rel = "yomu/ui/ui_bridge.py"
+        rel = "komyst/ui/ui_bridge.py"
     return (ROOT / rel).read_text(encoding="utf-8")
 
 
@@ -144,7 +144,7 @@ class BootOverlayStaysInBoot(unittest.TestCase):
     """The readiness view must never repaint over the running application."""
 
     def setUp(self):
-        self.js = read("static/tradutor_ui.js")
+        self.js = read("static/komyst_ui.js")
         self.html = read("ui/ui_shell.html")
 
     def test_bootstrap_surface_renders_only_while_actually_booting(self):
@@ -238,7 +238,7 @@ class StartIsIdempotent(StoreCase):
         new_job(store, slug="shadow_slave_chapter_2", owner="owner-b")
 
     def test_ui_start_is_single_flight_not_only_a_disabled_button(self):
-        js = read("static/tradutor_ui.js")
+        js = read("static/komyst_ui.js")
         block = js[js.index("let startInFlight"):]
         block = block[:block.index("\n  function visibleCancelControl")]
         self.assertIn(
@@ -256,7 +256,7 @@ class StartIsIdempotent(StoreCase):
         indeterminate progress render must happen synchronously, before that
         awaited call - not be faked with a fabricated percentage.
         """
-        js = read("static/tradutor_ui.js")
+        js = read("static/komyst_ui.js")
         start = js.index("async function runStartTranslation")
         end = js.index("\n  function visibleCancelControl")
         block = js[start:end]
@@ -275,7 +275,7 @@ class StartIsIdempotent(StoreCase):
         )
 
     def test_every_start_entrypoint_uses_the_canonical_command(self):
-        js = read("static/tradutor_ui.js")
+        js = read("static/komyst_ui.js")
         start = js.index("let startInFlight")
         end = js.index("\n  function visibleCancelControl")
         outside = js[:start] + js[end:]

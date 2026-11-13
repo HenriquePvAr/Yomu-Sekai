@@ -12,8 +12,8 @@ install_offline_network_guard()
 
 import pytest
 
-import yomu.ui.ui_bridge as ui_bridge
-from yomu.runtime.job_store import JobStatus
+import komyst.ui.ui_bridge as ui_bridge
+from komyst.runtime.job_store import JobStatus
 from tests.test_review_ordering_r1 import _bridge, _review_job, _close
 
 
@@ -184,7 +184,7 @@ def test_persist_after_full_store_reopen(tmp_path, monkeypatch):
 
 def test_source_text_column_migrates_onto_existing_store(tmp_path):
     # A store created fresh must carry the source_text column (migration v13).
-    from yomu.runtime.job_store import JobStore
+    from komyst.runtime.job_store import JobStore
     store = JobStore(tmp_path / "jobs.sqlite3")
     try:
         cols = {row["name"] for row in store._conn.execute(

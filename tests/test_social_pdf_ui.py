@@ -11,7 +11,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def read(rel):
     if rel == "app_ui.py":
-        rel = "yomu/ui/app.py"
+        rel = "komyst/ui/app.py"
     return (ROOT / rel).read_text(encoding="utf-8")
 
 
@@ -85,7 +85,7 @@ class PdfUiTests(unittest.TestCase):
         self.assertIn("pollPublish", self.src)
 
     def test_technical_gate_stays_distinct_from_completed_review(self):
-        ui = read("static/tradutor_ui.js")
+        ui = read("static/komyst_ui.js")
         self.assertIn("technicalGatePassed", ui)
         self.assertIn("gate técnico reprovado · revisão humana concluída", ui)
         self.assertNotIn("review ? 'revisão necessária' : 'gate aprovado'", ui)
@@ -99,7 +99,7 @@ class PdfWiringTests(unittest.TestCase):
 
     def test_backend_never_returns_drive_id_in_asset_dto(self):
         # The asset status DTO is booleans + owner-only mime/updated_at, never storage id.
-        repo = read("yomu/community/chapter_asset_repository.py")
+        repo = read("komyst/community/chapter_asset_repository.py")
         self.assertIn('"linked"', repo)
         self.assertIn('"available"', repo)
         # storage_file_id only used internally, never in get_asset_status output.

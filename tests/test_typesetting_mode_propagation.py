@@ -2,9 +2,9 @@
 rebuild that historically dropped --output-format. PSD only; never emitted for pdf/png."""
 import unittest
 
-from yomu.review.source_analysis_phase import command_with_source_selection
-from yomu.ui.ui_helpers import build_run_command
-from yomu.download.local.local_folder_job import build_local_job_command
+from komyst.review.source_analysis_phase import command_with_source_selection
+from komyst.ui.ui_helpers import build_run_command
+from komyst.download.local.local_folder_job import build_local_job_command
 
 URL = "https://comix.to/title/qk31-example/11378175-chapter-70"
 

@@ -8,16 +8,16 @@ from pathlib import Path
 
 import numpy as np
 
-import yomu.translation.semantic_fidelity as semantic_fidelity
-from yomu.pipeline.benchmark_pipeline import _translation_quality_accounting
-from yomu.ocr.ocr_balloon import (
+import komyst.translation.semantic_fidelity as semantic_fidelity
+from komyst.pipeline.benchmark_pipeline import _translation_quality_accounting
+from komyst.ocr.ocr_balloon import (
     OCRLine,
     TextGroup,
     apply_group_translations,
     get_translatable_groups,
     validate_and_retry_translations,
 )
-from yomu.pipeline.session_context import SessionContextStore
+from komyst.pipeline.session_context import SessionContextStore
 
 
 def _line(text):

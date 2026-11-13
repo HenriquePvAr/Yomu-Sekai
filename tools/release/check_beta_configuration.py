@@ -24,7 +24,7 @@ def main() -> None:
     print("DEEPL_PROXY=" + state("DEEPL_API_KEY"))
     print("BILLING=DISABLED")
     print("REWARDED_ADS=DISABLED")
-    print("UPDATER_HOSTING=" + ("READY" if os.getenv("TRADUTOR_IA_UPDATE_MANIFEST_URL") else "NOT_CONFIGURED"))
+    print("UPDATER_HOSTING=" + ("READY" if os.getenv("KOMYST_UPDATE_MANIFEST_URL") else "NOT_CONFIGURED"))
     print("UPDATE_PUBLIC_KEY=" + state("UPDATE_PUBLIC_KEY"))
     print("BETA_LICENSE=" + state("BETA_LICENSE_PROVIDER"))
 

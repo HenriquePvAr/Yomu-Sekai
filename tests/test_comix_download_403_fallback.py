@@ -17,9 +17,9 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
-from yomu.download.sources.chapter_source import SourceError
-from yomu.download.down import download_images
-from yomu.download.readers.scrapling_reader_resolver import DynamicReaderError
+from komyst.download.sources.chapter_source import SourceError
+from komyst.download.down import download_images
+from komyst.download.readers.scrapling_reader_resolver import DynamicReaderError
 from tests.test_downloader_regressions import _accepted_source_analysis
 
 
@@ -44,18 +44,18 @@ def _comix_adapter(analyze):
 
 def _selenium_mocks():
     return (
-        mock.patch("yomu.download.http_source_discovery.discover_via_http", return_value=None),
-        mock.patch("yomu.download.down.preflight_browser_navigation", side_effect=lambda _a, v: v),
-        mock.patch("yomu.download.down._create_driver", return_value=_QuitDriver()),
-        mock.patch("yomu.download.down._capture_driver_ownership", return_value={}),
-        mock.patch("yomu.download.down._refresh_driver_ownership"),
-        mock.patch("yomu.download.down._bounded_driver_teardown",
+        mock.patch("komyst.download.http_source_discovery.discover_via_http", return_value=None),
+        mock.patch("komyst.download.down.preflight_browser_navigation", side_effect=lambda _a, v: v),
+        mock.patch("komyst.download.down._create_driver", return_value=_QuitDriver()),
+        mock.patch("komyst.download.down._capture_driver_ownership", return_value={}),
+        mock.patch("komyst.download.down._refresh_driver_ownership"),
+        mock.patch("komyst.download.down._bounded_driver_teardown",
                    return_value={"status": "success", "timeout_occurred": False}),
-        mock.patch("yomu.download.down._viewer_image_snapshot",
+        mock.patch("komyst.download.down._viewer_image_snapshot",
                    return_value={"image_count": 1, "urls": ["one"], "complete_manifest": True}),
-        mock.patch("yomu.download.down._scroll_incrementally",
+        mock.patch("komyst.download.down._scroll_incrementally",
                    return_value={"reached_document_end": True, "stabilized": True}),
-        mock.patch("yomu.download.down.time.sleep"),
+        mock.patch("komyst.download.down.time.sleep"),
     )
 
 
@@ -84,12 +84,12 @@ class ComixDownload403FallbackTest(unittest.TestCase):
             return [f"p{i}.png" for i in range(len(args[1]))]
 
         patches = _selenium_mocks() + (
-            mock.patch("yomu.download.sources.chapter_source.select_adapter", return_value=adapter),
-            mock.patch("yomu.download.readers.scrapling_reader_resolver.resolve", resolve),
-            mock.patch("yomu.download.download_transport.build_transports", return_value=[_T()]),
-            mock.patch("yomu.download.down._download_candidates", side_effect=fake_download),
-            mock.patch("yomu.download.down._persist_download_metadata"),
-            mock.patch("yomu.download.down._write_download_report"),
+            mock.patch("komyst.download.sources.chapter_source.select_adapter", return_value=adapter),
+            mock.patch("komyst.download.readers.scrapling_reader_resolver.resolve", resolve),
+            mock.patch("komyst.download.download_transport.build_transports", return_value=[_T()]),
+            mock.patch("komyst.download.down._download_candidates", side_effect=fake_download),
+            mock.patch("komyst.download.down._persist_download_metadata"),
+            mock.patch("komyst.download.down._write_download_report"),
         )
         with tempfile.TemporaryDirectory() as folder:
             ctx = []

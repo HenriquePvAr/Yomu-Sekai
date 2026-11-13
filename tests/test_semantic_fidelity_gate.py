@@ -21,15 +21,15 @@ from pathlib import Path
 
 import numpy as np
 
-import yomu.translation.semantic_fidelity as semantic_fidelity
-from yomu.ocr.ocr_balloon import (
+import komyst.translation.semantic_fidelity as semantic_fidelity
+from komyst.ocr.ocr_balloon import (
     OCRLine,
     TextGroup,
     get_translatable_groups,
     validate_and_retry_translations,
 )
-from yomu.pipeline.session_context import SessionContextStore
-from yomu.translation.providers.translator_nvidia import TranslatorNvidiaBatch
+from komyst.pipeline.session_context import SessionContextStore
+from komyst.translation.providers.translator_nvidia import TranslatorNvidiaBatch
 
 
 CHAPTER = "https://example.invalid/series/chapter-fidelity"
@@ -560,7 +560,7 @@ class RetryTests(unittest.TestCase):
                          "semantic_fidelity_failed_after_retries")
 
     def test_fidelity_retries_share_the_global_retry_budget(self):
-        import yomu.config.settings as config
+        import komyst.config.settings as config
 
         translator = _StubTranslator(*["HA 30 INIMIGOS."] * 10)
         group = _group(QUANTITY_SOURCE, QUANTITY_CORRUPTED)

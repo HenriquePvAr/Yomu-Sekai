@@ -15,18 +15,18 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def _read(rel: str) -> str:
     if rel == "app_ui.py":
-        rel = "yomu/ui/app.py"
+        rel = "komyst/ui/app.py"
     elif rel == "supabase_auth.py":
-        rel = "yomu/auth/supabase_auth.py"
+        rel = "komyst/auth/supabase_auth.py"
     elif rel == "community_http.py":
-        rel = "yomu/community/community_http.py"
+        rel = "komyst/community/community_http.py"
     return (ROOT / rel).read_text(encoding="utf-8")
 
 
 class SupabaseFrontendTests(unittest.TestCase):
     def test_secret_key_never_referenced_in_frontend(self):
         for rel in ("static/supabase_auth.js", "static/auth_ui.js",
-                    "static/tradutor_ui.js", "ui/ui_shell.html", "ui/auth_callback.html"):
+                    "static/komyst_ui.js", "ui/ui_shell.html", "ui/auth_callback.html"):
             source = _read(rel)
             self.assertNotIn("SUPABASE_SECRET_KEY", source, rel)
             self.assertNotIn("sb_secret", source, rel)
@@ -46,9 +46,9 @@ class SupabaseFrontendTests(unittest.TestCase):
         self.assertNotIn("@supabase/supabase-js@latest", source)
 
     def test_api_attaches_bearer_from_sdk_cache(self):
-        source = _read("static/tradutor_ui.js")
-        self.assertIn("getGlobal('__tradutorAccessToken')", source)
-        self.assertIn("setGlobal('__tradutorAccessToken'", source)
+        source = _read("static/komyst_ui.js")
+        self.assertIn("getGlobal('__komystAccessToken')", source)
+        self.assertIn("setGlobal('__komystAccessToken'", source)
         self.assertIn("Authorization", source)
         self.assertIn("Bearer ${bearer}", source)
 
@@ -90,7 +90,7 @@ class SupabaseFrontendTests(unittest.TestCase):
 
     def test_auth_bootstrap_defines_state_before_dynamic_dependency_import(self):
         source = _read("static/auth_ui.js")
-        self.assertIn("window.__tradutorAuthState = 'auth_loading'", source)
+        self.assertIn("window.__komystAuthState = 'auth_loading'", source)
         # Dynamic, but with a stable specifier. A per-call cache key resolved to a new
         # URL on every import, so the browser kept a *second* module instance of
         # auth_provider.js (social_api.js/social_community.js import the bare URL) and
@@ -109,14 +109,14 @@ class SupabaseFrontendTests(unittest.TestCase):
     def test_auth_shell_clears_stale_identity_while_loading(self):
         source = _read("static/auth_ui.js")
         self.assertIn("Verificando sessão", source)
-        self.assertIn("window.__tradutorAccessToken = ''", source)
-        self.assertIn("if (state !== 'authenticated') window.__tradutorAccessToken = ''", source)
+        self.assertIn("window.__komystAccessToken = ''", source)
+        self.assertIn("if (state !== 'authenticated') window.__komystAccessToken = ''", source)
         self.assertIn("logoutBtn.hidden = state !== 'authenticated'", source)
 
     def test_authenticated_shell_preserves_bearer_for_community_requests(self):
         source = _read("static/auth_ui.js")
         self.assertIn(
-            "if (state !== 'authenticated') window.__tradutorAccessToken = ''",
+            "if (state !== 'authenticated') window.__komystAccessToken = ''",
             source,
         )
 
@@ -144,7 +144,7 @@ class SupabaseFrontendTests(unittest.TestCase):
             "login_completed",
             "login_reconciled_after_timeout",
             "auth_timeout",
-            "__tradutorAuthStore",
+            "__komystAuthStore",
         ):
             self.assertIn(marker, source)
 
@@ -159,22 +159,22 @@ class SupabaseFrontendTests(unittest.TestCase):
     def test_login_has_single_guarded_handler_and_recreates_abort_controller(self):
         source = _read("static/auth_ui.js")
         self.assertEqual(source.count("$('#authForm')?.addEventListener('submit'"), 1)
-        self.assertIn("window.__tradutorAuthHandlersBound", source)
-        self.assertIn("window.__tradutorActiveLoginController = controller", source)
+        self.assertIn("window.__komystAuthHandlersBound", source)
+        self.assertIn("window.__komystActiveLoginController = controller", source)
         self.assertIn("auth_ui:canonical-submit-v3", source)
 
     def test_logout_clears_local_auth_even_when_sdk_signout_is_slow(self):
         auth = _read("static/auth_ui.js")
         sdk = _read("static/supabase_auth.js")
         self.assertIn("withTimeout(authApi.signOut(), AUTH_BOOTSTRAP_TIMEOUT_MS)", auth)
-        self.assertIn("window.__tradutorAccessToken = ''", auth)
+        self.assertIn("window.__komystAccessToken = ''", auth)
         self.assertIn("state: 'unauthenticated'", auth)
         self.assertIn("client.auth.signOut({scope: 'local'})", sdk)
         self.assertIn("SDK_SESSION_TIMEOUT_MS", sdk)
 
     def test_auth_asset_exposes_sanitized_build_marker(self):
         source = _read("static/auth_ui.js")
-        self.assertIn("window.__tradutorAuthBuild", source)
+        self.assertIn("window.__komystAuthBuild", source)
         self.assertIn("new URL(import.meta.url)", source)
 
     def test_auth_heartbeat_keeps_refresh_and_canonical_state_in_sync(self):
@@ -216,7 +216,7 @@ class SupabaseFrontendTests(unittest.TestCase):
             "getCanonicalAccessToken",
         ):
             self.assertIn(marker, source)
-        self.assertIn("__tradutorGetCanonicalAccessToken", _read("static/auth_ui.js"))
+        self.assertIn("__komystGetCanonicalAccessToken", _read("static/auth_ui.js"))
 
     def test_supabase_signin_uses_official_sdk_persistence_before_rest_fallback(self):
         source = _read("static/supabase_auth.js")
@@ -242,7 +242,7 @@ class SupabaseFrontendTests(unittest.TestCase):
             self.assertIn(marker, source, marker)
 
     def test_pdf_popup_flow_does_not_replace_the_authenticated_tab(self):
-        source = _read("static/tradutor_ui.js")
+        source = _read("static/komyst_ui.js")
         helper = source[source.index("async function openAuthenticatedCommunityPdf"):source.index("async function loadCommunityFeed")]
         self.assertIn("window.open('', '_blank')", helper)
         self.assertIn("viewer.opener = null", helper)
@@ -251,10 +251,10 @@ class SupabaseFrontendTests(unittest.TestCase):
         self.assertIn("viewer.close()", helper)
 
     def test_community_helper_resolves_token_asynchronously(self):
-        source = _read("static/tradutor_ui.js")
-        self.assertIn("const canonicalAccessToken = getGlobal('__tradutorGetCanonicalAccessToken')", source)
+        source = _read("static/komyst_ui.js")
+        self.assertIn("const canonicalAccessToken = getGlobal('__komystGetCanonicalAccessToken')", source)
         self.assertIn("await canonicalAccessToken()", source)
-        self.assertNotIn("const bearer = window.__tradutorAccessToken || ''", source)
+        self.assertNotIn("const bearer = window.__komystAccessToken || ''", source)
         for marker in (
             "community_request_started",
             "authorization_header_present",
@@ -281,9 +281,9 @@ class SupabaseFrontendTests(unittest.TestCase):
         self.assertIn("path.relative_to(STATIC_DIR).as_posix()", app_source)
         self.assertIn("return f\"/static/{rel}?v={version}\"", app_source)
 
-    def test_tradutor_refreshes_bootstrap_after_auth_change(self):
-        source = _read("static/tradutor_ui.js")
-        self.assertIn("tradutor-auth-changed", source)
+    def test_komyst_refreshes_bootstrap_after_auth_change(self):
+        source = _read("static/komyst_ui.js")
+        self.assertIn("komyst-auth-changed", source)
         self.assertIn("void refreshBootstrap()", source)
 
     def test_shell_has_auth_controls(self):

@@ -7,7 +7,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-import yomu.clean.reconstruction.reference_guided_reconstruction as rgr
+import komyst.clean.reconstruction.reference_guided_reconstruction as rgr
 
 
 class ReferenceInventoryTests(unittest.TestCase):

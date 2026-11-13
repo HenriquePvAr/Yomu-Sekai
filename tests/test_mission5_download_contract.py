@@ -9,7 +9,7 @@ from unittest import mock
 
 from PIL import Image
 
-import yomu.download.down as down
+import komyst.download.down as down
 
 
 class RequestsTransport:

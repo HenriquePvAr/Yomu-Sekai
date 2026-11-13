@@ -9,7 +9,7 @@
 AppId={{D4F4C42A-9D03-4E62-9E18-2C7E0C7C41D4}
 AppName=Komyst - Native Ads Diagnostic 4
 AppVersion=0.9.0-beta.44
-DefaultDirName={localappdata}\Programs\YomuSekai-NativeAdsD4
+DefaultDirName={localappdata}\Programs\Komyst-NativeAdsD4
 DefaultGroupName=Komyst - Native Ads D4
 PrivilegesRequired=lowest
 ArchitecturesAllowed=x64
@@ -25,9 +25,9 @@ ChangesEnvironment=no
 CreateUninstallRegKey=yes
 UninstallDisplayName=Komyst - Native Ads Diagnostic 4
 [Files]
-Source: "{#BundleRoot}\YomuSekai\*"; DestDir: "{app}"; Flags: recursesubdirs createallsubdirs ignoreversion
+Source: "{#BundleRoot}\Komyst\*"; DestDir: "{app}"; Flags: recursesubdirs createallsubdirs ignoreversion
 [Icons]
-Name: "{group}\Komyst - Native Ads D4"; Filename: "{app}\YomuSekai-NativeAdsD4.exe"; WorkingDir: "{app}"
-Name: "{autodesktop}\Komyst - Native Ads D4"; Filename: "{app}\YomuSekai-NativeAdsD4.exe"; WorkingDir: "{app}"
+Name: "{group}\Komyst - Native Ads D4"; Filename: "{app}\Komyst-NativeAdsD4.exe"; WorkingDir: "{app}"
+Name: "{autodesktop}\Komyst - Native Ads D4"; Filename: "{app}\Komyst-NativeAdsD4.exe"; WorkingDir: "{app}"
 [Run]
-Filename: "{app}\YomuSekai-NativeAdsD4.exe"; Description: "Iniciar Komyst - Native Ads D4"; Flags: postinstall skipifsilent nowait
+Filename: "{app}\Komyst-NativeAdsD4.exe"; Description: "Iniciar Komyst - Native Ads D4"; Flags: postinstall skipifsilent nowait

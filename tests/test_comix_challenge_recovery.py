@@ -8,7 +8,7 @@ import pytest
 
 def test_comix_session_round_trip_is_atomic_and_sanitized(tmp_path, monkeypatch):
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
-    from yomu.download.comix_session import load_comix_session, save_comix_session, session_path
+    from komyst.download.comix_session import load_comix_session, save_comix_session, session_path
 
     save_comix_session("clearance-value", "UA/test")
     assert load_comix_session() == ("clearance-value", "UA/test")
@@ -20,8 +20,8 @@ def test_comix_session_round_trip_is_atomic_and_sanitized(tmp_path, monkeypatch)
 
 def test_comix_transport_uses_persisted_cookie_and_user_agent(tmp_path, monkeypatch):
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
-    from yomu.download.comix_session import save_comix_session
-    from yomu.download.download_transport import RequestsTransport
+    from komyst.download.comix_session import save_comix_session
+    from komyst.download.download_transport import RequestsTransport
 
     save_comix_session("cookie", "UA/canonical")
     adapter = SimpleNamespace(name="comix")
@@ -31,7 +31,7 @@ def test_comix_transport_uses_persisted_cookie_and_user_agent(tmp_path, monkeypa
 
 
 def test_worker_reuses_comix_preflight_ids(monkeypatch):
-    from yomu.runtime import worker_service
+    from komyst.runtime import worker_service
 
     service = object.__new__(worker_service.Worker)
     service.store = SimpleNamespace(db_path=":memory:")
@@ -49,7 +49,7 @@ def test_worker_reuses_comix_preflight_ids(monkeypatch):
         def get_analysis(self, *_): return Result()
         def close(self): pass
     monkeypatch.setattr(worker_service, "SOURCE_ANALYSIS_REUSE_TTL_SECONDS", 900)
-    monkeypatch.setattr("yomu.review.source_readiness.SourceReadinessStore", Store)
+    monkeypatch.setattr("komyst.review.source_readiness.SourceReadinessStore", Store)
     job = {
         "id": "job",
         "source_url": "https://comix.to/title/1",
@@ -64,9 +64,9 @@ def test_worker_reuses_comix_preflight_ids(monkeypatch):
 
 
 def test_navigation_recovery_is_bounded_and_rechecks(monkeypatch):
-    import yomu.download.down as down
-    from yomu.download.download_transport import _preflight_result
-    from yomu.download.sources.chapter_source import SourceError
+    import komyst.download.down as down
+    from komyst.download.download_transport import _preflight_result
+    from komyst.download.sources.chapter_source import SourceError
 
     adapter = SimpleNamespace(
         name="comix", capabilities=SimpleNamespace(public=lambda: {}),
@@ -89,8 +89,8 @@ def test_navigation_recovery_is_bounded_and_rechecks(monkeypatch):
 
 
 def test_non_comix_error_does_not_enter_recovery(monkeypatch):
-    import yomu.download.down as down
-    from yomu.download.sources.chapter_source import SourceError
+    import komyst.download.down as down
+    from komyst.download.sources.chapter_source import SourceError
 
     adapter = SimpleNamespace(
         name="other",

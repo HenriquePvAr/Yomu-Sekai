@@ -1,5 +1,5 @@
-"""Compatibility launcher; implementation lives in :mod:`yomu.runtime.worker_service`."""
-from yomu.runtime import worker_service as _implementation
+"""Compatibility launcher; implementation lives in :mod:`komyst.runtime.worker_service`."""
+from komyst.runtime import worker_service as _implementation
 import sys as _sys
 
 if __name__ == "__main__":

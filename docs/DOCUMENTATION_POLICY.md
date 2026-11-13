@@ -21,7 +21,7 @@ A ordem de autoridade é sempre esta:
 2. Testes atuais
 3. Configuração atual (`.env.example`, `pytest.ini`, CI)
 4. UI atual (`ui/`, `static/`)
-5. Contratos de banco/migração (`supabase/migrations/`, `SCHEMA_VERSION` em `yomu/runtime/job_store.py`)
+5. Contratos de banco/migração (`supabase/migrations/`, `SCHEMA_VERSION` em `komyst/runtime/job_store.py`)
 6. Arquitetura de runtime local observada
 
 **Documentação histórica não é automaticamente autoritativa.** Quando um documento existente
@@ -125,7 +125,7 @@ Regras invioláveis:
 | --- | --- |
 | Comando | Executá-lo (ou pelo menos `--help`) contra o repositório |
 | Caminho de módulo/arquivo | Confirmar que existe no índice do Git |
-| Estado ou transição | Ler `yomu/runtime/job_store.py` |
+| Estado ou transição | Ler `komyst/runtime/job_store.py` |
 | Variável de ambiente | Confirmar em `.env.example` e no consumidor |
 | Rótulo de UI | Ler `ui/ui_shell.html` ou `static/*.js` |
 | Mensagem de erro | Ler o mapa de mensagens no frontend/backend |
@@ -242,9 +242,9 @@ Exemplos resolvidos, para calibrar o julgamento.
 
 ## 14. Contratos de atualização futura
 
-> Estado em `5f482ce1`: o núcleo do updater (`yomu/runtime/update_manifest.py`,
+> Estado em `5f482ce1`: o núcleo do updater (`komyst/runtime/update_manifest.py`,
 > `update_transport.py`, `update_installer.py`, `update_bootstrap.py`) e a licença Beta
-> (`yomu/auth/beta_license.py`) já existem; specs de build (`packaging/`) e
+> (`komyst/auth/beta_license.py`) já existem; specs de build (`packaging/`) e
 > `tools/build_installer.py` também. Os contratos abaixo valem a partir de cada superfície
 > visível ao usuário (Setup, UI de atualização, tela de licença). O estado de cada um está na
 > [Documentação Técnica §30](technical/DOCUMENTACAO_TECNICA.md#30-empacotamento-updater-e-prontidão-para-beta).
@@ -282,7 +282,7 @@ Terminologia canônica, usada de forma consistente:
 
 | Termo | Uso na doc técnica | Uso no guia do usuário |
 | --- | --- | --- |
-| Tradutor IA | Nome do produto | Nome do produto |
+| Komyst | Nome do produto | Nome do produto |
 | Job / Trabalho | "job" | "capítulo" ou "tradução" |
 | Worker | "worker" | "serviço de processamento" (explicando o termo na primeira vez) |
 | Runner | "runner" | não usar |

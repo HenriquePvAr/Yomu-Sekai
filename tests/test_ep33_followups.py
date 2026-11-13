@@ -5,10 +5,10 @@ from unittest import mock
 
 import numpy as np
 
-import yomu.ocr.ocr_balloon as ob
-from yomu.download.local import local_folder_input
-from yomu.review import region_taxonomy
-from yomu.translation import semantic_fidelity
+import komyst.ocr.ocr_balloon as ob
+from komyst.download.local import local_folder_input
+from komyst.review import region_taxonomy
+from komyst.translation import semantic_fidelity
 
 
 class SoundsWrittenTheSameTests(unittest.TestCase):
@@ -43,7 +43,7 @@ class GluedSentencePromotionTests(unittest.TestCase):
 
 class LocalSnapshotRootTests(unittest.TestCase):
     def test_snapshots_live_under_the_runtime_root(self):
-        with mock.patch.dict(os.environ, {"TRADUTOR_RUNTIME_ROOT": os.path.abspath("rt_probe")}), \
+        with mock.patch.dict(os.environ, {"KOMYST_RUNTIME_ROOT": os.path.abspath("rt_probe")}), \
                 mock.patch.object(local_folder_input, "LOCAL_SNAPSHOT_ROOT", None), \
                 mock.patch("pathlib.Path.mkdir"), mock.patch("pathlib.Path.resolve", lambda self: self):
             root = local_folder_input.snapshot_workspace_root()

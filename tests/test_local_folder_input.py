@@ -11,9 +11,9 @@ from unittest import mock
 
 from PIL import Image
 
-import yomu.download.local.local_folder_input as local_folder_input
-from yomu.download.local.local_folder_input import materialize_snapshot
-from yomu.download.local.local_folder_source import LocalFolderChapterAdapter, LocalFolderError, LocalFolderPolicy
+import komyst.download.local.local_folder_input as local_folder_input
+from komyst.download.local.local_folder_input import materialize_snapshot
+from komyst.download.local.local_folder_source import LocalFolderChapterAdapter, LocalFolderError, LocalFolderPolicy
 
 
 def image_bytes(color):
@@ -121,7 +121,7 @@ class LocalFolderInputTests(unittest.TestCase):
         snap = self.snapshot()
         runtime_output = self.root / "user-data" / "output"
         target = runtime_output / "webtoon_chapter" / "run-1" / "input"
-        with mock.patch("yomu.runtime.runtime_paths.output_root", return_value=runtime_output):
+        with mock.patch("komyst.runtime.runtime_paths.output_root", return_value=runtime_output):
             paths, report = materialize_snapshot(
                 snap.manifest_path, target, snapshot_root=self.snapshots)
         self.assertEqual(len(paths), 2)
@@ -131,7 +131,7 @@ class LocalFolderInputTests(unittest.TestCase):
     def test_default_runtime_root_rejects_bundle_and_arbitrary_paths(self):
         snap = self.snapshot()
         runtime_output = self.root / "user-data" / "output"
-        with mock.patch("yomu.runtime.runtime_paths.output_root", return_value=runtime_output):
+        with mock.patch("komyst.runtime.runtime_paths.output_root", return_value=runtime_output):
             for target in (
                 self.root / "bundle" / "_internal" / "output" / "run" / "input",
                 self.root / "arbitrary" / "run" / "input",

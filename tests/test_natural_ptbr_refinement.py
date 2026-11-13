@@ -3,7 +3,7 @@ import json
 import tempfile
 import unittest
 
-import yomu.translation.natural_ptbr_refinement as npr
+import komyst.translation.natural_ptbr_refinement as npr
 
 
 def request():

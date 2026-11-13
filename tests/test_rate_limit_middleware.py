@@ -1,7 +1,7 @@
 import unittest
 from unittest.mock import patch
 
-from yomu.ui.app import MutationRateLimitMiddleware
+from komyst.ui.app import MutationRateLimitMiddleware
 
 
 class MutationRateLimitMiddlewareTests(unittest.IsolatedAsyncioTestCase):
@@ -39,7 +39,7 @@ class MutationRateLimitMiddlewareTests(unittest.IsolatedAsyncioTestCase):
             await send({"type": "http.response.body", "body": b"{}"})
 
         middleware = MutationRateLimitMiddleware(downstream)
-        with patch("yomu.ui.app._append_diagnostic_log"):
+        with patch("komyst.ui.app._append_diagnostic_log"):
             for _ in range(middleware._LIMITS["/api/ui/"][0]):
                 status, _ = await self._call(middleware, "/api/ui/source-trace")
                 self.assertEqual(status, 200)
@@ -56,7 +56,7 @@ class MutationRateLimitMiddlewareTests(unittest.IsolatedAsyncioTestCase):
             await send({"type": "http.response.body", "body": b"{}"})
 
         middleware = MutationRateLimitMiddleware(downstream)
-        with patch("yomu.ui.app._append_diagnostic_log"):
+        with patch("komyst.ui.app._append_diagnostic_log"):
             for _ in range(middleware._LIMITS["/api/ui/"][0]):
                 status, _ = await self._call(middleware, "/api/ui/open")
                 self.assertEqual(status, 200)

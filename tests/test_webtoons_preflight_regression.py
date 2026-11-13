@@ -22,11 +22,11 @@ from unittest import mock
 
 import requests
 
-import yomu.download.sources.chapter_source as chapter_source
-from yomu.download.sources.chapter_source import (
+import komyst.download.sources.chapter_source as chapter_source
+from komyst.download.sources.chapter_source import (
     SOURCE_ACCESS_DENIED, SourceError, UniversalChapterAdapter, select_adapter,
 )
-from yomu.download.download_transport import (
+from komyst.download.download_transport import (
     DownloadLimits, inspect_source_preflight, preflight_browser_navigation,
 )
 
@@ -305,7 +305,7 @@ class ReaderSelectorOwnershipTests(unittest.TestCase):
     def test_downloader_holds_no_webtoons_selectors(self):
         from pathlib import Path
 
-        source = (Path(__file__).resolve().parents[1] / "yomu/download/down.py").read_text(encoding="utf-8")
+        source = (Path(__file__).resolve().parents[1] / "komyst/download/down.py").read_text(encoding="utf-8")
         for leaked in ("#_imageList", "viewer_img", "img._images", "viewer_lst"):
             self.assertNotIn(leaked, source, leaked)
 

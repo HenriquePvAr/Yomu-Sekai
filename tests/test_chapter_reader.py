@@ -23,11 +23,11 @@ from types import SimpleNamespace
 import pytest
 from PIL import Image
 
-import yomu.ui.app as app_ui
-import yomu.export.pdf_reader as pdf_reader
-from yomu.community.community_auth import RequestPrincipal
-from yomu.runtime.job_store import JobStatus, JobStore
-from yomu.ui.ui_bridge import UiBridge
+import komyst.ui.app as app_ui
+import komyst.export.pdf_reader as pdf_reader
+from komyst.community.community_auth import RequestPrincipal
+from komyst.runtime.job_store import JobStatus, JobStore
+from komyst.ui.ui_bridge import UiBridge
 
 
 def _write_pdf(path: Path, sizes, colour=(40, 40, 40)) -> Path:
@@ -346,14 +346,14 @@ def test_the_pdf_fallback_is_served_as_a_pdf_with_range_support(harness, monkeyp
 # ------------------------------------------------------- ui integration ----
 
 READER_JS = Path(app_ui.ROOT) / "static" / "chapter_reader.js"
-UI_JS = Path(app_ui.ROOT) / "static" / "tradutor_ui.js"
+UI_JS = Path(app_ui.ROOT) / "static" / "komyst_ui.js"
 SHELL = Path(app_ui.ROOT) / "ui" / "ui_shell.html"
 
 
 def test_history_reads_inside_the_app_and_keeps_the_external_viewer_secondary():
     source = UI_JS.read_text(encoding="utf-8")
     assert "data-action=\"read\"" in source
-    assert "tradutor-open-reader" in source
+    assert "komyst-open-reader" in source
     # The external viewer survives, but no longer as the primary read action. It is now the
     # format-aware "Abrir PDF" action (offered only for a PDF job), kept after the in-app read.
     assert "actionButton('Abrir PDF', 'pdf', record.pdf_path)" in source
@@ -373,7 +373,7 @@ def test_the_reader_lives_inside_the_application_shell():
 
 
 def test_the_shell_loads_the_reader_module():
-    source = (Path(app_ui.ROOT) / "yomu/ui/app.py").read_text(encoding="utf-8")
+    source = (Path(app_ui.ROOT) / "komyst/ui/app.py").read_text(encoding="utf-8")
     assert "CHAPTER_READER_ASSET" in source
     assert "_asset_url(CHAPTER_READER_ASSET)" in source
 

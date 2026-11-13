@@ -17,7 +17,7 @@ logout e para obter o access token.
 
 ```
 Frontend (social_community.js + social_api.js)
-  → backend Tradutor.Ia (/api/community/social)
+  → backend Komyst (/api/community/social)
   → JWT validado
   → Supabase Data API
   → PostgreSQL + RLS
@@ -112,7 +112,7 @@ vinculado" + "Publicar PDF".
 ## Como testar
 
 - `pytest -q` inclui `tests/test_social_community_ui.py` (contrato/segurança do fonte JS/HTML/CSS).
-- `node --check static/tradutor_ui.js` e checagem de sintaxe ESM dos módulos novos.
+- `node --check static/komyst_ui.js` e checagem de sintaxe ESM dos módulos novos.
 - Smoke de runtime no navegador: o gate monta, sem erros no console e **sem** chamadas a
   `/rest/v1`; o fluxo autenticado completo é coberto pelo e2e do backend (fase anterior,
   com JWTs locais reais + RLS).

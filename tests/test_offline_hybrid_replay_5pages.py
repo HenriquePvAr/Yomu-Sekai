@@ -20,12 +20,12 @@ from unittest import mock
 import cv2
 import numpy as np
 
-import yomu.pipeline.benchmark_pipeline as benchmark_pipeline
-import yomu.config.settings as config
-import yomu.download.local.local_folder_input as local_folder_input
-from yomu.download.local.local_folder_source import LocalFolderChapterAdapter, LocalFolderPolicy
-from yomu.ocr.ocr_balloon import TextCandidate, TextGroup
-from yomu.ocr.ocr_engine import OCRLine
+import komyst.pipeline.benchmark_pipeline as benchmark_pipeline
+import komyst.config.settings as config
+import komyst.download.local.local_folder_input as local_folder_input
+from komyst.download.local.local_folder_source import LocalFolderChapterAdapter, LocalFolderPolicy
+from komyst.ocr.ocr_balloon import TextCandidate, TextGroup
+from komyst.ocr.ocr_engine import OCRLine
 
 
 class _ReplayTranslator:
@@ -35,7 +35,7 @@ class _ReplayTranslator:
         self.calls = []
         self.force_cache = False
         self.stats = {"api_texts": 0, "api_requests": 0, "cache_hits": 0, "failed_batches": 0,
-                      "provider_name": "yomu_backend"}
+                      "provider_name": "komyst_backend"}
 
     def translate_many(self, texts, force=False):
         self.calls.append((list(texts), bool(force)))
@@ -137,7 +137,7 @@ class OfflineFivePageReplayTests(unittest.TestCase):
                                     CLASSIFICATION_PROFILING=False, POST_RENDER_OCR_VALIDATION=False,
                                     VISUAL_DIFF_VALIDATION=False, TRANSLATION_VALIDATION=True,
                                     TRANSLATION_RETRY_ON_MIXED_LANGUAGE=True, TRANSLATE_SFX=False),
-                mock.patch.dict("os.environ", {"TRANSLATION_ENABLED": "true", "YOMU_ENV": "test", "YOMU_TEST_BACKEND": "mock", "TRADUTOR_OUTPUT_ROOT": str(root / "output")}, clear=False),
+                mock.patch.dict("os.environ", {"TRANSLATION_ENABLED": "true", "KOMYST_ENV": "test", "KOMYST_TEST_BACKEND": "mock", "KOMYST_OUTPUT_ROOT": str(root / "output")}, clear=False),
             ):
                 report = benchmark_pipeline.run_benchmark(args)
 

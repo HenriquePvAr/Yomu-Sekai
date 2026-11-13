@@ -112,13 +112,13 @@ def main() -> int:
     parser.add_argument("--output", type=Path, default=None, help="new output directory; must not already exist")
     args = parser.parse_args()
     if args.output is None:
-        out = Path(tempfile.mkdtemp(prefix="yomu-synthetic-clean-set-"))
+        out = Path(tempfile.mkdtemp(prefix="komyst-synthetic-clean-set-"))
     else:
         out = args.output
         out.mkdir(parents=True, exist_ok=False)
 
     manifest = {
-        "schema": "yomu-synthetic-clean-benchmark.v1",
+        "schema": "komyst-synthetic-clean-benchmark.v1",
         "synthetic_only": True,
         "dimensions": [WIDTH, HEIGHT],
         "split_policy": "calibration and selection may guide; holdout is frozen and must not tune parameters",

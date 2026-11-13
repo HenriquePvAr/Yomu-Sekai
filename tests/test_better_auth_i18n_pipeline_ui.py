@@ -8,7 +8,7 @@ from unittest import mock
 
 from PIL import Image
 
-from yomu.community.community_auth import (
+from komyst.community.community_auth import (
     AuthConfigurationError,
     BetterAuthProvider,
     build_auth_provider,
@@ -19,7 +19,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def read(rel: str) -> str:
     if rel == "app_ui.py":
-        rel = "yomu/ui/app.py"
+        rel = "komyst/ui/app.py"
     return (ROOT / rel).read_text(encoding="utf-8")
 
 
@@ -83,7 +83,7 @@ for (const node of nodes) {
  assert.notEqual(node.textContent,node.key,`Unresolved visible key: ${node.key}`);
  assert.ok(node.textContent.trim());
 }
-assert.equal(sandbox.window.TradutorI18n.t('settings.title'),'Configurações');
+assert.equal(sandbox.window.KomystI18n.t('settings.title'),'Configurações');
 '''
         result = subprocess.run(["node", "-e", script],
                                 input=bootstrap[len("<script>"):-len("</script>")],
@@ -175,7 +175,7 @@ class BetterAuthServiceScaffoldTests(unittest.TestCase):
 
 class PipelineIdentityUiTests(unittest.TestCase):
     def test_new_submission_tracks_current_job_identity(self):
-        src = read("static/tradutor_ui.js")
+        src = read("static/komyst_ui.js")
         for token in (
             "currentRequestId",
             "currentJobId",
@@ -187,7 +187,7 @@ class PipelineIdentityUiTests(unittest.TestCase):
             self.assertIn(token, src)
 
     def test_submit_uses_one_payload_after_identity_reset(self):
-        src = read("static/tradutor_ui.js")
+        src = read("static/komyst_ui.js")
         self.assertIn("const payload = formPayload();", src)
         self.assertIn("resetActivePipelineIdentity(payload.url || payload.local_folder || '')", src)
         self.assertIn("JSON.stringify(payload)", src)
@@ -196,10 +196,10 @@ class PipelineIdentityUiTests(unittest.TestCase):
 class AuthLoadingVisualContractTests(unittest.TestCase):
     def setUp(self):
         self.shell = read("ui/ui_shell.html")
-        self.css = read("static/tradutor_ui.css")
+        self.css = read("static/komyst_ui.css")
         self.auth_js = read("static/auth_ui.js")
         self.auth_presentation_js = read("static/auth_presentation.js")
-        self.ui_js = read("static/tradutor_ui.js")
+        self.ui_js = read("static/komyst_ui.js")
 
     def test_login_is_full_page_surface_not_modal(self):
         self.assertIn('id="authSurface"', self.shell)
@@ -340,7 +340,7 @@ class AuthLoadingVisualContractTests(unittest.TestCase):
 
     def test_reduced_motion_visual_hook_is_explicit_and_loopback_only(self):
         self.assertIn("visual_auth_reduced_motion", self.auth_js)
-        self.assertIn("window.__tradutorVisualTestEnabled === true", self.auth_js)
+        self.assertIn("window.__komystVisualTestEnabled === true", self.auth_js)
         self.assertIn("['127.0.0.1', 'localhost', '::1']", self.auth_js)
         self.assertIn("dataset.visualReducedMotion = '1'", self.auth_js)
 
@@ -445,7 +445,7 @@ class AuthLoadingVisualContractTests(unittest.TestCase):
         self.assertIn("authPresentation?.reflectAuthState(state)", self.auth_js)
         self.assertIn("optional_module_unavailable", self.auth_js)
         self.assertIn("visual_auth_without_presentation", self.auth_js)
-        self.assertIn("window.__tradutorVisualTestEnabled === true", self.auth_js)
+        self.assertIn("window.__komystVisualTestEnabled === true", self.auth_js)
         self.assertIn("['127.0.0.1', 'localhost', '::1']", self.auth_js)
         self.assertEqual(self.auth_js.count("canonicalAuthSubmitImpl = handleAuthSubmit"), 1)
         self.assertIn("setAuthState('auth_submitting')", self.auth_js)
@@ -468,7 +468,7 @@ class AuthLoadingVisualContractTests(unittest.TestCase):
         self.assertIn('id="authMarketingPipeline"', self.shell)
         self.assertEqual(self.shell.count("data-auth-pipeline-step"), 4)
         self.assertNotIn("sequence = [0, 1, 2, 3, 2, 1, 0]", self.auth_js)
-        self.assertNotIn("__tradutorAuthPipelineTimer", self.auth_js)
+        self.assertNotIn("__komystAuthPipelineTimer", self.auth_js)
         self.assertIn("auth-marketing-pipeline{", self.css)
         self.assertIn("pointer-events:none", self.css)
         pipeline_fragment = self.shell[
@@ -553,13 +553,13 @@ class AuthLoadingVisualContractTests(unittest.TestCase):
 
     def test_loading_visual_test_mode_is_local_and_fail_closed(self):
         self.assertIn("visual_boot_stage", self.ui_js)
-        self.assertIn("__tradutorVisualTestEnabled", read("app_ui.py"))
-        self.assertIn("TRADUTOR_UI_VISUAL_TEST", read("app_ui.py"))
-        self.assertIn("getGlobal('__tradutorVisualTestEnabled') === true", self.ui_js)
+        self.assertIn("__komystVisualTestEnabled", read("app_ui.py"))
+        self.assertIn("KOMYST_UI_VISUAL_TEST", read("app_ui.py"))
+        self.assertIn("getGlobal('__komystVisualTestEnabled') === true", self.ui_js)
         self.assertIn("['127.0.0.1', 'localhost', '::1']", self.ui_js)
         self.assertIn("dataset.visualBootTest = '1'", self.ui_js)
         self.assertIn("document.documentElement.dataset.visualBootTest = '1'", self.ui_js)
-        self.assertIn("window.__tradutorVisualTestEnabled === true && document.documentElement.dataset.visualBootTest === '1'", self.auth_js)
+        self.assertIn("window.__komystVisualTestEnabled === true && document.documentElement.dataset.visualBootTest === '1'", self.auth_js)
         self.assertIn("if (bootVisualTest) return;", self.ui_js)
         self.assertIn("bootHighestStage", self.ui_js)
         self.assertIn("bootProgressBar", self.shell)
@@ -575,7 +575,7 @@ class AuthLoadingVisualContractTests(unittest.TestCase):
         checked = {
             "app_ui.py": read("app_ui.py"),
             "ui/ui_shell.html": self.shell,
-            "static/tradutor_ui.js": self.ui_js,
+            "static/komyst_ui.js": self.ui_js,
             "static/auth_ui.js": self.auth_js,
         }
         mojibake_patterns = (

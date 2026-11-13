@@ -6,7 +6,7 @@ import pytest
 from PIL import Image
 from psd_tools.api.layers import PixelLayer
 
-from yomu.export.psd_tools_compat import pixel_layer_from_pil
+from komyst.export.psd_tools_compat import pixel_layer_from_pil
 
 
 @pytest.mark.parametrize(("api", "name_parameter"), [("old", "layer_name"), ("new", "name")])

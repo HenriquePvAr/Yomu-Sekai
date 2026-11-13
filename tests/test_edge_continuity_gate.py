@@ -5,8 +5,8 @@ import cv2
 import numpy as np
 from unittest import mock
 
-from yomu.config import settings as config
-from yomu.ocr.ocr_balloon import (
+from komyst.config import settings as config
+from komyst.ocr.ocr_balloon import (
     _edge_continuity_fidelity_findings,
     _advanced_art_fallback_eligible,
 )

@@ -12,7 +12,7 @@ only for shouts and sound effects.
 | `bangers-regular.ttf` | Bangers (Vernon Adams) | SIL OFL 1.1 — `OFL-Bangers.txt` |
 
 Source: https://github.com/google/fonts (`ofl/comicrelief`, `ofl/bangers`), downloaded 2026-10-24.
-Used by `yomu.clean.ownership.font_fidelity` (`BUNDLED_FONTS_DIR`); a bundled
+Used by `komyst.clean.ownership.font_fidelity` (`BUNDLED_FONTS_DIR`); a bundled
 file wins over a Windows font of the same role.
 
 ## Avaliação de 2026-11-03

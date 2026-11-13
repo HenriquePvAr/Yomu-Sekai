@@ -6,17 +6,17 @@
 > Beta 17. O owner confirmou que a Beta 17 foi distribuída pelo updater. A referência a endpoint
 > placeholder e à sequência `0.9.0-beta.35` → `0.9.0-beta.36` não é instrução nem status atual.
 > A M18 não certificou o canal atual, signing ou readiness de release; consulte os valores-fonte
-> de build em `yomu/runtime/version.py` e reexecute os gates antes de uma publicação.
+> de build em `komyst/runtime/version.py` e reexecute os gates antes de uma publicação.
 
 **Estado (2026-10-24): IMPLEMENTADO no código e na UI; publicação do canal = gate externo.**
 
 O updater verifica manifest HTTPS, assinatura Ed25519, SHA-256, canal e versão mínima
-(`yomu/runtime/update_manifest.py`, `update_transport.py`). A chave privada permanece fora do
+(`komyst/runtime/update_manifest.py`, `update_transport.py`). A chave privada permanece fora do
 repositório e dos logs. O trust root público está configurado em
 `update_manifest.TRUSTED_PUBLIC_KEYS` com o id `beta-2026-10`, e o cliente aceita somente
 manifests do canal `beta` (`CLIENT_UPDATE_CHANNEL`). A URL padrão do manifest é
 `update_bootstrap.DEFAULT_MANIFEST_URL` (repositório GitHub de releases, `updates/beta/latest.json`);
-`TRADUTOR_IA_UPDATE_MANIFEST_URL` a substitui e, definida vazia, desliga a verificação.
+`KOMYST_UPDATE_MANIFEST_URL` a substitui e, definida vazia, desliga a verificação.
 
 Na UI, a aba **Atualizações** tem **Verificar atualizações** (`GET /api/update/manifest`) e,
 quando há versão nova, **Baixar e instalar** → **Instalar agora** (`POST /api/update/download`,
@@ -37,7 +37,7 @@ flowchart TD
 ```
 
 Para a distribuição Windows, o artefato principal é o installer Inno Setup
-`YomuSekai-<versão>-Setup-x64.exe`. O fluxo da aba Atualizações baixa o installer para staging,
+`Komyst-<versão>-Setup-x64.exe`. O fluxo da aba Atualizações baixa o installer para staging,
 confere assinatura, SHA-256 e tamanho, e só então inicia o processo externo sem `shell=True`.
 O caminho ZIP permanece compatível apenas para manifests legados e não é o caminho principal da UI.
 

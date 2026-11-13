@@ -26,9 +26,9 @@ from pathlib import Path
 import psutil
 
 import test_support.hermetic_runtime as hermetic_runtime
-import yomu.runtime.process_tree as process_tree
-import yomu.ui.ui_bridge as ui_bridge
-from yomu.runtime.job_store import JobStatus, JobStore
+import komyst.runtime.process_tree as process_tree
+import komyst.ui.ui_bridge as ui_bridge
+from komyst.runtime.job_store import JobStatus, JobStore
 
 REPO = Path(__file__).resolve().parents[1]
 
@@ -240,8 +240,8 @@ class HardExitProcessTests(unittest.TestCase):
             import os, sys
             sys.path.insert(0, %r)
             import test_support._test_bootstrap  # noqa: F401
-            import yomu.runtime.process_tree as process_tree
-            from yomu.runtime.job_store import JobStore
+            import komyst.runtime.process_tree as process_tree
+            from komyst.runtime.job_store import JobStore
             store = JobStore(%r)
             snapshot = process_tree.snapshot(os.getpid()) or {}
             store.register_worker("crashed", os.getpid(),
@@ -273,8 +273,8 @@ class HardExitProcessTests(unittest.TestCase):
             import os, sys
             sys.path.insert(0, %r)
             import test_support._test_bootstrap  # noqa: F401
-            import yomu.runtime.process_tree as process_tree
-            from yomu.runtime.job_store import JobStore
+            import komyst.runtime.process_tree as process_tree
+            from komyst.runtime.job_store import JobStore
             store = JobStore(%r)
             snapshot = process_tree.snapshot(os.getpid()) or {}
             store.register_worker(sys.argv[1], os.getpid(),

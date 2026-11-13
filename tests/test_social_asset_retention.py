@@ -6,13 +6,13 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from yomu.community.chapter_asset_repository import AssetNotFound, ChapterAssetRepository
-from yomu.community.community_store import FileStatus, PostStatus
-from yomu.community.social_asset_reconcile import (
+from komyst.community.chapter_asset_repository import AssetNotFound, ChapterAssetRepository
+from komyst.community.community_store import FileStatus, PostStatus
+from komyst.community.social_asset_reconcile import (
     RECONCILE_REQUIRED, SAFE_FOR_TRASH, SocialAssetReconciliationService,
     SocialAssetRetentionSweep,
 )
-from yomu.community.social_asset_retention import (
+from komyst.community.social_asset_retention import (
     DAY_SECONDS, DEFAULT_RETENTION_DAYS, RetentionConflict, RetentionError,
     SocialAssetRetentionService, retention_days, sweep_enabled,
 )
@@ -284,7 +284,7 @@ class ReconcileTests(Base):
 class SafetyTests(Base):
     def test_no_permanent_delete_anywhere_in_the_retention_code(self):
         root = Path(__file__).resolve().parents[1]
-        for name in ("yomu/community/social_asset_retention.py", "yomu/community/social_asset_reconcile.py",
+        for name in ("komyst/community/social_asset_retention.py", "komyst/community/social_asset_reconcile.py",
                      "scripts/social_asset_maintenance_cli.py"):
             src = (root / name).read_text(encoding="utf-8")
             for bad in ("delete_file", "empty_trash", "emptyTrash", "files.delete"):
@@ -292,7 +292,7 @@ class SafetyTests(Base):
 
     def test_no_broad_drive_listing(self):
         root = Path(__file__).resolve().parents[1]
-        for name in ("yomu/community/social_asset_retention.py", "yomu/community/social_asset_reconcile.py"):
+        for name in ("komyst/community/social_asset_retention.py", "komyst/community/social_asset_reconcile.py"):
             src = (root / name).read_text(encoding="utf-8")
             for bad in ("list_files", "files.list", "q=", "'*'"):
                 self.assertNotIn(bad, src, f"{name}: {bad}")

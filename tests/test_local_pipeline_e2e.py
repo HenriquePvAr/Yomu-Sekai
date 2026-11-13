@@ -19,13 +19,13 @@ from pathlib import Path
 
 from PIL import Image
 
-from yomu.runtime.job_store import JobStatus, JobStore
-from yomu.download.local.local_folder_job import (
+from komyst.runtime.job_store import JobStatus, JobStore
+from komyst.download.local.local_folder_job import (
     SOURCE_TYPE_LOCAL_FOLDER, ensure_not_both_sources, folder_fingerprint, job_fields,
     public_summary,
 )
-from yomu.download.local.local_folder_source import LocalFolderChapterAdapter, LocalFolderPolicy
-from yomu.export.pdf import prepare_smart_webtoon_pages
+from komyst.download.local.local_folder_source import LocalFolderChapterAdapter, LocalFolderPolicy
+from komyst.export.pdf import prepare_smart_webtoon_pages
 
 REPO = Path(__file__).resolve().parents[1]
 
@@ -201,13 +201,13 @@ class LocalPipelineE2ETests(unittest.TestCase):
 
 class OfflineGuardTests(unittest.TestCase):
     def test_no_provider_module_is_imported_by_the_local_path(self):
-        for module in ("yomu/download/local/local_folder_job.py", "yomu/download/local/local_folder_source.py", "yomu/download/local/local_folder_input.py"):
+        for module in ("komyst/download/local/local_folder_job.py", "komyst/download/local/local_folder_source.py", "komyst/download/local/local_folder_input.py"):
             source = (REPO / module).read_text(encoding="utf-8")
             for banned in ("import requests", "translator_nvidia", "googleapis", "supabase"):
                 self.assertNotIn(banned, source, f"{module}: {banned}")
 
     def test_command_is_an_argument_list_never_a_shell_string(self):
-        from yomu.download.local.local_folder_job import build_local_job_command
+        from komyst.download.local.local_folder_job import build_local_job_command
 
         command = build_local_job_command(
             snapshot_ref="abc123", output="cap", mode="fast", logical_pages=True,

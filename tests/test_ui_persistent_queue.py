@@ -9,9 +9,9 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-import yomu.ui.ui_bridge as ui_bridge
-from yomu.community.community_auth import RequestPrincipal
-from yomu.runtime.job_store import JobStatus, JobStore
+import komyst.ui.ui_bridge as ui_bridge
+from komyst.community.community_auth import RequestPrincipal
+from komyst.runtime.job_store import JobStatus, JobStore
 
 
 def _run(coro):
@@ -39,7 +39,7 @@ class UiPersistentQueueTests(unittest.TestCase):
             )
         self._patches = [
             # Explicit isolated runtime root instead of the project's real .cache/runtime.
-            patch.dict(os.environ, {"TRADUTOR_TEST_RUNTIME_ROOT": str(self.tmp)}),
+            patch.dict(os.environ, {"KOMYST_TEST_RUNTIME_ROOT": str(self.tmp)}),
             patch.object(ui_bridge, "env_status", lambda *a, **k: {"env_exists": True, "nvidia_configured": True}),
             patch.object(ui_bridge, "_current_commit", lambda: "deadbeef"),
             patch.object(ui_bridge, "_current_branch", lambda: "main"),
@@ -47,7 +47,7 @@ class UiPersistentQueueTests(unittest.TestCase):
             # Queue tests own persistence, not worker lifecycle. The real method
             # launches a detached worker against the launcher's import-time DB.
             patch.object(ui_bridge.UiBridge, "ensure_worker", return_value={"online": True}),
-            patch("yomu.commands.start_tradutor.spawn_worker_process",
+            patch("komyst.commands.start_tradutor.spawn_worker_process",
                   side_effect=AssertionError("queue unit test must not spawn a worker")),
         ]
         for p in self._patches:
@@ -109,7 +109,7 @@ class UiPersistentQueueTests(unittest.TestCase):
     def test_queue_item_passes_the_commercial_device_gate(self):
         """The queue used to skip the gate the main form uses, so every queued
         chapter was refused with commercial_device_id_missing."""
-        from yomu.auth.commercial_device import CommercialDeviceContext
+        from komyst.auth.commercial_device import CommercialDeviceContext
 
         principal = RequestPrincipal("owner-a", True, auth_source="test")
         seen = []
@@ -273,7 +273,7 @@ class UiPersistentQueueTests(unittest.TestCase):
         # An interrupted job whose recorded runner is still a live process must not be
         # resumed - that would run two trees for the same chapter.
         import os
-        import yomu.runtime.process_tree as process_tree
+        import komyst.runtime.process_tree as process_tree
         store = JobStore(self.db)
         jid = store.create_job(source_url="https://example/x",
                                output_dir=str(self.tmp / "out"), command=["x"])

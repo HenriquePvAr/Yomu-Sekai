@@ -105,7 +105,7 @@ modelos, caches, temporários e paginação do Windows precisam de espaço adici
 
 [Métricas agregadas em JSON](../reports/data/job_f3de3bca_resources.json) e
 [linha do tempo em CSV](../reports/data/job_f3de3bca_resources.csv).
-Logs e artefatos originais estão em `%LOCALAPPDATA%/TradutorIA`; os dados de
+Logs e artefatos originais estão em `%LOCALAPPDATA%/Komyst`; os dados de
 processos detalhados não foram incluídos na documentação pública.
 
 Antes de anunciar mínimo de RAM/VRAM: repetir com captura desde o início,

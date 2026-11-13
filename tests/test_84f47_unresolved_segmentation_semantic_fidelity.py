@@ -22,7 +22,7 @@ install_offline_network_guard()
 
 import unittest
 
-import yomu.translation.semantic_fidelity as semantic_fidelity
+import komyst.translation.semantic_fidelity as semantic_fidelity
 
 
 def _fidelity(source, candidate, **kwargs):

@@ -1,13 +1,13 @@
 # Backend social integrado ao Supabase (Data API + RLS)
 
-> **Estado:** backend IMPLEMENTADO (`yomu/community/social_http.py`,
-> `yomu/community/social_repository.py`, `yomu/community/supabase_social.py`; montado por
-> `yomu/ui/app.py` quando o provider social está configurado). A superfície de UI da
+> **Estado:** backend IMPLEMENTADO (`komyst/community/social_http.py`,
+> `komyst/community/social_repository.py`, `komyst/community/supabase_social.py`; montado por
+> `komyst/ui/app.py` quando o provider social está configurado). A superfície de UI da
 > Comunidade está **desligada** (`COMMUNITY_ENABLED = false` em `static/social_community.js`),
 > então o usuário final não alcança estes endpoints pela interface.
 > **Revisado em:** 2026-10-24 · **Base verificada:** `5f482ce1`.
 
-Esta fase liga o backend do Tradutor.Ia ao Postgres social do Supabase. O navegador **não**
+Esta fase liga o backend do Komyst ao Postgres social do Supabase. O navegador **não**
 acessa as tabelas diretamente: chama endpoints autenticados do backend, que encaminham o
 **JWT do próprio usuário** à Data API (PostgREST), onde a **RLS** revalida cada linha.
 
@@ -15,7 +15,7 @@ acessa as tabelas diretamente: chama endpoints autenticados do backend, que enca
 
 ```
 Frontend
-  → backend Tradutor.Ia  (valida o JWT, cria RequestPrincipal)
+  → backend Komyst  (valida o JWT, cria RequestPrincipal)
   → user JWT + publishable key
   → Supabase Data API (PostgREST)
   → PostgreSQL + RLS

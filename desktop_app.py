@@ -1,5 +1,5 @@
-"""Compatibility launcher; implementation lives in :mod:`yomu.desktop.app`."""
-from yomu.desktop import app as _implementation
+"""Compatibility launcher; implementation lives in :mod:`komyst.desktop.app`."""
+from komyst.desktop import app as _implementation
 import sys as _sys
 
 if __name__ == "__main__":

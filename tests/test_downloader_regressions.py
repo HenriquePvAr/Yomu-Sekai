@@ -15,13 +15,13 @@ from types import SimpleNamespace
 from unittest import mock
 
 from PIL import Image, ImageDraw
-from yomu.pipeline.benchmark_pipeline import _download_cache_reuse_allowed, _valid_download_paths
-import yomu.download.sources.chapter_source as chapter_source
-import yomu.download.down as down
-from yomu.download.sources.chapter_source import GenericImageChapterAdapter, REVIEW_REQUIRED_MEDIUM_CONFIDENCE, SourceError
-from yomu.download.download_transport import DownloadLimits, LimitExceeded, RequestsTransport
+from komyst.pipeline.benchmark_pipeline import _download_cache_reuse_allowed, _valid_download_paths
+import komyst.download.sources.chapter_source as chapter_source
+import komyst.download.down as down
+from komyst.download.sources.chapter_source import GenericImageChapterAdapter, REVIEW_REQUIRED_MEDIUM_CONFIDENCE, SourceError
+from komyst.download.download_transport import DownloadLimits, LimitExceeded, RequestsTransport
 
-from yomu.download.down import (
+from komyst.download.down import (
     _bounded_driver_teardown,
     _build_download_gate,
     _capture_driver_ownership,
@@ -279,21 +279,21 @@ class DownloaderRegressionTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as folder:
             with (
-                mock.patch("yomu.download.sources.chapter_source.select_adapter", return_value=adapter),
-                mock.patch("yomu.download.down.preflight_browser_navigation", side_effect=lambda _adapter, value: value),
-                mock.patch("yomu.download.down._create_driver", return_value=driver),
-                mock.patch("yomu.download.down._capture_driver_ownership", return_value={}),
-                mock.patch("yomu.download.down._refresh_driver_ownership"),
-                mock.patch("yomu.download.down._bounded_driver_teardown", return_value={"status": "success", "timeout_occurred": False}),
-                mock.patch("yomu.download.down._viewer_image_snapshot", return_value={"image_count": 1, "urls": ["one"], "complete_manifest": True}),
-                mock.patch("yomu.download.down._scroll_incrementally", return_value={"reached_document_end": True, "stabilized": True}),
-                mock.patch("yomu.download.down._collect_image_candidates", side_effect=AssertionError("legacy collector must not run")),
-                mock.patch("yomu.download.down._dedupe_candidates", side_effect=lambda values: values),
-                mock.patch("yomu.download.download_transport.build_transports", return_value=[Transport()]),
-                mock.patch("yomu.download.down._download_candidates", side_effect=fake_download),
-                mock.patch("yomu.download.down._persist_download_metadata"),
-                mock.patch("yomu.download.down._write_download_report"),
-                mock.patch("yomu.download.down.time.sleep"),
+                mock.patch("komyst.download.sources.chapter_source.select_adapter", return_value=adapter),
+                mock.patch("komyst.download.down.preflight_browser_navigation", side_effect=lambda _adapter, value: value),
+                mock.patch("komyst.download.down._create_driver", return_value=driver),
+                mock.patch("komyst.download.down._capture_driver_ownership", return_value={}),
+                mock.patch("komyst.download.down._refresh_driver_ownership"),
+                mock.patch("komyst.download.down._bounded_driver_teardown", return_value={"status": "success", "timeout_occurred": False}),
+                mock.patch("komyst.download.down._viewer_image_snapshot", return_value={"image_count": 1, "urls": ["one"], "complete_manifest": True}),
+                mock.patch("komyst.download.down._scroll_incrementally", return_value={"reached_document_end": True, "stabilized": True}),
+                mock.patch("komyst.download.down._collect_image_candidates", side_effect=AssertionError("legacy collector must not run")),
+                mock.patch("komyst.download.down._dedupe_candidates", side_effect=lambda values: values),
+                mock.patch("komyst.download.download_transport.build_transports", return_value=[Transport()]),
+                mock.patch("komyst.download.down._download_candidates", side_effect=fake_download),
+                mock.patch("komyst.download.down._persist_download_metadata"),
+                mock.patch("komyst.download.down._write_download_report"),
+                mock.patch("komyst.download.down.time.sleep"),
             ):
                 result = download_images(
                     "https://specific.test/chapter/1",
@@ -324,16 +324,16 @@ class DownloaderRegressionTests(unittest.TestCase):
         )
         transport_builder = mock.Mock()
         with (
-            mock.patch("yomu.download.sources.chapter_source.select_adapter", return_value=adapter),
-            mock.patch("yomu.download.down.preflight_browser_navigation", side_effect=lambda _adapter, value: value),
-            mock.patch("yomu.download.down._create_driver", return_value=_QuitDriver()),
-            mock.patch("yomu.download.down._capture_driver_ownership", return_value={}),
-            mock.patch("yomu.download.down._refresh_driver_ownership"),
-            mock.patch("yomu.download.down._bounded_driver_teardown", return_value={"status": "success", "timeout_occurred": False}),
-            mock.patch("yomu.download.down._viewer_image_snapshot", return_value={"image_count": 1, "urls": ["one"], "complete_manifest": True}),
-            mock.patch("yomu.download.down._scroll_incrementally", return_value={"reached_document_end": False, "stabilized": False}),
-            mock.patch("yomu.download.download_transport.build_transports", transport_builder),
-            mock.patch("yomu.download.down.time.sleep"),
+            mock.patch("komyst.download.sources.chapter_source.select_adapter", return_value=adapter),
+            mock.patch("komyst.download.down.preflight_browser_navigation", side_effect=lambda _adapter, value: value),
+            mock.patch("komyst.download.down._create_driver", return_value=_QuitDriver()),
+            mock.patch("komyst.download.down._capture_driver_ownership", return_value={}),
+            mock.patch("komyst.download.down._refresh_driver_ownership"),
+            mock.patch("komyst.download.down._bounded_driver_teardown", return_value={"status": "success", "timeout_occurred": False}),
+            mock.patch("komyst.download.down._viewer_image_snapshot", return_value={"image_count": 1, "urls": ["one"], "complete_manifest": True}),
+            mock.patch("komyst.download.down._scroll_incrementally", return_value={"reached_document_end": False, "stabilized": False}),
+            mock.patch("komyst.download.download_transport.build_transports", transport_builder),
+            mock.patch("komyst.download.down.time.sleep"),
         ):
             with self.assertRaises(SourceError) as ctx:
                 download_images("https://specific.test/chapter/1", force=False)
@@ -352,16 +352,16 @@ class DownloaderRegressionTests(unittest.TestCase):
         )
         transport_builder = mock.Mock()
         with (
-            mock.patch("yomu.download.sources.chapter_source.select_adapter", return_value=adapter),
-            mock.patch("yomu.download.down.preflight_browser_navigation", side_effect=lambda _adapter, value: value),
-            mock.patch("yomu.download.down._create_driver", return_value=_QuitDriver()),
-            mock.patch("yomu.download.down._capture_driver_ownership", return_value={}),
-            mock.patch("yomu.download.down._refresh_driver_ownership"),
-            mock.patch("yomu.download.down._bounded_driver_teardown", return_value={"status": "success", "timeout_occurred": False}),
-            mock.patch("yomu.download.down._viewer_image_snapshot", return_value={"image_count": 401, "urls": ["one"], "complete_manifest": True}),
-            mock.patch("yomu.download.down._scroll_incrementally", return_value={"reached_document_end": True, "stabilized": True}),
-            mock.patch("yomu.download.download_transport.build_transports", transport_builder),
-            mock.patch("yomu.download.down.time.sleep"),
+            mock.patch("komyst.download.sources.chapter_source.select_adapter", return_value=adapter),
+            mock.patch("komyst.download.down.preflight_browser_navigation", side_effect=lambda _adapter, value: value),
+            mock.patch("komyst.download.down._create_driver", return_value=_QuitDriver()),
+            mock.patch("komyst.download.down._capture_driver_ownership", return_value={}),
+            mock.patch("komyst.download.down._refresh_driver_ownership"),
+            mock.patch("komyst.download.down._bounded_driver_teardown", return_value={"status": "success", "timeout_occurred": False}),
+            mock.patch("komyst.download.down._viewer_image_snapshot", return_value={"image_count": 401, "urls": ["one"], "complete_manifest": True}),
+            mock.patch("komyst.download.down._scroll_incrementally", return_value={"reached_document_end": True, "stabilized": True}),
+            mock.patch("komyst.download.download_transport.build_transports", transport_builder),
+            mock.patch("komyst.download.down.time.sleep"),
         ):
             with self.assertRaises(SourceError) as ctx:
                 download_images("https://specific.test/chapter/1", force=False)
@@ -448,7 +448,7 @@ class DownloaderRegressionTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             debug = Path(folder) / "debug"
             with (
-                mock.patch("yomu.download.down.preflight_browser_navigation",
+                mock.patch("komyst.download.down.preflight_browser_navigation",
                            side_effect=SourceError("challenge_required", "https://bad/?secret")),
                 mock.patch.object(chapter_source.socket, "getaddrinfo",
                                   return_value=[(2, 1, 6, "", ("93.184.216.34", 0))]),
@@ -485,7 +485,7 @@ class DownloaderRegressionTests(unittest.TestCase):
                 )
 
     def test_generic_source_never_uses_download_cache_as_reader_review(self):
-        with mock.patch("yomu.pipeline.benchmark_pipeline.config.ENABLE_DOWNLOAD_CACHE", True):
+        with mock.patch("komyst.pipeline.benchmark_pipeline.config.ENABLE_DOWNLOAD_CACHE", True):
             self.assertFalse(_download_cache_reuse_allowed(
                 "https://reader.example.test/chapter/1", force=False, approved_ids=[]))
             self.assertFalse(_download_cache_reuse_allowed(
@@ -510,11 +510,11 @@ class DownloaderRegressionTests(unittest.TestCase):
                 return None
 
         with (
-            mock.patch("yomu.download.down.inspect_source_preflight", return_value="https://reader.example.test/chapter/1"),
-            mock.patch("yomu.download.down._create_driver", return_value=Driver()),
-            mock.patch("yomu.download.down._capture_driver_ownership", return_value={}),
-            mock.patch("yomu.download.down._refresh_driver_ownership"),
-            mock.patch("yomu.download.down._bounded_driver_teardown", return_value={}),
+            mock.patch("komyst.download.down.inspect_source_preflight", return_value="https://reader.example.test/chapter/1"),
+            mock.patch("komyst.download.down._create_driver", return_value=Driver()),
+            mock.patch("komyst.download.down._capture_driver_ownership", return_value={}),
+            mock.patch("komyst.download.down._refresh_driver_ownership"),
+            mock.patch("komyst.download.down._bounded_driver_teardown", return_value={}),
             mock.patch.object(chapter_source.socket, "getaddrinfo", return_value=[(2, 1, 6, "", ("93.184.216.34", 0))]),
         ):
             with self.assertRaises(SourceError):
@@ -535,15 +535,15 @@ class DownloaderRegressionTests(unittest.TestCase):
         )
         driver = _QuitDriver()
         with (
-            mock.patch("yomu.download.sources.chapter_source.select_adapter", return_value=adapter),
-            mock.patch("yomu.download.down.inspect_source_preflight", return_value="https://known.example.test/chapter/1"),
-            mock.patch("yomu.download.down._create_driver", return_value=driver),
-            mock.patch("yomu.download.down._capture_driver_ownership", return_value={}),
-            mock.patch("yomu.download.down._refresh_driver_ownership"),
-            mock.patch("yomu.download.down._bounded_driver_teardown", return_value={}),
-            mock.patch("yomu.download.down._scroll_incrementally", return_value={"reached_document_end": False, "stabilized": False}),
-            mock.patch("yomu.download.down._load_source_profile", return_value=None),
-            mock.patch("yomu.download.down.time.sleep"),
+            mock.patch("komyst.download.sources.chapter_source.select_adapter", return_value=adapter),
+            mock.patch("komyst.download.down.inspect_source_preflight", return_value="https://known.example.test/chapter/1"),
+            mock.patch("komyst.download.down._create_driver", return_value=driver),
+            mock.patch("komyst.download.down._capture_driver_ownership", return_value={}),
+            mock.patch("komyst.download.down._refresh_driver_ownership"),
+            mock.patch("komyst.download.down._bounded_driver_teardown", return_value={}),
+            mock.patch("komyst.download.down._scroll_incrementally", return_value={"reached_document_end": False, "stabilized": False}),
+            mock.patch("komyst.download.down._load_source_profile", return_value=None),
+            mock.patch("komyst.download.down.time.sleep"),
         ):
             result = analyze_chapter_source("https://known.example.test/chapter/1")
 
@@ -566,15 +566,15 @@ class DownloaderRegressionTests(unittest.TestCase):
         )
         driver = _QuitDriver()
         with (
-            mock.patch("yomu.download.sources.chapter_source.select_adapter", return_value=adapter),
-            mock.patch("yomu.download.down.inspect_source_preflight", return_value="https://reader.example.test/chapter/1"),
-            mock.patch("yomu.download.down._create_driver", return_value=driver),
-            mock.patch("yomu.download.down._capture_driver_ownership", return_value={}),
-            mock.patch("yomu.download.down._refresh_driver_ownership"),
-            mock.patch("yomu.download.down._bounded_driver_teardown", return_value={}),
-            mock.patch("yomu.download.down._scroll_incrementally", return_value={"reached_document_end": False, "stabilized": False}),
-            mock.patch("yomu.download.down._load_source_profile", return_value=None),
-            mock.patch("yomu.download.down.time.sleep"),
+            mock.patch("komyst.download.sources.chapter_source.select_adapter", return_value=adapter),
+            mock.patch("komyst.download.down.inspect_source_preflight", return_value="https://reader.example.test/chapter/1"),
+            mock.patch("komyst.download.down._create_driver", return_value=driver),
+            mock.patch("komyst.download.down._capture_driver_ownership", return_value={}),
+            mock.patch("komyst.download.down._refresh_driver_ownership"),
+            mock.patch("komyst.download.down._bounded_driver_teardown", return_value={}),
+            mock.patch("komyst.download.down._scroll_incrementally", return_value={"reached_document_end": False, "stabilized": False}),
+            mock.patch("komyst.download.down._load_source_profile", return_value=None),
+            mock.patch("komyst.download.down.time.sleep"),
         ):
             self.assertIs(analyze_chapter_source("https://reader.example.test/chapter/1"), result)
 
@@ -599,21 +599,21 @@ class DownloaderRegressionTests(unittest.TestCase):
         crashed_driver = _QuitDriver()
         fresh_driver = _QuitDriver()
         with (
-            mock.patch("yomu.download.sources.chapter_source.select_adapter", return_value=adapter),
-            mock.patch("yomu.download.down.inspect_source_preflight", return_value="https://known.example.test/chapter/1"),
-            mock.patch("yomu.download.down._create_driver", side_effect=[crashed_driver, fresh_driver]) as create_driver,
-            mock.patch("yomu.download.down._capture_driver_ownership", return_value={}),
-            mock.patch("yomu.download.down._refresh_driver_ownership"),
-            mock.patch("yomu.download.down._bounded_driver_teardown", return_value={}),
+            mock.patch("komyst.download.sources.chapter_source.select_adapter", return_value=adapter),
+            mock.patch("komyst.download.down.inspect_source_preflight", return_value="https://known.example.test/chapter/1"),
+            mock.patch("komyst.download.down._create_driver", side_effect=[crashed_driver, fresh_driver]) as create_driver,
+            mock.patch("komyst.download.down._capture_driver_ownership", return_value={}),
+            mock.patch("komyst.download.down._refresh_driver_ownership"),
+            mock.patch("komyst.download.down._bounded_driver_teardown", return_value={}),
             mock.patch(
-                "yomu.download.down._scroll_incrementally",
+                "komyst.download.down._scroll_incrementally",
                 side_effect=[
                     InvalidSessionIdException("session deleted as the browser has closed the connection"),
                     {"reached_document_end": True, "stabilized": True},
                 ],
             ),
-            mock.patch("yomu.download.down._load_source_profile", return_value=None),
-            mock.patch("yomu.download.down.time.sleep"),
+            mock.patch("komyst.download.down._load_source_profile", return_value=None),
+            mock.patch("komyst.download.down.time.sleep"),
         ):
             self.assertIs(analyze_chapter_source("https://known.example.test/chapter/1"), result)
 
@@ -632,18 +632,18 @@ class DownloaderRegressionTests(unittest.TestCase):
             analyze=mock.Mock(),
         )
         with (
-            mock.patch("yomu.download.sources.chapter_source.select_adapter", return_value=adapter),
-            mock.patch("yomu.download.down.inspect_source_preflight", return_value="https://known.example.test/chapter/1"),
-            mock.patch("yomu.download.down._create_driver", side_effect=[_QuitDriver(), _QuitDriver()]) as create_driver,
-            mock.patch("yomu.download.down._capture_driver_ownership", return_value={}),
-            mock.patch("yomu.download.down._refresh_driver_ownership"),
-            mock.patch("yomu.download.down._bounded_driver_teardown", return_value={}),
+            mock.patch("komyst.download.sources.chapter_source.select_adapter", return_value=adapter),
+            mock.patch("komyst.download.down.inspect_source_preflight", return_value="https://known.example.test/chapter/1"),
+            mock.patch("komyst.download.down._create_driver", side_effect=[_QuitDriver(), _QuitDriver()]) as create_driver,
+            mock.patch("komyst.download.down._capture_driver_ownership", return_value={}),
+            mock.patch("komyst.download.down._refresh_driver_ownership"),
+            mock.patch("komyst.download.down._bounded_driver_teardown", return_value={}),
             mock.patch(
-                "yomu.download.down._scroll_incrementally",
+                "komyst.download.down._scroll_incrementally",
                 side_effect=InvalidSessionIdException("session deleted as the browser has closed the connection"),
             ),
-            mock.patch("yomu.download.down._load_source_profile", return_value=None),
-            mock.patch("yomu.download.down.time.sleep"),
+            mock.patch("komyst.download.down._load_source_profile", return_value=None),
+            mock.patch("komyst.download.down.time.sleep"),
         ):
             with self.assertRaises(InvalidSessionIdException):
                 analyze_chapter_source("https://known.example.test/chapter/1")
@@ -1404,21 +1404,21 @@ class DownloaderRegressionTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             base = Path(folder)
             with (
-                mock.patch("yomu.download.down._create_driver", return_value=driver),
-                mock.patch("yomu.download.down._capture_driver_ownership", return_value={}),
-                mock.patch("yomu.download.down._refresh_driver_ownership"),
-                mock.patch("yomu.download.down._viewer_image_snapshot", return_value={"image_count": 1, "urls": ["one"], "complete_manifest": True}),
-                mock.patch("yomu.download.down._scroll_incrementally", return_value={"reached_document_end": True, "stabilized": True}),
+                mock.patch("komyst.download.down._create_driver", return_value=driver),
+                mock.patch("komyst.download.down._capture_driver_ownership", return_value={}),
+                mock.patch("komyst.download.down._refresh_driver_ownership"),
+                mock.patch("komyst.download.down._viewer_image_snapshot", return_value={"image_count": 1, "urls": ["one"], "complete_manifest": True}),
+                mock.patch("komyst.download.down._scroll_incrementally", return_value={"reached_document_end": True, "stabilized": True}),
                 mock.patch.object(chapter_source.WEBTOONS, "analyze", return_value=_accepted_source_analysis()),
-                mock.patch("yomu.download.down._collect_image_candidates", side_effect=AssertionError("legacy collector must not run")),
-                mock.patch("yomu.download.down._dedupe_candidates", side_effect=lambda items: items),
-                mock.patch("yomu.download.down._download_candidates", side_effect=fake_candidates),
-                mock.patch("yomu.download.download_transport.build_transports", return_value=[]),
-                mock.patch("yomu.download.down.preflight_browser_navigation", side_effect=lambda _adapter, request_url: request_url),
-                mock.patch("yomu.download.down._persist_download_metadata", side_effect=fake_persist),
-                mock.patch("yomu.download.down._bounded_driver_teardown", side_effect=fake_teardown),
-                mock.patch("yomu.download.down._write_download_report"),
-                mock.patch("yomu.download.down.time.sleep"),
+                mock.patch("komyst.download.down._collect_image_candidates", side_effect=AssertionError("legacy collector must not run")),
+                mock.patch("komyst.download.down._dedupe_candidates", side_effect=lambda items: items),
+                mock.patch("komyst.download.down._download_candidates", side_effect=fake_candidates),
+                mock.patch("komyst.download.download_transport.build_transports", return_value=[]),
+                mock.patch("komyst.download.down.preflight_browser_navigation", side_effect=lambda _adapter, request_url: request_url),
+                mock.patch("komyst.download.down._persist_download_metadata", side_effect=fake_persist),
+                mock.patch("komyst.download.down._bounded_driver_teardown", side_effect=fake_teardown),
+                mock.patch("komyst.download.down._write_download_report"),
+                mock.patch("komyst.download.down.time.sleep"),
             ):
                 result = download_images(
                     "https://www.webtoons.com/en/fantasy/serie/ep-1/viewer",
@@ -1443,19 +1443,19 @@ class DownloaderRegressionTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             base = Path(folder)
             with (
-                mock.patch("yomu.download.down._create_driver", return_value=_QuitDriver(raise_quit_error)),
-                mock.patch("yomu.download.down._capture_driver_ownership", return_value={}),
-                mock.patch("yomu.download.down._refresh_driver_ownership"),
-                mock.patch("yomu.download.down._viewer_image_snapshot", return_value={"image_count": 1, "urls": ["one"], "complete_manifest": True}),
-                mock.patch("yomu.download.down._scroll_incrementally", return_value={"reached_document_end": True, "stabilized": True}),
+                mock.patch("komyst.download.down._create_driver", return_value=_QuitDriver(raise_quit_error)),
+                mock.patch("komyst.download.down._capture_driver_ownership", return_value={}),
+                mock.patch("komyst.download.down._refresh_driver_ownership"),
+                mock.patch("komyst.download.down._viewer_image_snapshot", return_value={"image_count": 1, "urls": ["one"], "complete_manifest": True}),
+                mock.patch("komyst.download.down._scroll_incrementally", return_value={"reached_document_end": True, "stabilized": True}),
                 mock.patch.object(chapter_source.WEBTOONS, "analyze", return_value=_accepted_source_analysis()),
-                mock.patch("yomu.download.down._collect_image_candidates", side_effect=AssertionError("legacy collector must not run")),
-                mock.patch("yomu.download.down._dedupe_candidates", side_effect=lambda items: items),
-                mock.patch("yomu.download.down._download_candidates", side_effect=fake_candidates),
-                mock.patch("yomu.download.download_transport.build_transports", return_value=[]),
-                mock.patch("yomu.download.down.preflight_browser_navigation", side_effect=lambda _adapter, request_url: request_url),
-                mock.patch("yomu.download.down._write_download_artifacts"),
-                mock.patch("yomu.download.down.time.sleep"),
+                mock.patch("komyst.download.down._collect_image_candidates", side_effect=AssertionError("legacy collector must not run")),
+                mock.patch("komyst.download.down._dedupe_candidates", side_effect=lambda items: items),
+                mock.patch("komyst.download.down._download_candidates", side_effect=fake_candidates),
+                mock.patch("komyst.download.download_transport.build_transports", return_value=[]),
+                mock.patch("komyst.download.down.preflight_browser_navigation", side_effect=lambda _adapter, request_url: request_url),
+                mock.patch("komyst.download.down._write_download_artifacts"),
+                mock.patch("komyst.download.down.time.sleep"),
             ):
                 download_images(
                     "https://www.webtoons.com/en/fantasy/serie/ep-1/viewer",
@@ -1489,21 +1489,21 @@ class DownloaderRegressionTests(unittest.TestCase):
             base = Path(folder)
             try:
                 with (
-                    mock.patch("yomu.download.down._create_driver", return_value=_QuitDriver(block_quit)),
-                    mock.patch("yomu.download.down._capture_driver_ownership", return_value={}),
-                    mock.patch("yomu.download.down._refresh_driver_ownership"),
-                    mock.patch("yomu.download.down._viewer_image_snapshot", return_value={"image_count": 1, "urls": ["one"], "complete_manifest": True}),
-                    mock.patch("yomu.download.down._scroll_incrementally", return_value={"reached_document_end": True, "stabilized": True}),
+                    mock.patch("komyst.download.down._create_driver", return_value=_QuitDriver(block_quit)),
+                    mock.patch("komyst.download.down._capture_driver_ownership", return_value={}),
+                    mock.patch("komyst.download.down._refresh_driver_ownership"),
+                    mock.patch("komyst.download.down._viewer_image_snapshot", return_value={"image_count": 1, "urls": ["one"], "complete_manifest": True}),
+                    mock.patch("komyst.download.down._scroll_incrementally", return_value={"reached_document_end": True, "stabilized": True}),
                     mock.patch.object(chapter_source.WEBTOONS, "analyze", return_value=_accepted_source_analysis()),
-                    mock.patch("yomu.download.down._collect_image_candidates", side_effect=AssertionError("legacy collector must not run")),
-                    mock.patch("yomu.download.down._dedupe_candidates", side_effect=lambda items: items),
-                    mock.patch("yomu.download.down._download_candidates", side_effect=fake_candidates),
-                    mock.patch("yomu.download.download_transport.build_transports", return_value=[]),
-                    mock.patch("yomu.download.down.preflight_browser_navigation", side_effect=lambda _adapter, request_url: request_url),
-                    mock.patch("yomu.download.down._write_download_artifacts"),
-                    mock.patch("yomu.download.down.SELENIUM_QUIT_TIMEOUT_SECONDS", 0.02),
-                    mock.patch("yomu.download.down.SELENIUM_CLEANUP_TIMEOUT_SECONDS", 0.01),
-                    mock.patch("yomu.download.down.time.sleep"),
+                    mock.patch("komyst.download.down._collect_image_candidates", side_effect=AssertionError("legacy collector must not run")),
+                    mock.patch("komyst.download.down._dedupe_candidates", side_effect=lambda items: items),
+                    mock.patch("komyst.download.down._download_candidates", side_effect=fake_candidates),
+                    mock.patch("komyst.download.download_transport.build_transports", return_value=[]),
+                    mock.patch("komyst.download.down.preflight_browser_navigation", side_effect=lambda _adapter, request_url: request_url),
+                    mock.patch("komyst.download.down._write_download_artifacts"),
+                    mock.patch("komyst.download.down.SELENIUM_QUIT_TIMEOUT_SECONDS", 0.02),
+                    mock.patch("komyst.download.down.SELENIUM_CLEANUP_TIMEOUT_SECONDS", 0.01),
+                    mock.patch("komyst.download.down.time.sleep"),
                 ):
                     download_images(
                         "https://www.webtoons.com/en/fantasy/serie/ep-1/viewer",
@@ -1701,7 +1701,7 @@ class DownloaderRegressionTests(unittest.TestCase):
             },
         }
 
-        from yomu.download.down import _cleanup_owned_processes
+        from komyst.download.down import _cleanup_owned_processes
 
         result = _cleanup_owned_processes(
             ownership,
@@ -1768,7 +1768,7 @@ class DownloaderRegressionTests(unittest.TestCase):
             },
         }
 
-        from yomu.download.down import _cleanup_owned_processes
+        from komyst.download.down import _cleanup_owned_processes
 
         result = _cleanup_owned_processes(
             ownership,
@@ -1912,12 +1912,12 @@ class PaginatedReaderSafetyTests(unittest.TestCase):
             return [self._control(self.PAGE_TWO)] if driver.current_url == self.PAGE_ONE else []
 
         with (
-            mock.patch("yomu.download.down._read_pagination_controls", side_effect=controls),
-            mock.patch("yomu.download.down._scroll_incrementally", return_value={
+            mock.patch("komyst.download.down._read_pagination_controls", side_effect=controls),
+            mock.patch("komyst.download.down._scroll_incrementally", return_value={
                 "reached_document_end": True, "stabilized": True}),
-            mock.patch("yomu.download.down._aggregate_paginated_analyses", return_value=aggregate) as aggregate_call,
-            mock.patch("yomu.download.down._load_source_profile", return_value=None),
-            mock.patch("yomu.download.down.time.sleep"),
+            mock.patch("komyst.download.down._aggregate_paginated_analyses", return_value=aggregate) as aggregate_call,
+            mock.patch("komyst.download.down._load_source_profile", return_value=None),
+            mock.patch("komyst.download.down.time.sleep"),
         ):
             result, diagnostic = down._maybe_collect_paginated_reader(
                 driver, adapter, initial, page_url=self.PAGE_ONE)
@@ -1939,7 +1939,7 @@ class PaginatedReaderSafetyTests(unittest.TestCase):
         initial = self._analysis(1)
         adapter = SimpleNamespace(is_specific=False)
         with mock.patch(
-            "yomu.download.down._read_pagination_controls",
+            "komyst.download.down._read_pagination_controls",
             return_value=[self._control("https://reader.example.test/chapter/two")],
         ):
             result, diagnostic = down._maybe_collect_paginated_reader(
@@ -1961,7 +1961,7 @@ class PaginatedReaderSafetyTests(unittest.TestCase):
         adapter = SimpleNamespace(is_specific=False)
         button = self._control("")
         button.update({"interactive": True, "href": ""})
-        with mock.patch("yomu.download.down._read_pagination_controls", return_value=[button]):
+        with mock.patch("komyst.download.down._read_pagination_controls", return_value=[button]):
             result, diagnostic = down._maybe_collect_paginated_reader(
                 Driver(), adapter, initial, page_url=self.PAGE_ONE)
 
@@ -1980,7 +1980,7 @@ class PaginatedReaderSafetyTests(unittest.TestCase):
         initial = self._analysis(1)
         adapter = SimpleNamespace(is_specific=False)
         with mock.patch(
-            "yomu.download.down._read_pagination_controls",
+            "komyst.download.down._read_pagination_controls",
             return_value=[self._control("https://reader.example.test/chapter/two?page=2")],
         ):
             result, diagnostic = down._maybe_collect_paginated_reader(
@@ -2012,15 +2012,15 @@ class PaginatedReaderSafetyTests(unittest.TestCase):
             analyze=mock.Mock(return_value=second),
         )
         with (
-            mock.patch("yomu.download.down._select_safe_pagination_target", side_effect=[
+            mock.patch("komyst.download.down._select_safe_pagination_target", side_effect=[
                 ("safe", self.PAGE_TWO, self.PAGE_TWO),
                 ("safe", self.PAGE_TWO, self.PAGE_TWO),
             ]),
-            mock.patch("yomu.download.down._read_pagination_controls", return_value=[]),
-            mock.patch("yomu.download.down._scroll_incrementally", return_value={
+            mock.patch("komyst.download.down._read_pagination_controls", return_value=[]),
+            mock.patch("komyst.download.down._scroll_incrementally", return_value={
                 "reached_document_end": True, "stabilized": True}),
-            mock.patch("yomu.download.down._load_source_profile", return_value=None),
-            mock.patch("yomu.download.down.time.sleep"),
+            mock.patch("komyst.download.down._load_source_profile", return_value=None),
+            mock.patch("komyst.download.down.time.sleep"),
         ):
             result, diagnostic = down._maybe_collect_paginated_reader(
                 driver, adapter, initial, page_url=self.PAGE_ONE)
@@ -2059,11 +2059,11 @@ class PaginatedReaderSafetyTests(unittest.TestCase):
             return [self._control(page_three)]
 
         with (
-            mock.patch("yomu.download.down._read_pagination_controls", side_effect=controls),
-            mock.patch("yomu.download.down._scroll_incrementally", return_value={
+            mock.patch("komyst.download.down._read_pagination_controls", side_effect=controls),
+            mock.patch("komyst.download.down._scroll_incrementally", return_value={
                 "reached_document_end": True, "stabilized": True}),
-            mock.patch("yomu.download.down._load_source_profile", return_value=None),
-            mock.patch("yomu.download.down.time.sleep"),
+            mock.patch("komyst.download.down._load_source_profile", return_value=None),
+            mock.patch("komyst.download.down.time.sleep"),
             mock.patch.object(down, "MAX_PAGINATED_READER_FOLLOWS", 1),
         ):
             result, diagnostic = down._maybe_collect_paginated_reader(

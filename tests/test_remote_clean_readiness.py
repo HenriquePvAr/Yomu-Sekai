@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import requests
 
-from yomu.runtime.remote_readiness import probe_remote_clean_readiness
-from yomu.runtime.transport_errors import classify_transport_error
-from yomu.ui import app as app_ui
+from komyst.runtime.remote_readiness import probe_remote_clean_readiness
+from komyst.runtime.transport_errors import classify_transport_error
+from komyst.ui import app as app_ui
 
 
 class _Response:
@@ -31,7 +31,7 @@ def _ready_responses():
 
 
 def test_readiness_is_loopback_only_and_does_not_claim_provider_auth(monkeypatch):
-    monkeypatch.setenv("YOMU_GEMINI_REMOTE_URL", "http://127.0.0.1:18777")
+    monkeypatch.setenv("KOMYST_GEMINI_REMOTE_URL", "http://127.0.0.1:18777")
     responses = _ready_responses()
     calls = []
 
@@ -52,7 +52,7 @@ def test_readiness_is_loopback_only_and_does_not_claim_provider_auth(monkeypatch
 
 
 def test_readiness_rejects_non_loopback_and_never_sends_request(monkeypatch):
-    monkeypatch.setenv("YOMU_GEMINI_REMOTE_URL", "https://example.invalid")
+    monkeypatch.setenv("KOMYST_GEMINI_REMOTE_URL", "https://example.invalid")
     called = False
 
     def get(*_args, **_kwargs):
@@ -67,7 +67,7 @@ def test_readiness_rejects_non_loopback_and_never_sends_request(monkeypatch):
 
 
 def test_readiness_requires_worker_consumer_and_both_schemas(monkeypatch):
-    monkeypatch.setenv("YOMU_GEMINI_REMOTE_URL", "http://localhost:18777")
+    monkeypatch.setenv("KOMYST_GEMINI_REMOTE_URL", "http://localhost:18777")
     responses = [
         _Response({"api": "UP", "queue": "UP", "worker": "UP",
                    "worker_health": {"ready_consumers": 0, "gemini_ui_available": True}}),
@@ -83,7 +83,7 @@ def test_readiness_requires_worker_consumer_and_both_schemas(monkeypatch):
 
 
 def test_readiness_reports_queue_and_worker_gates_separately(monkeypatch):
-    monkeypatch.setenv("YOMU_GEMINI_REMOTE_URL", "http://127.0.0.1:18777")
+    monkeypatch.setenv("KOMYST_GEMINI_REMOTE_URL", "http://127.0.0.1:18777")
     queue_down = [
         _Response({"api": "UP", "queue": "DOWN", "worker": "UP",
                    "worker_health": {"ready_consumers": 1}}),
@@ -105,7 +105,7 @@ def test_readiness_reports_queue_and_worker_gates_separately(monkeypatch):
 
 
 def test_readiness_classifies_connection_refusal_without_exposing_exception(monkeypatch):
-    monkeypatch.setenv("YOMU_GEMINI_REMOTE_URL", "http://127.0.0.1:18777")
+    monkeypatch.setenv("KOMYST_GEMINI_REMOTE_URL", "http://127.0.0.1:18777")
     error = requests.exceptions.ConnectionError(
         "HTTPConnectionPool(host='127.0.0.1', port=18777): [Errno 10061] refused"
     )

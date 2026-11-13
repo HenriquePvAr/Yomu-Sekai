@@ -7,9 +7,9 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-import yomu.ui.ui_bridge as ui_bridge
-from yomu.runtime.job_store import JobStatus, JobStore
-from yomu.ui.ui_bridge import UiBridge
+import komyst.ui.ui_bridge as ui_bridge
+from komyst.runtime.job_store import JobStatus, JobStore
+from komyst.ui.ui_bridge import UiBridge
 
 
 class ReviewRerunFixture:
@@ -122,7 +122,7 @@ class PendingRegionPlanTests(unittest.TestCase):
         self.temp.cleanup()
 
     def test_plan_targets_only_visual_rejection_and_untranslated_source(self):
-        from yomu.review.workflows.review_rerun import build_pending_region_plan
+        from komyst.review.workflows.review_rerun import build_pending_region_plan
 
         plan = build_pending_region_plan(self.fixture.output)
         self.assertEqual(plan["region_count"], 2)
@@ -182,12 +182,12 @@ class ReviewRerunStoreTests(unittest.TestCase):
 
 class WorkerReviewRerunDispatchTests(unittest.TestCase):
     def test_review_rerun_has_a_dedicated_runner(self):
-        from yomu.runtime.worker_service import Worker
+        from komyst.runtime.worker_service import Worker
 
         self.assertEqual(Worker._RUNNERS["review_rerun"], "review_rerun_runner.py")
 
     def test_review_rerun_bypasses_chapter_source_analysis(self):
-        from yomu.runtime.worker_service import Worker
+        from komyst.runtime.worker_service import Worker
 
         worker = object.__new__(Worker)
         worker.store = unittest.mock.Mock()
@@ -211,12 +211,12 @@ class WorkerReviewRerunDispatchTests(unittest.TestCase):
             "runner_pid": 1234,
             "runner_create_time": 5678.0,
         }
-        with patch("yomu.runtime.process_tree.is_alive", return_value=True) as is_alive:
+        with patch("komyst.runtime.process_tree.is_alive", return_value=True) as is_alive:
             self.assertTrue(ui_bridge._runner_still_alive(job))
         is_alive.assert_called_once_with(
             1234,
             create_time=5678.0,
-            substrings=["yomu.review.workflows.review_rerun_runner", "b" * 32],
+            substrings=["komyst.review.workflows.review_rerun_runner", "b" * 32],
         )
 
 
@@ -230,7 +230,7 @@ class ReviewRerunBridgeAndUiTests(unittest.TestCase):
             {
                 "APP_ENV": "test",
                 "ALLOW_LOCAL_TEST_IDENTITIES": "1",
-                "TRADUTOR_TEST_RUNTIME_ROOT": str(self.root),
+                "KOMYST_TEST_RUNTIME_ROOT": str(self.root),
             },
         )
         self.env.start()
@@ -353,7 +353,7 @@ class ReviewRerunBridgeAndUiTests(unittest.TestCase):
             "reconstruction_only": 21, "provider_required": 0,
             "estimated_provider_requests": 0, "schema_version": 1, "pages": [1],
         }
-        with patch("yomu.ui.ui_bridge.build_pending_region_plan", return_value=synthetic_plan):
+        with patch("komyst.ui.ui_bridge.build_pending_region_plan", return_value=synthetic_plan):
             twenty_ids = [item["region_id"] for item in synthetic_targets[:20]]
             started = self.bridge.start_review_rerun_for_owner(
                 "owner-a", self.parent_id, allow_provider=False,
@@ -419,7 +419,7 @@ class ReviewRerunBridgeAndUiTests(unittest.TestCase):
     def test_review_rerun_ui_has_confirmation_and_real_handlers(self):
         root = Path(__file__).resolve().parents[1]
         shell = (root / "ui" / "ui_shell.html").read_text(encoding="utf-8")
-        js = (root / "static" / "tradutor_ui.js").read_text(encoding="utf-8")
+        js = (root / "static" / "komyst_ui.js").read_text(encoding="utf-8")
         self.assertIn('id="rerunPendingReview"', shell)
         self.assertIn('id="reviewRerunConfirm"', shell)
         self.assertIn('id="cancelReviewRerunAction"', shell)
@@ -498,7 +498,7 @@ class ReviewRerunBridgeAndUiTests(unittest.TestCase):
             runner_pid=999999,
             runner_create_time=1.0,
         )
-        with patch("yomu.ui.ui_bridge._runner_still_alive", return_value=False):
+        with patch("komyst.ui.ui_bridge._runner_still_alive", return_value=False):
             record = self.bridge.review_rerun_status_for_owner("owner-a", started["id"])
         self.assertEqual(record["status"], JobStatus.CANCELLED)
         self.assertEqual(record["lifecycle_state"], "cancelled")
@@ -553,7 +553,7 @@ class ReviewRerunRunnerTests(unittest.TestCase):
         self.temp.cleanup()
 
     def test_runner_updates_progress_and_finishes_without_provider(self):
-        from yomu.review.workflows.review_rerun_runner import execute_review_rerun
+        from komyst.review.workflows.review_rerun_runner import execute_review_rerun
 
         calls = []
 
@@ -589,7 +589,7 @@ class ReviewRerunRunnerTests(unittest.TestCase):
         self.assertEqual(child["progress_total"], 1)
 
     def test_cancelled_before_work_never_calls_engine(self):
-        from yomu.review.workflows.review_rerun_runner import execute_review_rerun
+        from komyst.review.workflows.review_rerun_runner import execute_review_rerun
 
         store = JobStore(self.root / "jobs.sqlite3")
         store.request_cancel(self.child_id)
@@ -612,7 +612,7 @@ class ReviewRerunRunnerTests(unittest.TestCase):
         self.assertEqual(child["status"], JobStatus.CANCELLED)
 
     def test_runner_counts_regions_and_persists_terminal_outcomes(self):
-        from yomu.review.workflows.review_rerun_runner import execute_review_rerun
+        from komyst.review.workflows.review_rerun_runner import execute_review_rerun
 
         store = JobStore(self.root / "jobs.sqlite3")
         parent_id = store.get_job(self.child_id)["parent_job_id"]

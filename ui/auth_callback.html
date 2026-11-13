@@ -33,9 +33,9 @@
         try { history.replaceState(null, '', '/auth/callback'); } catch (_) { /* best effort */ }
       };
       const showBootFailure = () => {
-        if (terminal || window.__yomuAuthCallbackStarted) return;
+        if (terminal || window.__komystAuthCallbackStarted) return;
         terminal = true;
-        window.__yomuAuthCallbackBootFailed = true;
+        window.__komystAuthCallbackBootFailed = true;
         window.clearTimeout(timer);
         window.removeEventListener('error', onModuleError, true);
         cleanupUrl();
@@ -51,7 +51,7 @@
       };
       window.addEventListener('error', onModuleError, true);
       timer = window.setTimeout(showBootFailure, 12000);
-      window.__yomuAuthCallbackBootTimer = timer;
+      window.__komystAuthCallbackBootTimer = timer;
     })();
   </script>
   <script id="authCallbackModule" type="module">
@@ -60,11 +60,11 @@
     import { getSupabaseClient, hasPkceCodeVerifier } from '/static/supabase_auth.js';
     // Hand off immediately after static imports have loaded. A failed module/import
     // never reaches this line and remains covered by the pre-module watchdog.
-    if (window.__yomuAuthCallbackBootFailed) throw new Error('callback_boot_timeout');
-    window.__yomuAuthCallbackStarted = true;
-    window.clearTimeout(window.__yomuAuthCallbackBootTimer);
+    if (window.__komystAuthCallbackBootFailed) throw new Error('callback_boot_timeout');
+    window.__komystAuthCallbackStarted = true;
+    window.clearTimeout(window.__komystAuthCallbackBootTimer);
     const msg = document.getElementById('msg');
-    const callbackDiagnosticKey = 'tradutor_auth_callback_last_error';
+    const callbackDiagnosticKey = 'komyst_auth_callback_last_error';
     const CALLBACK_TIMEOUT_MS = 15000;
     const callbackTraceId = (window.crypto?.randomUUID?.() || `callback-${Date.now()}`)
       .replace(/[^A-Za-z0-9_.-]/g, '').slice(0, 80);
@@ -109,8 +109,8 @@
       const desktopHandoff = params.get('desktop') === '1';
       const handoffId = params.get('handoff') || '';
       const recoveryHint = params.get('recovery') === '1';
-      const pendingAt = Number(sessionStorage.getItem('yomu_recovery_pending_at')
-        || localStorage.getItem('yomu_recovery_pending_at_durable') || 0);
+      const pendingAt = Number(sessionStorage.getItem('komyst_recovery_pending_at')
+        || localStorage.getItem('komyst_recovery_pending_at_durable') || 0);
       const recoveryPending = recoveryHint || Boolean(pendingAt && Date.now() - pendingAt < 10 * 60 * 1000);
       recoveryHandoffPending = recoveryPending;
       if (callbackError) {
@@ -143,8 +143,8 @@
       // Mark intent before exchanging the PKCE code so INITIAL_SESSION cannot
       // race ahead and open the authenticated shell.
       if (code && recoveryPending) {
-        sessionStorage.setItem('yomu_recovery_intent', '1');
-        localStorage.setItem('yomu_recovery_intent', '1');
+        sessionStorage.setItem('komyst_recovery_intent', '1');
+        localStorage.setItem('komyst_recovery_intent', '1');
       }
       if (!code) {
         const err = new Error(recoveryPending ? 'recovery_code_missing' : 'auth_code_missing');
@@ -171,8 +171,8 @@
         const subscription = client.auth.onAuthStateChange((event) => {
           if (event === 'PASSWORD_RECOVERY') {
             try {
-              sessionStorage.setItem('yomu_recovery_intent', '1');
-              localStorage.setItem('yomu_recovery_intent', '1');
+              sessionStorage.setItem('komyst_recovery_intent', '1');
+              localStorage.setItem('komyst_recovery_intent', '1');
             } catch (_) {}
           }
         });
@@ -188,10 +188,10 @@
           throw err;
         }
         if (recoveryPending) {
-          sessionStorage.removeItem('yomu_recovery_pending_at');
+          sessionStorage.removeItem('komyst_recovery_pending_at');
           // Keep the intent until the password screen consumes it; only the
           // pending timestamp is cleared after a successful exchange.
-          localStorage.removeItem('yomu_recovery_pending_at_durable');
+          localStorage.removeItem('komyst_recovery_pending_at_durable');
         }
         subscription?.data?.subscription?.unsubscribe?.();
       }
@@ -207,11 +207,11 @@
       try { history.replaceState(null, '', '/auth/callback'); } catch (_) { /* best effort */ }
       persistCallbackError(err);
       try {
-        sessionStorage.removeItem('yomu_recovery_intent');
-        sessionStorage.removeItem('yomu_recovery_pending_at');
-        localStorage.removeItem('yomu_recovery_intent');
-        localStorage.removeItem('yomu_recovery_pending_at_durable');
-        sessionStorage.setItem('yomu_recovery_invalid', '1');
+        sessionStorage.removeItem('komyst_recovery_intent');
+        sessionStorage.removeItem('komyst_recovery_pending_at');
+        localStorage.removeItem('komyst_recovery_intent');
+        localStorage.removeItem('komyst_recovery_pending_at_durable');
+        sessionStorage.setItem('komyst_recovery_invalid', '1');
       } catch (_) {}
       const spinner = document.getElementById('authCallbackSpinner');
       if (spinner) spinner.hidden = true;

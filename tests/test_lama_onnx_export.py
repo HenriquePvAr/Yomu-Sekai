@@ -6,7 +6,7 @@ torch = pytest.importorskip("torch")
 pytest.importorskip("onnx")
 ort = pytest.importorskip("onnxruntime")
 
-from yomu.clean.inpainting import lama_onnx  # noqa: E402
+from komyst.clean.inpainting import lama_onnx  # noqa: E402
 
 
 class _FourierUnit(torch.nn.Module):

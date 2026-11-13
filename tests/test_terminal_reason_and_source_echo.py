@@ -19,8 +19,8 @@ from unittest.mock import patch
 import cv2
 import numpy as np
 
-import yomu.config.settings as config
-from yomu.ocr.ocr_balloon import (
+import komyst.config.settings as config
+from komyst.ocr.ocr_balloon import (
     OCRLine,
     TextGroup,
     PROPER_NAME_ONLY_REASON,
@@ -187,7 +187,7 @@ class CandidateBearingTerminalTests(unittest.TestCase):
 
     def test_every_strategy_refusing_is_an_explicit_review_not_a_silent_preserve(self):
         image, grp = self._uniform_balloon_group()
-        with patch("yomu.ocr.ocr_balloon._remove_text_for_group") as remove,                 patch.object(config, "TRANSLATION_LABEL_FALLBACK", False):
+        with patch("komyst.ocr.ocr_balloon._remove_text_for_group") as remove,                 patch.object(config, "TRANSLATION_LABEL_FALLBACK", False):
             remove.side_effect = lambda current, original, group, strategy="primary": (
                 current.copy(),
                 np.zeros(original.shape[:2], dtype=np.uint8),
@@ -207,7 +207,7 @@ class CandidateBearingTerminalTests(unittest.TestCase):
         """With the label fallback on, the art stays untouched and the reader still
         gets the translation instead of the English source."""
         image, grp = self._uniform_balloon_group()
-        with patch("yomu.ocr.ocr_balloon._remove_text_for_group") as remove,                 patch.object(config, "TRANSLATION_LABEL_FALLBACK", True):
+        with patch("komyst.ocr.ocr_balloon._remove_text_for_group") as remove,                 patch.object(config, "TRANSLATION_LABEL_FALLBACK", True):
             remove.side_effect = lambda current, original, group, strategy="primary": (
                 current.copy(),
                 np.zeros(original.shape[:2], dtype=np.uint8),

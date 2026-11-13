@@ -6,8 +6,8 @@ from pathlib import Path
 
 from PIL import Image
 
-import yomu.pipeline.benchmark_pipeline as bp
-from yomu.download.sources.chapter_source import ComixAdapter, WebtoonsAdapter
+import komyst.pipeline.benchmark_pipeline as bp
+from komyst.download.sources.chapter_source import ComixAdapter, WebtoonsAdapter
 
 
 def _images(size, count=5):

@@ -11,7 +11,7 @@ import cv2
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
-import yomu.ocr.ocr_balloon as ob
+import komyst.ocr.ocr_balloon as ob
 
 FONT = Path(__file__).resolve().parents[1] / "assets" / "fonts" / "comicrelief-bold.ttf"
 

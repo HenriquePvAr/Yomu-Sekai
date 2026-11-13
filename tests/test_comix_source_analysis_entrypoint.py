@@ -7,12 +7,12 @@ from types import SimpleNamespace
 from unittest import mock
 
 import pytest
-import yomu.ui.app as app_ui
-import yomu.download.down as down
-import yomu.review.source_analysis_progress as source_analysis_progress
-from yomu.download.sources.chapter_source import SourceError
-from yomu.download.sources.universal_chapter_adapter import SourceAnalysis, SUPPORTED_SPECIFIC_ADAPTER
-from yomu.ui.ui_bridge import UiBridge
+import komyst.ui.app as app_ui
+import komyst.download.down as down
+import komyst.review.source_analysis_progress as source_analysis_progress
+from komyst.download.sources.chapter_source import SourceError
+from komyst.download.sources.universal_chapter_adapter import SourceAnalysis, SUPPORTED_SPECIFIC_ADAPTER
+from komyst.ui.ui_bridge import UiBridge
 
 
 URL = "https://comix.to/title/k72ge-home/1536897-chapter-1"
@@ -34,7 +34,7 @@ def isolate_source_analysis_registry():
 ])
 def test_ui_source_analysis_entrypoint_routes_recoverable_comix_failures(
         tmp_path, monkeypatch, code, detail, status):
-    monkeypatch.setenv("TRADUTOR_TEST_RUNTIME_ROOT", str(tmp_path / "runtime"))
+    monkeypatch.setenv("KOMYST_TEST_RUNTIME_ROOT", str(tmp_path / "runtime"))
     bridge = UiBridge()
     logged = []
     request = SimpleNamespace(headers={}, client=SimpleNamespace(host="127.0.0.1"))
@@ -57,9 +57,9 @@ def test_ui_source_analysis_entrypoint_routes_recoverable_comix_failures(
         lambda _file, event, **fields: logged.append((event, fields)))
 
     try:
-        with mock.patch("yomu.download.http_source_discovery.discover_via_http", return_value=None), \
+        with mock.patch("komyst.download.http_source_discovery.discover_via_http", return_value=None), \
              mock.patch.object(down, "analyze_chapter_source", side_effect=preflight_error), \
-             mock.patch("yomu.download.readers.scrapling_reader_resolver.resolve", return_value=analysis) as resolver:
+             mock.patch("komyst.download.readers.scrapling_reader_resolver.resolve", return_value=analysis) as resolver:
             response = asyncio.run(app_ui.api_source_analyze(
                 request, {"source_type": "url", "url": URL, "trace_id": "trace-test"}))
         resolver.assert_called_once()
@@ -79,7 +79,7 @@ def test_ui_source_analysis_entrypoint_routes_recoverable_comix_failures(
 
 def test_partial_source_analysis_passes_requested_page_scope_to_dynamic_resolver(
         tmp_path, monkeypatch):
-    monkeypatch.setenv("TRADUTOR_TEST_RUNTIME_ROOT", str(tmp_path / "runtime"))
+    monkeypatch.setenv("KOMYST_TEST_RUNTIME_ROOT", str(tmp_path / "runtime"))
     bridge = UiBridge()
     principal = SimpleNamespace(owner_id="local", user_id="local", authenticated=True)
     preflight_error = SourceError("source_access_denied", "reader_api_status_403")
@@ -93,9 +93,9 @@ def test_partial_source_analysis_passes_requested_page_scope_to_dynamic_resolver
     monkeypatch.setattr(app_ui, "_ui_principal", lambda *_args, **_kwargs: principal)
     request = SimpleNamespace(headers={}, client=SimpleNamespace(host="127.0.0.1"))
     try:
-        with mock.patch("yomu.download.http_source_discovery.discover_via_http", return_value=None), \
+        with mock.patch("komyst.download.http_source_discovery.discover_via_http", return_value=None), \
              mock.patch.object(down, "analyze_chapter_source", side_effect=preflight_error), \
-             mock.patch("yomu.download.readers.scrapling_reader_resolver.resolve", return_value=analysis) as resolver:
+             mock.patch("komyst.download.readers.scrapling_reader_resolver.resolve", return_value=analysis) as resolver:
             response = asyncio.run(app_ui.api_source_analyze(request, {
                 "source_type": "url", "url": URL, "full": False,
                 "max_images": 5, "trace_id": "partial-five",

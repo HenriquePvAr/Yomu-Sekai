@@ -7,7 +7,7 @@ import test_support._test_bootstrap as _test_bootstrap  # noqa: F401
 
 import unittest
 
-from yomu.download.sources.canonical_source_identity import (
+from komyst.download.sources.canonical_source_identity import (
     CanonicalSourceError,
     canonicalize_webtoons_url,
 )

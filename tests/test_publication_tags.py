@@ -7,7 +7,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from yomu.community.community_store import CommunityStore, normalize_tags
+from komyst.community.community_store import CommunityStore, normalize_tags
 
 
 class PublicationTagTests(unittest.TestCase):

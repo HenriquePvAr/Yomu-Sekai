@@ -11,8 +11,8 @@ from unittest import mock
 import pytest
 
 from tests.test_progress_v1 import _ProgressBridge
-from yomu.runtime.job_store import JobStatus
-import yomu.ui.ui_bridge as ui_bridge
+from komyst.runtime.job_store import JobStatus
+import komyst.ui.ui_bridge as ui_bridge
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -21,7 +21,7 @@ def test_pipeline_navigation_preserves_job_and_canonical_stage_names():
     node = shutil.which("node")
     if not node:
         pytest.skip("Node unavailable")
-    source = (ROOT / "static/tradutor_ui.js").read_text(encoding="utf-8")
+    source = (ROOT / "static/komyst_ui.js").read_text(encoding="utf-8")
     activation = source[source.index("function activateTab("):source.index("\n  $$('.rail-tab').forEach(tab => tab.addEventListener")]
     aliases = source[source.index("const stageAliases ="):source.index("  function terminalIdentity(")]
     build = source[source.index("function canonicalProgressStage("):source.index("  function canonicalStageMetric(")]

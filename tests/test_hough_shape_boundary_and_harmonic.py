@@ -16,9 +16,9 @@ from unittest import mock
 import cv2
 import numpy as np
 
-import yomu.clean.inpainting.harmonic_fill as harmonic_fill
-import yomu.clean.ownership.glyph_art_boundary_review as boundary_review
-from yomu.clean.ownership.glyph_art_boundary_review import (
+import komyst.clean.inpainting.harmonic_fill as harmonic_fill
+import komyst.clean.ownership.glyph_art_boundary_review as boundary_review
+from komyst.clean.ownership.glyph_art_boundary_review import (
     detect_linear_boundary_conflict,
     hough_segments,
 )

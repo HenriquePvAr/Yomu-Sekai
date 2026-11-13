@@ -15,7 +15,7 @@ from tempfile import TemporaryDirectory
 import numpy as np
 import cv2
 
-import yomu.pipeline.benchmark_pipeline as bp
+import komyst.pipeline.benchmark_pipeline as bp
 
 
 def _content(w, h):

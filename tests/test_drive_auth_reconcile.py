@@ -9,12 +9,12 @@ import unittest
 import unittest.mock
 from pathlib import Path
 
-import yomu.community.storage.drive_auth as drive_auth
-from yomu.community.community_storage import FakeStorageProvider
-from yomu.community.community_store import CommunityStore, FileStatus, PostStatus
-from yomu.community.community_storage_reconcile import reconcile
-from yomu.community.storage.google_drive_storage import HttpResponse
-from yomu.runtime.job_store import JobStatus, JobStore
+import komyst.community.storage.drive_auth as drive_auth
+from komyst.community.community_storage import FakeStorageProvider
+from komyst.community.community_store import CommunityStore, FileStatus, PostStatus
+from komyst.community.community_storage_reconcile import reconcile
+from komyst.community.storage.google_drive_storage import HttpResponse
+from komyst.runtime.job_store import JobStatus, JobStore
 
 
 class FakeTransport:

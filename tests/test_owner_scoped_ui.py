@@ -10,12 +10,12 @@ from types import SimpleNamespace
 
 import pytest
 
-import yomu.ui.app as app_ui
-from yomu.community.community_auth import RequestPrincipal
-from yomu.runtime.job_store import JobStatus, JobStore
-from yomu.export.output_manifest import build_run_manifest
-from yomu.ui.ui_bridge import UiBridge
-from yomu.ui.ui_history import UIHistoryStore
+import komyst.ui.app as app_ui
+from komyst.community.community_auth import RequestPrincipal
+from komyst.runtime.job_store import JobStatus, JobStore
+from komyst.export.output_manifest import build_run_manifest
+from komyst.ui.ui_bridge import UiBridge
+from komyst.ui.ui_history import UIHistoryStore
 
 
 def _create_job(store: JobStore, owner: str, *, job_id: str) -> str:
@@ -175,7 +175,7 @@ def test_runtime_paths_can_only_be_overridden_in_guarded_test_mode(
 
 def test_persisted_queued_items_keep_the_remove_control():
     source = (
-        app_ui.ROOT / "static" / "tradutor_ui.js"
+        app_ui.ROOT / "static" / "komyst_ui.js"
     ).read_text(encoding="utf-8")
     assert "['waiting','queued'].includes(item.status)" in source
 

@@ -8,7 +8,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-UI_SOURCE = ROOT / "static" / "tradutor_ui.js"
+UI_SOURCE = ROOT / "static" / "komyst_ui.js"
 
 
 def _source() -> str:

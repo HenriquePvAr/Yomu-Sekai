@@ -15,9 +15,9 @@ from unittest.mock import patch
 import cv2
 import numpy as np
 
-import yomu.config.settings as config
-import yomu.ocr.ocr_balloon as ocr_balloon
-from yomu.ocr.ocr_balloon import (
+import komyst.config.settings as config
+import komyst.ocr.ocr_balloon as ocr_balloon
+from komyst.ocr.ocr_balloon import (
     TextGroup,
     _should_translate_group,
     analyze_image_array,
@@ -27,7 +27,7 @@ from yomu.ocr.ocr_balloon import (
     rapidocr_region_decision,
     score_group_ocr_quality,
 )
-from yomu.ocr.ocr_engine import OCRLine
+from komyst.ocr.ocr_engine import OCRLine
 
 
 def _line(text, box, confidence=0.92):

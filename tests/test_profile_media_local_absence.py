@@ -2,15 +2,15 @@
 
 from pathlib import Path
 
-import yomu.ui.app as app_ui
-from yomu.ui.ui_bridge import UiBridge
+import komyst.ui.app as app_ui
+from komyst.ui.ui_bridge import UiBridge
 
 ROOT = Path(__file__).resolve().parents[1]
 
 
 def test_profile_media_routes_bridge_and_fetchers_are_absent():
-    app_source = (ROOT / "yomu/ui/app.py").read_text(encoding="utf-8")
-    bridge_source = (ROOT / "yomu/ui/ui_bridge.py").read_text(encoding="utf-8")
+    app_source = (ROOT / "komyst/ui/app.py").read_text(encoding="utf-8")
+    bridge_source = (ROOT / "komyst/ui/ui_bridge.py").read_text(encoding="utf-8")
     for source in (app_source, bridge_source):
         for marker in (
             "profile_media", "profile-media", "avatar_object_key", "banner_object_key",
@@ -36,8 +36,8 @@ def test_profile_media_routes_bridge_and_fetchers_are_absent():
 
 def test_profile_media_ui_upload_and_hydration_are_absent():
     shell = (ROOT / "ui" / "ui_shell.html").read_text(encoding="utf-8")
-    js = (ROOT / "static" / "tradutor_ui.js").read_text(encoding="utf-8")
-    css = (ROOT / "static" / "tradutor_ui.css").read_text(encoding="utf-8")
+    js = (ROOT / "static" / "komyst_ui.js").read_text(encoding="utf-8")
+    css = (ROOT / "static" / "komyst_ui.css").read_text(encoding="utf-8")
     for marker in ('id="view-profile"', 'id="avatarImageInput"', 'id="bannerImageInput"',
                    'data-media-kind="avatar"', 'data-media-kind="banner"'):
         assert marker not in shell
@@ -49,7 +49,7 @@ def test_profile_media_ui_upload_and_hydration_are_absent():
 
 
 def test_community_card_uses_identity_without_remote_media_url():
-    from yomu.community.community_service import CommunityService
+    from komyst.community.community_service import CommunityService
 
     card = CommunityService._card({
         "id": "post-1", "user_id": "user-1", "series_title": "Series",

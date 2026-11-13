@@ -1,9 +1,9 @@
 from pathlib import Path
 
 
-UI = Path("static/tradutor_ui.js").read_text(encoding="utf-8")
+UI = Path("static/komyst_ui.js").read_text(encoding="utf-8")
 CP = Path("static/control_plane_client.js").read_text(encoding="utf-8")
-APP = Path("yomu/ui/app.py").read_text(encoding="utf-8")
+APP = Path("komyst/ui/app.py").read_text(encoding="utf-8")
 
 
 def test_control_plane_flag_is_read_from_authoritative_bootstrap():
@@ -15,8 +15,8 @@ def test_control_plane_flag_is_read_from_authoritative_bootstrap():
 
 
 def test_control_plane_policy_event_uses_matching_window_contract():
-    assert "window.dispatchEvent(new CustomEvent('tradutor-control-plane-updated'" in CP
-    assert "window.addEventListener('tradutor-control-plane-updated'" in UI
+    assert "window.dispatchEvent(new CustomEvent('komyst-control-plane-updated'" in CP
+    assert "window.addEventListener('komyst-control-plane-updated'" in UI
     assert "event_target: 'window'" in CP
 
 
@@ -24,7 +24,7 @@ def test_valid_snapshot_dispatches_after_apply_and_ui_has_startup_sync():
     applied = CP.find("trace('CONTROL_PLANE_SNAPSHOT_APPLIED'")
     dispatched = CP.find("dispatchControlPlaneUpdated({bootstrap: state.bootstrap", applied)
     assert applied >= 0 and dispatched > applied
-    assert "window.addEventListener('tradutor-control-plane-ready', syncAuthoritativeTranslationFlag)" in UI
+    assert "window.addEventListener('komyst-control-plane-ready', syncAuthoritativeTranslationFlag)" in UI
     assert "syncAuthoritativeTranslationFlag();" in UI
 
 
@@ -35,7 +35,7 @@ def test_ui_policy_sync_fails_closed_without_valid_snapshot():
 def test_run_payload_snapshots_translation_policy():
     assert "translation_enabled: appState.translationEnabled === true" in UI
     assert "await controlPlane.bootstrap()" in UI
-    assert '"translation_enabled": normalized["translation_enabled"]' in Path("yomu/ui/ui_bridge.py").read_text(encoding="utf-8")
+    assert '"translation_enabled": normalized["translation_enabled"]' in Path("komyst/ui/ui_bridge.py").read_text(encoding="utf-8")
 
 
 def test_failed_policy_refresh_cannot_create_silent_disabled_job():
@@ -53,7 +53,7 @@ def test_http_200_without_policy_cannot_replace_snapshot():
 
 
 def test_control_plane_trace_allowlist_preserves_bootstrap_policy_fields():
-    app = Path("yomu/ui/app.py").read_text(encoding="utf-8")
+    app = Path("komyst/ui/app.py").read_text(encoding="utf-8")
     for field in ("project_ref", "function_slug", "translation_enabled", "maintenance_mode",
                   "keys_present", "feature_flags_present", "feature_flags_type"):
         assert f'"{field}"' in app
@@ -74,31 +74,31 @@ def test_beta_bootstrap_client_returns_direct_json_payload_to_normalizer():
 
 
 def test_bridge_normalization_preserves_explicit_true_snapshot(monkeypatch):
-    import yomu.ui.ui_bridge as ui_bridge
+    import komyst.ui.ui_bridge as ui_bridge
 
     bridge = object.__new__(ui_bridge.UiBridge)
     monkeypatch.setattr(ui_bridge, "env_status", lambda: {"env_exists": True, "nvidia_configured": True})
     monkeypatch.setattr(ui_bridge, "build_run_command", lambda **_: [])
     payload = {"url": "https://example.com/chapter-1", "translation_enabled": True,
-               "translation_provider": "yomu_backend", "force": True}
+               "translation_provider": "komyst_backend", "force": True}
     normalized = bridge._normalize_payload(payload)
     assert normalized["translation_enabled"] is True
 
 
 def test_job_configuration_records_translation_policy_provenance():
-    bridge_source = Path("yomu/ui/ui_bridge.py").read_text(encoding="utf-8")
+    bridge_source = Path("komyst/ui/ui_bridge.py").read_text(encoding="utf-8")
     assert '"translation_policy_source"' in bridge_source
     assert '"translation_policy_resolved_at"' in bridge_source
 
 
 def test_enabled_translation_cannot_finish_as_silent_untranslated_pdf():
-    source = Path("yomu/pipeline/benchmark_pipeline.py").read_text(encoding="utf-8")
+    source = Path("komyst/pipeline/benchmark_pipeline.py").read_text(encoding="utf-8")
     assert 'raise RuntimeError("translation_not_executed")' in source
     assert "translation_execution_invariant" in source
 
 
 def test_bridge_normalization_is_fail_closed_when_flag_absent(monkeypatch):
-    import yomu.ui.ui_bridge as ui_bridge
+    import komyst.ui.ui_bridge as ui_bridge
 
     bridge = object.__new__(ui_bridge.UiBridge)
     monkeypatch.setattr(ui_bridge, "env_status", lambda: {"env_exists": True, "nvidia_configured": True})

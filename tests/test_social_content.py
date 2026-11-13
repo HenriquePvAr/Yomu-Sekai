@@ -10,13 +10,13 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from yomu.community.community_auth import AuthenticationRequired, RequestPrincipal
-from yomu.community.community_store import FileStatus, PostStatus
-from yomu.community.chapter_asset_repository import (
+from komyst.community.community_auth import AuthenticationRequired, RequestPrincipal
+from komyst.community.community_store import FileStatus, PostStatus
+from komyst.community.chapter_asset_repository import (
     AssetConflict, AssetNotFound, ChapterAssetRepository,
 )
-from yomu.community.social_content import SocialContentService
-from yomu.community.supabase_social import SocialNotFound
+from komyst.community.social_content import SocialContentService
+from komyst.community.supabase_social import SocialNotFound
 
 OWNER = RequestPrincipal("owner-A", True, auth_source="supabase", session_id=None)
 OTHER = RequestPrincipal("user-B", True, auth_source="supabase", session_id=None)
@@ -207,7 +207,7 @@ class ContentAuthorizationTests(unittest.TestCase):
         self.assertEqual(self.spy.opens, 0)  # HEAD answers from metadata, no Drive read
 
     def test_invalid_range_is_416_after_auth(self):
-        from yomu.community.social_content import RangeNotSatisfiable
+        from komyst.community.social_content import RangeNotSatisfiable
         self._link()
         self.social.allow("chapA", {"owner-A"})
         with self.assertRaises(RangeNotSatisfiable):

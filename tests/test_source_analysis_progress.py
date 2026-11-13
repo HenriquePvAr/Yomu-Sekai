@@ -4,7 +4,7 @@ import asyncio
 import pytest
 from fastapi import HTTPException
 
-import yomu.review.source_analysis_progress as sap
+import komyst.review.source_analysis_progress as sap
 
 
 def _fresh():
@@ -85,7 +85,7 @@ def test_elapsed_is_reported_non_negative():
 
 def test_unauthenticated_source_analysis_does_not_register_trace(monkeypatch):
     _fresh()
-    import yomu.ui.app as app_ui
+    import komyst.ui.app as app_ui
 
     monkeypatch.setattr(app_ui, "_append_diagnostic_log", lambda *args, **kwargs: None)
 

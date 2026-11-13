@@ -15,7 +15,7 @@ from test_support.offline_test_guard import OfflineNetworkAttempt
 
 class UnittestGuardProbe(unittest.TestCase):
     def test_socket_is_blocked_before_any_request(self):
-        self.assertTrue(getattr(socket, "_tradutor_ia_offline_guard", False))
+        self.assertTrue(getattr(socket, "_komyst_offline_guard", False))
         with self.assertRaises(OfflineNetworkAttempt):
             socket.create_connection(("198.51.100.9", 443), timeout=0.01)
 

@@ -84,7 +84,7 @@ values
 select lives_ok(
     format($$select private.register_legacy_source('{
         "manifest_id": "%s", "manifest_version": 1,
-        "source_system": "tradutor_ia_sqlite_runtime_v1",
+        "source_system": "komyst_sqlite_runtime_v1",
         "proposed_source_instance_id": "%s", "source_schema_version": 3,
         "snapshot_sha256": "%s", "logical_fingerprint": "fp-r1",
         "source_reference": "synthetic-batch-1", "capture_timestamp": "2026-08-06T00:00:00Z",
@@ -102,7 +102,7 @@ select is(
 select is(
     (select private.register_legacy_source(format('{
         "manifest_id": "%s", "manifest_version": 1,
-        "source_system": "tradutor_ia_sqlite_runtime_v1",
+        "source_system": "komyst_sqlite_runtime_v1",
         "proposed_source_instance_id": "%s", "source_schema_version": 3,
         "snapshot_sha256": "%s", "logical_fingerprint": "fp-r1",
         "source_reference": "synthetic-batch-1", "capture_timestamp": "2026-08-06T00:00:00Z",
@@ -122,7 +122,7 @@ select is(
 select is(
     (select private.register_legacy_source(format('{
         "manifest_id": "b1000000-0000-4000-8000-000000000102", "manifest_version": 1,
-        "source_system": "tradutor_ia_sqlite_runtime_v1",
+        "source_system": "komyst_sqlite_runtime_v1",
         "proposed_source_instance_id": "%s", "source_schema_version": 3,
         "snapshot_sha256": "%s", "logical_fingerprint": "fp-r1",
         "source_reference": "synthetic-batch-2", "capture_timestamp": "2026-08-07T00:00:00Z",
@@ -145,7 +145,7 @@ select is(
 select throws_ok(
     format($$select private.register_legacy_source('{
         "manifest_id": "b1000000-0000-4000-8000-000000000103", "manifest_version": 1,
-        "source_system": "tradutor_ia_sqlite_runtime_v1",
+        "source_system": "komyst_sqlite_runtime_v1",
         "proposed_source_instance_id": "%s", "source_schema_version": 3,
         "snapshot_sha256": "%s", "logical_fingerprint": "fp-DIFFERENT-content",
         "source_reference": "synthetic-batch-3", "capture_timestamp": "2026-08-08T00:00:00Z",
@@ -163,7 +163,7 @@ select is(
 select throws_ok(
     format($$select private.register_legacy_source('{
         "manifest_id": "%s", "manifest_version": 1,
-        "source_system": "tradutor_ia_sqlite_runtime_v1",
+        "source_system": "komyst_sqlite_runtime_v1",
         "proposed_source_instance_id": "a1000000-0000-4000-8000-000000000199", "source_schema_version": 3,
         "snapshot_sha256": "%s", "logical_fingerprint": "fp-other",
         "source_reference": "synthetic-batch-4", "capture_timestamp": "2026-08-08T00:00:00Z",
@@ -178,7 +178,7 @@ select throws_ok(
 select throws_ok(
     $$select private.register_legacy_source('{
         "manifest_id": "b1000000-0000-4000-8000-000000000199", "manifest_version": 1,
-        "source_system": "tradutor_ia_sqlite_runtime_v1",
+        "source_system": "komyst_sqlite_runtime_v1",
         "proposed_source_instance_id": "a1000000-0000-4000-8000-000000000198", "source_schema_version": 3,
         "snapshot_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         "logical_fingerprint": "fp-pending", "source_reference": "synthetic-batch-5",
@@ -193,7 +193,7 @@ select throws_ok(
 select throws_ok(
     $$select private.register_legacy_source('{
         "manifest_id": "b1000000-0000-4000-8000-000000000198", "manifest_version": 1,
-        "source_system": "tradutor_ia_sqlite_runtime_v1",
+        "source_system": "komyst_sqlite_runtime_v1",
         "proposed_source_instance_id": "a1000000-0000-4000-8000-000000000197", "source_schema_version": 3,
         "snapshot_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
         "logical_fingerprint": "fp-count-mismatch", "source_reference": "synthetic-batch-6",
@@ -208,7 +208,7 @@ select throws_ok(
 select throws_ok(
     $$select private.register_legacy_source('{
         "manifest_id": "b1000000-0000-4000-8000-000000000197", "manifest_version": 1,
-        "source_system": "tradutor_ia_sqlite_runtime_v1",
+        "source_system": "komyst_sqlite_runtime_v1",
         "proposed_source_instance_id": "a1000000-0000-4000-8000-000000000196", "source_schema_version": 3,
         "snapshot_sha256": "not-a-hash",
         "logical_fingerprint": "fp-bad-hash", "source_reference": "synthetic-batch-7",
@@ -350,7 +350,7 @@ select is(:'pt_conflict_result'::text, 'partial_target_conflicting', '3.7 the sa
 insert into private.legacy_migration_sources
     (source_instance_id, source_system, source_schema_version, initial_snapshot_sha256,
      initial_logical_fingerprint, registered_by, manifest_id, source_state, blocked_at, blocked_reason)
-values ('a1000000-0000-4000-8000-000000000199', 'tradutor_ia_sqlite_runtime_v1', 3, repeat('7', 64),
+values ('a1000000-0000-4000-8000-000000000199', 'komyst_sqlite_runtime_v1', 3, repeat('7', 64),
         'fp-blocked', 'synthetic-operator', 'b1000000-0000-4000-8000-000000000199', 'blocked', now(), 'synthetic investigation');
 select throws_ok(
     $$select * from private.claim_legacy_publication(

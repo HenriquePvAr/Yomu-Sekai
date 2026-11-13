@@ -326,9 +326,7 @@
   function header(view) {
     var head = el('header', 'ls-head');
     var brand = el('div', 'ls-brand');
-    brand.appendChild(el('span', 'ls-brand-mark', 'Tradutor'));
-    brand.appendChild(el('span', 'ls-brand-dot', '.'));
-    brand.appendChild(el('span', 'ls-brand-ia', 'IA'));
+    brand.appendChild(el('span', 'ls-brand-mark', 'Komyst'));
     head.appendChild(brand);
 
     // Only when the view model says so — never inferred from the environment.
@@ -468,5 +466,5 @@
   };
 
   if (typeof module === 'object' && module.exports) module.exports = api;
-  global.TradutorProcessingSurface = api;
+  global.KomystProcessingSurface = api;
 })(typeof globalThis !== 'undefined' ? globalThis : this);

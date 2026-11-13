@@ -1,7 +1,7 @@
 """Contract for the visual pipeline harness.
 
-The harness listened for `tradutor:auth-changed` while the application has only
-ever dispatched `tradutor-auth-changed`. The listener therefore never fired: the
+The harness listened for `komyst:auth-changed` while the application has only
+ever dispatched `komyst-auth-changed`. The listener therefore never fired: the
 harness appeared to work purely because it also re-rendered on two timers, so a
 silent dependency on a fallback was hiding a dead subscription.
 
@@ -24,8 +24,8 @@ ROOT = Path(__file__).resolve().parents[1]
 STATIC = ROOT / "static"
 HARNESS = STATIC / "pipeline_loading_harness.js"
 
-CANONICAL_EVENT = "tradutor-auth-changed"
-DIVERGENT_EVENT = "tradutor:auth-changed"
+CANONICAL_EVENT = "komyst-auth-changed"
+DIVERGENT_EVENT = "komyst:auth-changed"
 
 
 def strip_comments(source: str) -> str:
@@ -51,7 +51,7 @@ class HarnessAuthEventTest(unittest.TestCase):
 
     def test_the_application_dispatches_exactly_one_auth_event_name(self):
         """The divergence must not be resolved by emitting both names."""
-        for module in ("auth_ui.js", "tradutor_ui.js"):
+        for module in ("auth_ui.js", "komyst_ui.js"):
             code = strip_comments((STATIC / module).read_text(encoding="utf-8"))
             dispatched = {name for name in re.findall(r"CustomEvent\(\s*'([^']+)'", code)
                           if "auth" in name}
@@ -66,7 +66,7 @@ class HarnessAuthEventTest(unittest.TestCase):
             occurrences.extend([path.name] * code.count(DIVERGENT_EVENT))
         self.assertEqual(occurrences, [])
         application = strip_comments(
-            (STATIC / "tradutor_ui.js").read_text(encoding="utf-8"))
+            (STATIC / "komyst_ui.js").read_text(encoding="utf-8"))
         self.assertIn(
             f"addEventListener('{CANONICAL_EVENT}', loadModeration)", application)
 
@@ -86,7 +86,7 @@ class HarnessIsolationTest(unittest.TestCase):
     harness = strip_comments(HARNESS.read_text(encoding="utf-8"))
 
     def test_harness_is_served_only_under_the_visual_test_flag(self):
-        app_ui = (ROOT / "yomu/ui/app.py").read_text(encoding="utf-8")
+        app_ui = (ROOT / "komyst/ui/app.py").read_text(encoding="utf-8")
         tree = ast.parse(app_ui)
         guarded = False
         for node in ast.walk(tree):
@@ -102,7 +102,7 @@ class HarnessIsolationTest(unittest.TestCase):
             "the harness asset must be injected only inside a visual_test_enabled branch")
 
     def test_harness_is_fail_closed_in_the_browser(self):
-        self.assertIn("__tradutorVisualTestEnabled !== true", self.harness)
+        self.assertIn("__komystVisualTestEnabled !== true", self.harness)
         self.assertIn("127.0.0.1", self.harness)
         self.assertIn("hasOwnProperty.call(fixtures, requested)", self.harness)
 

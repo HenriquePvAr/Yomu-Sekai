@@ -19,16 +19,16 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from yomu.community.community_api import CommunityApi
-from yomu.community.community_auth import (
+from komyst.community.community_api import CommunityApi
+from komyst.community.community_auth import (
     CSRF_COOKIE_NAME,
     CSRF_HEADER_NAME,
     LocalSessionAuthProvider,
     SESSION_COOKIE_NAME,
 )
-from yomu.community.community_http import CommunityNetworkBoundaryMiddleware, create_community_router
-from yomu.community.community_store import FileStatus, PostStatus
-from yomu.runtime.job_store import JobStore
+from komyst.community.community_http import CommunityNetworkBoundaryMiddleware, create_community_router
+from komyst.community.community_store import FileStatus, PostStatus
+from komyst.runtime.job_store import JobStore
 from test_support.offline_test_guard import (
     _loopback_test_connect,
     _loopback_test_connect_ex,
@@ -77,7 +77,7 @@ class PublishHttpHarness:
         return job_id
 
     def browser_publish(self, source_job_id: str, **extra):
-        """Exactly the payload static/tradutor_ui.js sends on the Publish click."""
+        """Exactly the payload static/komyst_ui.js sends on the Publish click."""
         payload = {
             "slug": "",
             "series_title": "Serie",
@@ -271,6 +271,6 @@ def test_unresolvable_canonical_identity_creates_no_attempt_rows(harness):
 
 def test_ui_publish_payload_carries_no_retry_or_versioning_flag():
     """Retry safety is server state, not a browser-controlled flag."""
-    source = Path("static/tradutor_ui.js").read_text(encoding="utf-8")
+    source = Path("static/komyst_ui.js").read_text(encoding="utf-8")
     assert "/api/community/publish" in source
     assert "force_new_version" not in source

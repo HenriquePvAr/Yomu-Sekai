@@ -2,7 +2,7 @@ import hashlib
 import hmac
 import unittest
 
-from yomu.core.ayet_rewarded import canonical_callback_payload, verify_callback
+from komyst.core.ayet_rewarded import canonical_callback_payload, verify_callback
 
 
 class AyetRewardedTests(unittest.TestCase):

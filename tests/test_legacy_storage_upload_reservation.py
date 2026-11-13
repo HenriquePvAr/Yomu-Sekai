@@ -19,7 +19,7 @@ from typing import Any
 
 import pytest
 
-from yomu.community.legacy.legacy_publication_migration_executor import (
+from komyst.community.legacy.legacy_publication_migration_executor import (
     ConflictingStorageObjectError,
     FakeLegacyArtifactStorage,
     FakeLegacyProvenanceBackend,
@@ -27,8 +27,8 @@ from yomu.community.legacy.legacy_publication_migration_executor import (
     TerminalBackendError,
     TransientBackendError,
 )
-from yomu.community.legacy.legacy_publication_migrator import load_migration_input, plan_migration
-from yomu.community.legacy.legacy_storage_upload_reservation import (
+from komyst.community.legacy.legacy_publication_migrator import load_migration_input, plan_migration
+from komyst.community.legacy.legacy_storage_upload_reservation import (
     ReservationClaim,
     ReservationCompletion,
     ReservationFailureRecorded,

@@ -2,8 +2,8 @@ import test_support._test_bootstrap as _test_bootstrap  # noqa: F401
 
 import unittest
 
-import yomu.pipeline.benchmark_pipeline as benchmark_pipeline
-from yomu.export.output_manifest import (
+import komyst.pipeline.benchmark_pipeline as benchmark_pipeline
+from komyst.export.output_manifest import (
     build_run_manifest,
     load_verified_run_manifest,
     sanitize_physical_quality,
@@ -12,7 +12,7 @@ from pathlib import Path
 import tempfile
 import json
 
-from yomu.ui.ui_helpers import build_run_command
+from komyst.ui.ui_helpers import build_run_command
 
 
 def _state(item):
@@ -60,22 +60,22 @@ def _manifest(*, folder=None, quality_validation=None, quality_passed=False):
 
 
 class ProviderProvenanceTests(unittest.TestCase):
-    def test_deepl_remote_engine_maps_to_yomu_backend_internal_provider(self):
+    def test_deepl_remote_engine_maps_to_komyst_backend_internal_provider(self):
         class Translator:
-            stats = {"provider_name": "yomu_backend"}
+            stats = {"provider_name": "komyst_backend"}
 
         provenance = benchmark_pipeline.resolve_provider_provenance(
             Translator(), "deepl", translation_enabled=True
         )
         self.assertEqual(provenance["remote_engine"], "deepl")
-        self.assertEqual(provenance["internal_provider"], "yomu_backend")
-        self.assertEqual(provenance["provider_class"], "YomuBackendTranslationProvider")
+        self.assertEqual(provenance["internal_provider"], "komyst_backend")
+        self.assertEqual(provenance["provider_class"], "KomystBackendTranslationProvider")
         self.assertEqual(provenance["provenance_status"], "valid")
         self.assertFalse(provenance["provider_mismatch"])
 
-    def test_unsupported_remote_engine_rejects_yomu_backend(self):
+    def test_unsupported_remote_engine_rejects_komyst_backend(self):
         class Translator:
-            stats = {"provider_name": "yomu_backend"}
+            stats = {"provider_name": "komyst_backend"}
 
         with self.assertRaisesRegex(RuntimeError, "provider_mismatch"):
             benchmark_pipeline.resolve_provider_provenance(

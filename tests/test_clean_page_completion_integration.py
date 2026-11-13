@@ -4,8 +4,8 @@ import cv2
 import numpy as np
 import pytest
 
-import yomu.runtime.artifact_contract as artifact_contract
-from yomu.pipeline import benchmark_pipeline as pipeline
+import komyst.runtime.artifact_contract as artifact_contract
+from komyst.pipeline import benchmark_pipeline as pipeline
 
 
 def _page(tmp_path, page_id, disposition="LOCAL_SAFE"):
@@ -47,7 +47,7 @@ def test_serial_and_parallel_workers_complete_clean_and_bind_canonical_file(
         clean.append(image)
 
     monkeypatch.setenv("PIPELINE_PAGE_WORKERS", str(workers))
-    monkeypatch.setenv("YOMU_ENABLE_GEMINI_SAFE_FALLBACK", "0")
+    monkeypatch.setenv("KOMYST_ENABLE_GEMINI_SAFE_FALLBACK", "0")
     monkeypatch.setattr(pipeline, "_plan_pipeline_flags", lambda: {
         "want_clean": True, "want_typeset": False,
     })
@@ -70,7 +70,7 @@ def test_serial_and_parallel_workers_complete_clean_and_bind_canonical_file(
     states = [result.page_state for result in results]
     for state in states:
         assert state["clean_verified"] is True
-        assert state["clean_certificate"]["schema_version"] == "yomu.clean-certificate.v1"
+        assert state["clean_certificate"]["schema_version"] == "komyst.clean-certificate.v1"
         assert state["clean_certificate"]["status"] == "PASS"
         assert state["clean_certificate"]["job_id"] == "job-clean-cert"
         assert cv2.imread(state["cleaned_path"], cv2.IMREAD_COLOR) is not None
@@ -124,7 +124,7 @@ def test_pending_local_can_complete_execution_without_clean_quality_certificate(
     cleaned = state["original_bgr"].copy()
     cleaned[8:13, 8:13] = (200, 190, 180)
     monkeypatch.setenv("PIPELINE_PAGE_WORKERS", "1")
-    monkeypatch.setenv("YOMU_ENABLE_GEMINI_SAFE_FALLBACK", "0")
+    monkeypatch.setenv("KOMYST_ENABLE_GEMINI_SAFE_FALLBACK", "0")
     monkeypatch.setattr(pipeline, "_plan_pipeline_flags", lambda: {
         "want_clean": True, "want_typeset": False,
     })

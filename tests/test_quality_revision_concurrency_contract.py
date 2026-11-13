@@ -5,7 +5,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 
-import yomu.review.chapter_quality_revision as cqr
+import komyst.review.chapter_quality_revision as cqr
 
 
 class DeterministicReviewer:

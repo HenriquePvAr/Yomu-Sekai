@@ -9,7 +9,7 @@ import unittest.mock
 from pathlib import Path
 from types import SimpleNamespace
 
-import yomu.pipeline.benchmark_pipeline as benchmark_pipeline
+import komyst.pipeline.benchmark_pipeline as benchmark_pipeline
 
 
 class RunManifestIdentityTests(unittest.TestCase):

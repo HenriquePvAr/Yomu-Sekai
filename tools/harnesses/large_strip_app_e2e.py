@@ -55,25 +55,25 @@ def _env(runtime: Path, *, recovery=False) -> dict[str, str]:
     env = os.environ.copy()
     hook_path = ROOT / "large_strip_e2e_runtime"
     env.update({
-        "TRADUTOR_TEST_RUNTIME_ROOT": str(runtime),
-        "TRADUTOR_RUNTIME_ROOT": str(runtime),
-        "TRADUTOR_OUTPUT_ROOT": str(runtime / "output"),
-        "TRADUTOR_IA_RUNTIME_ISOLATION_GUARD": "1",
-        "TRADUTOR_IA_HERMETIC_TEST_ENV": "1",
+        "KOMYST_TEST_RUNTIME_ROOT": str(runtime),
+        "KOMYST_RUNTIME_ROOT": str(runtime),
+        "KOMYST_OUTPUT_ROOT": str(runtime / "output"),
+        "KOMYST_RUNTIME_ISOLATION_GUARD": "1",
+        "KOMYST_HERMETIC_TEST_ENV": "1",
         # local_folder_input.snapshot_workspace_root only relocates snapshots
         # when this test marker is present; keep UI intake and worker on one root.
-        "YOMU_CANCEL_TEST_MARKER_DIR": str(runtime / "markers"),
-        "YOMU_ENV": "test",
-        "YOMU_TEST_BACKEND": "mock",
-        "YOMU_EXECUTION_E2E": "0",
-        "YOMU_TALL_STRIP_E2E": "1",
-        "YOMU_TALL_STRIP_FAIL_EXPORT": "1" if recovery else "0",
-        "YOMU_TALL_STRIP_FAILURE_MARKER": str(runtime / "fault-once.marker"),
-        "YOMU_TEST_WALLET_STATE": str(runtime / "wallet_mock.pkl"),
+        "KOMYST_CANCEL_TEST_MARKER_DIR": str(runtime / "markers"),
+        "KOMYST_ENV": "test",
+        "KOMYST_TEST_BACKEND": "mock",
+        "KOMYST_EXECUTION_E2E": "0",
+        "KOMYST_TALL_STRIP_E2E": "1",
+        "KOMYST_TALL_STRIP_FAIL_EXPORT": "1" if recovery else "0",
+        "KOMYST_TALL_STRIP_FAILURE_MARKER": str(runtime / "fault-once.marker"),
+        "KOMYST_TEST_WALLET_STATE": str(runtime / "wallet_mock.pkl"),
         "BETA_LICENSE_PROVIDER": "local_development",
-        "YOMU_BACKEND_URL": "",
+        "KOMYST_BACKEND_URL": "",
         "SUPABASE_URL": "",
-        "TRADUTOR_DEVICE_UUID": "550e8400-e29b-41d4-a716-446655440000",
+        "KOMYST_DEVICE_UUID": "550e8400-e29b-41d4-a716-446655440000",
         "LOCAL_INPUT_ROOTS": str(runtime / "fixtures"),
         "OCR_ENGINE": "rapidocr",
         "RAPIDOCR_ENABLED": "true",
@@ -90,7 +90,7 @@ def _env(runtime: Path, *, recovery=False) -> dict[str, str]:
 
 
 def _status_wait(store, job_id: str, worker: subprocess.Popen, timeout=240):
-    from yomu.runtime.job_store import JobStatus
+    from komyst.runtime.job_store import JobStatus
 
     transitions = []
     terminal = set(JobStatus.TERMINAL) | {JobStatus.INTERRUPTED}
@@ -169,7 +169,7 @@ def _png_output(job: dict) -> tuple[Path, list[Path]]:
 
 
 def _verify_regions(path: Path, *, height: int) -> dict:
-    from yomu.ocr.ocr_engine import OCREngine
+    from komyst.ocr.ocr_engine import OCREngine
 
     image = cv2.imread(str(path), cv2.IMREAD_COLOR)
     if image is None:
@@ -188,7 +188,7 @@ def _verify_regions(path: Path, *, height: int) -> dict:
 
 def _run_job(bridge, runtime: Path, env: dict[str, str], source: str,
              name: str, source_path: Path):
-    from yomu.runtime.job_store import JobStatus
+    from komyst.runtime.job_store import JobStatus
 
     result = asyncio.run(_create(bridge, source, name, source_path))
     job_id = str(result.get("job_id") or "")
@@ -220,10 +220,10 @@ def _run_job(bridge, runtime: Path, env: dict[str, str], source: str,
 
 
 def main() -> int:
-    runtime = Path(tempfile.mkdtemp(prefix="yomu-large-strip-app-e2e-"))
+    runtime = Path(tempfile.mkdtemp(prefix="komyst-large-strip-app-e2e-"))
     env = _env(runtime)
     os.environ.update(env)
-    import yomu.ui.ui_bridge as ui_bridge
+    import komyst.ui.ui_bridge as ui_bridge
 
     bridge = ui_bridge.UiBridge()
     bridge.ensure_worker = lambda: {"status": "manual_isolated_dispatch"}
@@ -246,7 +246,7 @@ def main() -> int:
         # The next submission uses the exact normal Local Folder UI bridge path.
         # Its runner receives a one-shot test-only export fault via sitecustomize.
         env_recovery = _env(runtime, recovery=True)
-        env_recovery["YOMU_TEST_WALLET_STATE"] = str(runtime / "wallet_mock.pkl")
+        env_recovery["KOMYST_TEST_WALLET_STATE"] = str(runtime / "wallet_mock.pkl")
         result = asyncio.run(_create(
             bridge, "local_folder", "Tall recovery 20k", recovery_folder))
         recovery_id = str(result.get("job_id") or "")
@@ -267,7 +267,7 @@ def main() -> int:
             if wallet_state.is_file() else {}
         )
         output_dir = Path(str(first_row.get("output_dir") or ""))
-        import yomu.runtime.yk_reservation as yk_reservation
+        import komyst.runtime.yk_reservation as yk_reservation
         translation_ready = yk_reservation.translation_ready(
             output_dir, job_id=recovery_id
         )

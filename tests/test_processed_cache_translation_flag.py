@@ -9,7 +9,7 @@ import os
 import unittest
 from unittest import mock
 
-import yomu.pipeline.benchmark_pipeline as bp
+import komyst.pipeline.benchmark_pipeline as bp
 
 
 class ProcessedCacheTranslationFlagTests(unittest.TestCase):

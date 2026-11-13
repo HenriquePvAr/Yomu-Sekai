@@ -1,4 +1,4 @@
-from yomu.observability.events import SCHEMA_VERSION, build_event, redact_event
+from komyst.observability.events import SCHEMA_VERSION, build_event, redact_event
 
 
 def test_event_contract_redacts_secrets_and_text():

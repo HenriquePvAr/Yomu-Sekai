@@ -5,26 +5,26 @@ import os
 import unittest
 from unittest import mock
 
-import yomu.pipeline.benchmark_pipeline as bp
+import komyst.pipeline.benchmark_pipeline as bp
 
 
 class LamaPrewarmTests(unittest.TestCase):
     def test_hermetic_tests_never_load_the_model(self):
-        with mock.patch.dict(os.environ, {"TRADUTOR_IA_HERMETIC_TEST_ENV": "1"}):
+        with mock.patch.dict(os.environ, {"KOMYST_HERMETIC_TEST_ENV": "1"}):
             self.assertIsNone(bp._prewarm_learned_inpainter())
 
     def test_render_runs_load_the_inpainter_in_background(self):
         inpainter = mock.Mock()
-        with mock.patch.dict(os.environ, {"TRADUTOR_IA_HERMETIC_TEST_ENV": "0"}), \
-                mock.patch("yomu.core.gpu.directml_enabled", return_value=True), \
-                mock.patch("yomu.clean.inpainting.advanced_art_inpainting.get_default_inpainter",
+        with mock.patch.dict(os.environ, {"KOMYST_HERMETIC_TEST_ENV": "0"}), \
+                mock.patch("komyst.core.gpu.directml_enabled", return_value=True), \
+                mock.patch("komyst.clean.inpainting.advanced_art_inpainting.get_default_inpainter",
                            return_value=inpainter):
             thread = bp._prewarm_learned_inpainter()
             thread.join(5)
         inpainter.load.assert_called_once()
 
     def test_no_render_no_prewarm(self):
-        with mock.patch.dict(os.environ, {"TRADUTOR_IA_HERMETIC_TEST_ENV": "0", "YOMU_EFFECTIVE_OPS": "translate"}):
+        with mock.patch.dict(os.environ, {"KOMYST_HERMETIC_TEST_ENV": "0", "KOMYST_EFFECTIVE_OPS": "translate"}):
             self.assertIsNone(bp._prewarm_learned_inpainter())
 
 

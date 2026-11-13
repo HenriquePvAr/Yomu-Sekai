@@ -1,4 +1,4 @@
--- Tradutor.Ia social foundation — Row Level Security.
+-- Komyst social foundation — Row Level Security.
 --
 -- Every public social table is RLS-protected and every policy targets `authenticated`
 -- only (never public/anon). Anonymous callers therefore read nothing. Ownership is

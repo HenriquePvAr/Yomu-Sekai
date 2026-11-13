@@ -12,13 +12,13 @@ from types import SimpleNamespace
 from pathlib import Path
 from unittest import mock
 
-from yomu.runtime.job_runner import _OutputPump, _join_output_pump_and_drain
-from yomu.runtime.job_store import JobStatus, JobStore, ProgressEventRejected, SCHEMA_VERSION
-from yomu.runtime.progress_contract import (
+from komyst.runtime.job_runner import _OutputPump, _join_output_pump_and_drain
+from komyst.runtime.job_store import JobStatus, JobStore, ProgressEventRejected, SCHEMA_VERSION
+from komyst.runtime.progress_contract import (
     PROGRESS_V1_PREFIX, emit_progress_v1, parse_progress_v1_line,
 )
-import yomu.ui.ui_bridge as ui_bridge
-import yomu.pipeline.benchmark_pipeline as benchmark_pipeline
+import komyst.ui.ui_bridge as ui_bridge
+import komyst.pipeline.benchmark_pipeline as benchmark_pipeline
 
 
 class _ProgressBridge(ui_bridge.UiBridge):
@@ -156,7 +156,7 @@ class ProgressV1Tests(unittest.TestCase):
 
     def test_runner_pump_drains_burst_and_parent_binds_host_identity(self):
         child = (
-            "from yomu.runtime.progress_contract import emit_progress_v1; "
+            "from komyst.runtime.progress_contract import emit_progress_v1; "
             "[emit_progress_v1(stage_id='ocr',phase='recognition',status='running',"
             "stage_current=i,stage_total=300) for i in range(1,301)]"
         )

@@ -6,7 +6,7 @@ from test_support.offline_test_guard import install_offline_network_guard
 
 install_offline_network_guard()
 
-from yomu.auth.commercial_foundation import (
+from komyst.auth.commercial_foundation import (
     PLANS,
     DisabledBillingProvider,
     DisabledRewardedAdProvider,

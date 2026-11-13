@@ -11,9 +11,9 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from yomu.ocr.ocr_balloon import validate_and_retry_translations
-from yomu.translation.semantic_fidelity import evaluate_local_fidelity
-from yomu.pipeline.session_context import SessionContextStore
+from komyst.ocr.ocr_balloon import validate_and_retry_translations
+from komyst.translation.semantic_fidelity import evaluate_local_fidelity
+from komyst.pipeline.session_context import SessionContextStore
 from tests.test_chapter_terminology_ledger import _StubTranslator, _group
 
 

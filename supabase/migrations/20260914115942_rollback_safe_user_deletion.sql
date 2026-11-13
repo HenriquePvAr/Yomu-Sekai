@@ -1,5 +1,5 @@
 begin;
-drop function if exists public.yomu_user_delete_schema_ready();
+drop function if exists public.komyst_user_delete_schema_ready();
 alter table public.translation_requests drop constraint if exists translation_requests_user_id_fkey;
 alter table public.translation_requests
   add constraint translation_requests_user_id_fkey

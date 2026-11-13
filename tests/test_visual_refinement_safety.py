@@ -16,10 +16,10 @@ import cv2
 import numpy as np
 from PIL import Image, ImageDraw
 
-import yomu.clean.inpainting.art_text_inpainting as ati
-import yomu.clean.ownership.font_fidelity as ff
-import yomu.translation.providers.provider_execution as provider_execution
-from yomu.ocr.ocr_balloon import get_font
+import komyst.clean.inpainting.art_text_inpainting as ati
+import komyst.clean.ownership.font_fidelity as ff
+import komyst.translation.providers.provider_execution as provider_execution
+from komyst.ocr.ocr_balloon import get_font
 
 
 def _font_path_for(role):
@@ -71,7 +71,7 @@ class FontFidelityContract(unittest.TestCase):
         if not regular or not shout:
             self.skipTest("local role fonts unavailable")
         font = get_font(regular, 28, role="shout", prefer_role=True, text="TEXTO!")
-        runtime = getattr(font, "tradutor_font_runtime", {})
+        runtime = getattr(font, "komyst_font_runtime", {})
         self.assertEqual(runtime.get("requested_font"), "shout")
         self.assertEqual(Path(runtime.get("resolved_font_path")).resolve(), Path(shout).resolve())
 

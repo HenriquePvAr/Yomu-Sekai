@@ -310,5 +310,5 @@
   };
 
   if (typeof module === 'object' && module.exports) module.exports = api;
-  global.TradutorLoadingView = api;
+  global.KomystLoadingView = api;
 })(typeof globalThis !== 'undefined' ? globalThis : this);

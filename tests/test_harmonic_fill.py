@@ -5,7 +5,7 @@ import unittest
 import cv2
 import numpy as np
 
-from yomu.clean.inpainting.harmonic_fill import (
+from komyst.clean.inpainting.harmonic_fill import (
     classify_boundary_evidence,
     convert_spatial_background_class,
     harmonic_boundary_fill,

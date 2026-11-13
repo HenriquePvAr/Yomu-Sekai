@@ -16,9 +16,9 @@ import os
 from unittest import mock
 from pathlib import Path
 
-from yomu.runtime.job_store import JobStatus, JobStore
-import yomu.runtime.process_tree as process_tree
-from yomu.runtime.worker_service import Worker
+from komyst.runtime.job_store import JobStatus, JobStore
+import komyst.runtime.process_tree as process_tree
+from komyst.runtime.worker_service import Worker
 
 REPO = Path(__file__).resolve().parents[1]
 
@@ -213,14 +213,14 @@ class CancelAndRecoveryTests(unittest.TestCase):
         except Exception as exc:  # pragma: no cover - environment diagnostic
             self.skipTest(f"image fixture unavailable: {exc}")
 
-        import yomu.download.local.local_folder_input as local_folder_input
+        import komyst.download.local.local_folder_input as local_folder_input
         local_folder_input.LOCAL_SNAPSHOT_ROOT = self.tmp / "runtime" / "local_sources"
-        from yomu.download.local.local_folder_input import snapshot_workspace_root
+        from komyst.download.local.local_folder_input import snapshot_workspace_root
         with mock.patch.dict(os.environ, {
-            "TRADUTOR_TEST_RUNTIME_ROOT": str(self.tmp / "runtime"),
+            "KOMYST_TEST_RUNTIME_ROOT": str(self.tmp / "runtime"),
             "LOCAL_INPUT_ROOTS": str(self.tmp),
         }, clear=False):
-            from yomu.download.local.local_folder_source import LocalFolderChapterAdapter
+            from komyst.download.local.local_folder_source import LocalFolderChapterAdapter
             snapshot = LocalFolderChapterAdapter().snapshot(str(source), snapshot_workspace_root())
 
         marker_dir = self.tmp / "markers"
@@ -228,18 +228,18 @@ class CancelAndRecoveryTests(unittest.TestCase):
         cmd = [sys.executable, "-u", str(REPO / "run_webtoon.py"),
                "--input-manifest", str(snapshot.manifest_path), "--output", "output/test_real_pipeline_cancel",
                "--mode", "fast", "--force", "--max-images", "5",
-               "--no-context", "--translation-provider", "yomu_backend"]
+               "--no-context", "--translation-provider", "komyst_backend"]
         jid = self.store.create_job(
             source_url="local-folder:test-canonical-input",
             output_dir=str(out), command=cmd,
             configuration={"job_type": "translation", "translation_enabled": False,
-                            "translation_provider": "yomu_backend"},
+                            "translation_provider": "komyst_backend"},
         )
         worker = Worker(self.db, poll_seconds=0.02, stale_seconds=30)
         with mock.patch.dict(os.environ, {
-            "YOMU_CANCEL_TEST_MARKER_DIR": str(marker_dir),
-            "YOMU_CANCEL_TEST_OCR_STUB": "1",
-            "TRADUTOR_TEST_RUNTIME_ROOT": str(self.tmp / "runtime"),
+            "KOMYST_CANCEL_TEST_MARKER_DIR": str(marker_dir),
+            "KOMYST_CANCEL_TEST_OCR_STUB": "1",
+            "KOMYST_TEST_RUNTIME_ROOT": str(self.tmp / "runtime"),
             "LOCAL_INPUT_ROOTS": str(self.tmp),
             "OCR_EXECUTION_MODE": "rapidocr",
         }, clear=False):

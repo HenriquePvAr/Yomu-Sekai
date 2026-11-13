@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-import yomu.runtime.installer_update as installer_update
+import komyst.runtime.installer_update as installer_update
 
 
 pytestmark = pytest.mark.skipif(os.name != "nt", reason="Windows PowerShell integration")
@@ -121,7 +121,7 @@ def test_timeout_and_malformed_payload_fail_closed(tmp_path):
 
 
 def test_duplicate_pid_is_normalized_and_command_has_one_payload_parameter(tmp_path):
-    installer = tmp_path / "YomuSekai-0.9.1-beta.8-Setup-x64.exe"
+    installer = tmp_path / "Komyst-0.9.1-beta.8-Setup-x64.exe"
     installer.write_bytes(b"fixture")
     with pytest.MonkeyPatch.context() as patch:
         patch.setattr(installer_update.subprocess, "Popen", lambda *args, **kwargs: (args[0], kwargs))

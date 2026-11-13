@@ -20,7 +20,7 @@ import pytest
 
 
 def _resolver():
-    from yomu.download.readers import scrapling_reader_resolver
+    from komyst.download.readers import scrapling_reader_resolver
     return scrapling_reader_resolver
 
 
@@ -162,8 +162,8 @@ def test_isolation_telemetry_winerror_is_propagated_for_permission_error():
 
 def test_isolation_via_not_a_directory_error_does_not_trigger_cf_capture():
     """NotADirectoryError isolation failure must not cause CF clearance capture attempt."""
-    from yomu.download import down
-    from yomu.download.sources.chapter_source import SourceError
+    from komyst.download import down
+    from komyst.download.sources.chapter_source import SourceError
 
     def fake_once(*a, **kw):
         raise SourceError("dynamic_source_unavailable", "dynamic_resolver_isolation_unavailable")

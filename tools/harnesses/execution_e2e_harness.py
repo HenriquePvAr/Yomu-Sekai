@@ -42,23 +42,23 @@ def _fixture_images(root: Path) -> list[Path]:
 
 async def _start(bridge, payload, *, local_folder_allowed=True):
     bridge.ensure_worker = lambda: {"status": "isolated_e2e_manual_dispatch"}
-    prior = os.environ.get("TRADUTOR_IA_HERMETIC_TEST_ENV")
+    prior = os.environ.get("KOMYST_HERMETIC_TEST_ENV")
     if not local_folder_allowed:
-        os.environ["TRADUTOR_IA_HERMETIC_TEST_ENV"] = "1"
+        os.environ["KOMYST_HERMETIC_TEST_ENV"] = "1"
     try:
         return await bridge.start(payload, local_folder_allowed=local_folder_allowed,
                                   license_access_token=_token())
     finally:
         if not local_folder_allowed:
             if prior is None:
-                os.environ.pop("TRADUTOR_IA_HERMETIC_TEST_ENV", None)
+                os.environ.pop("KOMYST_HERMETIC_TEST_ENV", None)
             else:
-                os.environ["TRADUTOR_IA_HERMETIC_TEST_ENV"] = prior
+                os.environ["KOMYST_HERMETIC_TEST_ENV"] = prior
 
 
 def _pdf_page_count(path: Path) -> int | None:
     try:
-        from yomu.export.pdf_reader import read_pdf_page_count
+        from komyst.export.pdf_reader import read_pdf_page_count
         return int(read_pdf_page_count(path))
     except Exception:
         try:
@@ -78,24 +78,24 @@ def main() -> int:
                         default=("png", "pdf", "psd"))
     parser.add_argument("--source-url", default=URL)
     args = parser.parse_args()
-    runtime = Path(tempfile.mkdtemp(prefix="yomu-execution-e2e-"))
+    runtime = Path(tempfile.mkdtemp(prefix="komyst-execution-e2e-"))
     env = os.environ.copy()
     env.update({
-        "TRADUTOR_TEST_RUNTIME_ROOT": str(runtime),
-        "TRADUTOR_RUNTIME_ROOT": str(runtime),
-        "TRADUTOR_OUTPUT_ROOT": str(runtime / "output"),
-        "TRADUTOR_IA_RUNTIME_ISOLATION_GUARD": "1",
-        "TRADUTOR_IA_HERMETIC_TEST_ENV": "1",
-        "YOMU_ENV": "test",
-        "YOMU_TEST_BACKEND": "mock",
-        "YOMU_EXECUTION_E2E": "1",
+        "KOMYST_TEST_RUNTIME_ROOT": str(runtime),
+        "KOMYST_RUNTIME_ROOT": str(runtime),
+        "KOMYST_OUTPUT_ROOT": str(runtime / "output"),
+        "KOMYST_RUNTIME_ISOLATION_GUARD": "1",
+        "KOMYST_HERMETIC_TEST_ENV": "1",
+        "KOMYST_ENV": "test",
+        "KOMYST_TEST_BACKEND": "mock",
+        "KOMYST_EXECUTION_E2E": "1",
         "BETA_LICENSE_PROVIDER": "local_development",
         # Keep every provider path local. MockBackendClient handles successful
         # translation/wallet settlement; empty URLs prevent any HTTP settlement fallback.
-        "YOMU_BACKEND_URL": "",
+        "KOMYST_BACKEND_URL": "",
         "SUPABASE_URL": "",
-        "TRADUTOR_DEVICE_UUID": "550e8400-e29b-41d4-a716-446655440000",
-        "YOMU_CANCEL_TEST_MARKER_DIR": str(runtime / "markers"),
+        "KOMYST_DEVICE_UUID": "550e8400-e29b-41d4-a716-446655440000",
+        "KOMYST_CANCEL_TEST_MARKER_DIR": str(runtime / "markers"),
         "LOCAL_INPUT_ROOTS": str(runtime / "fixtures"),
         "PYTHONPATH": str(ROOT / "e2e_test_runtime") + os.pathsep +
                        str(ROOT) + os.pathsep + os.environ.get("PYTHONPATH", ""),
@@ -103,19 +103,19 @@ def main() -> int:
         "PIPELINE_PAGE_WORKERS": "1",
     })
     if "comix_url" in args.sources:
-        env.pop("TRADUTOR_IA_HERMETIC_TEST_ENV", None)
-        env["TRADUTOR_ALLOW_DRIVER_DOWNLOAD"] = "1"
+        env.pop("KOMYST_HERMETIC_TEST_ENV", None)
+        env["KOMYST_ALLOW_DRIVER_DOWNLOAD"] = "1"
         env["SE_CACHE_PATH"] = str(runtime / "selenium-cache")
     os.environ.update(env)
 
-    import yomu.ui.ui_bridge as ui_bridge
-    from yomu.runtime.job_store import JobStatus
-    from yomu.download.local.local_folder_input import snapshot_workspace_root
-    from yomu.ui.ui_helpers import find_output_artifacts
+    import komyst.ui.ui_bridge as ui_bridge
+    from komyst.runtime.job_store import JobStatus
+    from komyst.download.local.local_folder_input import snapshot_workspace_root
+    from komyst.ui.ui_helpers import find_output_artifacts
 
     bridge = ui_bridge.UiBridge()
     if "comix_url" in args.sources:
-        from yomu.review.source_readiness import SourceReadinessStore, default_workspace_id
+        from komyst.review.source_readiness import SourceReadinessStore, default_workspace_id
         readiness = SourceReadinessStore(bridge.store.db_path)
         try:
             readiness.activate_workspace_policy(
@@ -143,7 +143,7 @@ def main() -> int:
                 "mode": "quality",
                 "full": True,
                 "output_format": fmt,
-                # The UI-facing engine is deepl; YOMU_ENV=test routes it to the
+                # The UI-facing engine is deepl; KOMYST_ENV=test routes it to the
                 # internal MockBackendClient (never the real DeepL service).
                 "translation_provider": "deepl",
                 "translation_enabled": True,

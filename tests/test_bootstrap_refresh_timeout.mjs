@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import vm from 'node:vm';
 
-const source = fs.readFileSync(new URL('../static/tradutor_ui.js', import.meta.url), 'utf8');
+const source = fs.readFileSync(new URL('../static/komyst_ui.js', import.meta.url), 'utf8');
 const start = source.indexOf('  async function runBootstrapRefresh() {');
 const end = source.indexOf('  async function pollState()', start);
 assert.ok(start >= 0 && end > start);

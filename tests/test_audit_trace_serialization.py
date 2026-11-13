@@ -12,9 +12,9 @@ import test_support._test_bootstrap as _test_bootstrap  # noqa: F401
 import json
 import unittest
 
-from yomu.pipeline.benchmark_pipeline import _build_quality_report, _serializable_state
-from yomu.ocr.ocr_balloon import summarize_speech_container_reocr
-from yomu.export.pdf import smart_split_audit
+from komyst.pipeline.benchmark_pipeline import _build_quality_report, _serializable_state
+from komyst.ocr.ocr_balloon import summarize_speech_container_reocr
+from komyst.export.pdf import smart_split_audit
 
 
 def _reocr_record(

@@ -15,8 +15,8 @@ from unittest import mock
 
 import numpy as np
 
-import yomu.ocr.ocr_balloon as ocr_balloon
-from yomu.ocr.ocr_balloon import OCRLine, TextGroup, _classify_background_region
+import komyst.ocr.ocr_balloon as ocr_balloon
+from komyst.ocr.ocr_balloon import OCRLine, TextGroup, _classify_background_region
 
 
 # One horizontal segment plus one ~45 deg diagonal, both far longer than any

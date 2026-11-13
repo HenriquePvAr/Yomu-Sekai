@@ -7,7 +7,7 @@ import test_support._test_bootstrap as _test_bootstrap  # noqa: F401
 
 import unittest
 
-from yomu.ui import ui_helpers
+from komyst.ui import ui_helpers
 
 
 class SfxPolicyGateTests(unittest.TestCase):

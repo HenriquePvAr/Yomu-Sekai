@@ -26,7 +26,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import test_support.hermetic_runtime as hermetic_runtime
-import yomu.ui.ui_bridge as ui_bridge
+import komyst.ui.ui_bridge as ui_bridge
 from test_support.hermetic_runtime import (
     REAL_JOBS_DB,
     REAL_OUTPUT_ROOT,
@@ -37,9 +37,9 @@ from test_support.hermetic_runtime import (
     is_real_user_state_path,
     sqlite_uri_path,
 )
-from yomu.runtime.job_store import JobStatus, JobStore
-from yomu.ui.ui_history import UIHistoryStore
-from yomu.runtime.runtime_paths import default_user_data_root
+from komyst.runtime.job_store import JobStatus, JobStore
+from komyst.ui.ui_history import UIHistoryStore
+from komyst.runtime.runtime_paths import default_user_data_root
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -111,7 +111,7 @@ class RealJobsDatabaseTripwireTests(unittest.TestCase):
 
     def test_the_module_default_uses_user_data_not_the_legacy_repo_db(self):
         """Beta defaults must be writable outside the installation directory."""
-        self.assertEqual(ui_bridge.JOBS_DB_PATH, Path(os.environ["TRADUTOR_TEST_RUNTIME_ROOT"]) / "jobs.sqlite3")
+        self.assertEqual(ui_bridge.JOBS_DB_PATH, Path(os.environ["KOMYST_TEST_RUNTIME_ROOT"]) / "jobs.sqlite3")
         self.assertFalse(is_real_runtime_path(ui_bridge.JOBS_DB_PATH))
 
 
@@ -157,7 +157,7 @@ class SqliteUriTripwireTests(unittest.TestCase):
         self.assertFalse(is_real_runtime_path("file:isolated.db?mode=ro"))
         sqlite3.connect(":memory:").close()
         sqlite3.connect("file::memory:?cache=shared", uri=True).close()
-        with tempfile.TemporaryDirectory(prefix="tradutor-uri-") as folder:
+        with tempfile.TemporaryDirectory(prefix="komyst-uri-") as folder:
             db = Path(folder) / "jobs.sqlite3"
             db.write_bytes(b"")
             uri = self._uri(db, "?mode=ro")
@@ -210,13 +210,13 @@ class RealOutputTripwireTests(unittest.TestCase):
             REAL_UI_HISTORY_PATHS[0].write_text("[]", encoding="utf-8")
 
     def test_a_default_history_store_no_longer_discovers_legacy_repo_runs(self):
-        with tempfile.TemporaryDirectory(prefix="tradutor-history-") as folder:
+        with tempfile.TemporaryDirectory(prefix="komyst-history-") as folder:
             store = UIHistoryStore(Path(folder) / "ui_history.json")
             self.assertFalse(is_real_user_state_path(store.output_root))
 
     def test_an_isolated_output_root_discovers_its_own_runs_and_only_those(self):
         """Real discovery semantics, isolated data — not a mocked-away history."""
-        with tempfile.TemporaryDirectory(prefix="tradutor-history-") as folder:
+        with tempfile.TemporaryDirectory(prefix="komyst-history-") as folder:
             output_root = Path(folder) / "output"
             run = output_root / "isolated_chapter_01"
             run.mkdir(parents=True)
@@ -251,7 +251,7 @@ class RealWorkerSpawnTripwireTests(unittest.TestCase):
 
     def test_a_worker_pointed_at_an_isolated_db_is_still_allowed(self):
         """Mission §25B: subprocess worker semantics stay testable, just not on real state."""
-        with tempfile.TemporaryDirectory(prefix="tradutor-worker-") as folder:
+        with tempfile.TemporaryDirectory(prefix="komyst-worker-") as folder:
             argv = [
                 sys.executable, str(REPO_ROOT / "worker_service.py"),
                 "--status", "--db", str(Path(folder) / "jobs.sqlite3"),
@@ -271,14 +271,14 @@ class RealWorkerSpawnTripwireTests(unittest.TestCase):
         """app_ui builds a module-level UiBridge(), so its runtime root must be isolated."""
         environment = {
             key: value for key, value in os.environ.items()
-            if key != "TRADUTOR_TEST_RUNTIME_ROOT"
+            if key != "KOMYST_TEST_RUNTIME_ROOT"
         }
         with self.assertRaises(RealRuntimeAccess):
             subprocess.Popen([sys.executable, "app_ui.py"], cwd=REPO_ROOT, env=environment)
         with self.assertRaises(RealRuntimeAccess):
             subprocess.Popen(
                 [sys.executable, "app_ui.py"], cwd=REPO_ROOT,
-                env={**environment, "TRADUTOR_TEST_RUNTIME_ROOT": str(REAL_RUNTIME_ROOT)},
+                env={**environment, "KOMYST_TEST_RUNTIME_ROOT": str(REAL_RUNTIME_ROOT)},
             )
 
     def test_any_subprocess_argument_naming_the_real_runtime_is_refused(self):
@@ -291,9 +291,9 @@ class RealWorkerSpawnTripwireTests(unittest.TestCase):
         The launcher module resolves its DB at import time, so the hermetic runtime root
         has to be visible to ``runtime_paths`` before the module is imported.
         """
-        import yomu.commands.start_tradutor as start_tradutor
+        import komyst.commands.start_tradutor as start_tradutor
 
-        self.assertEqual(start_tradutor.DB_PATH, Path(os.environ["TRADUTOR_TEST_RUNTIME_ROOT"]) / "jobs.sqlite3")
+        self.assertEqual(start_tradutor.DB_PATH, Path(os.environ["KOMYST_TEST_RUNTIME_ROOT"]) / "jobs.sqlite3")
         self.assertFalse(is_real_runtime_path(start_tradutor.DB_PATH))
 
 
@@ -301,14 +301,14 @@ class IsolatedRuntimeVisibilityTests(unittest.TestCase):
     """Real SQLite semantics against an isolated path — not a mock (mission §18)."""
 
     def _bridge_root(self) -> Path:
-        return Path(os.environ["TRADUTOR_TEST_RUNTIME_ROOT"])
+        return Path(os.environ["KOMYST_TEST_RUNTIME_ROOT"])
 
     def test_all_default_mutable_paths_stay_inside_test_root(self):
-        import yomu.runtime.runtime_paths as runtime_paths
+        import komyst.runtime.runtime_paths as runtime_paths
 
         overrides = {key: "" for key in (
-            "CACHE_ROOT", "TEMP_FOLDER", "TEMP_OUT", "TRADUTOR_OUTPUT_ROOT",
-            "TRADUTOR_USER_DATA_ROOT", "TRADUTOR_RUNTIME_ROOT")}
+            "CACHE_ROOT", "TEMP_FOLDER", "TEMP_OUT", "KOMYST_OUTPUT_ROOT",
+            "KOMYST_USER_DATA_ROOT", "KOMYST_RUNTIME_ROOT")}
         with patch.dict(os.environ, overrides):
             for resolver in (runtime_paths.runtime_root, runtime_paths.cache_root,
                              runtime_paths.output_root, runtime_paths.temp_input_root,
@@ -324,7 +324,7 @@ class IsolatedRuntimeVisibilityTests(unittest.TestCase):
                 )
 
     def test_containment_rejects_sibling_and_parent_paths(self):
-        with tempfile.TemporaryDirectory(prefix="tradutor-contained-") as folder:
+        with tempfile.TemporaryDirectory(prefix="komyst-contained-") as folder:
             parent = Path(folder)
             root = parent / "runtime"
             sibling = parent / "runtime-sibling"
@@ -380,7 +380,7 @@ class IsolatedRuntimeVisibilityTests(unittest.TestCase):
                     folder.rmdir()
 
     def test_app_ui_bridge_resolves_only_isolated_paths(self):
-        import yomu.ui.app as app_ui
+        import komyst.ui.app as app_ui
 
         bridge = app_ui.BRIDGE
         for path in (
@@ -390,7 +390,7 @@ class IsolatedRuntimeVisibilityTests(unittest.TestCase):
         self.assertEqual(Path(bridge.store.db_path).parent, bridge.runtime_root)
 
     def test_an_isolated_store_sees_only_its_own_jobs(self):
-        with tempfile.TemporaryDirectory(prefix="tradutor-isolation-") as folder:
+        with tempfile.TemporaryDirectory(prefix="komyst-isolation-") as folder:
             db = Path(folder) / "jobs.sqlite3"
             store = JobStore(db)
             try:
@@ -413,7 +413,7 @@ class IsolatedRuntimeVisibilityTests(unittest.TestCase):
 class FailClosedConstructionTests(unittest.TestCase):
     def test_ui_bridge_refuses_to_build_without_an_isolated_root_inside_tests(self):
         environment = dict(os.environ)
-        environment.pop("TRADUTOR_TEST_RUNTIME_ROOT", None)
+        environment.pop("KOMYST_TEST_RUNTIME_ROOT", None)
         with patch.dict(os.environ, environment, clear=True):
             with self.assertRaises(RuntimeError) as caught:
                 ui_bridge.UiBridge()
@@ -424,29 +424,29 @@ class FailClosedConstructionTests(unittest.TestCase):
 
         Read-only source inspection: no bridge is constructed, so nothing is opened.
         """
-        source = (REPO_ROOT / "yomu/ui/ui_bridge.py").read_text(encoding="utf-8")
+        source = (REPO_ROOT / "komyst/ui/ui_bridge.py").read_text(encoding="utf-8")
         self.assertIn('JOBS_DB_PATH = DEFAULT_RUNTIME_ROOT / "jobs.sqlite3"', source)
         self.assertIn('DEFAULT_RUNTIME_ROOT.resolve()', source)
-        launcher = (REPO_ROOT / "yomu/commands/start_tradutor.py").read_text(encoding="utf-8")
+        launcher = (REPO_ROOT / "komyst/commands/start_tradutor.py").read_text(encoding="utf-8")
         self.assertIn('DB_PATH = RUNTIME_ROOT / "jobs.sqlite3"', launcher)
 
     def test_a_clean_production_interpreter_uses_user_data_runtime_root(self):
         environment = {
             key: value for key, value in os.environ.items()
             if key not in {
-                "TRADUTOR_TEST_RUNTIME_ROOT",
-                "TRADUTOR_IA_HERMETIC_TEST_ENV",
-                "TRADUTOR_IA_OFFLINE_TEST_GUARD",
-                "TRADUTOR_IA_RUNTIME_ISOLATION_GUARD",
-                "TRADUTOR_USER_DATA_ROOT",
-                "TRADUTOR_RUNTIME_ROOT",
+                "KOMYST_TEST_RUNTIME_ROOT",
+                "KOMYST_HERMETIC_TEST_ENV",
+                "KOMYST_OFFLINE_TEST_GUARD",
+                "KOMYST_RUNTIME_ISOLATION_GUARD",
+                "KOMYST_USER_DATA_ROOT",
+                "KOMYST_RUNTIME_ROOT",
                 "PYTHONPATH",
             }
         }
         completed = subprocess.run(
             [
                 sys.executable, "-c",
-                "from yomu.runtime import runtime_paths;"
+                "from komyst.runtime import runtime_paths;"
                 "print(runtime_paths.runtime_root() == runtime_paths.default_user_data_root() / 'runtime')",
             ],
             cwd=REPO_ROOT, env=environment, capture_output=True, text=True, timeout=120,
@@ -460,9 +460,9 @@ class EntryPointHermeticityTests(unittest.TestCase):
         """``python -m unittest`` gets the guard through ``sitecustomize``, not conftest."""
         environment = dict(os.environ)
         for key in (
-            "TRADUTOR_TEST_RUNTIME_ROOT",
-            "TRADUTOR_IA_HERMETIC_TEST_ENV",
-            "TRADUTOR_IA_OFFLINE_TEST_GUARD",
+            "KOMYST_TEST_RUNTIME_ROOT",
+            "KOMYST_HERMETIC_TEST_ENV",
+            "KOMYST_OFFLINE_TEST_GUARD",
         ):
             environment.pop(key, None)
         environment["PYTHONPATH"] = str(REPO_ROOT)

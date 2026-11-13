@@ -12,13 +12,13 @@ from unittest.mock import patch
 
 import numpy as np
 
-import yomu.config.settings as config
-from yomu.ocr.ocr_engine import OCREngine
-import yomu.ocr.ocr_parallel as ocr_parallel
-import yomu.commands.run_webtoon as run_webtoon
-import yomu.runtime.process_options as process_options
-from yomu.ocr.fast_ocr_policy import FastOCRBudget, run_ocr_with_timeout
-from yomu.ui.ui_helpers import ProgressSnapshot, parse_progress_line
+import komyst.config.settings as config
+from komyst.ocr.ocr_engine import OCREngine
+import komyst.ocr.ocr_parallel as ocr_parallel
+import komyst.commands.run_webtoon as run_webtoon
+import komyst.runtime.process_options as process_options
+from komyst.ocr.fast_ocr_policy import FastOCRBudget, run_ocr_with_timeout
+from komyst.ui.ui_helpers import ProgressSnapshot, parse_progress_line
 
 
 def _sleep_child(connection):
@@ -189,7 +189,7 @@ class FastOCRPolicyTests(unittest.TestCase):
         # to be installed before it configures anything.  This test is about the
         # fallback policy, not about this machine's dependencies, so the engine
         # is declared available here.
-        import yomu.ocr.ocr_engine as ocr_engine
+        import komyst.ocr.ocr_engine as ocr_engine
 
         with patch.object(ocr_engine, "require_available_engine", lambda engine: engine):
             run_webtoon._configure_mode("quality")
@@ -199,7 +199,7 @@ class FastOCRPolicyTests(unittest.TestCase):
 
     def test_configure_mode_fast_engine_side_effects_do_not_leak_past_teardown(self):
         # _configure_mode("fast") resolves to the rapidocr engine (no
-        # TRADUTOR_OCR_ENGINE_OVERRIDE set) and flips
+        # KOMYST_OCR_ENGINE_OVERRIDE set) and flips
         # config.POST_RENDER_OCR_VALIDATION to True as a side effect
         # (run_webtoon.py). That attribute must not survive this test's own
         # tearDown: any later test that renders through ocr_balloon's

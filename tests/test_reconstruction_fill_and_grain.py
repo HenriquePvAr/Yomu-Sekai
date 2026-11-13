@@ -15,7 +15,7 @@ import unittest
 import cv2
 import numpy as np
 
-import yomu.ocr.ocr_balloon as ob
+import komyst.ocr.ocr_balloon as ob
 
 
 class WhiteRegionFillColorTest(unittest.TestCase):

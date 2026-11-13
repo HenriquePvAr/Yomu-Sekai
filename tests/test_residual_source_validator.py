@@ -1,4 +1,4 @@
-from yomu.translation.residual_validator import (
+from komyst.translation.residual_validator import (
     UNEXPECTED_SOURCE_DIALOGUE,
     classify_source_residual,
 )

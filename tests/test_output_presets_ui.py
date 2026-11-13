@@ -2,7 +2,7 @@
 
 Two layers:
   * UI content: the preset cards, custom checkboxes and payload wiring exist in the shipped
-    ui_shell.html / tradutor_ui.js (same style as test_output_profile_selection.py).
+    ui_shell.html / komyst_ui.js (same style as test_output_profile_selection.py).
   * Contract: each preset payload, run through the real server-side normalizer, yields the
     correct effective operations / knobs. The backend stays the single source of truth.
 """
@@ -10,9 +10,9 @@ from pathlib import Path
 
 import pytest
 
-import yomu.runtime.artifact_contract as ac
-import yomu.ui.ui_bridge as ui_bridge
-from yomu.runtime.output_plan import normalize_output_plan
+import komyst.runtime.artifact_contract as ac
+import komyst.ui.ui_bridge as ui_bridge
+from komyst.runtime.output_plan import normalize_output_plan
 
 
 # ---- UI content -------------------------------------------------------------------------
@@ -64,7 +64,7 @@ def test_professional_is_labelled_completo_not_profissional():
     assert ">Completo<" in section
     assert "Profissional" not in section
     # backend preset identifier + profile are unchanged
-    from yomu.runtime.output_plan import normalize_output_plan, PRESETS
+    from komyst.runtime.output_plan import normalize_output_plan, PRESETS
     assert normalize_output_plan("profissional").output_profile == "professional_qc"
     assert PRESETS["profissional"][1] == "Completo"  # presentation label only
 
@@ -75,7 +75,7 @@ def test_recommended_badge_on_default():
 
 
 def test_js_sends_output_plan_and_custom_operations():
-    js = Path("static/tradutor_ui.js").read_text(encoding="utf-8")
+    js = Path("static/komyst_ui.js").read_text(encoding="utf-8")
     assert "output_plan: appState.outputPlan" in js
     assert "operations: planOps" in js
     assert "typeof effectivePlanOps === 'function' ? effectivePlanOps()" in js
@@ -86,13 +86,13 @@ def test_js_sends_output_plan_and_custom_operations():
 
 
 def test_translation_viewer_is_wired():
-    js = Path("static/tradutor_ui.js").read_text(encoding="utf-8")
+    js = Path("static/komyst_ui.js").read_text(encoding="utf-8")
     # Translate modes without a final typeset offer a readable viewer (not raw JSON).
     assert "async function openTranslationView" in js
     assert "/api/ui/translation/" in js
     assert "addAction('Ver tradução', 'translation'" in js
     assert "nenhuma imagem foi alterada" in js  # translate-only reassurance copy
-    app = Path("yomu/ui/app.py").read_text(encoding="utf-8")
+    app = Path("komyst/ui/app.py").read_text(encoding="utf-8")
     assert '@app.get("/api/ui/translation/{job_id}")' in app
 
 

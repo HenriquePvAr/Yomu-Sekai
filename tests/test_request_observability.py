@@ -7,7 +7,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from yomu.runtime.request_observability import (
+from komyst.runtime.request_observability import (
     StructuredRequestAuditMiddleware,
     configured_request_audit_destination,
 )
@@ -88,15 +88,15 @@ class StructuredRequestAuditMiddlewareTests(unittest.IsolatedAsyncioTestCase):
             allowed = root / ".runtime" / "audit" / "requests.jsonl"
             self.assertEqual(
                 configured_request_audit_destination(root, {
-                    "TRADUTOR_REQUEST_OBSERVABILITY": "1",
-                    "TRADUTOR_REQUEST_AUDIT_PATH": str(allowed),
+                    "KOMYST_REQUEST_OBSERVABILITY": "1",
+                    "KOMYST_REQUEST_AUDIT_PATH": str(allowed),
                 }),
                 allowed.resolve(),
             )
             with self.assertRaisesRegex(RuntimeError, "request_observability_path_not_local"):
                 configured_request_audit_destination(root, {
-                    "TRADUTOR_REQUEST_OBSERVABILITY": "1",
-                    "TRADUTOR_REQUEST_AUDIT_PATH": str(root / "outside.jsonl"),
+                    "KOMYST_REQUEST_OBSERVABILITY": "1",
+                    "KOMYST_REQUEST_AUDIT_PATH": str(root / "outside.jsonl"),
                 })
 
 

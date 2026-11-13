@@ -1,7 +1,7 @@
 # Fronteira de autenticação e autorização da comunidade
 
 > **Revisado em:** 2026-10-25 · **Base verificada:** `fb8875e`.
-> **Estado:** fronteira de autorização IMPLEMENTADA no backend (`yomu/community/`). A UI da
+> **Estado:** fronteira de autorização IMPLEMENTADA no backend (`komyst/community/`). A UI da
 > Comunidade está desligada no cliente (`COMMUNITY_ENABLED = false` em
 > `static/social_community.js`); as rotas `/api/community/*` continuam montadas.
 
@@ -21,11 +21,11 @@ depois da validação da sessão pelo backend.
 - `session_id` opcional.
 
 `AuthProvider` define `authenticate_request`, `require_authenticated`, `require_role` e
-`require_csrf`. `yomu/community/community_auth.py::build_auth_provider` escolhe a
+`require_csrf`. `komyst/community/community_auth.py::build_auth_provider` escolhe a
 implementação por `AUTH_PROVIDER` ou `COMMUNITY_AUTH_PROVIDER`; sem valor, o padrão é
 **`supabase`**:
 
-- `SupabaseAuthProvider` (`yomu/auth/supabase_auth.py`) — **padrão**; valida o JWT do
+- `SupabaseAuthProvider` (`komyst/auth/supabase_auth.py`) — **padrão**; valida o JWT do
   Supabase por JWKS (assinatura, `iss`, `aud`, `exp`, `nbf`, `sub`) e cria um principal com
   role comum. Ver [SUPABASE_AUTH.md](SUPABASE_AUTH.md).
 - `LocalSessionAuthProvider` (`local`) — somente para localhost; mantém em memória o
@@ -66,14 +66,14 @@ Não existe login aberto nem admin automático. O bootstrap exige, simultaneamen
 - roles opcionais em `COMMUNITY_LOCAL_BOOTSTRAP_ROLES`.
 
 `POST /api/community/auth/local-session` recebe apenas o segredo no header
-`X-Tradutor-Bootstrap-Secret`. O request não aceita `user_id` ou role. Uma emissão nova
+`X-Komyst-Bootstrap-Secret`. O request não aceita `user_id` ou role. Uma emissão nova
 revoga a sessão anterior do usuário de bootstrap, e a sessão expira após
 `COMMUNITY_LOCAL_SESSION_TTL_SECONDS` (15 minutos por padrão).
 
 O token de sessão é criptograficamente aleatório, armazenado no servidor somente como
 digest e enviado apenas em cookie `HttpOnly`, `SameSite=Strict`, com `Secure` em HTTPS.
 Ele não aparece no body, URL ou logs. Um segundo cookie contém o token CSRF de
-double-submit; mutações exigem também o header `X-Tradutor-CSRF`. Logout e revogação
+double-submit; mutações exigem também o header `X-Komyst-CSRF`. Logout e revogação
 invalidam a sessão no servidor. Se a sessão já expirou ou foi perdida no servidor, o
 cleanup dos cookies continua exigindo o mesmo token CSRF no cookie e no header; logout
 anônimo ou sem essa prova responde `403`.
@@ -193,12 +193,12 @@ solicitado), e a limpeza usa o handle/PID/fingerprint do child para não deixar 
 O middleware atua diretamente em scopes ASGI HTTP e WebSocket e também exige o opt-in
 explícito; um provider forte, isoladamente, não libera peers externos.
 
-`TRADUTOR_UI_HOST` usa `127.0.0.1` por padrão. `0.0.0.0` ou outro bind externo exige
-`TRADUTOR_ALLOW_EXTERNAL_BIND=1` e um provider configurado que declare autenticação forte
+`KOMYST_UI_HOST` usa `127.0.0.1` por padrão. `0.0.0.0` ou outro bind externo exige
+`KOMYST_ALLOW_EXTERNAL_BIND=1` e um provider configurado que declare autenticação forte
 para exposição externa. `LocalSessionAuthProvider` nunca satisfaz esse requisito, mesmo
 com a flag explícita. `SupabaseAuthProvider` declara `supports_external_bind = True`, mas
 o opt-in continua obrigatório; o uso suportado do app é em loopback.
 
 Além da validação no entrypoint, um middleware global rejeita peers não-loopback quando
 o provider não declara autenticação externa forte. Isso mantém o app fechado mesmo se
-alguém importar o app (`yomu.ui.app`, reexportado por `app_ui.py`) em outro runner ASGI com um bind inseguro.
+alguém importar o app (`komyst.ui.app`, reexportado por `app_ui.py`) em outro runner ASGI com um bind inseguro.

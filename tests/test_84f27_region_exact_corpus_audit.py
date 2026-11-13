@@ -14,7 +14,7 @@ install_offline_network_guard()
 import re
 import unittest
 
-import yomu.review.region_taxonomy as region_taxonomy
+import komyst.review.region_taxonomy as region_taxonomy
 
 def _synthetic_quality_report():
     def item(

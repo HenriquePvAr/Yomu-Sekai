@@ -1,12 +1,12 @@
 // R3 frontend contracts: dirty protection and pointer-to-natural-image geometry.
-// Runs the real helpers extracted from static/tradutor_ui.js; no DOM/network needed.
+// Runs the real helpers extracted from static/komyst_ui.js; no DOM/network needed.
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const source = fs.readFileSync(path.join(root, 'static', 'tradutor_ui.js'), 'utf8');
+const source = fs.readFileSync(path.join(root, 'static', 'komyst_ui.js'), 'utf8');
 function extractFunction(name) {
   const start = source.indexOf(`function ${name}(`);
   if (start < 0) throw new Error(`function ${name} not found`);

@@ -18,7 +18,7 @@ from unittest.mock import patch
 
 import psutil
 
-from yomu.runtime.process_launcher import (
+from komyst.runtime.process_launcher import (
     CANCELLED_EXIT_CODE,
     CLEANUP_FAILURE_EXIT_CODE,
     LAUNCH_FAILURE_EXIT_CODE,
@@ -32,7 +32,7 @@ from yomu.runtime.process_launcher import (
 class ProcessLauncherTests(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory(
-            prefix="tradutor launcher tests ",
+            prefix="komyst launcher tests ",
         )
         self.root = Path(self.temporary.name)
 
@@ -106,7 +106,7 @@ class ProcessLauncherTests(unittest.TestCase):
                 raise KeyboardInterrupt
             return original_wait(process, timeout=timeout)
 
-        with patch("yomu.runtime.process_launcher.subprocess.Popen.wait", new=interrupting_wait):
+        with patch("komyst.runtime.process_launcher.subprocess.Popen.wait", new=interrupting_wait):
             return run_process(command, runtime, cwd=self.root)
 
     def _one_descendant_command(self, marker, pid_path, ready_path, *, exit_parent=False):
@@ -352,7 +352,7 @@ class ProcessLauncherTests(unittest.TestCase):
             return real_atomic_write(path, value)
 
         launcher_stderr = io.StringIO()
-        with patch("yomu.runtime.process_launcher.atomic_write_text", side_effect=fail_exit_code):
+        with patch("komyst.runtime.process_launcher.atomic_write_text", side_effect=fail_exit_code):
             with patch("sys.stderr", launcher_stderr):
                 with self.assertRaisesRegex(
                     OSError,
@@ -497,7 +497,7 @@ class ProcessLauncherTests(unittest.TestCase):
             [
                 sys.executable,
                 "-m",
-                "yomu.runtime.process_launcher",
+                "komyst.runtime.process_launcher",
                 "--runtime-directory",
                 str(runtime),
                 "--cwd",
@@ -532,7 +532,7 @@ class ProcessLauncherTests(unittest.TestCase):
         ) + [marker, str(command_marker)]
 
         with patch(
-            "yomu.runtime.process_launcher._WindowsJob.assign",
+            "komyst.runtime.process_launcher._WindowsJob.assign",
             side_effect=ProcessTreeError("controlled assignment failure"),
         ):
             returncode = run_process(command, runtime, cwd=self.root)
@@ -553,7 +553,7 @@ class ProcessLauncherTests(unittest.TestCase):
         ) + [marker, str(command_marker)]
 
         with patch(
-            "yomu.runtime.process_launcher._WindowsJob.assign",
+            "komyst.runtime.process_launcher._WindowsJob.assign",
             side_effect=KeyboardInterrupt,
         ):
             returncode = run_process(command, runtime, cwd=self.root)
@@ -574,7 +574,7 @@ class ProcessLauncherTests(unittest.TestCase):
         ) + [marker, str(ready)]
 
         with patch(
-            "yomu.runtime.process_launcher._WindowsJob.terminate",
+            "komyst.runtime.process_launcher._WindowsJob.terminate",
             side_effect=OSError("controlled termination failure"),
         ):
             returncode = self._run_with_keyboard_interrupt(command, runtime, ready)
@@ -606,7 +606,7 @@ class ProcessLauncherTests(unittest.TestCase):
                 raise RuntimeError("controlled monitoring failure")
             return original_wait(process, timeout=timeout)
 
-        with patch("yomu.runtime.process_launcher.subprocess.Popen.wait", new=failing_wait):
+        with patch("komyst.runtime.process_launcher.subprocess.Popen.wait", new=failing_wait):
             returncode = run_process(command, runtime, cwd=self.root)
 
         child_pid = int((runtime / "child_pid.txt").read_text())
@@ -676,12 +676,12 @@ class ProcessLauncherTests(unittest.TestCase):
         result_path = self.root / "resultado ç Unicode.json"
         argument = "valor com espaços ç 日本語"
         environment = os.environ.copy()
-        environment["TRADUTOR_LAUNCHER_UNICODE"] = "ambiente ç 日本語"
+        environment["KOMYST_LAUNCHER_UNICODE"] = "ambiente ç 日本語"
         code = (
             "import json, os, pathlib, sys; "
             "pathlib.Path(sys.argv[1]).write_text(json.dumps({"
             "'argument': sys.argv[2], "
-            "'environment': os.environ['TRADUTOR_LAUNCHER_UNICODE']}, "
+            "'environment': os.environ['KOMYST_LAUNCHER_UNICODE']}, "
             "ensure_ascii=False), encoding='utf-8')"
         )
 

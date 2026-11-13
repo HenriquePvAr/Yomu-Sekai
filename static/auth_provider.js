@@ -18,11 +18,11 @@ async function publicConfig() {
 }
 
 function authTrace(event, fields = {}) {
-  try { window.__tradutorAuthTraceEvent?.(event, fields); } catch (_) { /* diagnostics only */ }
+  try { window.__komystAuthTraceEvent?.(event, fields); } catch (_) { /* diagnostics only */ }
 }
 
-window.__tradutorAuthProviderBuild = `auth_provider:${new URL(import.meta.url).searchParams.get('v') || 'unversioned'}`;
-authTrace('AUTH_PROVIDER_BUILD_LOADED', {source: window.__tradutorAuthProviderBuild});
+window.__komystAuthProviderBuild = `auth_provider:${new URL(import.meta.url).searchParams.get('v') || 'unversioned'}`;
+authTrace('AUTH_PROVIDER_BUILD_LOADED', {source: window.__komystAuthProviderBuild});
 
 async function requestJson(path, options = {}) {
   const response = await fetch(path, {
@@ -60,7 +60,7 @@ function betterAuthAdapter(config) {
       authTrace('better_auth_signup_started', {source: 'better_auth'});
       await requestJson(`${base}/sign-up/email`, {
         method: 'POST',
-        body: JSON.stringify({email, password, name: 'Tradutor'}),
+        body: JSON.stringify({email, password, name: 'Komyst'}),
         signal,
       });
       authTrace('better_auth_signup_finished', {source: 'better_auth'});
@@ -103,7 +103,7 @@ function betterAuthAdapter(config) {
         const session = await fetch('/api/community/auth/session', {
           credentials: 'same-origin',
           cache: 'no-store',
-          headers: {'X-Yomu-Auth-Caller': 'auth-provider-initial-session', 'X-Yomu-Window-Role': 'auth'},
+          headers: {'X-Komyst-Auth-Caller': 'auth-provider-initial-session', 'X-Komyst-Window-Role': 'auth'},
         }).then((response) => response.ok ? response.json() : null);
         handler(session?.authenticated ? {provider: 'better_auth'} : null, 'INITIAL_SESSION');
       } catch (_) {
@@ -115,7 +115,7 @@ function betterAuthAdapter(config) {
 }
 
 function csrfToken() {
-  const prefix = 'tradutor_community_csrf=';
+  const prefix = 'komyst_community_csrf=';
   const part = document.cookie.split(';').map((value) => value.trim())
     .find((value) => value.startsWith(prefix));
   return part ? decodeURIComponent(part.slice(prefix.length)) : '';
@@ -169,7 +169,7 @@ function localTestAdapter() {
       await requestJson('/api/community/auth/logout', {
         method: 'POST',
         body: '{}',
-        headers: csrf ? {'X-Tradutor-CSRF': csrf} : {},
+        headers: csrf ? {'X-Komyst-CSRF': csrf} : {},
       });
     },
     async onAuthChange(handler) {
@@ -177,7 +177,7 @@ function localTestAdapter() {
         const session = await fetch('/api/community/auth/session', {
           credentials: 'same-origin',
           cache: 'no-store',
-          headers: {'X-Yomu-Auth-Caller': 'auth-provider-local-test-initial-session', 'X-Yomu-Window-Role': 'auth'},
+          headers: {'X-Komyst-Auth-Caller': 'auth-provider-local-test-initial-session', 'X-Komyst-Window-Role': 'auth'},
         }).then((response) => response.ok ? response.json() : null);
         handler(session?.authenticated ? {provider: 'local_test'} : null, 'INITIAL_SESSION');
       } catch (_) {

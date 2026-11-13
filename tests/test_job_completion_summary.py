@@ -9,8 +9,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from yomu.runtime.job_completion import build_job_completion_summary
-from yomu.ui.ui_bridge import UiBridge
+from komyst.runtime.job_completion import build_job_completion_summary
+from komyst.ui.ui_bridge import UiBridge
 
 
 def _write(path: Path, payload: bytes = b"x") -> Path:
@@ -207,7 +207,7 @@ def test_open_psd_and_qc_folder_use_only_opaque_allowlisted_actions(tmp_path):
 
 
 def test_completion_ui_copy_and_actions_are_local_artifact_driven():
-    js = Path("static/tradutor_ui.js").read_text(encoding="utf-8")
+    js = Path("static/komyst_ui.js").read_text(encoding="utf-8")
     html = Path("ui/ui_shell.html").read_text(encoding="utf-8")
     assert "record?.completion_summary" in js
     assert "model.actions?.pdf" in js and "model.actions?.psd_folder" in js
@@ -219,7 +219,7 @@ def test_completion_ui_copy_and_actions_are_local_artifact_driven():
 
 
 def test_review_count_copy_singular_plural_and_artifact_scoping():
-    js = Path("static/tradutor_ui.js").read_text(encoding="utf-8")
+    js = Path("static/komyst_ui.js").read_text(encoding="utf-8")
     assert "count === 1 ? 'item recomendado para revisão.' : 'itens recomendados para revisão.'" in js
     # The finish-screen artifact list is now produced-driven (plan-aware): it shows only
     # artifacts that were actually generated, in a stable order, never a phantom "Não gerado".
@@ -333,7 +333,7 @@ process.stdout.write(JSON.stringify(results));
     missing["completion_summary"]["artifacts"]["final_pdf"].update({"status": "missing", "available": False})
     records = [base, automatic_review, professional, professional_review, failed, cancelled, download, missing]
     completed = subprocess.run(
-        [node, "-e", harness, str(Path("static/tradutor_ui.js").resolve())],
+        [node, "-e", harness, str(Path("static/komyst_ui.js").resolve())],
         input=json.dumps(records), text=True, encoding="utf-8", capture_output=True, check=True,
     )
     results = json.loads(completed.stdout)

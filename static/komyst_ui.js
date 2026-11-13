@@ -1,0 +1,10122 @@
+(() => {
+  'use strict';
+
+  // Earliest execution sentinel: this must be observable even if a later
+  // initialization step fails before the normal diagnostic channel is ready.
+  try { window.__komystUiScriptEntered = true; } catch (_) { /* diagnostic only */ }
+
+  const $ = (selector, root = document) => root.querySelector(selector);
+  const $$ = (selector, root = document) => Array.from(root.querySelectorAll(selector));
+  const KOMYST_THEME_KEY = 'komyst.interface.theme';
+  function applyKomystTheme(value, persist = false) {
+    const theme = value === 'rubra' ? 'rubra' : 'original';
+    document.documentElement?.setAttribute?.('data-komyst-theme', theme);
+    $$('input[name="komyst-theme"]').forEach(input => { input.checked = input.value === theme; });
+    if (persist) {
+      const status = $('#themeSelectionStatus');
+      try {
+        localStorage.setItem(KOMYST_THEME_KEY, theme);
+        if (status) status.textContent = 'Tema aplicado e salvo neste dispositivo.';
+      } catch (_) {
+        if (status) status.textContent = 'Tema aplicado. Não foi possível salvar a preferência neste navegador.';
+      }
+    }
+  }
+  try { applyKomystTheme(localStorage.getItem(KOMYST_THEME_KEY)); }
+  catch (_) { applyKomystTheme('original'); }
+  window.addEventListener('storage', event => {
+    if (event.key === KOMYST_THEME_KEY || event.key === null) applyKomystTheme(event.newValue);
+  });
+  const escapeHtml = value => {
+    const node = document.createElement('div');
+    node.textContent = String(value ?? '');
+    return node.innerHTML;
+  };
+  const escapeAttr = value => escapeHtml(value).replace(/"/g, '&quot;');
+  // The app's own confirmation dialog (the browser's confirm() box looks foreign
+  // and shows "127.0.0.1:8080 diz"). Resolves true only on the confirm button.
+  function komystConfirm(message, {title = 'Confirmar ação', confirmLabel = 'Confirmar', cancelLabel = 'Cancelar', danger = false} = {}) {
+    let overlay = document.getElementById('komystConfirmOverlay');
+    if (!overlay) {
+      overlay = document.createElement('div');
+      overlay.className = 'modal-overlay';
+      overlay.id = 'komystConfirmOverlay';
+      overlay.innerHTML = `<div class="modal-card komyst-dialog" role="alertdialog" aria-modal="true" aria-labelledby="komystConfirmTitle" aria-describedby="komystConfirmText">
+        <div class="panel-label">confirmação</div><h2 id="komystConfirmTitle"></h2><p class="komyst-dialog-text" id="komystConfirmText"></p>
+        <div class="sc-modal-actions"><button type="button" class="btn-ghost" data-komyst-confirm="0"></button><button type="button" class="btn-primary" data-komyst-confirm="1"></button></div></div>`;
+      document.body.appendChild(overlay);
+    }
+    overlay.querySelector('#komystConfirmTitle').textContent = title;
+    overlay.querySelector('#komystConfirmText').textContent = message;
+    const ok = overlay.querySelector('[data-komyst-confirm="1"]');
+    const cancel = overlay.querySelector('[data-komyst-confirm="0"]');
+    ok.textContent = confirmLabel;
+    cancel.textContent = cancelLabel;
+    ok.classList.toggle('danger', danger);
+    const previousFocus = document.activeElement;
+    overlay.classList.add('show');
+    overlay.setAttribute('aria-hidden', 'false');
+    (danger ? cancel : ok).focus();
+    return new Promise(resolve => {
+      const finish = value => {
+        overlay.classList.remove('show');
+        overlay.setAttribute('aria-hidden', 'true');
+        overlay.removeEventListener('click', onClick);
+        document.removeEventListener('keydown', onKey, true);
+        try { previousFocus?.focus?.(); } catch (_) { /* element may be gone */ }
+        resolve(value);
+      };
+      const onClick = event => {
+        const choice = event.target.closest('[data-komyst-confirm]');
+        if (choice) finish(choice.dataset.komystConfirm === '1');
+        else if (event.target === overlay) finish(false);
+      };
+      const onKey = event => { if (event.key === 'Escape') { event.stopPropagation(); finish(false); } };
+      overlay.addEventListener('click', onClick);
+      document.addEventListener('keydown', onKey, true);
+    });
+  }
+  window.komystConfirm = komystConfirm;
+  const safeGlobals = Object.create(null);
+  function getGlobal(name, fallback = undefined) {
+    try {
+      if (Object.prototype.hasOwnProperty.call(window, name)) return window[name];
+    } catch (_) { /* fall back to local namespace */ }
+    return Object.prototype.hasOwnProperty.call(safeGlobals, name) ? safeGlobals[name] : fallback;
+  }
+  function setGlobal(name, value) {
+    try {
+      window[name] = value;
+      if (window[name] === value) return value;
+    } catch (_) { /* non-extensible window; use local namespace */ }
+    safeGlobals[name] = value;
+    return value;
+  }
+  const appState = {
+    bootstrap: null,
+    history: [],
+    settings: {},
+    queue: [],
+    status: 'ready',
+    cursor: 0,
+    historyRevision: 0,
+    selectedScope: 'full',
+    selectedMode: 'quality',
+    selectedSourceType: 'url',
+    localImages: [],
+    localMediaSelectionIds: [],
+    outputFormat: 'pdf',
+    outputProfile: 'automatic',
+    outputPlan: 'traducao_pronta',
+    activeEffectiveOps: null,
+    nameDirty: false,
+    outputDirty: false,
+    providerDirty: false,
+    programmingFields: false,
+    activeStage: 'prepare',
+    polling: false,
+    logs: [],
+    visualLogClearedAt: 0,
+    lastFinishedId: '',
+    sourceReview: null,
+    sourceValidation: {status: 'idle', analysisResultId: '', sourceUrl: '', reasonCode: ''},
+    sourceReportDraft: null,
+    sourceForm: {url: '', localFolder: '', chapterName: '', outputSlug: ''},
+    qualityReview: null,
+    reviewReexportPollingJobId: '',
+    qualityReviewFilter: 'pending',
+    qualityReviewSelection: new Set(),
+    qualityReviewUndo: [],
+    qualityReviewBulkBusy: false,
+    reviewSelectedKey: '',
+    reviewVisibleKeys: [],
+    reviewPreviewBlobUrl: '',
+    reviewPreviewToken: 0,
+    reviewDraw: null,
+    reviewRerunPlan: null,
+    reviewRerunBusy: false,
+    reviewRerunChildId: '',
+    reviewRerunPoll: null,
+    qualityRevisionPoll: null,
+    currentPipelineState: null,
+    cancelBusy: false,
+    resumeBusyJobId: '',
+    lastStartDisabledReasons: [],
+    expandedFolders: new Set(),
+    seriesQuery: '',
+    seriesSort: 'recent',
+    publicationRecord: null,
+    publicationBusy: false,
+    publicationCorrelation: '',
+    claimRecord: null,
+    claimBusy: false,
+    publicationDrafts: Object.create(null),
+    pendingHumanPreviews: {items: [], item_count: 0, ready_count: 0, blocked_count: 0},
+    communityObjectUrls: new Set(),
+    communityTab: 'explore',
+    communityCache: {explore: [], favorites: [], reading: [], mine: [], notifications: []},
+    localDeleteRecord: null,
+    localDeleteBusy: false,
+    historySelectionMode: false,
+    historySelectedIds: new Set(),
+    bulkDeleteBusy: false,
+    currentRequestId: '',
+    currentJobId: '',
+    currentRunId: '',
+    currentSourceUrl: '',
+    currentChapterName: '',
+    currentStageVersion: 0,
+    newTranslationDraft: false,
+    // Keep a fresh composition isolated from the previous terminal job while
+    // source analysis is in flight or has failed before job creation.
+    suppressHistoricalResult: false,
+    terminalStatusByIdentity: new Map(),
+    retryDialogContext: null,
+    authUserId: '',
+    authenticated: false,
+    authGeneration: 0,
+    bootstrapAuthGeneration: 0,
+    translationEnabled: false,
+  };
+  // These state cells are read by the initial form hydration before the
+  // translation-start section is reached. Declare them up front so that the
+  // first UI pass cannot trip a temporal-dead-zone error.
+  let startInFlight = null;
+  let startAttemptSequence = 0;
+  let activeStartFingerprint = '';
+  const diagnosticEvents = new Set(['KOMYST_UI_SCRIPT_ENTER', 'UI_JS_FATAL_ERROR', 'UI_JS_UNHANDLED_REJECTION', 'UI_SCRIPT_EXECUTED', 'UI_TRACE_CHANNEL_PROBE', 'UI_CHANNEL_PING_SENT', 'UI_BRIDGE_READY_SENT',
+    'UI_POLICY_LISTENER_REGISTRATION_ATTEMPT', 'UI_POLICY_LISTENER_REGISTERED',
+    'UI_CONTROL_PLANE_EVENT_CALLBACK_ENTERED', 'UI_CONTROL_PLANE_EVENT_RECEIVED',
+    'UI_TRANSLATION_POLICY_APPLIED', 'UI_POLICY_SYNC_SKIPPED',
+    'UI_AUTH_EVENT_RECEIVED', 'UI_BOOTSTRAP_SCHEDULED',
+    'UI_BRIDGE_REGISTERED', 'UI_BRIDGE_READY_RECEIVED',
+    'CONTROL_PLANE_PENDING_AUTH_REPLAY_START', 'CONTROL_PLANE_PENDING_AUTH_REPLAY_RESULT',
+    'READINESS_RECOMPUTE',
+    'YK_WALLET_POST_FINALIZE_REFRESH_START', 'YK_WALLET_POST_FINALIZE_REFRESH_RESULT',
+    'YK_WALLET_POST_FINALIZE_REFRESH_ERROR',
+    'IMAGE_PICKER_CALL_BEGIN', 'IMAGE_PICKER_CALL_RETURN', 'IMAGE_PICKER_NORMALIZATION_BEGIN',
+    'IMAGE_PICKER_NORMALIZATION_END', 'IMAGE_PAGES_APPEND_BEGIN', 'IMAGE_PAGES_APPEND_END',
+    'IMAGE_PICKER_HANDLER_ERROR', 'HISTORY_RENDER_COMMIT', 'HISTORY_REVISION_CHANGED',
+    'HISTORY_SCROLL_WATCH_RESULT', 'HISTORY_SCROLL_TO_TOP', 'HISTORY_FOCUS_CHANGED']);
+  function syncAuthoritativeTranslationFlag() {
+    const controlPlane = getGlobal('__komystControlPlane');
+    const flags = controlPlane?.state?.bootstrap?.feature_flags;
+    if (typeof flags?.translation_enabled !== 'boolean') return null;
+    appState.translationEnabled = flags.translation_enabled;
+    uiTrace('UI_TRANSLATION_POLICY_APPLIED', {
+      translation_enabled: appState.translationEnabled,
+      source: controlPlane?.state?.bootstrap?.translation_policy_source || 'control_plane_snapshot',
+      resolved_at: controlPlane?.state?.bootstrap?.translation_policy_resolved_at || '',
+    });
+    // Bootstrap can recover after the first request reported the server as
+    // unavailable.  Recompute the controls on the next turn, after the
+    // initial constants/listeners have been installed, and clear only a stale
+    // run lock.  An actually in-flight operation remains fail-closed.
+    window.setTimeout(() => {
+      try {
+        updateTranslationStartControls();
+        const status = String(appState.status || '').toLowerCase();
+        const activeStatuses = ['staging', 'queued', 'claiming', 'starting', 'running', 'cancelling', 'awaiting_source_review', 'waiting_source_verification'];
+        if (isCanonicalCommunityAuthenticated() && !activeStatuses.includes(status)) {
+          setTranslationFormLocked(false);
+        }
+      } catch (_) { /* readiness recovery must never break the UI */ }
+    }, 0);
+    return appState.translationEnabled;
+  }
+  uiTrace('UI_POLICY_LISTENER_REGISTRATION_ATTEMPT', {event_name: 'komyst-control-plane-updated', target: 'window', document_ready_state: document.readyState, pathname: window.location?.pathname || '/', is_top_window: window.top === window, window_realm_id: window.__KOMYST_WINDOW_REALM_ID__ || ''});
+  window.addEventListener('komyst-control-plane-updated', event => {
+    uiTrace('UI_CONTROL_PLANE_EVENT_CALLBACK_ENTERED', {event_name: 'komyst-control-plane-updated', has_detail: Boolean(event?.detail), detail_translation_enabled: event?.detail?.state?.bootstrap?.feature_flags?.translation_enabled, detail_source: event?.detail?.state?.bootstrap?.translation_policy_source || '', detail_resolved_at: event?.detail?.state?.bootstrap?.translation_policy_resolved_at || '', window_realm_id: window.__KOMYST_WINDOW_REALM_ID__ || ''});
+    uiTrace('UI_CONTROL_PLANE_EVENT_RECEIVED', {event_name: 'komyst-control-plane-updated', window_realm_id: window.__KOMYST_WINDOW_REALM_ID__ || ''});
+    syncAuthoritativeTranslationFlag();
+    // Auth can settle in the control-plane before the auth UI event reaches this
+    // document (notably after restoring a persisted desktop session).  Re-run the
+    // local UI bootstrap once the event loop has installed the data lifecycle.
+    window.setTimeout(() => {
+      try {
+        const refresh = getGlobal('__komystRefreshBootstrap');
+        if (typeof refresh === 'function') {
+          uiTrace('UI_BOOTSTRAP_RETRY_AFTER_CONTROL_PLANE_AUTH', {reason: 'auth_event_ordering'});
+          void refresh();
+        }
+      } catch (_) { /* diagnostics/recovery must never affect the UI */ }
+    }, 0);
+  });
+  uiTrace('UI_POLICY_LISTENER_REGISTERED', {event_name: 'komyst-control-plane-updated', target: 'window', document_ready_state: document.readyState, pathname: window.location?.pathname || '/', is_top_window: window.top === window, window_realm_id: window.__KOMYST_WINDOW_REALM_ID__ || ''});
+  window.dispatchEvent(new CustomEvent('komyst-ui-policy-listener-ready'));
+  window.addEventListener('komyst-control-plane-ready', syncAuthoritativeTranslationFlag);
+  syncAuthoritativeTranslationFlag();
+  window.addEventListener('komyst-control-plane-ready', syncAuthoritativeTranslationFlag);
+  // Synchronize an already-available snapshot so startup does not depend on
+  // receiving a one-shot event emitted before this bundle loaded.
+  syncAuthoritativeTranslationFlag();
+  // The legacy queued label remains in this compatibility note while the
+  // visible copy adds the clearer waiting state.
+  // queued: 'na fila'
+  const runStatusLabels = {ready: 'pronto', staging: 'preparando', queued: 'na fila · aguardando', claiming: 'iniciando', starting: 'iniciando', running: 'processando', cancelling: 'cancelando', interrupted: 'interrompido', awaiting_source_review: 'confirme as páginas', waiting_source_verification: 'aguardando verificação da fonte', source_analysis_ready: 'fonte analisada', finished: 'concluído', review_required: 'concluído — revisão recomendada', review_completed: 'revisão concluída', failed: 'falhou', legacy_unverified: 'resultado antigo não verificado', error: 'falhou', cancelled: 'cancelado'};
+  const terminalRunStatuses = new Set(['finished', 'review_required', 'review_completed', 'failed', 'cancelled']);
+  const inFlightStatuses = new Set(['staging', 'queued', 'claiming', 'starting', 'running', 'cancelling', 'awaiting_source_review', 'waiting_source_verification']);
+  // Queued work remains visible in the queue, but is not currently owned by a runner.
+  const activeOperationStatuses = new Set(['staging', 'claiming', 'starting', 'running', 'cancelling', 'awaiting_source_review', 'waiting_source_verification']);
+  const MAX_VISIBLE_TOASTS = 3;
+  const TOAST_DISMISS_MS = 3200;
+  const TOAST_DEDUP_LIMIT = 80;
+  const TERMINAL_NOTIFICATION_STORAGE_KEY = 'komyst.terminalNotifications.v1';
+  const SOURCE_VALIDATION_DRAFT_STORAGE_KEY = 'komyst.sourceValidationDraft.v1';
+  const toastRegistry = new Map();
+  const consumedTerminalNotifications = new Set();
+  try {
+    const stored = JSON.parse(sessionStorage.getItem(TERMINAL_NOTIFICATION_STORAGE_KEY) || '[]');
+    if (Array.isArray(stored)) stored.slice(-TOAST_DEDUP_LIMIT).forEach(key => {
+      if (typeof key === 'string' && key) consumedTerminalNotifications.add(key);
+    });
+  } catch (_) { /* session storage is advisory only */ }
+  const boolish = value => {
+    if (value === true || value === false) return value;
+    if (value === 1 || value === '1') return true;
+    if (value === 0 || value === '0') return false;
+    if (typeof value === 'string') {
+      const normalized = value.trim().toLowerCase();
+      if (['true', 'yes'].includes(normalized)) return true;
+      if (['false', 'no'].includes(normalized)) return false;
+    }
+    return null;
+  };
+  setGlobal('__komystUiTrace', Array.isArray(getGlobal('__komystUiTrace')) ? getGlobal('__komystUiTrace') : []);
+  function uiTrace(event, fields = {}) {
+    const safe = {event: String(event || ''), timestamp: new Date().toISOString(), epoch_ms: Date.now()};
+    for (const key of [
+      'code', 'status', 'authenticated', 'valid', 'correlation_id', 'endpoint',
+      'trace_id', 'source_type', 'policy_present', 'policy_status',
+      'all_submitted_sources_authorized', 'guard_result', 'route', 'duration_ms',
+      'method', 'auth_transport', 'token_available', 'authorization_header_present',
+      'authorization_scheme', 'reason_code', 'kind', 'request_id', 'publication_id',
+      'job_id', 'run_id', 'stage',
+      'translation_enabled', 'source', 'resolved_at', 'policy_source',
+      'policy_resolved_at',
+      'error_class', 'message', 'source', 'line', 'column', 'phase',
+      'readiness_account_required', 'readiness_ready', 'sequence', 'elapsed_ms',
+      'node_instance_id', 'target_node_id', 'closest_start_button_node_id', 'is_connected',
+      'disabled', 'aria_disabled', 'event_phase', 'default_prevented', 'pointer_id', 'trusted',
+      'active_element_node_id', 'document_has_focus', 'render_generation', 'same_node_down_up',
+      'mutation_type', 'attribute', 'start_button_present', 'start_button_node_id', 'child_count',
+      'target_node_id', 'document_focused', 'pointer_capture_used', 'top_element', 'client_x', 'client_y',
+      'result', 'click_seen', 'mutation_count', 'current_start_button_node_id', 'current_button_is_connected',
+      'target_tag', 'target_start_button_match', 'computed_pointer_events', 'computed_visibility', 'computed_display',
+      'return_type', 'array_length', 'keys_present', 'item_keys', 'media_id_present', 'display_name_present', 'dimensions_present', 'boundary',
+      'scroll_owner', 'scroll_top', 'window_scroll_y', 'document_element_scroll_top',
+      'body_scroll_top', 'scrolling_element_scroll_top', 'history_revision', 'markup_changed',
+      'changed_nodes', 'record_count', 'zero_count', 'scroll_min', 'scroll_max', 'reason', 'focus_target',
+    ]) {
+      if (fields[key] !== undefined) safe[key] = fields[key];
+    }
+    const trace = getGlobal('__komystUiTrace', []);
+    trace.push(safe);
+    if (trace.length > 80) trace.shift();
+    setGlobal('__komystUiTrace', trace);
+    if (diagnosticEvents.has(safe.event)) {
+      const body = {event: safe.event};
+      for (const key of ['translation_enabled', 'source', 'resolved_at', 'policy_source',
+        'policy_resolved_at', 'event_name', 'target', 'document_ready_state', 'pathname',
+        'is_top_window', 'window_realm_id', 'has_detail', 'detail_translation_enabled',
+        'job_id', 'status', 'usable_now', 'daily_stored', 'code',
+        'detail_source', 'detail_resolved_at', 'probe', 'ui_generation', 'bridge_type', 'error_class', 'message', 'source', 'line', 'column', 'phase',
+        'readiness_account_required', 'readiness_ready', 'sequence', 'elapsed_ms',
+        'node_instance_id', 'target_node_id', 'closest_start_button_node_id', 'is_connected',
+        'disabled', 'aria_disabled', 'event_phase', 'default_prevented', 'pointer_id', 'trusted',
+        'active_element_node_id', 'document_has_focus', 'render_generation', 'same_node_down_up',
+        'mutation_type', 'attribute', 'start_button_present', 'start_button_node_id', 'child_count',
+        'pointer_capture_used', 'top_element', 'client_x', 'client_y', 'result', 'click_seen', 'mutation_count',
+        'current_start_button_node_id', 'current_button_is_connected', 'target_tag', 'target_start_button_match',
+        'computed_pointer_events', 'computed_visibility', 'computed_display', 'return_type', 'array_length',
+        'keys_present', 'item_keys', 'media_id_present', 'display_name_present', 'dimensions_present', 'boundary',
+        'scroll_owner', 'scroll_top', 'window_scroll_y', 'document_element_scroll_top',
+        'body_scroll_top', 'scrolling_element_scroll_top', 'history_revision', 'markup_changed',
+        'changed_nodes', 'record_count', 'zero_count', 'scroll_min', 'scroll_max', 'reason', 'focus_target']) {
+        if (safe[key] !== undefined) body[key] = safe[key];
+      }
+      try {
+        const request = fetch('/api/ui/control-plane-trace', {
+          method: 'POST', headers: {'Content-Type': 'application/json'},
+          credentials: 'same-origin', body: JSON.stringify(body), keepalive: true,
+        });
+        request.then(response => {
+          const status = {event: 'UI_TRACE_FETCH_STATUS', status: response.status, ok: response.ok, source_event: safe.event};
+          const current = getGlobal('__komystUiTrace', []); current.push({at: Date.now(), ...status});
+          if (current.length > 80) current.shift(); setGlobal('__komystUiTrace', current);
+        }).catch(error => {
+          const status = {event: 'UI_TRACE_FETCH_ERROR', error_name: String(error?.name || 'Error'), source_event: safe.event};
+          const current = getGlobal('__komystUiTrace', []); current.push({at: Date.now(), ...status});
+          if (current.length > 80) current.shift(); setGlobal('__komystUiTrace', current);
+        });
+      } catch (error) { /* diagnostics must never affect the UI */ }
+    }
+  }
+  uiTrace('KOMYST_UI_SCRIPT_ENTER', {document_ready_state: document.readyState});
+  const sanitizeJsError = (value, limit = 160) => String(value || '').replace(/[\r\n\t]+/g, ' ').slice(0, limit);
+  window.addEventListener('error', event => {
+    uiTrace('UI_JS_FATAL_ERROR', {
+      error_class: sanitizeJsError(event.error?.name || 'Error', 60),
+      message: sanitizeJsError(event.message || event.error?.message),
+      source: sanitizeJsError(String(event.filename || '').split(/[\\/]/).pop(), 80),
+      line: Number(event.lineno || 0), column: Number(event.colno || 0), phase: 'script_init',
+    });
+  });
+  window.addEventListener('unhandledrejection', event => {
+    const reason = event.reason || {};
+    uiTrace('UI_JS_UNHANDLED_REJECTION', {
+      error_class: sanitizeJsError(reason.name || 'UnhandledRejection', 60),
+      message: sanitizeJsError(reason.message || reason), phase: 'script_init',
+    });
+  });
+  uiTrace('UI_SCRIPT_EXECUTED', {document_ready_state: document.readyState, pathname: window.location?.pathname || '/', is_top_window: window.top === window, window_realm_id: window.__KOMYST_WINDOW_REALM_ID__ || ''});
+  uiTrace('UI_TRACE_CHANNEL_PROBE', {probe: 'komyst_ui', document_ready_state: document.readyState, window_realm_id: window.__KOMYST_WINDOW_REALM_ID__ || ''});
+  function correlationId() {
+    try { return crypto.randomUUID(); } catch (_) { return `ui-${Date.now()}-${Math.random().toString(16).slice(2)}`; }
+  }
+  function bootstrapCommunityAuthenticated(data = appState.bootstrap) {
+    return data?.community?.authenticated === true;
+  }
+  // A revision is a number the backend actually sent. Absent is not zero, and
+  // zero is not absent - conflating them is what kept the comparison below
+  // permanently unequal.
+  function isReportedRevision(value) {
+    return typeof value === 'number' && Number.isFinite(value);
+  }
+  function currentCanonicalAuthState() {
+    if (String(getGlobal('__komystAuthState') || '') === 'authenticated') return 'authenticated';
+    if (bootstrapCommunityAuthenticated()) return 'authenticated';
+    return String(getGlobal('__komystAuthState') || 'auth_loading');
+  }
+  function isCanonicalCommunityAuthenticated() {
+    if (bootstrapCommunityAuthenticated()) return true;
+    return String(getGlobal('__komystAuthState') || '') === 'authenticated' && Boolean(
+      getGlobal('__komystCommunityAuthenticated') ||
+      getGlobal('__komystAccessToken') ||
+      getGlobal('__komystAuthStore')?.authenticated,
+    );
+  }
+  function syncCanonicalAuthFromBootstrap(data) {
+    const community = data?.community || {};
+    const backendAuthenticated = community.authenticated === true;
+    const backendUnauthenticated = community.authenticated === false;
+    if (backendAuthenticated) {
+      const userId = String(community.user_id || getGlobal('__komystCommunityUserId') || '');
+      setGlobal('__komystAuthState', 'authenticated');
+      setGlobal('__komystCommunityAuthenticated', true);
+      if (userId) setGlobal('__komystCommunityUserId', userId);
+      setGlobal('__komystAuthStore', {status: 'authenticated', authenticated: true, user_id: userId});
+      if (document.body) document.body.dataset.authState = 'authenticated';
+      document.documentElement.dataset.shellState = 'authenticated';
+      uiTrace('canonical_auth_bootstrap_applied', {authenticated: true});
+      return 'authenticated';
+    }
+    const rawAuthState = String(getGlobal('__komystAuthState') || '');
+    if (backendUnauthenticated && !getGlobal('__komystAccessToken') && rawAuthState !== 'auth_loading') {
+      setGlobal('__komystAuthState', 'unauthenticated');
+      setGlobal('__komystCommunityAuthenticated', false);
+      setGlobal('__komystCommunityUserId', '');
+      setGlobal('__komystAuthStore', {status: 'unauthenticated', authenticated: false, user_id: ''});
+      if (document.body) document.body.dataset.authState = 'unauthenticated';
+      document.documentElement.dataset.shellState = 'unauthenticated';
+      uiTrace('canonical_auth_bootstrap_applied', {authenticated: false});
+      return 'unauthenticated';
+    }
+    return currentCanonicalAuthState();
+  }
+
+  function cookieValue(name) {
+    const prefix = `${encodeURIComponent(name)}=`;
+    const part = document.cookie.split(';').map(value => value.trim()).find(value => value.startsWith(prefix));
+    return part ? decodeURIComponent(part.slice(prefix.length)) : '';
+  }
+  async function api(path, options = {}) {
+    const method = String(options.method || 'GET').toUpperCase();
+    const headers = {'Content-Type': 'application/json', ...(options.headers || {})};
+    if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(method)) {
+      const csrf = cookieValue('komyst_community_csrf');
+      if (csrf) headers['X-Komyst-CSRF'] = csrf;
+    }
+    // Supabase mode: attach the current access token (kept fresh by the SDK). The token
+    // lives only in the auth module's cache; this never persists or logs it.
+    const authState = String(getGlobal('__komystAuthState') || '');
+    let bearer = authState === 'authenticated' ? (getGlobal('__komystAccessToken') || '') : '';
+    const canonicalAccessToken = getGlobal('__komystGetCanonicalAccessToken');
+    // A token returned while auth is still booting may belong to a persisted
+    // session that has not been canonically confirmed. Never let anonymous
+    // bootstrap/control-plane reads trigger JWT/JWKS verification.
+    // Authenticated requests always go through the canonical getter: it returns the
+    // cached token while it has >= 11 min left and refreshes it otherwise, so a job
+    // start is never refused for a token about to expire.
+    if (authState === 'authenticated' && typeof canonicalAccessToken === 'function') {
+      try { bearer = (await canonicalAccessToken()) || bearer; } catch (_) { /* keep the cached token */ }
+      if (bearer) setGlobal('__komystAccessToken', bearer);
+    }
+    if (bearer) headers['Authorization'] = `Bearer ${bearer}`;
+    const authTransport = String(getGlobal('__komystAuthTransport') || '');
+    uiTrace('community_request_started', {
+      endpoint: String(path || '').split('?')[0], method,
+      authenticated: getGlobal('__komystAuthState') === 'authenticated',
+      auth_transport: authTransport, token_available: Boolean(bearer),
+      authorization_header_present: Boolean(headers.Authorization),
+      authorization_scheme: headers.Authorization ? 'Bearer' : '',
+    });
+    const timeoutMs = Number(options.timeoutMs || 15000);
+    const controller = options.signal ? null : new AbortController();
+    const timer = controller ? window.setTimeout(() => controller.abort(), timeoutMs) : 0;
+    const init = {...options, method, headers, credentials: 'same-origin', cache: 'no-store'};
+    delete init.timeoutMs;
+    delete init.rawResponse;
+    if (controller) init.signal = controller.signal;
+    let response;
+    try {
+      response = await fetch(path, init);
+    } catch (cause) {
+      if (cause?.name === 'AbortError') {
+        const error = new Error('O serviço demorou para responder. Verificando o estado…');
+        error.code = 'timeout'; error.status = 408; throw error;
+      }
+      const error = new Error('Não foi possível conectar ao serviço.');
+      error.code = 'connection_error'; throw error;
+    } finally {
+      if (timer) window.clearTimeout(timer);
+    }
+    if (!response.ok) {
+      let payload = {};
+      try { payload = await response.json(); } catch (_) { /* empty response */ }
+      const detail = payload.detail;
+      const error = new Error(
+        (detail && typeof detail === 'object' ? detail.message : detail)
+        || `Falha local (${response.status})`);
+      error.status = response.status;
+      if (detail && typeof detail === 'object') {
+        error.code = detail.code || '';
+        error.stage = detail.stage || '';
+        error.action = detail.action || '';
+        error.hosts = detail.hosts || null;
+      }
+      uiTrace('community_request_failed', {
+        endpoint: String(path || '').split('?')[0], method, status: response.status,
+        reason_code: error.code || (typeof detail === 'string' ? detail : ''),
+        authenticated: getGlobal('__komystAuthState') === 'authenticated',
+        auth_transport: authTransport, token_available: Boolean(bearer),
+        authorization_header_present: Boolean(headers.Authorization),
+        authorization_scheme: headers.Authorization ? 'Bearer' : '',
+      });
+      throw error;
+    }
+    uiTrace('community_request_response', {
+      endpoint: String(path || '').split('?')[0], method, status: response.status,
+      authenticated: getGlobal('__komystAuthState') === 'authenticated',
+      auth_transport: authTransport, token_available: Boolean(bearer),
+      authorization_header_present: Boolean(headers.Authorization),
+      authorization_scheme: headers.Authorization ? 'Bearer' : '',
+    });
+    if (options.rawResponse === true) return response;
+    let payload = {};
+    try { payload = await response.json(); } catch (_) { /* empty response */ }
+    return payload;
+  }
+
+  /* ---------- boot ---------- */
+  const bootEl = $('#boot');
+  const bootVisualTest = (() => {
+    const params = new URLSearchParams(window.location.search || '');
+    const raw = String(params.get('visual_boot_stage') || '').trim().toLowerCase();
+    if (!raw) return null;
+    const local = ['127.0.0.1', 'localhost', '::1'].includes(window.location.hostname);
+    const enabled = getGlobal('__komystVisualTestEnabled') === true;
+    if (!local || !enabled) return null;
+    const stageMap = {init: 1, local: 2, auth: 3, session: 4, profile: 5, settings: 6, community: 7, ready: 8};
+    if (raw === 'error' || raw === 'disk_full' || raw === 'retry') {
+      return {kind: 'error', code: raw === 'error' ? String(params.get('visual_boot_error') || 'boot_error') : raw, reducedMotion: params.get('visual_reduced_motion') === '1'};
+    }
+    const stage = Number(raw) || stageMap[raw] || 0;
+    if (stage < 1 || stage > 8) return null;
+    return {kind: 'stage', index: stage - 1, reducedMotion: params.get('visual_reduced_motion') === '1'};
+  })();
+  let bootHighestStage = 0;
+  // Latched once boot is over. refreshBootstrap() runs for the whole life of
+  // the app and re-walks setBootStage(1..7) every time, so without this the
+  // finished readiness view repainted into #loadingSurface -- which sits in
+  // the Nova tradução column, right above the real Pipeline panel.
+  let bootHasClosed = false;
+  const bootStages = [
+    'loading.stage.init', 'loading.stage.local', 'loading.stage.auth', 'loading.stage.session',
+    'loading.stage.account', 'loading.stage.settings', 'loading.stage.community', 'loading.stage.ready',
+  ];
+  const bootStageMeta = [
+    {sub: 'preparando seu espaço', icon: '<rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="8.5" cy="9.5" r="1.4"/><path d="M21 15l-5-5-4 4-3-3-6 6"/>'},
+    {sub: 'conectando ao servidor', icon: '<path d="M5 12h14"/><path d="M12 5l7 7-7 7"/><path d="M5 5v14"/>'},
+    {sub: 'preparando provider de autenticação', icon: '<rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/>'},
+    {sub: 'validando cookie e sessão canônica', icon: '<path d="M20 6 9 17l-5-5"/>'},
+    {sub: 'carregando sua identidade', icon: '<path d="M20 21a8 8 0 0 0-16 0"/><circle cx="12" cy="8" r="5"/>'},
+    {sub: 'aplicando preferências do painel', icon: '<path d="M12 15.5A3.5 3.5 0 1 0 12 8a3.5 3.5 0 0 0 0 7.5z"/><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.88l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06A1.7 1.7 0 0 0 15 19.37a1.7 1.7 0 0 0-1 .57V20a2 2 0 1 1-4 0v-.09a1.7 1.7 0 0 0-1-.57 1.7 1.7 0 0 0-1.88.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.7 1.7 0 0 0 4.63 15a1.7 1.7 0 0 0-.57-1H4a2 2 0 1 1 0-4h.09a1.7 1.7 0 0 0 .57-1 1.7 1.7 0 0 0-.34-1.88l-.06-.06A2 2 0 1 1 7.09 4.2l.06.06A1.7 1.7 0 0 0 9 4.63h.09A1.7 1.7 0 0 0 10 4.06V4a2 2 0 1 1 4 0v.09c.35.13.68.32 1 .57a1.7 1.7 0 0 0 1.88-.34l.06-.06A2 2 0 1 1 19.77 7.1l-.06.06A1.7 1.7 0 0 0 19.37 9c.25.32.44.65.57 1H20a2 2 0 1 1 0 4h-.09c-.13.35-.32.68-.57 1z"/>'},
+    {sub: 'sincronizando comunidade e histórico', icon: '<path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>'},
+    {sub: 'interface pronta', icon: '<path d="M20 6 9 17l-5-5"/>'},
+  ];
+  document.documentElement.dataset.shellState = document.documentElement.dataset.shellState || 'booting';
+  const bootNodes = $('#bootNodes');
+  const bootLabels = $('#bootNodeLabels');
+  if (bootNodes && !bootNodes.children.length) {
+    bootStageMeta.forEach((stage, index) => {
+      const node = document.createElement('div');
+      node.className = 'app-loading-node';
+      node.dataset.bootNode = String(index);
+      node.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">${stage.icon}</svg>`;
+      bootNodes.appendChild(node);
+      if (index < bootStageMeta.length - 1) {
+        const connector = document.createElement('div');
+        connector.className = 'app-loading-connector';
+        connector.innerHTML = '<div class="app-loading-connector-fill"></div><div class="app-loading-connector-spark"></div>';
+        bootNodes.appendChild(connector);
+      }
+      const label = document.createElement('span');
+      label.textContent = String(index + 1);
+      bootLabels?.appendChild(label);
+    });
+  }
+  const bootParticles = $('#bootParticles');
+  if (bootParticles && !bootParticles.children.length) {
+    for (let index = 0; index < 14; index += 1) {
+      const particle = document.createElement('div');
+      particle.className = 'app-loading-particle';
+      const size = 2 + Math.random() * 3;
+      particle.style.width = `${size}px`;
+      particle.style.height = `${size}px`;
+      particle.style.left = `${Math.random() * 100}%`;
+      particle.style.setProperty('--drift', `${Math.random() * 60 - 30}px`);
+      particle.style.animationDuration = `${9 + Math.random() * 10}s`;
+      particle.style.animationDelay = `${Math.random() * 12}s`;
+      bootParticles.appendChild(particle);
+    }
+  }
+  function setBootText(element, text) {
+    if (!element) return;
+    element.innerHTML = '';
+    const span = document.createElement('span');
+    span.textContent = text;
+    element.appendChild(span);
+  }
+  function setBootStage(index, message = '') {
+    if (!bootEl) return;
+    let bounded = Math.max(0, Math.min(bootStages.length - 1, Number(index) || 0));
+    if (bootEl.dataset.bootState !== 'failed') {
+      bounded = Math.max(bootHighestStage, bounded);
+      bootHighestStage = bounded;
+    }
+    const label = message || window.KomystI18n?.t(bootStages[bounded]) || bootStages[bounded];
+    const pct = ((bounded + 1) / bootStages.length) * 100;
+    setBootText($('#bootStatusLine'), label);
+    $('#bootStatusMini') && ($('#bootStatusMini').textContent = bootStageMeta[bounded]?.sub || `${bounded + 1} de ${bootStages.length} etapas`);
+    $('#ringFill') && ($('#ringFill').style.strokeDashoffset = String(175.9 - (pct / 100) * 175.9));
+    $('#bootProgressBar') && ($('#bootProgressBar').style.width = `${pct}%`);
+    $('#pageCount') && ($('#pageCount').textContent = `${bounded + 1} de ${bootStages.length} etapas`);
+    $('#bootFooterLabel') && ($('#bootFooterLabel').textContent = pct < 100 ? 'preparando interface' : 'pronto');
+    $$('#bootNodes [data-boot-node]').forEach((node, nodeIndex) => {
+      node.classList.toggle('done', nodeIndex < bounded);
+      node.classList.toggle('active', nodeIndex === bounded);
+      node.classList.toggle('failed', bootEl.dataset.bootState === 'failed' && nodeIndex === bounded);
+    });
+    $$('#bootNodes .app-loading-connector').forEach((connector, connectorIndex) => {
+      connector.classList.toggle('done', connectorIndex < bounded);
+    });
+    renderBootstrapSurface(bounded, label);
+  }
+
+  // Feeds the existing bootstrap sequence into the shared loading surface. The
+  // stage index is the real one setBootStage already advanced on a completed
+  // step, so the count is completed/known — never a timer.
+  function renderBootstrapSurface(index, label) {
+    const view = window.KomystLoadingView;
+    const surface = window.KomystProcessingSurface;
+    const root = $('#loadingSurface');
+    if (!view || !surface || !root) return;
+    // Boot is over: this surface describes startup, and startup is not what
+    // the user is looking at any more. A real startup failure still reaches
+    // setBootFailed/#boot, so nothing is hidden by refusing to paint here.
+    if (bootHasClosed) return;
+    const failed = bootEl?.dataset.bootState === 'failed';
+    // Bootstrap groups are session, environment and interface. The boot sequence
+    // has more steps than that, so the index is mapped by proportion rather than
+    // inventing a fourth group.
+    const groupKeys = view.BOOTSTRAP_GROUPS.map(group => group.key);
+    const share = Math.min(groupKeys.length - 1,
+      Math.floor((index / Math.max(1, bootStages.length - 1)) * groupKeys.length));
+
+    root.hidden = false;
+    surface.renderProcessingSurface(root, view.mapJobStateToLoadingView({
+      mode: 'bootstrap',
+      status: failed ? 'failed' : (index >= bootStages.length - 1 ? 'finished' : 'running'),
+      stage: groupKeys[Math.max(0, share)],
+      message: failed ? String(label || '') : '',
+      // Completed steps over known steps: a legitimate denominator.
+      progress: {completed_stages: index + 1, total_stages: bootStages.length},
+      reduced_motion: Boolean(window.matchMedia
+        && window.matchMedia('(prefers-reduced-motion: reduce)').matches),
+    }));
+  }
+
+  // The surface must not outlive the operation it described, or a later session
+  // would open onto the previous one's state.
+  function clearLoadingSurface() {
+    const root = $('#loadingSurface');
+    if (!root) return;
+    root.replaceChildren();
+    root.hidden = true;
+    delete root.dataset.lsMode;
+    delete root.dataset.lsStatus;
+    delete root.dataset.lsTone;
+  }
+  function setBootFailed(message) {
+    if (!bootEl) return;
+    bootEl.dataset.bootState = 'failed';
+    document.documentElement.dataset.shellState = 'boot_failed';
+    setBootStage(1, message || 'Não foi possível carregar a interface.');
+    $('#bootActions') && ($('#bootActions').hidden = false);
+    $('#bootFooterLabel') && ($('#bootFooterLabel').textContent = 'ação necessária');
+  }
+  function closeBoot() {
+    bootHasClosed = true;
+    if (bootEl) bootEl.classList.add('hide');
+    // The bootstrap surface described the boot, which is over. Leaving it up
+    // would show a finished bootstrap behind the panel.
+    clearLoadingSurface();
+  }
+  setBootStage(0);
+  if (bootVisualTest?.kind === 'stage') {
+    bootEl.dataset.visualBootTest = '1';
+    document.documentElement.dataset.visualBootTest = '1';
+    if (bootVisualTest.reducedMotion) document.documentElement.dataset.visualReducedMotion = '1';
+    document.documentElement.dataset.shellState = 'booting';
+    $('#authSurface') && ($('#authSurface').hidden = true);
+    setBootStage(bootVisualTest.index);
+  } else if (bootVisualTest?.kind === 'error') {
+    bootEl.dataset.visualBootTest = '1';
+    document.documentElement.dataset.visualBootTest = '1';
+    if (bootVisualTest.reducedMotion) document.documentElement.dataset.visualReducedMotion = '1';
+    document.documentElement.dataset.shellState = 'boot_failed';
+    $('#authSurface') && ($('#authSurface').hidden = true);
+    setBootFailed(bootVisualTest.code === 'disk_full'
+      ? 'Disco cheio ao preparar seu espaço.'
+      : 'Não foi possível carregar a interface.');
+  }
+  const bootTimer = bootVisualTest ? 0 : window.setTimeout(() => setBootFailed('O carregamento demorou para responder.'), 15000);
+  $('#bootRetry')?.addEventListener('click', () => window.location.reload());
+  $('#bootDiagnostics')?.addEventListener('click', () => activateTab('logs'));
+
+  /* ---------- ambient canvas ---------- */
+  const ambientGlow = $('#ambientGlow');
+  const tabTheme = {
+    inicio: {hex: '#c5372c', rgb: '197,55,44'},
+    nova: {hex: '#c5372c', rgb: '197,55,44'},
+    fontes: {hex: '#2f8f5f', rgb: '47,143,95'},
+    queue: {hex: '#4a7fb5', rgb: '74,127,181'},
+    hist: {hex: '#c9a227', rgb: '201,162,39'},
+    leitor: {hex: '#c9a227', rgb: '201,162,39'},
+    community: {hex: '#b8557a', rgb: '184,85,122'},
+    rewards: {hex: '#c9a227', rgb: '201,162,39'},
+    cfg: {hex: '#2f7a6b', rgb: '47,122,107'},
+    logs: {hex: '#8a8377', rgb: '138,131,119'},
+  };
+  function ambientSweep() {
+    const sweep = document.createElement('div');
+    sweep.className = 'sweep';
+    document.body.appendChild(sweep);
+    window.setTimeout(() => sweep.remove(), 950);
+  }
+
+  const canvas = $('#bgCanvas');
+  const ctx = canvas?.getContext('2d');
+  let width = 0;
+  let height = 0;
+  let animationFrame = 0;
+  let canvasPaused = document.hidden;
+  const particles = Array.from({length: 70}, () => ({
+    x: Math.random(), y: Math.random(), r: .3 + Math.random() * 1.3,
+    vx: (Math.random() - .5) * .00018, vy: (Math.random() - .5) * .00016,
+    alpha: .08 + Math.random() * .18,
+  }));
+  const blots = Array.from({length: 2}, () => ({
+    x: Math.random(), y: Math.random(), r: 90 + Math.random() * 170,
+    drift: Math.random() * Math.PI * 2,
+  }));
+  let burstLines = [];
+  function resizeCanvas() {
+    if (!canvas) return;
+    width = canvas.width = window.innerWidth;
+    height = canvas.height = window.innerHeight;
+  }
+  function drawFrame() {
+    if (!ctx || canvasPaused) return;
+    ctx.clearRect(0, 0, width, height);
+    const time = performance.now() * .00012;
+    blots.forEach((blot, index) => {
+      const x = blot.x * width + Math.sin(time + blot.drift) * 20;
+      const y = blot.y * height + Math.cos(time * .7 + blot.drift) * 16;
+      const gradient = ctx.createRadialGradient(x, y, 0, x, y, blot.r);
+      gradient.addColorStop(0, index % 2 ? 'rgba(239,231,216,.014)' : 'rgba(138,131,119,.012)');
+      gradient.addColorStop(1, 'rgba(0,0,0,0)');
+      ctx.fillStyle = gradient;
+      ctx.fillRect(x - blot.r, y - blot.r, blot.r * 2, blot.r * 2);
+    });
+    particles.forEach(particle => {
+      particle.x += particle.vx;
+      particle.y += particle.vy;
+      if (particle.x < 0) particle.x = 1;
+      if (particle.x > 1) particle.x = 0;
+      if (particle.y < 0) particle.y = 1;
+      if (particle.y > 1) particle.y = 0;
+      ctx.beginPath();
+      ctx.arc(particle.x * width, particle.y * height, particle.r, 0, Math.PI * 2);
+      ctx.fillStyle = `rgba(239,231,216,${particle.alpha})`;
+      ctx.fill();
+    });
+    burstLines = burstLines.filter(line => line.life > 0);
+    burstLines.forEach(line => {
+      line.life -= .035;
+      ctx.beginPath();
+      ctx.moveTo(line.x, line.y);
+      ctx.lineTo(line.x + Math.cos(line.angle) * line.length, line.y + Math.sin(line.angle) * line.length);
+      ctx.strokeStyle = `rgba(239,231,216,${Math.max(0, line.life) * .22})`;
+      ctx.lineWidth = .7;
+      ctx.stroke();
+    });
+    animationFrame = requestAnimationFrame(drawFrame);
+  }
+  function burstAt(x, y, count = 14) {
+    for (let index = 0; index < count; index += 1) {
+      burstLines.push({x, y, angle: Math.random() * Math.PI * 2, length: 18 + Math.random() * 58, life: 1});
+    }
+  }
+  resizeCanvas();
+  window.addEventListener('resize', resizeCanvas, {passive: true});
+  document.addEventListener('visibilitychange', () => {
+    canvasPaused = document.hidden;
+    if (canvasPaused) cancelAnimationFrame(animationFrame);
+    else { drawFrame(); pollState(); }
+  });
+  drawFrame();
+
+  /* ---------- tabs and motion ---------- */
+  const views = {
+    inicio: 'view-inicio', nova: 'view-nova', fontes: 'view-fontes', queue: 'view-queue', hist: 'view-hist',
+    leitor: 'view-leitor',
+    scans: 'view-scans', rewards: 'view-rewards', community: 'view-community', updates: 'view-updates', cfg: 'view-cfg', logs: 'view-logs',
+  };
+  const logsTab = $('.rail-tab[data-tab="logs"]'); if (logsTab) logsTab.closest('li')?.setAttribute('hidden', '');
+  const railIndicator = $('#railIndicator');
+  function moveIndicator(tab) {
+    if (!railIndicator || window.innerWidth <= 880) return;
+    railIndicator.style.transform = `translateY(${tab.offsetTop - 18}px)`;
+    railIndicator.style.height = `${tab.offsetHeight}px`;
+  }
+  function clearBootstrapSurfaceForFreshTranslation() {
+    const status = String(appState.currentPipelineState?.status || appState.status || '').toLowerCase();
+    if (inFlightStatuses.has(status)) return;
+    clearLoadingSurface();
+  }
+  function staggerReveal(view) {
+    $$('.panel, .hist-item', view).forEach((item, index) => {
+      item.style.animation = 'none';
+      void item.offsetHeight;
+      item.style.animation = `riseIn .42s cubic-bezier(.2,.8,.25,1) ${Math.min(index, 8) * 70}ms both`;
+    });
+  }
+  function activateTab(name, {preservePipeline = false} = {}) {
+    const tab = $(`.rail-tab[data-tab="${name}"]`);
+    const target = $(`#${views[name] || ''}`);
+    if (!tab || !target) {
+      if (name === 'profile') activateTab('inicio');
+      return;
+    }
+    const previous = $('.panel-view.active');
+    if (previous && previous !== target) {
+      previous.classList.remove('active');
+      previous.classList.add('leaving');
+      window.setTimeout(() => previous.classList.remove('leaving'), 210);
+    }
+    $$('.rail-tab').forEach(item => item.classList.remove('active'));
+    tab.classList.add('active');
+    target.classList.add('active');
+    window.dispatchEvent(new CustomEvent('komyst-passive-ad-route', { detail: { tab: name } }));
+    moveIndicator(tab);
+    staggerReveal(target);
+    const theme = tabTheme[name] || tabTheme.inicio;
+    document.documentElement.style.setProperty('--tab-accent', theme.hex);
+    document.documentElement.style.setProperty('--tab-rgb', theme.rgb);
+    railIndicator.style.borderColor = theme.hex;
+    railIndicator.style.background = `rgba(${theme.rgb},.095)`;
+    if (ambientGlow) ambientGlow.style.background = `radial-gradient(circle at 80% 8%, rgba(${theme.rgb},.105), transparent 38%)`;
+    ambientSweep();
+    const rect = tab.getBoundingClientRect();
+    burstAt(rect.right, rect.top + rect.height / 2, 10);
+    if (name === 'nova' && !appState.reviewMode) {
+      if (!preservePipeline) {
+        const wasFreshDraft = appState.newTranslationDraft;
+        appState.newTranslationDraft = true;
+        appState.suppressHistoricalResult = true;
+        // A fresh draft starts without cache; returning to a submitted job
+        // preserves its identity, progress and the operator's choices.
+        if (!wasFreshDraft) {
+          if ($('#forceToggle')) $('#forceToggle').checked = true;
+          if ($('#cacheToggle')) $('#cacheToggle').checked = false;
+        }
+        clearNewTranslationDraftPanels();
+        clearBootstrapSurfaceForFreshTranslation();
+      }
+    }
+    if (name === 'hist') {
+      renderHistory('tab_activation');
+      // Returning from the reader should land where the user left the library.
+      const owner = getHistoryScrollOwner($('#histList'));
+      const offset = Number(appState.historyScrollTop || 0);
+      if (owner && offset > 0) window.requestAnimationFrame(() => restoreHistoryScroll(owner, offset));
+      startHistoryScrollWatch();
+    }
+    if (name === 'inicio') renderDashboard();
+    if (name === 'fontes') void refreshSourcePreviews();
+    if (name === 'community') loadCommunityFeed();
+  }
+  $$('.rail-tab').forEach(tab => tab.addEventListener('click', () => {
+    // Choosing "Nova tradução" from the rail means starting a fresh chapter, so
+    // review_mode must release the form instead of pinning the reviewed chapter.
+    if (tab.dataset.tab === 'nova' && appState.reviewMode) exitReviewMode();
+    activateTab(tab.dataset.tab, {preservePipeline: tab.dataset.tab === 'nova'
+      && Boolean(appState.currentJobId) && activeOperationStatuses.has(appState.status)});
+  }));
+  window.addEventListener('komyst-navigate-tab', event => activateTab(event.detail?.tab || 'rewards'));
+  $$('[data-goto]').forEach(button => button.addEventListener('click', () => activateTab(button.dataset.goto)));
+  // "Fontes" cards: open one of the three allow-listed sites on an explicit click.
+  // Inside the desktop WebView the bridge opens the system browser (constant
+  // server-side URL; the page only sends an opaque key). In a browser tab there
+  // is no bridge, so the same constant URL opens in a new tab.
+  const SUPPORTED_SOURCE_SITES = {
+    webtoon: 'https://www.webtoons.com/en/',
+    comix: 'https://comix.to/browse?genres_in=101137',
+    vortex: 'https://vortexscans.org/',
+  };
+  $$('.source-open').forEach(button => button.addEventListener('click', () => {
+    const key = button.dataset.source;
+    const url = SUPPORTED_SOURCE_SITES[key];
+    if (!url) return;
+    const bridge = window.pywebview?.api?.open_supported_source;
+    if (typeof bridge === 'function') {
+      try { bridge(key); return; } catch (_) { /* fall through to a new tab */ }
+    }
+    window.open(url, '_blank', 'noopener,noreferrer');
+  }));
+  async function refreshSourcePreviews() {
+    window.clearTimeout(appState.sourcePreviewTimer);
+    if (appState.sourcePreviewsLoading || document.hidden || !$('#view-fontes')?.classList.contains('active')) return;
+    appState.sourcePreviewsLoading = true;
+    let refreshing = false;
+    try {
+      await Promise.all($$('[data-source-preview]', $('#view-fontes')).map(async preview => {
+        try {
+          const data = await api(`/api/ui/sources/preview/${encodeURIComponent(preview.dataset.sourcePreview)}`);
+          refreshing = refreshing || data.refreshing;
+          if (/^data:image\/jpeg;base64,[A-Za-z0-9+/=]+$/.test(data.image || '')) {
+            preview.style.backgroundImage = `url("${data.image}")`;
+          }
+        } catch (_) { /* the last preview stays; the next refresh retries */ }
+      }));
+    } finally {
+      appState.sourcePreviewsLoading = false;
+      if (!document.hidden && $('#view-fontes')?.classList.contains('active')) {
+        appState.sourcePreviewTimer = window.setTimeout(refreshSourcePreviews, refreshing ? 2500 : 60000);
+      }
+    }
+  }
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden && $('#view-fontes')?.classList.contains('active')) void refreshSourcePreviews();
+  });
+  window.setTimeout(() => moveIndicator($('.rail-tab.active')), 60);
+
+  /* ---------- visual feedback ---------- */
+  const reasonMessages = {
+    source_not_ready: 'Não foi possível analisar a fonte.',
+    source_analysis_failed: 'A análise da fonte falhou antes de reconhecer sua estrutura.',
+    download_authorization_required: 'É necessária uma autorização de conteúdo antes de iniciar o download.',
+    workspace_policy_operation_denied: 'A política deste workspace não autoriza as operações solicitadas.',
+    workspace_policy_hash_mismatch: 'A política do workspace mudou. Revise as permissões e tente novamente.',
+    pipeline_intent_required: 'Confirme as operações desejadas antes de iniciar o processamento.',
+    invalid_requested_mode: 'O modo solicitado é inválido. Selecione um modo disponível.',
+    invalid_requested_scope: 'O escopo solicitado é inválido. Selecione um escopo disponível.',
+    source_transport_failed: 'Não foi possível conectar à fonte após tentativas controladas.',
+    source_unavailable: 'A página da fonte não está disponível.',
+    source_redirect_blocked: 'A fonte tentou redirecionar para um endereço não permitido.',
+    source_content_type_unsupported: 'A fonte não respondeu com uma página web compatível.',
+    browser_runtime_unavailable: 'Nenhum navegador compatível foi encontrado no computador.',
+    browser_executable_not_found: 'O navegador configurado não foi encontrado.',
+    browser_driver_unavailable: 'O navegador foi encontrado, mas seu driver não está disponível.',
+    browser_driver_incompatible: 'A versão do driver não é compatível com o navegador instalado.',
+    browser_launch_failed: 'O navegador foi encontrado, mas não conseguiu iniciar.',
+    browser_startup_timeout: 'O navegador ultrapassou o tempo limite de inicialização.',
+    browser_profile_locked: 'O perfil temporário do navegador não pôde ser aberto.',
+    browser_process_exited: 'O navegador encerrou antes de concluir a análise.',
+    source_navigation_timeout: 'A página ultrapassou o tempo limite de navegação.',
+    chromedriver_unavailable: 'O navegador foi encontrado, mas seu driver não está disponível.',
+    disk_full: 'Disco cheio ao gravar as páginas baixadas. Libere espaço e tente novamente.',
+    authentication_required: 'Essa fonte exige autenticação.',
+    challenge_required: 'A fonte exige uma verificação interativa.',
+    source_access_denied: 'A fonte recusou o acesso público.',
+    source_rate_limited: 'A fonte limitou temporariamente o acesso.',
+    source_not_found: 'A página informada não foi encontrada.',
+    source_temporarily_unavailable: 'Não foi possível acessar essa fonte agora. Tente novamente.',
+    incomplete_source_coverage: 'Não foi possível carregar todas as páginas do leitor.',
+    no_chapter_images: 'Nenhuma página do capítulo foi encontrada.',
+    // Kept distinct on purpose: a download error must never be shown for an analysis that
+    // never reached the download stage.
+    worker_unavailable: 'Servico de processamento indisponivel.',
+    user_cancelled: 'O processamento foi cancelado.',
+    review_required: 'Tradução concluída. Há pontos que recomendamos revisar.',
+    timeout: 'O site demorou demais para responder.',
+    connection_error: 'Nao foi possivel conectar ao site.',
+    transport_error: 'Ocorreu um problema ao baixar as imagens.',
+    incomplete_download: 'Algumas páginas não puderam ser baixadas.',
+    unsupported_source: 'Esta fonte ainda não é compatível com o Komyst.',
+    environment_not_configured: 'O ambiente ainda não está pronto para processar esta tradução.',
+    INSUFFICIENT_KOMYST_KEYS: 'Komyst Keys insuficientes para iniciar esta tradução.',
+    insufficient_yk: 'Komyst Keys insuficientes para iniciar esta tradução.',
+    not_entitled: 'Seu acesso atual não permite iniciar esta tradução.',
+    license_not_entitled: 'Seu acesso atual não permite iniciar esta tradução.',
+    license_not_active: 'Seu acesso à versão beta ainda não está ativo.',
+    license_expired: 'Seu acesso à versão beta expirou.',
+    license_revoked: 'Seu acesso à versão beta foi revogado.',
+    license_not_started: 'Seu acesso à versão beta ainda não começou.',
+    device_revoked: 'Este dispositivo não está autorizado para esta conta.',
+    device_limit_reached: 'O limite de dispositivos autorizados foi atingido.',
+  };
+  function reasonText(code) {
+    return reasonMessages[code] || '';
+  }
+
+  const stageMessages = {
+    idle: 'Pronto para iniciar',
+    prepare: 'Pronto para iniciar',
+    validating_source: 'Verificando a fonte...',
+    source_validation: 'Validando a fonte...',
+    source_verified: 'Fonte encontrada',
+    creating_job: 'Criando o processamento...',
+    queued: 'Na fila...',
+    starting_worker: 'Iniciando o worker...',
+    worker_starting: 'Iniciando o worker...',
+    starting: 'Iniciando o worker...',
+    source_analysis: 'Preparando as páginas...',
+    source_analysis_ready: 'Fonte analisada',
+    browser_loading: 'Analisando o capítulo...',
+    collecting_candidates: 'Analisando o capítulo...',
+    clustering_candidates: 'Analisando o capítulo...',
+    source_lazy_resolution: 'carregando páginas do leitor',
+    source_selection: 'preparando a ordem das páginas',
+    awaiting_source_review: 'Preparando as páginas...',
+    waiting_source_verification: 'Aguardando verificação da fonte no navegador...',
+    reviewing_pages: 'Preparando as páginas...',
+    downloading: 'Obtendo as páginas...',
+    downloading_pages: 'Obtendo as páginas...',
+    validating_pages: 'Obtendo as páginas...',
+    download: 'Obtendo as páginas...',
+    detecting_balloons: 'Identificando regiões...',
+    validation: 'Identificando regiões...',
+    reading_text: 'Lendo textos...',
+    ocr: 'Lendo textos...',
+    classification: 'Lendo textos...',
+    translating: 'Traduzindo o capítulo...',
+    translation: 'Traduzindo o capítulo...',
+    translate: 'Traduzindo o capítulo...',
+    redrawing: 'Reconstruindo a arte...',
+    rendering: 'Reconstruindo a arte...',
+    render: 'Reconstruindo a arte...',
+    generating_pdf: 'Gerando o arquivo final...',
+    pdf: 'Gerando o arquivo final...',
+    reports: 'Gerando o arquivo final...',
+    quality_review: 'Verificando o resultado...',
+    review_rerun: 'Reprocessando pendências...',
+    quality_gate: 'Revisando a tradução...',
+    review_required: 'Concluído — revisão recomendada',
+    finished: 'Capítulo concluído',
+    review_completed: 'Capítulo concluído',
+    failed: 'Não foi possível concluir',
+    cancelled: 'Processamento cancelado',
+    final: 'Capítulo concluído',
+  };
+  const sfxWords = {download: '…', downloading: '…', downloading_pages: '…', validation: '!!', detecting_balloons: '!!', ocr: 'スキャン', reading_text: 'スキャン', classification: 'CHK', translate: 'ZAP', translating: 'ZAP', render: 'SHK', redrawing: 'SHK', pdf: 'PDF', generating_pdf: 'PDF', quality_review: 'OK', reports: 'OK'};
+  function sfxPop(key) {
+    const stage = $('#balloonStage');
+    if (!stage || !sfxWords[key]) return;
+    const element = document.createElement('div');
+    element.className = 'sfx-pop';
+    element.innerHTML = `<span>${escapeHtml(sfxWords[key])}</span>`;
+    stage.appendChild(element);
+    window.setTimeout(() => element.remove(), 1100);
+  }
+  function flashFrame() {
+    const flash = document.createElement('div');
+    flash.className = 'flash-frame';
+    document.body.appendChild(flash);
+    window.setTimeout(() => flash.remove(), 600);
+  }
+  function showToast(message, type = 'ok') {
+    const stack = $('#toastStack');
+    if (!stack) return;
+    const toast = document.createElement('div');
+    toast.className = `toast ${type}`;
+    const icon = type === 'error' ? '!' : type === 'warn' ? '△' : '✓';
+    toast.innerHTML = `<span class="t-icon">${icon}</span><span>${escapeHtml(message)}</span>`;
+    stack.appendChild(toast);
+    window.setTimeout(() => { toast.classList.add('leaving'); window.setTimeout(() => toast.remove(), 280); }, 3200);
+  }
+  function rememberBounded(set, key, limit = TOAST_DEDUP_LIMIT) {
+    if (!key) return;
+    if (set.has(key)) set.delete(key);
+    set.add(key);
+    while (set.size > limit) set.delete(set.values().next().value);
+  }
+  function persistConsumedTerminalNotifications() {
+    try {
+      sessionStorage.setItem(
+        TERMINAL_NOTIFICATION_STORAGE_KEY,
+        JSON.stringify(Array.from(consumedTerminalNotifications).slice(-TOAST_DEDUP_LIMIT)),
+      );
+    } catch (_) { /* best effort only */ }
+  }
+  function removeToastByKey(key) {
+    const existing = toastRegistry.get(key);
+    if (!existing) return;
+    window.clearTimeout(existing.timeout);
+    window.clearTimeout(existing.removeTimeout);
+    existing.node.remove();
+    toastRegistry.delete(key);
+  }
+  function scheduleToastRemoval(key, toast) {
+    const timeout = window.setTimeout(() => {
+      toast.classList.add('leaving');
+      const removeTimeout = window.setTimeout(() => {
+        toast.remove();
+        toastRegistry.delete(key);
+      }, 280);
+      const entry = toastRegistry.get(key);
+      if (entry) entry.removeTimeout = removeTimeout;
+    }, TOAST_DISMISS_MS);
+    return timeout;
+  }
+  showToast = function deduplicatedToast(message, type = 'ok', options = {}) {
+    if (type && typeof type === 'object') {
+      options = type;
+      type = options.type || 'ok';
+    }
+    const stack = $('#toastStack');
+    if (!stack) return null;
+    const key = String(options.key || `${type}:${message}`);
+    const icon = type === 'error' ? '!' : type === 'warn' ? '△' : '✓';
+    const existing = toastRegistry.get(key);
+    if (existing?.node?.isConnected) {
+      existing.node.className = `toast ${type}`;
+      existing.node.innerHTML = `<span class="t-icon">${icon}</span><span>${escapeHtml(message)}</span>`;
+      window.clearTimeout(existing.timeout);
+      window.clearTimeout(existing.removeTimeout);
+      existing.timeout = scheduleToastRemoval(key, existing.node);
+      uiTrace('TERMINAL_NOTIFICATION_DEDUPED', {kind: options.kind || 'toast'});
+      return existing.node;
+    }
+    while (toastRegistry.size >= MAX_VISIBLE_TOASTS) removeToastByKey(toastRegistry.keys().next().value);
+    const toast = document.createElement('div');
+    toast.className = `toast ${type}`;
+    toast.dataset.toastKey = key;
+    toast.innerHTML = `<span class="t-icon">${icon}</span><span>${escapeHtml(message)}</span>`;
+    stack.appendChild(toast);
+    toastRegistry.set(key, {node: toast, timeout: scheduleToastRemoval(key, toast), removeTimeout: 0});
+    return toast;
+  };
+  // Bridge so ES modules (e.g. the social community UI) reuse the same toast component.
+  setGlobal('__komystToast', (message, kind) => showToast(message, kind === 'err' ? 'error' : kind || 'ok'));
+  function humanCommunityError(errorValue, fallback = 'Não foi possível concluir a ação.') {
+    const code = String(errorValue?.code || errorValue?.message || '').trim();
+    const status = Number(errorValue?.status || 0);
+    if (status === 401 || code === 'authentication_required') return 'Sua sessão expirou. Entre novamente.';
+    if (status === 403 || code === 'csrf_rejected' || code === 'forbidden') return 'Você não tem permissão para esta ação.';
+    if (status === 404) return 'Este conteúdo não está disponível.';
+    if (code === 'timeout') return 'O serviço demorou para responder. Tente novamente.';
+    if (code === 'connection_error') return 'Não foi possível conectar ao serviço.';
+    if (code === 'publish_consent_required') return 'Confirme a autorização de publicação antes de enviar para a Comunidade.';
+    return fallback;
+  }
+  function shake(element) {
+    if (!element) return;
+    element.style.animation = 'none';
+    void element.offsetHeight;
+    element.style.animation = 'shake .35s ease';
+  }
+
+  /* ---------- URL labels ---------- */
+  function titleCase(value) {
+    return value.replace(/[-_]+/g, ' ').replace(/\b\w/g, character => character.toUpperCase()).trim();
+  }
+  function slugify(value) {
+    return String(value || '').normalize('NFKD').replace(/[\u0300-\u036f]/g, '')
+      .toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/_+/g, '_').replace(/^_|_$/g, '').slice(0, 80) || 'webtoon_chapter';
+  }
+  function seriesKeyFromUrl(url) {
+    try {
+      const u = new URL(url);
+      const parts = u.pathname.split('/').filter(Boolean);
+      const key = (u.hostname + '/' + (parts[0] || '')).toLowerCase().replace(/[^a-z0-9./-]/g, '_');
+      return key.length > 3 ? key : '';
+    } catch (_) { return ''; }
+  }
+  function nameGlossaryPairs(text) {
+    const pairs = [];
+    for (const line of String(text || '').split('\n')) {
+      const eq = line.indexOf('=');
+      if (eq < 1) continue;
+      const src = line.slice(0, eq).trim();
+      const tgt = line.slice(eq + 1).trim();
+      if (src && tgt && pairs.length < 50) pairs.push([src, tgt]);
+    }
+    return pairs;
+  }
+  function rememberNameGlossary(seriesKey, text) {
+    if (!seriesKey) return;
+    try {
+      if (String(text || '').trim()) localStorage.setItem(NAME_GLOSSARY_STORAGE_KEY_PREFIX + seriesKey, String(text).trim());
+      else localStorage.removeItem(NAME_GLOSSARY_STORAGE_KEY_PREFIX + seriesKey);
+    } catch (_) {}
+  }
+  function loadNameGlossary(seriesKey) {
+    if (!seriesKey) return '';
+    try { return localStorage.getItem(NAME_GLOSSARY_STORAGE_KEY_PREFIX + seriesKey) || ''; }
+    catch (_) { return ''; }
+  }
+  function guessFromUrl(value) {
+    try {
+      const url = new URL(value);
+      const parts = url.pathname.split('/').filter(Boolean);
+      if (parts.at(-1)?.toLowerCase() === 'viewer') parts.pop();
+      // Comix prefixes its slugs with internal ids ("0g9q-seitokai-...",
+      // "11500234-chapter-188"); they are not part of the title.
+      const comix = /(^|\.)comix\.to$/i.test(url.hostname);
+      const chapterSlug = (parts.at(-1) || 'chapter').replace(comix ? /^\d{4,}[-_]+(?=[a-z])/i : /^$/, '');
+      const seriesSlug = (parts.at(-2) || 'webtoon').replace(comix ? /^(?=[a-z]*\d)[a-z0-9]{3,6}[-_]+(?=[a-z])/i : /^$/, '');
+      const queryKeys = ['episode_no', 'episode', 'chapter_no', 'chapter', 'ep', 'cap', 'capitulo'];
+      const number = queryKeys.map(key => url.searchParams.get(key)).find(Boolean) || '';
+      const match = chapterSlug.match(/^(episode|chapter|capitulo|cap|ep|ch)[-_ ]*(\d+)$/i);
+      let chapterLabel = titleCase(chapterSlug);
+      if (match) {
+        const labels = {episode: 'Episode', chapter: 'Chapter', capitulo: 'Capitulo', cap: 'CAP', ep: 'EP', ch: 'CH'};
+        chapterLabel = `${labels[match[1].toLowerCase()]} ${match[2]}`;
+      } else if (number) chapterLabel = `Episode ${number}`;
+      return {
+        title: `${titleCase(seriesSlug)} - ${chapterLabel}`,
+        slug: slugify(`${seriesSlug}_${chapterSlug}`),
+      };
+    } catch (_) {
+      return {title: '', slug: ''};
+    }
+  }
+  function programField(input, value) {
+    appState.programmingFields = true;
+    input.value = value;
+    appState.programmingFields = false;
+    if (typeof syncSourceFormState === 'function') syncSourceFormState();
+  }
+  uiTrace('KOMYST_UI_SCRIPT_ENTER', {document_ready_state: document.readyState});
+  function applyUrlDerivedFields(value, {fillEmpty = false} = {}) {
+    if (!/^https?:\/\//i.test(String(value || '').trim())) return;
+    const guess = guessFromUrl(value);
+    const nameInput = $('#nameInput');
+    const outputInput = $('#outputInput');
+    const nameValue = nameInput?.value?.trim() || '';
+    const outputValue = outputInput?.value?.trim() || '';
+    const nameCanBeFilled = !appState.nameDirty || !nameValue;
+    const outputCanBeFilled = !appState.outputDirty || !outputValue;
+    if (nameCanBeFilled && guess.title) programField(nameInput, guess.title);
+    if (outputCanBeFilled && guess.slug) programField(outputInput, guess.slug);
+    const newSeriesKey = seriesKeyFromUrl(value);
+    if (newSeriesKey && newSeriesKey !== appState.currentSeriesKey) {
+      appState.currentSeriesKey = newSeriesKey;
+      appState.glossaryDirty = false;
+      const glossaryInput = $('#nameGlossaryInput');
+      if (glossaryInput && !appState.glossaryDirty) glossaryInput.value = loadNameGlossary(newSeriesKey);
+    }
+    syncSourceFormState();
+  }
+  function setSourceType(value) {
+    const sourceType = ['local_folder', 'local_images'].includes(value) ? value : 'url';
+    const previousSourceType = appState.selectedSourceType || 'url';
+    if (previousSourceType !== sourceType) {
+      const oldSelections = Array.isArray(appState.localMediaSelectionIds)
+        ? appState.localMediaSelectionIds.slice() : [];
+      oldSelections.forEach(selectionId => {
+        if (selectionId) void window.pywebview?.api?.revoke_local_media?.(selectionId);
+      });
+      appState.localMediaSelectionIds = [];
+      appState.localImages = [];
+      appState.selectedLocalImagePath = '';
+      if (sourceType === 'url') {
+        const folderInput = $('#localFolderInput');
+        if (folderInput) folderInput.value = '';
+        appState.sourceForm = {...(appState.sourceForm || {}), localFolder: ''};
+      } else {
+        const urlInput = $('#urlInput');
+        if (urlInput) urlInput.value = '';
+        appState.sourceForm = {...(appState.sourceForm || {}), url: ''};
+      }
+      const localFolderSummary = $('#localFolderSummary');
+      if (localFolderSummary) localFolderSummary.textContent = '';
+      const localPreview = $('#localPagePreview');
+      if (localPreview) localPreview.hidden = true;
+      const localPageList = $('#localPageList');
+      if (localPageList) localPageList.innerHTML = '';
+    }
+    appState.selectedSourceType = sourceType;
+    const local = sourceType !== 'url';
+    const folder = sourceType === 'local_folder';
+    const images = sourceType === 'local_images';
+    $$('.source-type-card').forEach(card => {
+      const selected = card.dataset.sourceType === sourceType;
+      card.classList.toggle('selected', selected);
+      card.setAttribute('aria-pressed', String(selected));
+    });
+    $('#urlSourceField').hidden = local;
+    $('#localFolderSourceField').hidden = !folder;
+    $('#localImagesSourceField').hidden = !images;
+    $('#localPageManagerField').hidden = !local;
+    $('#urlInput').disabled = local;
+    $('#localFolderInput').disabled = !folder;
+    const downloadOnlyOption = $('#modeSelect option[value="download_only"]');
+    if (downloadOnlyOption) {
+      downloadOnlyOption.disabled = local;
+      if (local && appState.selectedMode === 'download_only') applyProcessingMode('quality');
+    }
+    const profileToggle = $('#sourceProfileToggle');
+    if (profileToggle) {
+      profileToggle.disabled = local;
+      if (local) profileToggle.checked = false;
+    }
+    $('#urlError')?.classList.remove('show');
+    $('#localFolderError')?.classList.remove('show');
+    // The local runner consumes a complete immutable snapshot. It deliberately does not
+    // accept a UI-selected subset, so make that constraint visible before submission.
+    if (local) {
+      appState.selectedScope = 'full';
+      $$('.scope-card').forEach(card => card.classList.toggle('selected', card.dataset.scope === 'full'));
+      $('#scopeCustom')?.classList.remove('open');
+    }
+    $$('.scope-card').forEach(card => {
+      const unavailable = local && card.dataset.scope !== 'full';
+      card.classList.toggle('disabled', unavailable);
+      card.setAttribute('aria-disabled', String(unavailable));
+    });
+    syncSourceFormState();
+    invalidateSourceValidation();
+  }
+  $$('.source-type-card').forEach(card => card.addEventListener('click', () => setSourceType(card.dataset.sourceType)));
+  setSourceType(appState.selectedSourceType);
+
+  function selectedLocalImageIndex() {
+    const selected = appState.selectedLocalImagePath;
+    const index = appState.localImages.findIndex(item => (item.mediaId || item.path) === selected);
+    return index >= 0 ? index : 0;
+  }
+  function localPreviewMarkup(item) {
+    if (!item) return '<span>Nenhuma página selecionada.</span>';
+    if (item.previewUrl) return `<img src="${escapeHtml(item.previewUrl)}" alt="Prévia de ${escapeHtml(item.name)}" />`;
+    return `<div class="local-page-preview-fallback"><strong>${escapeHtml(item.name)}</strong><span>Prévia disponível no aplicativo após selecionar as imagens.</span></div>`;
+  }
+  function renderLocalPreview() {
+    const preview = $('#localPagePreview');
+    const media = $('#localPreviewMedia');
+    const count = appState.localImages.length;
+    if (!preview || !media) return;
+    preview.hidden = count === 0;
+    if (!count) return;
+    const index = selectedLocalImageIndex();
+    const item = appState.localImages[index];
+    appState.selectedLocalImagePath = item.mediaId || item.path;
+    $('#localPreviewCounter').textContent = `Página ${index + 1} de ${count}`;
+    $('#localPreviewPrevious').disabled = index === 0;
+    $('#localPreviewNext').disabled = index === count - 1;
+    media.innerHTML = localPreviewMarkup(item);
+  }
+  function moveLocalImage(fromIndex, toIndex) {
+    if (fromIndex === toIndex || fromIndex < 0 || toIndex < 0 || fromIndex >= appState.localImages.length || toIndex >= appState.localImages.length) return;
+    const [item] = appState.localImages.splice(fromIndex, 1);
+    appState.localImages.splice(toIndex, 0, item);
+  }
+  function renderLocalImages() {
+    const count = appState.localImages.length;
+    const counter = $('#localImagesCount');
+    if (counter) counter.textContent = count ? `${count} ${count === 1 ? 'página selecionada' : 'páginas selecionadas'}` : 'Nenhuma página selecionada';
+    const addButton = $('#addLocalImagesBtn');
+    if (addButton) addButton.textContent = count ? '+ Adicionar mais' : 'Adicionar imagens';
+    const clearButton = $('#clearLocalImagesBtn');
+    if (clearButton) clearButton.hidden = count === 0;
+    const sharedCounter = $('#localPageCount');
+    if (sharedCounter) sharedCounter.textContent = count ? `${count} ${count === 1 ? 'página no capítulo' : 'páginas no capítulo'} · a ordem abaixo será usada no processamento` : 'Nenhuma página selecionada';
+    const list = $('#localPageList');
+    if (!list) return;
+    list.innerHTML = appState.localImages.map((item, index) => `
+      <div class="source-image-row${(item.mediaId || item.path) === appState.selectedLocalImagePath ? ' selected' : ''}" data-index="${index}" draggable="true">
+        <button type="button" class="source-image-drag" data-image-action="select" aria-label="Selecionar Página ${index + 1}" title="Arraste para reorganizar">☰</button>
+        <button type="button" class="source-image-name" data-image-action="select">${item.thumbnailUrl ? `<img class="source-image-thumb" src="${escapeHtml(item.thumbnailUrl)}" alt="" />` : ''}<span>Página ${index + 1}</span><span>${escapeHtml(item.name)}</span></button>
+        <button type="button" data-image-action="up" aria-label="Mover para cima">↑</button>
+        <button type="button" data-image-action="down" aria-label="Mover para baixo">↓</button>
+        <button type="button" data-image-action="remove" aria-label="Remover imagem">×</button>
+      </div>`).join('');
+    list.querySelectorAll('[data-image-action]').forEach(button => button.addEventListener('click', () => {
+      const row = button.closest('[data-index]');
+      const index = Number(row?.dataset.index);
+      const action = button.dataset.imageAction;
+      if (!Number.isInteger(index)) return;
+      if (action === 'select') appState.selectedLocalImagePath = appState.localImages[index]?.mediaId || appState.localImages[index]?.path || '';
+      if (action === 'remove') {
+        const removed = appState.localImages.splice(index, 1)[0];
+        if ((removed?.mediaId || removed?.path) === appState.selectedLocalImagePath) appState.selectedLocalImagePath = appState.localImages[index]?.mediaId || appState.localImages[index]?.path || appState.localImages[index - 1]?.mediaId || appState.localImages[index - 1]?.path || '';
+      }
+      if (action === 'up' && index > 0) [appState.localImages[index - 1], appState.localImages[index]] = [appState.localImages[index], appState.localImages[index - 1]];
+      if (action === 'down' && index < appState.localImages.length - 1) [appState.localImages[index + 1], appState.localImages[index]] = [appState.localImages[index], appState.localImages[index + 1]];
+      renderLocalImages(); updateTranslationStartControls();
+    }));
+    let draggingIndex = -1;
+    list.querySelectorAll('[data-index]').forEach(row => {
+      row.addEventListener('dragstart', event => { draggingIndex = Number(row.dataset.index); event.dataTransfer.effectAllowed = 'move'; });
+      row.addEventListener('dragover', event => { event.preventDefault(); event.dataTransfer.dropEffect = 'move'; });
+      row.addEventListener('drop', event => {
+        event.preventDefault();
+        const targetIndex = Number(row.dataset.index);
+        moveLocalImage(draggingIndex, targetIndex);
+        draggingIndex = -1;
+        renderLocalImages(); updateTranslationStartControls();
+      });
+    });
+    renderLocalPreview();
+  }
+  function acceptLocalImageFiles(fileList) {
+    const incoming = Array.from(fileList || []).filter(file => /\.(png|jpe?g)$/i.test(file.name));
+    for (const file of incoming) {
+      const path = String(file.path || file.webkitRelativePath || '').trim();
+      if (!path) continue;
+      const isBrowserFile = typeof File !== 'undefined' && file instanceof File;
+      if (!appState.localImages.some(item => item.path === path)) appState.localImages.push({path, name: file.name, previewUrl: isBrowserFile ? URL.createObjectURL(file) : ''});
+    }
+    if (!appState.selectedLocalImagePath && appState.localImages[0]) appState.selectedLocalImagePath = appState.localImages[0].mediaId || appState.localImages[0].path;
+    renderLocalImages(); updateTranslationStartControls();
+  }
+  async function chooseLocalFolder() {
+    if (!window.pywebview?.api?.choose_local_folder) {
+      showToast('O seletor de pasta está disponível somente no aplicativo Komyst.', 'warn');
+      return;
+    }
+    try {
+      const result = await window.pywebview.api.choose_local_folder();
+      const items = Array.isArray(result?.items) ? result.items : [];
+      const oldSelections = appState.localMediaSelectionIds.slice();
+      appState.localImages = items.map(item => ({mediaId: item.media_id, name: item.name, thumbnailUrl: item.thumbnail_url, previewUrl: item.preview_url}));
+      appState.localMediaSelectionIds = result?.selection_id ? [result.selection_id] : [];
+      appState.selectedLocalImagePath = appState.localImages[0]?.mediaId || '';
+      programField($('#localFolderInput'), result?.selection_id || '');
+      oldSelections.forEach(selectionId => { if (selectionId) void window.pywebview?.api?.revoke_local_media?.(selectionId); });
+      const summary = $('#localFolderSummary');
+      if (summary) summary.textContent = items.length ? `${String(result?.folder || 'Pasta selecionada')} · ${items.length} imagens encontradas` : 'Nenhuma imagem PNG/JPG/JPEG foi encontrada diretamente nesta pasta.';
+      renderLocalImages(); updateTranslationStartControls();
+    } catch (_) { showToast('Não foi possível ler a pasta selecionada.', 'error'); }
+  }
+  $('#selectLocalFolderBtn')?.addEventListener('click', chooseLocalFolder);
+  async function chooseLocalImages() {
+    uiTrace('IMAGE_PICKER_CALL_BEGIN', {boundary: 'js_bridge'});
+    if (window.pywebview?.api?.choose_local_images) {
+      try {
+        const result = await window.pywebview.api.choose_local_images();
+        const resultKeys = result && typeof result === 'object' ? Object.keys(result) : [];
+        const items = Array.isArray(result?.items) ? result.items : [];
+        uiTrace('IMAGE_PICKER_CALL_RETURN', {
+          boundary: 'js_bridge', return_type: typeof result, array_length: items.length,
+          keys_present: resultKeys.join(','), item_keys: items[0] && typeof items[0] === 'object' ? Object.keys(items[0]).join(',') : '',
+          media_id_present: Boolean(items[0]?.media_id), display_name_present: Boolean(items[0]?.name),
+          dimensions_present: Boolean(items[0]?.width && items[0]?.height),
+        });
+        if (result?.selection_id) appState.localMediaSelectionIds.push(result.selection_id);
+        uiTrace('IMAGE_PICKER_NORMALIZATION_BEGIN', {boundary: 'js_state', array_length: items.length});
+        for (const item of items) {
+          if (!appState.localImages.some(page => page.mediaId === item.media_id)) appState.localImages.push({mediaId: item.media_id, name: item.name, thumbnailUrl: item.thumbnail_url, previewUrl: item.preview_url});
+        }
+        uiTrace('IMAGE_PICKER_NORMALIZATION_END', {boundary: 'js_state', array_length: appState.localImages.length});
+        if (!appState.selectedLocalImagePath && appState.localImages[0]) appState.selectedLocalImagePath = appState.localImages[0].mediaId || appState.localImages[0].path;
+        uiTrace('IMAGE_PAGES_APPEND_END', {boundary: 'js_state', array_length: appState.localImages.length});
+        renderLocalImages(); updateTranslationStartControls();
+        return;
+      } catch (error) {
+        uiTrace('IMAGE_PICKER_HANDLER_ERROR', {
+          boundary: 'js_bridge', error_class: String(error?.name || 'Error').slice(0, 60),
+          message: String(error?.message || error || 'picker_failed').replace(/[\r\n\t]+/g, ' ').slice(0, 160),
+        });
+        showToast('Não foi possível adicionar as imagens selecionadas.', 'error');
+      }
+    }
+    $('#localImagesInput')?.click();
+  }
+  $('#addLocalImagesBtn')?.addEventListener('click', chooseLocalImages);
+  $('#clearLocalImagesBtn')?.addEventListener('click', () => { appState.localMediaSelectionIds.forEach(selectionId => { if (selectionId) void window.pywebview?.api?.revoke_local_media?.(selectionId); }); appState.localMediaSelectionIds = []; appState.localImages = []; appState.selectedLocalImagePath = ''; renderLocalImages(); updateTranslationStartControls(); });
+  $('#localImagesInput')?.addEventListener('change', event => { acceptLocalImageFiles(event.target.files); event.target.value = ''; });
+  $('#localPreviewPrevious')?.addEventListener('click', () => { const index = selectedLocalImageIndex(); const item = appState.localImages[Math.max(0, index - 1)]; appState.selectedLocalImagePath = item?.mediaId || item?.path || ''; renderLocalImages(); });
+  $('#localPreviewNext')?.addEventListener('click', () => { const index = selectedLocalImageIndex(); const item = appState.localImages[Math.min(appState.localImages.length - 1, index + 1)]; appState.selectedLocalImagePath = item?.mediaId || item?.path || ''; renderLocalImages(); });
+  function closeLocalImageModal() { $('#localImageModal').hidden = true; }
+  $('#localPreviewEnlarge')?.addEventListener('click', () => { const item = appState.localImages[selectedLocalImageIndex()]; if (!item) return; $('#localImageModalMedia').innerHTML = localPreviewMarkup(item); $('#localImageModal').hidden = false; });
+  $('#localImageModalClose')?.addEventListener('click', closeLocalImageModal);
+  $('#localImageModal')?.addEventListener('click', event => { if (event.target === $('#localImageModal')) closeLocalImageModal(); });
+  document.addEventListener('keydown', event => { if (event.key === 'Escape') closeLocalImageModal(); });
+  const OUTPUT_PROFILE_STORAGE_KEY = 'komyst.outputProfile';
+  function normalizeOutputProfile(value) {
+    const profile = String(value == null ? '' : value).trim().toLowerCase();
+    return ['automatic', 'professional_qc'].includes(profile) ? profile : 'automatic';
+  }
+  function applyOutputProfile(value, {persist = false} = {}) {
+    const profile = normalizeOutputProfile(value);
+    appState.outputProfile = profile;
+    $$('input[name="output_profile"]').forEach(input => { input.checked = input.value === profile; });
+    $$('[data-output-profile-card]').forEach(card => {
+      const selected = card.dataset.outputProfileCard === profile;
+      card.classList.toggle('selected', selected);
+      card.setAttribute('aria-checked', selected ? 'true' : 'false');
+    });
+    if (persist) {
+      try { localStorage.setItem(OUTPUT_PROFILE_STORAGE_KEY, profile); } catch (_) { /* default remains safe */ }
+    }
+    syncOutputProfileField();
+    return profile;
+  }
+  function syncOutputProfileField() {
+    const downloadOnly = appState.selectedMode === 'download_only';
+    const options = $('#outputProfileOptions');
+    const hint = $('#outputProfileDownloadOnlyHint');
+    if (options) options.setAttribute('aria-disabled', downloadOnly ? 'true' : 'false');
+    $$('input[name="output_profile"]').forEach(input => { input.disabled = downloadOnly; });
+    if (hint) hint.hidden = !downloadOnly;
+  }
+  $$('input[name="output_profile"]').forEach(input => input.addEventListener('change', event => {
+    applyOutputProfile(event.currentTarget.value, {persist: true});
+    syncSourceFormState();
+    refreshStoredSourceExecutionDraft();
+  }));
+  try { applyOutputProfile(localStorage.getItem(OUTPUT_PROFILE_STORAGE_KEY) || 'automatic'); }
+  catch (_) { applyOutputProfile('automatic'); }
+
+  // ---- Output plan presets ("O que você quer gerar?") -------------------------------------
+  // The backend (komyst/runtime/output_plan.py) is the single source of truth: the UI sends a
+  // preset (and, for custom, the chosen operations) and the backend normalizes + validates.
+  // These JS mirrors drive only the on-screen hint and the custom-mode dependency UX.
+  const OUTPUT_PLAN_STORAGE_KEY = 'komyst.outputPlan';
+  const NAME_GLOSSARY_STORAGE_KEY_PREFIX = 'komyst.nameGlossary.v1.';
+  const OUTPUT_PLAN_PRESETS = {
+    traducao_pronta: {ops: ['translate', 'clean', 'typeset', 'pdf'], profile: 'automatic',
+      hint: 'Traduz, limpa, aplica a tradução e gera o PDF final.'},
+    apenas_clean: {ops: ['clean'], profile: 'automatic',
+      hint: 'Remove o texto original e entrega as imagens limpas (não traduz).'},
+    apenas_traducao: {ops: ['translate'], profile: 'automatic',
+      hint: 'Traduz os textos sem modificar as imagens; entrega os dados de tradução.'},
+    traducao_clean: {ops: ['translate', 'clean'], profile: 'automatic',
+      hint: 'Traduz e gera as imagens limpas, sem aplicar o texto traduzido.'},
+    profissional: {ops: ['translate', 'clean', 'typeset', 'pdf', 'psd', 'qc'], profile: 'professional_qc',
+      hint: 'Gera todos os arquivos: PDF, imagens limpas, PSD editável e revisão.'},
+    personalizado: {ops: [], profile: 'automatic', hint: 'Escolha manualmente quais etapas deseja executar.'},
+  };
+  const PLAN_REQUIRES = {typeset: ['translate'], psd: ['translate', 'typeset'], qc: ['translate', 'clean', 'typeset']};
+  const PLAN_PAGE_PRODUCERS = ['typeset', 'clean'];
+  const PLAN_OP_ORDER = ['translate', 'clean', 'typeset', 'pdf', 'psd', 'qc'];
+  function closePlanDeps(ops) {
+    const set = new Set(ops);
+    let changed = true;
+    while (changed) {
+      changed = false;
+      for (const op of Array.from(set)) {
+        for (const dep of (PLAN_REQUIRES[op] || [])) {
+          if (!set.has(dep)) { set.add(dep); changed = true; }
+        }
+      }
+    }
+    if (set.has('pdf') && !PLAN_PAGE_PRODUCERS.some(p => set.has(p))) set.delete('pdf');
+    return PLAN_OP_ORDER.filter(op => set.has(op));
+  }
+  function normalizeOutputPlan(value) {
+    const plan = String(value == null ? '' : value).trim().toLowerCase();
+    return Object.prototype.hasOwnProperty.call(OUTPUT_PLAN_PRESETS, plan) ? plan : 'traducao_pronta';
+  }
+  function customCheckedOps() {
+    return PLAN_OP_ORDER.filter(op => $('#op' + op.charAt(0).toUpperCase() + op.slice(1))?.checked);
+  }
+  // Operations the current selection will actually run (dependency-closed), for progress/hint.
+  function effectivePlanOps() {
+    if (appState.outputPlan === 'personalizado') return closePlanDeps(customCheckedOps());
+    return (OUTPUT_PLAN_PRESETS[appState.outputPlan] || {}).ops || [];
+  }
+  function syncCustomOpsUI() {
+    const closed = closePlanDeps(customCheckedOps());
+    const picked = customCheckedOps();
+    const auto = closed.filter(op => !picked.includes(op));
+    PLAN_OP_ORDER.forEach(op => {
+      const box = $('#op' + op.charAt(0).toUpperCase() + op.slice(1));
+      if (!box) return;
+      const isAuto = auto.includes(op);
+      box.closest('.custom-op')?.classList.toggle('op-auto', isAuto);
+    });
+    const dep = $('#outputPlanDepHint');
+    if (dep) {
+      if (auto.length) {
+        const names = {translate: 'traduzir', clean: 'limpar', typeset: 'aplicar o texto', pdf: 'gerar PDF'};
+        dep.textContent = 'Também será necessário: ' + auto.map(o => names[o] || o).join(', ') + '.';
+        dep.hidden = false;
+      } else { dep.hidden = true; dep.textContent = ''; }
+    }
+  }
+  function applyOutputPlan(value, {persist = false} = {}) {
+    const plan = normalizeOutputPlan(value);
+    appState.outputPlan = plan;
+    $$('input[name="output_plan"]').forEach(input => { input.checked = input.value === plan; });
+    $$('[data-output-plan-card]').forEach(card => {
+      const selected = card.dataset.outputPlanCard === plan;
+      card.classList.toggle('selected', selected);
+      card.setAttribute('aria-checked', selected ? 'true' : 'false');
+    });
+    const custom = $('#outputCustomOps');
+    if (custom) custom.hidden = plan !== 'personalizado';
+    const hint = $('#outputPlanHint');
+    if (hint) hint.textContent = (OUTPUT_PLAN_PRESETS[plan] || {}).hint || '';
+    // Keep the (hidden, legacy) output profile consistent so finish-screen/profile code and
+    // backward-compatible payload fields stay coherent; the backend re-derives from the plan.
+    applyOutputProfile((OUTPUT_PLAN_PRESETS[plan] || {}).profile || 'automatic');
+    if (plan === 'personalizado') syncCustomOpsUI(); else { const d = $('#outputPlanDepHint'); if (d) d.hidden = true; }
+    // Keep a secondary selection visible: expand "Mais opções" when the chosen plan lives there.
+    if (SECONDARY_PLANS.has(plan)) setMorePlansExpanded(true);
+    if (persist) { try { localStorage.setItem(OUTPUT_PLAN_STORAGE_KEY, plan); } catch (_) { /* default stays safe */ } }
+    syncOutputPlanField();
+    return plan;
+  }
+  const SECONDARY_PLANS = new Set(['apenas_traducao', 'traducao_clean', 'personalizado']);
+  function setMorePlansExpanded(open) {
+    const toggle = $('#morePlansToggle');
+    const secondary = $('#outputPlanSecondary');
+    if (toggle) toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+    if (secondary) secondary.hidden = !open;
+  }
+  function syncOutputPlanField() {
+    const downloadOnly = appState.selectedMode === 'download_only';
+    ['#outputPlanPrimary', '#outputPlanSecondary'].forEach(sel => {
+      const grid = $(sel);
+      if (grid) grid.setAttribute('aria-disabled', downloadOnly ? 'true' : 'false');
+    });
+    const toggle = $('#morePlansToggle');
+    if (toggle) toggle.disabled = downloadOnly;
+    $$('input[name="output_plan"]').forEach(input => { input.disabled = downloadOnly; });
+    const custom = $('#outputCustomOps');
+    if (custom) $$('input', custom).forEach(input => { input.disabled = downloadOnly; });
+    const dlHint = $('#outputPlanDownloadOnlyHint');
+    if (dlHint) dlHint.hidden = !downloadOnly;
+    const planHint = $('#outputPlanHint');
+    if (planHint) planHint.hidden = downloadOnly;
+  }
+  $$('input[name="output_plan"]').forEach(input => input.addEventListener('change', event => {
+    applyOutputPlan(event.currentTarget.value, {persist: true});
+    syncSourceFormState();
+    refreshStoredSourceExecutionDraft();
+  }));
+  $$('#outputCustomOps input[type="checkbox"]').forEach(box => box.addEventListener('change', () => {
+    syncCustomOpsUI();
+    syncSourceFormState();
+    refreshStoredSourceExecutionDraft();
+  }));
+  $('#morePlansToggle')?.addEventListener('click', () => {
+    const open = $('#morePlansToggle').getAttribute('aria-expanded') === 'true';
+    setMorePlansExpanded(!open);
+  });
+  try { applyOutputPlan(localStorage.getItem(OUTPUT_PLAN_STORAGE_KEY) || 'traducao_pronta'); }
+  catch (_) { applyOutputPlan('traducao_pronta'); }
+  // Typesetting ON/OFF is only meaningful for PSD (§11): show it only for that format.
+  function syncTypesettingField() {
+    const field = $('#typesettingModeField');
+    // OutputPlan is the sole user-facing authority. The legacy format control was
+    // intentionally removed from the main form; PSD is selected by the Complete plan.
+    if (field) field.hidden = true;
+    const hint = $('#typesettingModeHint');
+    if (hint) hint.textContent = ($('#typesettingModeSelect')?.value === 'off')
+      ? 'Página limpa para diagramação manual.'
+      : 'Texto traduzido incluído em camadas por região.';
+  }
+  $('#typesettingModeSelect')?.addEventListener('change', () => { syncTypesettingField(); syncSourceFormState(); });
+  // Only the providers the runner accepts are representable in form state; anything else
+  // (tampered <option>, stale stored value) collapses to '' and never reaches a job.
+  // Canonical ids only — the "DeepL (Qualidade)" label never crosses into a payload.
+  // The list is inline because the contract tests extract this function on its own.
+  function normalizeTranslationProvider(value) {
+    const provider = String(value == null ? '' : value).trim().toLowerCase();
+    return ['riva', 'nemotron', 'deepl'].includes(provider) ? provider : '';
+  }
+  function syncSourceFormState() {
+    const previous = {...appState.sourceForm};
+    const next = {
+      url: $('#urlInput')?.value?.trim() || '',
+      localFolder: $('#localFolderInput')?.value?.trim() || '',
+      chapterName: $('#nameInput')?.value?.trim() || '',
+      outputSlug: slugify($('#outputInput')?.value || ''),
+      outputFormat: 'pdf',
+      typesettingMode: ($('#typesettingModeSelect')?.value === 'off') ? 'off' : 'on',
+      outputProfile: appState.outputProfile === 'professional_qc' ? 'professional_qc' : 'automatic',
+      translationProvider: normalizeTranslationProvider($('#providerSelect')?.value)
+        || normalizeTranslationProvider(previous.translationProvider),
+    };
+    appState.sourceForm = next;
+    return {
+      ...next,
+      changed: previous.url !== next.url
+        || previous.localFolder !== next.localFolder
+        || previous.chapterName !== next.chapterName
+        || previous.outputSlug !== next.outputSlug
+        || previous.outputFormat !== next.outputFormat
+        || previous.outputProfile !== next.outputProfile,
+      sourceChanged: previous.url !== next.url || previous.localFolder !== next.localFolder,
+    };
+  }
+  function bindSourceFormInput(selector, handler) {
+    const input = $(selector);
+    if (!input) return;
+    ['input', 'change', 'keyup', 'paste', 'compositionend'].forEach(eventName => {
+      input.addEventListener(eventName, handler);
+    });
+  }
+  function handleSourceUrlInput() {
+    const state = syncSourceFormState();
+    if (state.sourceChanged) {
+      clearSourceValidationDraft();
+      invalidateSourceValidation();
+    }
+    const value = state.url;
+    if (!/^https?:\/\//i.test(value)) return;
+    applyUrlDerivedFields(value);
+    $('#urlError')?.classList.remove('show');
+    updateTranslationStartControls();
+  }
+  bindSourceFormInput('#urlInput', handleSourceUrlInput);
+  bindSourceFormInput('#localFolderInput', () => {
+    const state = syncSourceFormState();
+    if (state.sourceChanged) {
+      clearSourceValidationDraft();
+      invalidateSourceValidation();
+    }
+    $('#localFolderError')?.classList.remove('show');
+    updateTranslationStartControls();
+  });
+  bindSourceFormInput('#nameInput', () => {
+    syncSourceFormState();
+    if (!appState.programmingFields) appState.nameDirty = true;
+    updateTranslationStartControls();
+  });
+  bindSourceFormInput('#outputInput', event => {
+    if (!appState.programmingFields) appState.outputDirty = true;
+    const start = event.target.selectionStart;
+    event.target.value = slugify(event.target.value);
+    syncSourceFormState();
+    try { event.target.setSelectionRange(start, start); } catch (_) { /* unsupported */ }
+    updateTranslationStartControls();
+  });
+
+  $('#nameGlossaryInput')?.addEventListener('input', () => {
+    appState.glossaryDirty = true;
+    const key = appState.currentSeriesKey || seriesKeyFromUrl(appState.sourceForm?.url || '');
+    rememberNameGlossary(key, $('#nameGlossaryInput').value);
+  });
+
+  // Provider is execution configuration, not source identity: switching it must never
+  // invalidate an already validated source or trigger another source analysis.
+  $('#providerSelect')?.addEventListener('change', () => {
+    appState.providerDirty = true;
+    syncSourceFormState();
+    refreshStoredSourceExecutionDraft();
+    updateTranslationStartControls();
+  });
+  function applyProviderDefault(value) {
+    const select = $('#providerSelect');
+    const provider = normalizeTranslationProvider(value);
+    // Bootstrap refreshes repeatedly; an explicit operator choice outranks the runtime default.
+    if (!select || !provider || appState.providerDirty) return;
+    select.value = provider;
+    syncSourceFormState();
+  }
+
+  function currentSourceExecutionDraft(sourceUrl = '') {
+    const form = syncSourceFormState();
+    return {
+      source_url: String(sourceUrl || form.url || '').trim(),
+      chapter_name: form.chapterName || '',
+      output_slug: form.outputSlug || '',
+      translation_provider: form.translationProvider || normalizeTranslationProvider($('#providerSelect')?.value),
+      selected_mode: appState.selectedMode,
+      selected_scope: appState.selectedScope,
+      custom_scope: $('#scopeCustomInput')?.value || '',
+      use_cache: Boolean($('#cacheToggle')?.checked),
+      force: Boolean($('#forceToggle')?.checked),
+      use_context: Boolean($('#ctxToggle')?.checked),
+      open_output: Boolean($('#openToggle')?.checked),
+      create_source_profile: Boolean($('#sourceProfileToggle')?.checked),
+      output_profile: appState.outputProfile === 'professional_qc' ? 'professional_qc' : 'automatic',
+    };
+  }
+  function readSourceValidationDraft() {
+    try {
+      const value = JSON.parse(sessionStorage.getItem(SOURCE_VALIDATION_DRAFT_STORAGE_KEY) || 'null');
+      return value && typeof value === 'object' ? value : null;
+    } catch (_) {
+      return null;
+    }
+  }
+  function writeSourceValidationDraft(value) {
+    try {
+      sessionStorage.setItem(SOURCE_VALIDATION_DRAFT_STORAGE_KEY, JSON.stringify(value));
+    } catch (_) { /* advisory browser state only */ }
+  }
+  function clearSourceValidationDraft() {
+    try { sessionStorage.removeItem(SOURCE_VALIDATION_DRAFT_STORAGE_KEY); }
+    catch (_) { /* advisory browser state only */ }
+  }
+  function persistSourceValidationDraft(result, sourceUrl) {
+    const analysis = result?.source_analysis_result || {};
+    const analysisId = String(result?.analysis_result_id || analysis.analysis_id || '');
+    if (!analysisId || result?.status !== 'source_analysis_ready' || result?.ready !== true) {
+      clearSourceValidationDraft();
+      return;
+    }
+    writeSourceValidationDraft({
+      schema_version: 1,
+      status: 'source_analysis_ready',
+      analysis_result_id: analysisId,
+      source_url: String(sourceUrl || '').trim(),
+      normalized_url_hash: String(analysis.normalized_url_hash || ''),
+      result_hash: String(analysis.result_hash || ''),
+      reason_code: String(result?.reason_code || analysis.reason_code || ''),
+      execution: currentSourceExecutionDraft(sourceUrl),
+      updated_at: Date.now(),
+    });
+  }
+  function refreshStoredSourceExecutionDraft() {
+    const draft = readSourceValidationDraft();
+    if (!draft || appState.sourceValidation.status !== 'ready') return;
+    if (String(draft.analysis_result_id || '') !== appState.sourceValidation.analysisResultId) return;
+    draft.execution = currentSourceExecutionDraft(appState.sourceValidation.sourceUrl);
+    draft.updated_at = Date.now();
+    writeSourceValidationDraft(draft);
+  }
+  // One place owns the mode, so the select, a restored draft and a history replay
+  // can never disagree about the value the run will actually carry. The internal
+  // values are unchanged: the three-card grid became a select, nothing else.
+  function applyProcessingMode(mode) {
+    const hints = {
+      quality: 'Usa processamento mais conservador para páginas e fontes difíceis.',
+      fast: 'Processa o capítulo com otimizações automáticas e validação de qualidade.',
+      download_only: 'Coleta e valida páginas sem OCR, tradução ou PDF.',
+    };
+    const value = Object.prototype.hasOwnProperty.call(hints, String(mode))
+      ? String(mode) : 'quality';
+    appState.selectedMode = value;
+    if (typeof syncOutputProfileField === 'function') syncOutputProfileField();
+    if (typeof syncOutputPlanField === 'function') syncOutputPlanField();
+    const select = $('#modeSelect');
+    if (select) select.value = value;
+    const hint = $('#modeHint');
+    if (hint) hint.textContent = hints[value];
+    return value;
+  }
+  function applyStoredExecutionDraft(execution) {
+    if (!execution || typeof execution !== 'object') return;
+    appState.programmingFields = true;
+    if (execution.chapter_name && $('#nameInput')) $('#nameInput').value = execution.chapter_name;
+    if (execution.output_slug && $('#outputInput')) $('#outputInput').value = execution.output_slug;
+    const provider = normalizeTranslationProvider(execution.translation_provider);
+    if (provider && $('#providerSelect')) {
+      $('#providerSelect').value = provider;
+      appState.providerDirty = true;
+    }
+    if ($('#cacheToggle') && typeof execution.use_cache === 'boolean') $('#cacheToggle').checked = execution.use_cache;
+    if ($('#forceToggle') && typeof execution.force === 'boolean') $('#forceToggle').checked = execution.force;
+    if ($('#ctxToggle') && typeof execution.use_context === 'boolean') $('#ctxToggle').checked = execution.use_context;
+    if ($('#openToggle') && typeof execution.open_output === 'boolean') $('#openToggle').checked = execution.open_output;
+    if ($('#sourceProfileToggle') && typeof execution.create_source_profile === 'boolean') {
+      $('#sourceProfileToggle').checked = execution.create_source_profile;
+    }
+    if (execution.output_profile != null) applyOutputProfile(execution.output_profile);
+    appState.programmingFields = false;
+    applyProcessingMode(execution.selected_mode);
+    const scope = String(execution.selected_scope || 'full');
+    const scopeCard = $(`.scope-card[data-scope="${escapeAttr(scope)}"]`) || $('.scope-card[data-scope="full"]');
+    if (scopeCard) {
+      $$('.scope-card').forEach(card => card.classList.toggle('selected', card === scopeCard));
+      appState.selectedScope = scopeCard.dataset.scope || 'full';
+    }
+    if (appState.selectedScope === 'custom' && $('#scopeCustomInput')) {
+      $('#scopeCustomInput').value = execution.custom_scope || $('#scopeCustomInput').value || '1';
+    }
+    $('#scopeCustom')?.classList.toggle('open', appState.selectedScope === 'custom');
+  }
+  function rehydrateSourceValidationFromReadyRecord(record) {
+    const result = record?.source_analysis_result || {};
+    const analysisId = String(record?.analysis_result_id || record?.id || result.analysis_id || '');
+    const status = String(record?.status || result.status || '');
+    const draft = readSourceValidationDraft();
+    if (!analysisId || status !== 'source_analysis_ready'
+        || String(result.status || 'source_analysis_ready') !== 'source_analysis_ready'
+        || !String(result.normalized_url_hash || '')) {
+      invalidateSourceValidation();
+      return {ready: false, reason: 'missing_validation_evidence'};
+    }
+    if (sourceValidationMatchesForm()
+        && appState.sourceValidation.analysisResultId === analysisId) {
+      return {ready: true, reason: 'already_ready'};
+    }
+    if (!draft || String(draft.analysis_result_id || '') !== analysisId
+        || String(draft.status || '') !== 'source_analysis_ready'
+        || !String(draft.source_url || '').trim()) {
+      invalidateSourceValidation();
+      return {ready: false, reason: 'missing_source_validation_draft'};
+    }
+    if (String(draft.normalized_url_hash || '') !== String(result.normalized_url_hash || '')) {
+      invalidateSourceValidation();
+      return {ready: false, reason: 'source_validation_hash_mismatch'};
+    }
+    const currentUrl = $('#urlInput')?.value?.trim() || '';
+    const draftUrl = String(draft.source_url || '').trim();
+    if (currentUrl && currentUrl !== draftUrl) {
+      invalidateSourceValidation();
+      return {ready: false, reason: 'source_validation_stale'};
+    }
+    setSourceType('url');
+    appState.programmingFields = true;
+    if ($('#urlInput')) $('#urlInput').value = draftUrl;
+    appState.programmingFields = false;
+    // Restored drafts do not emit a DOM input event. Apply the same URL-derived
+    // defaults here, but only into fields that are still blank; explicit saved
+    // execution values are applied immediately afterward and take precedence.
+    applyUrlDerivedFields(draftUrl, {fillEmpty: true});
+    applyStoredExecutionDraft(draft.execution || {});
+    syncSourceFormState();
+    appState.sourceValidation = {
+      status: 'ready',
+      analysisResultId: analysisId,
+      sourceUrl: draftUrl,
+      reasonCode: String(record?.reason_code || result.reason_code || draft.reason_code || ''),
+      analysis: record?.analysis || null,
+    };
+    appState.currentSourceUrl = draftUrl;
+    appState.newTranslationDraft = false;
+    updateTranslationStartControls();
+    return {ready: sourceValidationMatchesForm(), reason: 'rehydrated'};
+  }
+
+  /* ---------- form ---------- */
+  $('#modeSelect')?.addEventListener('change', () => {
+    applyProcessingMode($('#modeSelect').value);
+    const label = $('.stage-item[data-stage="ocr"] span:nth-of-type(2)');
+    if (label) label.textContent = 'Leitura do texto';
+    refreshStoredSourceExecutionDraft();
+  });
+  $$('.scope-card').forEach(card => card.addEventListener('click', () => {
+    if (appState.selectedSourceType !== 'url' && card.dataset.scope !== 'full') return;
+    $$('.scope-card').forEach(item => item.classList.remove('selected'));
+    card.classList.add('selected');
+    appState.selectedScope = card.dataset.scope;
+    $('#scopeCustom')?.classList.toggle('open', card.dataset.scope === 'custom');
+    refreshStoredSourceExecutionDraft();
+  }));
+  $('#cacheToggle')?.addEventListener('change', event => {
+    if (event.target.checked) $('#forceToggle').checked = false;
+    refreshStoredSourceExecutionDraft();
+  });
+  $('#forceToggle')?.addEventListener('change', event => {
+    if (event.target.checked) $('#cacheToggle').checked = false;
+    refreshStoredSourceExecutionDraft();
+  });
+  $('#scopeCustomInput')?.addEventListener('input', refreshStoredSourceExecutionDraft);
+  function validateForm() {
+    const form = syncSourceFormState();
+    const local = appState.selectedSourceType !== 'url';
+    const images = appState.selectedSourceType === 'local_images';
+    const url = form.url;
+    const folder = form.localFolder;
+    let message = '';
+    if (images) {
+      if (!appState.localImages.length) message = 'Selecione pelo menos uma imagem.';
+    } else if (local) {
+      if (!folder) message = 'Escolha uma pasta do capítulo antes de iniciar.';
+      else if (!appState.localImages.length) message = 'Mantenha pelo menos uma página para iniciar.';
+    } else {
+      if (!url) message = 'informe a URL do capítulo antes de iniciar';
+      else if (!/^https?:\/\//i.test(url)) message = 'a URL precisa começar com http:// ou https://';
+      try { if (!message) new URL(url); } catch (_) { message = 'essa URL não parece válida'; }
+    }
+    const error = images ? $('#localImagesError') : (local ? $('#localFolderError') : $('#urlError'));
+    if (message) {
+      error.textContent = message;
+      error.classList.add('show');
+      shake(images ? $('#localImagesInput') : (local ? $('#localFolderInput') : $('#urlInput')));
+      return false;
+    }
+    $('#urlError')?.classList.remove('show');
+    $('#localFolderError')?.classList.remove('show');
+    $('#localImagesError')?.classList.remove('show');
+    error.classList.remove('show');
+    if (appState.selectedScope === 'custom' && Number($('#scopeCustomInput').value) <= 0) {
+      shake($('#scopeCustomInput'));
+      showToast('Informe uma quantidade positiva de páginas.', 'error');
+      return false;
+    }
+    return true;
+  }
+  function formPayload() {
+    const form = syncSourceFormState();
+    const local = appState.selectedSourceType !== 'url';
+    const images = appState.selectedSourceType === 'local_images';
+    const full = appState.selectedScope === 'full';
+    const maxImages = full ? null : Number(appState.selectedScope === 'custom' ? $('#scopeCustomInput').value : appState.selectedScope);
+    const guess = local ? {title: 'Capítulo local', slug: 'capitulo_local'} : guessFromUrl(form.url);
+    // Drive plan-aware progress immediately for the run the user just started.
+    const planOps = typeof effectivePlanOps === 'function' ? effectivePlanOps() : null;
+    appState.activeEffectiveOps = appState.selectedMode === 'download_only' ? [] : planOps;
+    const payload = {
+      source_type: appState.selectedSourceType,
+      // Legacy field retained only for backward-compatible payload parsing. The backend
+      // derives the effective artifact contract from output_plan.
+      output_format: 'pdf',
+      output_profile: appState.selectedMode === 'download_only' ? 'automatic' : (form.outputProfile === 'professional_qc' ? 'professional_qc' : 'automatic'),
+      typesetting_mode: form.typesettingMode || 'on',
+      name_glossary: nameGlossaryPairs($('#nameGlossaryInput')?.value || ''),
+      chapter_name: form.chapterName || guess.title,
+      slug: form.outputSlug || slugify(guess.slug),
+      mode: appState.selectedMode === 'download_only' ? 'fast' : appState.selectedMode,
+      download_only: appState.selectedMode === 'download_only',
+      // Output plan is the single source of truth: the backend normalizes it and overrides the
+      // legacy output_profile/output_format/translation_enabled fields above. Omitted for
+      // download-only (its own path) so legacy behaviour is untouched.
+      ...(appState.selectedMode === 'download_only' ? {} : {
+        output_plan: appState.outputPlan || 'traducao_pronta',
+        ...(appState.outputPlan === 'personalizado' && Array.isArray(planOps) ? {operations: planOps} : {}),
+      }),
+      full,
+      max_images: maxImages,
+      use_cache: $('#cacheToggle').checked,
+      force: $('#forceToggle').checked,
+      use_context: $('#ctxToggle').checked,
+      open_output: $('#openToggle').checked,
+      create_source_profile: !local && $('#sourceProfileToggle').checked,
+      translation_provider: form.translationProvider
+        || normalizeTranslationProvider(appState.settings?.translation_provider)
+        // Mirrors ui_helpers.DEFAULT_TRANSLATION_PROVIDER; the backend re-resolves
+        // an omitted provider anyway, so the two can never silently disagree.
+        || 'deepl',
+      source_lang: $('#langSelect')?.value || '3',
+      // Snapshot the current control-plane decision into the job request.
+      // Missing/unavailable bootstrap remains fail-closed.
+      translation_enabled: appState.translationEnabled === true,
+      translate_sfx: $('#translateSfxToggle')?.checked === true,
+      pipeline_intent: {
+        requested: true,
+        mode: appState.selectedMode === 'download_only' ? 'download_only' : appState.selectedMode,
+        scope: full ? 'full' : String(maxImages),
+      },
+    };
+    (typeof uiTrace === 'function' ? uiTrace : () => {})('FORM_PAYLOAD_TRANSLATION_POLICY', {
+      translation_enabled: payload.translation_enabled,
+      policy_source: (typeof getGlobal === 'function' ? getGlobal('__komystControlPlane') : null)?.state?.bootstrap?.translation_policy_source || 'control_plane_snapshot',
+      policy_resolved_at: (typeof getGlobal === 'function' ? getGlobal('__komystControlPlane') : null)?.state?.bootstrap?.translation_policy_resolved_at || '',
+    });
+    const mediaIds = (appState.localImages || []).map(item => item.mediaId).filter(Boolean);
+    if (appState.selectedSourceType === 'url') {
+      // Never serialize local selections left by another source type.
+      payload.url = form.url;
+    } else if (mediaIds.length) {
+      payload.local_media_selection_ids = (appState.localMediaSelectionIds || []).slice();
+      payload.ordered_media_ids = mediaIds;
+    } else if (images) {
+      payload.image_paths = appState.localImages.map(item => item.path);
+    } else {
+      payload.local_folder = form.localFolder;
+      payload.selected_image_paths = appState.localImages.map(item => item.path);
+    }
+    return payload;
+  }
+  function workspacePolicyAllowsProcessing() {
+    const policy = appState.settings?.workspace_source_policy || {};
+    // The policy is active by default and the server restores it at every start. A policy that
+    // has not loaded yet (the page's first requests can be rate limited) is not a refusal; only
+    // an explicit status other than active blocks.
+    if (!Object.keys(policy).length) return true;
+    return policy.status === 'active' && policy.all_submitted_sources_authorized === true;
+  }
+  function minimumSourceInputIsValid() {
+    const form = syncSourceFormState();
+    if (appState.selectedSourceType === 'local_images') return appState.localImages.length > 0;
+    if (appState.selectedSourceType === 'local_folder') {
+      if (!form.localFolder) return Boolean(form.localFolder);
+      return appState.localImages.length > 0;
+    }
+    const value = form.url;
+    try { return /^https?:\/\//i.test(value) && Boolean(new URL(value)); }
+    catch (_) { return false; }
+  }
+  function sourceValidationMatchesForm() {
+    const form = syncSourceFormState();
+    return appState.sourceValidation.status === 'ready'
+      && appState.sourceValidation.sourceUrl === form.url
+      && Boolean(appState.sourceValidation.analysisResultId);
+  }
+  function translationStartDisabledReasons() {
+    const reasons = [];
+    const local = appState.selectedSourceType !== 'url';
+    const minimumValid = minimumSourceInputIsValid();
+    const validating = appState.sourceValidation.status === 'validating';
+    // A genuinely active job (queued/claiming/starting/running) must gate the button even
+    // when appState.status reflects a previous terminal (failed/cancelled) job. Use the
+    // canonical active-job identity so a stale terminal status can never re-enable start
+    // while another job is really running.
+    const pipelineBusy = activeOperationStatuses.has(appState.status) || Boolean(appState.activeJobId);
+    const busyBlocksDraft = pipelineBusy && !appState.newTranslationDraft;
+    if (!minimumValid) reasons.push(local ? 'local_folder_missing' : 'source_input_invalid');
+    if (!local && !workspacePolicyAllowsProcessing()) reasons.push('workspace_policy_blocked');
+    if (validating) reasons.push('source_validation_in_progress');
+    if (busyBlocksDraft) reasons.push('pipeline_busy');
+    return reasons;
+  }
+  function traceTranslationStartControlState(reason, button = $('#startBtn')) {
+    const ready = minimumSourceInputIsValid() && !translationStartDisabledReasons().length;
+    const state = {
+      ready, disabled: Boolean(button?.disabled), start_in_flight: Boolean(startInFlight),
+      dry_run: window.__komystTranslationStartDryRun === true,
+      generation: Number(window.__KOMYST_FORM_RENDER_GENERATION || 0), reason: String(reason || 'unknown'),
+    };
+    const signature = JSON.stringify({...state, reason: ''});
+    if (window.__komystLastStartControlState === signature) return;
+    window.__komystLastStartControlState = signature;
+    sourceTrace('TRANSLATION_START_CONTROL_STATE', state);
+  }
+  function updateTranslationStartControls() {
+    const validating = appState.sourceValidation.status === 'validating';
+    // Single source of job identity: a real active job gates the button regardless of a
+    // stale terminal appState.status (see translationStartDisabledReasons).
+    const pipelineBusy = activeOperationStatuses.has(appState.status) || Boolean(appState.activeJobId);
+    const startRequestBusy = Boolean(
+      (typeof startInFlight !== 'undefined' && startInFlight)
+      || (typeof activeStartFingerprint !== 'undefined' && activeStartFingerprint));
+    // The worker queue may already contain another chapter. A fresh form remains an
+    // independent draft: it may be validated and enqueued while that job continues.
+    const editingFreshDraft = appState.newTranslationDraft;
+    const busyBlocksDraft = pipelineBusy && !editingFreshDraft;
+    const startBusyBlocksDraft = startRequestBusy;
+    const local = appState.selectedSourceType !== 'url';
+    const minimumValid = minimumSourceInputIsValid();
+    const canStart = local
+      ? minimumValid && !busyBlocksDraft && !startBusyBlocksDraft
+      : minimumValid && workspacePolicyAllowsProcessing() && !busyBlocksDraft && !startBusyBlocksDraft;
+    const disabledReasons = canStart ? [] : translationStartDisabledReasons();
+    if (disabledReasons.join('|') !== appState.lastStartDisabledReasons.join('|')) {
+      appState.lastStartDisabledReasons = disabledReasons;
+      uiTrace('start_disabled_reasons', {reasons: appState.lastStartDisabledReasons});
+    }
+    const start = $('#startBtn');
+    if (start) {
+      start.disabled = !canStart;
+      // A disabled URL start used to look like a dead button in a clean install.
+      // Keep the fail-closed policy, but expose the precise actionable reason in
+      // native keyboard/hover affordances instead of silently swallowing the click.
+      const reason = disabledReasons[0] || '';
+      const reasonText = {
+        source_input_invalid: 'Informe uma fonte válida para iniciar.',
+        local_folder_missing: 'Escolha uma pasta local antes de iniciar.',
+        workspace_policy_blocked: 'Ative a política de fontes autorizadas em Configurações.',
+        source_validation_in_progress: 'Aguarde a validação da fonte terminar.',
+        pipeline_busy: 'Aguarde o processamento atual terminar.',
+      }[reason] || '';
+      start.title = reasonText;
+      start.setAttribute('aria-disabled', canStart ? 'false' : 'true');
+      if (!busyBlocksDraft && !startBusyBlocksDraft && start.dataset.busy !== '1') start.textContent = appState.selectedMode === 'download_only' ? 'Iniciar download' : 'Iniciar tradução';
+    }
+    if (typeof traceTranslationStartControlState === 'function') traceTranslationStartControlState('controls_update', start);
+    return {canStart, validating, pipelineBusy};
+  }
+  function clearOptimisticExecutionBusy() {
+    // runStartTranslation sets appState.status to an active-operation value ('staging')
+    // optimistically, before the /api/ui/run POST.  A failure BEFORE a job is created
+    // (control-plane transient, source-analyze error, any pre-job error) used to leave
+    // that status stuck, so pipelineBusy stayed true and the start button never
+    // re-enabled without a UI reload.  Clear the optimistic status when no job was
+    // created — but keep gating on a genuinely active job so this never masks a real
+    // running job (active-job identity is preserved).  The error card and source
+    // readiness are untouched: only the transient execution-busy state is reset.
+    if (!appState.activeJobId && activeOperationStatuses.has(appState.status)) {
+      appState.status = appState.sourceValidation?.status === 'ready'
+        ? 'source_analysis_ready' : 'ready';
+    }
+  }
+  function invalidateSourceValidation() {
+    appState.sourceValidation = {
+      status: 'idle', analysisResultId: '', sourceUrl: '', reasonCode: '', analysis: null,
+    };
+    appState.sourceReady = null;
+    $('#sourceReadyPanel') && ($('#sourceReadyPanel').hidden = true);
+    updateTranslationStartControls();
+  }
+  function resetRunPreview() {
+    const summary = $('#runSummary');
+    if (summary) { summary.hidden = true; summary.innerHTML = ''; }
+    appState.lastFinishedId = '';
+    appState.previewJobId = '';
+    appState.sourceReview = null;
+    appState.sourceReady = null;
+    $('#sourceReviewPanel') && ($('#sourceReviewPanel').hidden = true);
+    $('#sourceReadyPanel') && ($('#sourceReadyPanel').hidden = true);
+  }
+  function clearNewTranslationDraftPanels() {
+    resetRunPreview();
+    clearLoadingSurface();
+    appState.qualityReview = null;
+    appState.qualityReviewSelection = new Set();
+    resetReviewPreview();
+    $('#qualityReviewPanel') && ($('#qualityReviewPanel').hidden = true);
+    const reviewedPdf = $('#reviewedPdfAction');
+    if (reviewedPdf) { reviewedPdf.hidden = true; reviewedPdf.innerHTML = ''; }
+    $('#runStatusCard') && ($('#runStatusCard').hidden = true);
+    $('#artifactActions') && ($('#artifactActions').innerHTML = '');
+    $('#balloonText') && ($('#balloonText').textContent = window.KomystI18n?.t('pipeline.idle') || 'Pronto para iniciar');
+    $$('.stage-item').forEach(item => {
+      item.classList.remove('active', 'done', 'indeterminate', 'failed', 'cancelled');
+      const pct = $('.stage-pct', item);
+      const fill = $('.stage-fill', item);
+      if (pct) pct.textContent = '—';
+      if (fill) fill.style.width = '0%';
+    });
+    if ($('#pipelineTiming')) $('#pipelineTiming').hidden = true;
+  }
+
+  function resetActivePipelineIdentity(sourceUrl = '') {
+    // A new operation owns every pipeline/result panel immediately. Clear terminal
+    // artifacts before adopting its identity so a polling tick cannot leave the last
+    // chapter's failure or quality review under the new active stage.
+    clearNewTranslationDraftPanels();
+    appState.currentRequestId = correlationId();
+    appState.currentJobId = '';
+    appState.currentRunId = '';
+    appState.currentSourceUrl = String(sourceUrl || '');
+    appState.currentChapterName = $('#nameInput')?.value?.trim() || '';
+    appState.currentStageVersion += 1;
+    appState.newTranslationDraft = false;
+    appState.suppressHistoricalResult = true;
+    $('#balloonText') && ($('#balloonText').textContent = window.KomystI18n?.t('pipeline.validating_source') || 'Validando fonte');
+    persistPipelineIdentity('validating_source');
+    uiTrace('pipeline_request_created', {request_id: appState.currentRequestId});
+  }
+
+  function persistPipelineIdentity(stage = '') {
+    setGlobal('__komystCurrentRequestId', appState.currentRequestId);
+    setGlobal('__komystCurrentJobId', appState.currentJobId);
+    setGlobal('__komystCurrentRunId', appState.currentRunId);
+    setGlobal('__komystCurrentStage', stage || appState.activeStage || '');
+    try {
+      sessionStorage.setItem('komyst:activePipeline', JSON.stringify({
+        request_id: appState.currentRequestId,
+        job_id: appState.currentJobId,
+        run_id: appState.currentRunId,
+        source_url: appState.currentSourceUrl,
+        chapter_name: appState.currentChapterName,
+        stage: stage || appState.activeStage || '',
+        updated_at: Date.now(),
+      }));
+    } catch (_) { /* session storage is a convenience only */ }
+  }
+
+  function adoptPipelineIdentity(record, {authoritative = false, stage = ''} = {}) {
+    const incomingJobId = String(record?.id || record?.job_id || '');
+    const incomingRunId = String(record?.run_id || '');
+    if (!incomingJobId) return false;
+    if (!authoritative && appState.currentJobId && appState.currentJobId !== incomingJobId) {
+      return false;
+    }
+    const changed = appState.currentJobId !== incomingJobId
+      || (incomingRunId && appState.currentRunId !== incomingRunId);
+    if (appState.currentJobId !== incomingJobId) appState.currentRunId = '';
+    appState.currentJobId = incomingJobId;
+    if (incomingRunId) appState.currentRunId = incomingRunId;
+    persistPipelineIdentity(stage || record?.stage || appState.status);
+    if (changed) {
+      uiTrace('pipeline_identity_changed', {
+        request_id: appState.currentRequestId,
+        job_id: incomingJobId,
+        run_id: incomingRunId,
+        stage: stage || record?.stage || '',
+        authoritative,
+      });
+    }
+    return true;
+  }
+
+  function pipelineRecord(status = 'staging', stage = 'source_validation', extra = {}) {
+    return {
+      id: appState.currentJobId,
+      job_id: appState.currentJobId,
+      run_id: appState.currentRunId,
+      status,
+      stage,
+      reason_code: extra.reason_code || '',
+      chapter_name: appState.currentChapterName || $('#nameInput')?.value?.trim() || 'Capítulo atual',
+      slug: $('#outputInput')?.value || '',
+      url: appState.currentSourceUrl,
+      error_message: extra.message || '',
+    };
+  }
+
+  function renderLocalPipelineState(stage, {status = 'staging', message = '', reason_code = ''} = {}) {
+    appState.status = status;
+    appState.activeStage = '';
+    persistPipelineIdentity(stage);
+    const record = pipelineRecord(status, stage, {reason_code, message});
+    const runtime = {
+      status,
+      active: terminalRunStatuses.has(status) ? null : record,
+      latest: terminalRunStatuses.has(status) ? record : null,
+      progress: {
+        stage_key: stage,
+        stage: stageMessages[stage] || stage,
+        current: 0,
+        total: 0,
+        fraction: null,
+        indeterminate: !terminalRunStatuses.has(status),
+        last_message: message,
+        updated_at: Date.now() / 1000,
+      },
+    };
+    renderProgress(runtime.progress);
+    renderRunStatus(runtime);
+    const identity = terminalIdentity(record);
+    if (identity) appState.terminalStatusByIdentity.set(identity, String(status || '').toLowerCase());
+  }
+
+  function hideStartError() {
+    const box = $('#startError');
+    if (!box) return;
+    box.hidden = true;
+    box.classList.remove('show');
+  }
+  function showStartError(error) {
+    const box = $('#startError');
+    $('#sourceReadyPanel') && ($('#sourceReadyPanel').hidden = true);
+    $('#sourceReadyPolicyState') && ($('#sourceReadyPolicyState').textContent = '');
+    renderLocalPipelineState('source_analysis', {
+      status: 'failed',
+      reason_code: error.code || '',
+      message: error.message || '',
+    });
+    if (!box) { showToast(error.message, 'error'); return; }
+    const parts = [`<strong>Não foi possível iniciar</strong>`];
+    if (error.stage) parts.push(`Etapa: ${escapeHtml(error.stage)}`);
+    const coded = reasonText(error.code);
+    if (coded) parts.push(escapeHtml(coded));
+    parts.push(escapeHtml(error.message || 'Erro desconhecido.'));
+    if (Array.isArray(error.hosts) && error.hosts.length) {
+      parts.push(`Fontes suportadas: ${escapeHtml(error.hosts.join(', '))}`);
+    }
+    if (error.action) parts.push(escapeHtml(error.action));
+    if (error.code) parts.push(`<code>${escapeHtml(error.code)}</code>`);
+    parts.push('<button class="btn-ghost" id="startRetryBtn">Tentar novamente</button>');
+    box.innerHTML = parts.join('<br>');
+    box.hidden = false;
+    box.classList.add('show');
+    $('#startRetryBtn')?.addEventListener('click', () => { box.hidden = true; startTranslation(); });
+  }
+  function sourceErrorCategory(code) {
+    const normalized = String(code || '').toLowerCase();
+    if (normalized === 'invalid_url') return 'invalid_url';
+    if (normalized === 'unsupported_source' || normalized.startsWith('unsupported_')) return 'unsupported_source';
+    if (['no_chapter_images', 'source_not_found', 'http_404'].includes(normalized)) return 'source_not_found';
+    // Recoverable transport classes are grouped into one message for the user; the
+    // backend keeps them apart in its own logs so the class itself is never lost.
+    if (['source_transport_failed', 'source_unavailable', 'source_navigation_timeout', 'source_rate_limited', 'source_timeout', 'source_network_error'].includes(normalized)) return 'source_temporarily_unavailable';
+    return normalized || 'source_extraction_failed';
+  }
+  function sourceReportPayload(error) {
+    const form = syncSourceFormState();
+    let domain = '';
+    try { domain = new URL(form.url).hostname; } catch (_) { domain = ''; }
+    return {
+      url: form.url,
+      host: domain,
+      domain,
+      detected_adapter: String(error?.adapter || error?.analysis?.adapter || ''),
+      failure_reason_code: sourceErrorCategory(error?.code || error?.reason_code),
+      timestamp: new Date().toISOString(),
+      user_note: '',
+    };
+  }
+  function openSourceReportDialog(error) {
+    appState.sourceReportDraft = sourceReportPayload(error || {});
+    const dialog = $('#sourceReportDialog');
+    const details = $('#sourceReportDetails');
+    if (details) {
+      details.textContent = `Domínio: ${appState.sourceReportDraft.domain || '—'} · motivo: ${appState.sourceReportDraft.failure_reason_code}`;
+      details.hidden = false;
+    }
+    if (!dialog) return;
+    dialog.hidden = false;
+    if (typeof dialog.showModal === 'function' && !dialog.open) dialog.showModal();
+  }
+  function closeSourceReportDialog() {
+    const dialog = $('#sourceReportDialog');
+    if (dialog?.open && typeof dialog.close === 'function') dialog.close();
+    if (dialog) dialog.hidden = true;
+  }
+  async function sendSourceSupportReport() {
+    if (!appState.sourceReportDraft) return;
+    const note = $('#sourceReportNote')?.value || '';
+    const payload = {...appState.sourceReportDraft, user_note: note};
+    const button = $('#sourceReportSend');
+    if (button) { button.disabled = true; button.textContent = 'Registrando…'; }
+    try {
+      const result = await api('/api/ui/source/report', {
+        method: 'POST', body: JSON.stringify(payload), timeoutMs: 10000,
+      });
+      if (!result?.queued) throw new Error('source_report_not_queued');
+      showToast(result.duplicate
+        ? 'Essa fonte já estava registrada para análise.'
+        : 'Obrigado. A fonte foi registrada para análise.', 'ok');
+      closeSourceReportDialog();
+    } catch (error) {
+      showToast(error.message || 'Não foi possível registrar a fonte agora.', 'error');
+    } finally {
+      if (button) { button.disabled = false; button.textContent = 'Enviar ao desenvolvedor'; }
+    }
+  }
+  function showSourceValidationError(error) {
+    // The direct Start path performs source analysis inline. On timeout/error it
+    // must leave the retry gate usable instead of keeping the form "validating".
+    appState.sourceValidation = {
+      status: 'blocked', analysisResultId: '', sourceUrl: appState.currentSourceUrl || '',
+      reasonCode: String(error?.code || error?.reason_code || 'source_validation_failed'),
+      analysis: null,
+    };
+    appState.sourceReady = null;
+    const box = $('#startError');
+    const code = sourceErrorCategory(error.code || error.reason_code);
+    const message = error.message || reasonText(code) || 'Não foi possível analisar esta fonte.';
+    const entitlementError = new Set([
+      'not_entitled', 'license_not_entitled', 'license_not_active',
+      'license_expired', 'license_revoked', 'license_not_started',
+      'device_revoked', 'device_limit_reached',
+    ]).has(code);
+    $('#balloonText') && ($('#balloonText').textContent = entitlementError
+      ? (reasonText(code) || 'Seu acesso atual não permite iniciar esta tradução.')
+      : 'A origem não pôde ser validada');
+    clearLoadingSurface();
+    if (!box) { showToast(message, 'error'); return; }
+    if (code === 'unsupported_source') openSourceReportDialog(error);
+    box.innerHTML = [
+      `<strong>${entitlementError ? 'Acesso não autorizado' : 'Fonte não iniciada'}</strong>`,
+      escapeHtml(reasonText(code) || message),
+      error.action ? escapeHtml(error.action) : '',
+      code === 'unsupported_source'
+        ? '<button class="btn-ghost" id="sourceReportOpenBtn">Enviar ao desenvolvedor</button>'
+        : '<button class="btn-ghost" id="sourceValidationRetryBtn">Tentar novamente</button>',
+    ].filter(Boolean).join('<br>');
+    box.hidden = false;
+    $('#sourceReportOpenBtn')?.addEventListener('click', () => openSourceReportDialog(error));
+    $('#sourceValidationRetryBtn')?.addEventListener('click', () => {
+      box.hidden = true;
+      validateSource();
+    });
+  }
+
+  // Poll live analysis progress while the (long) analyze POST is in flight, so the UI
+  // shows real activity ("Localizando páginas — N encontradas") instead of a frozen
+  // "Analisando a fonte...". Best-effort: any poll error is ignored.
+  function startSourceAnalysisProgressPoll(traceId) {
+    let active = true;
+    let timer = null;
+    const tick = async () => {
+      if (!active) return;
+      try {
+        const snap = await api(`/api/ui/source/analyze/progress/${encodeURIComponent(traceId)}`);
+        if (active && snap && snap.message && appState.sourceValidation.status === 'validating') {
+          const secs = Math.round((snap.elapsed_ms || 0) / 1000);
+          const progress = {
+            stage_key: 'source_analysis', stage: 'Análise segura da fonte',
+            current: 0, total: 0, fraction: null, indeterminate: true,
+            elapsed_seconds: secs, elapsed_label: `${secs}s`,
+            eta_seconds: null, eta_label: 'Estimativa disponível após as primeiras páginas',
+            last_message: String(snap.message),
+          };
+          const state = buildPipelineState({status: 'staging'}, progress);
+          renderProgress(progress, state);
+          const el = $('#balloonText');
+          if (el) el.textContent = secs > 1 ? `${snap.message} (${secs}s)` : String(snap.message);
+        }
+      } catch (_) { /* progress is best-effort */ }
+      if (active) timer = setTimeout(tick, 1000);
+    };
+    timer = setTimeout(tick, 800);
+    return () => { active = false; if (timer) clearTimeout(timer); };
+  }
+
+  async function validateSource() {
+    if (appState.selectedSourceType !== 'url' || !validateForm()) return;
+    if (appState.sourceValidation.status === 'validating') return;
+    const payload = formPayload();
+    const traceId = `sa-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+    payload.trace_id = traceId;
+    const sourceUrl = String(payload.url || '');
+    appState.sourceValidation = {
+      status: 'validating', analysisResultId: '', sourceUrl, reasonCode: '', analysis: null,
+    };
+    clearNewTranslationDraftPanels();
+    hideStartError();
+    $('#balloonText') && ($('#balloonText').textContent = 'Analisando a fonte...');
+    updateTranslationStartControls();
+    uiTrace('source_validation_started', {request_id: correlationId(), stage: 'source_validation'});
+    appState.sourceAnalysisTraceId = traceId;
+    const cancelBtn = $('#cancelSourceAnalysisBtn');
+    if (cancelBtn) cancelBtn.hidden = false;
+    const stopProgressPoll = startSourceAnalysisProgressPoll(traceId);
+    try {
+      const result = await api('/api/ui/source/analyze', {
+        method: 'POST', body: JSON.stringify(payload), timeoutMs: 190000,
+      });
+      const ready = result?.status === 'source_analysis_ready' && result?.ready === true;
+      if (result?.policy && typeof result.policy === 'object') {
+        appState.settings = appState.settings || {};
+        appState.settings.workspace_source_policy = result.policy;
+      }
+      appState.sourceValidation = {
+        status: ready ? 'ready' : 'blocked',
+        analysisResultId: ready ? String(result.analysis_result_id || '') : '',
+        sourceUrl,
+        reasonCode: String(result?.reason_code || ''),
+        analysis: result?.analysis || null,
+      };
+      if (ready) appState.newTranslationDraft = false;
+      appState.sourceReady = {
+        id: String(result?.analysis_result_id || ''),
+        job_id: '',
+        status: result?.status || 'source_analysis_blocked',
+        stage: result?.status || 'source_analysis_blocked',
+        source_type: 'url',
+        source_analysis_result: result?.source_analysis_result || {},
+        analysis: result?.analysis || {},
+        reason_code: result?.reason_code || '',
+      };
+      if (ready) persistSourceValidationDraft(result, sourceUrl);
+      else clearSourceValidationDraft();
+      renderSourceAnalysisReady(appState.sourceReady);
+      $('#balloonText') && ($('#balloonText').textContent = ready
+        ? (workspacePolicyAllowsProcessing()
+          ? 'Fonte reconhecida. Preparando tradução...' : 'Fonte bloqueada pela política')
+        : 'A origem não está pronta para processamento');
+      showToast(ready
+        ? (workspacePolicyAllowsProcessing() ? 'Fonte autorizada.' : 'Fonte analisada; autorização necessária.')
+        : 'A origem foi analisada, mas permanece bloqueada.', ready && workspacePolicyAllowsProcessing() ? 'ok' : 'warn');
+      uiTrace('source_validation_completed', {
+        status: appState.sourceValidation.status,
+        reason_code: appState.sourceValidation.reasonCode,
+        stage: 'source_validation',
+      });
+    } catch (error) {
+      appState.sourceValidation = {
+        status: 'blocked', analysisResultId: '', sourceUrl,
+        reasonCode: String(error.code || 'source_validation_failed'), analysis: null,
+      };
+      showSourceValidationError(error);
+      uiTrace('source_validation_failed', {
+        reason_code: appState.sourceValidation.reasonCode, stage: 'source_validation',
+      });
+    } finally {
+      stopProgressPoll();
+      appState.sourceAnalysisTraceId = '';
+      const btn = $('#cancelSourceAnalysisBtn');
+      if (btn) btn.hidden = true;
+      updateTranslationStartControls();
+    }
+  }
+
+  $('#cancelSourceAnalysisBtn')?.addEventListener('click', async () => {
+    const traceId = String(appState.sourceAnalysisTraceId || '');
+    if (!traceId) return;
+    const btn = $('#cancelSourceAnalysisBtn');
+    if (btn) btn.disabled = true;
+    const el = $('#balloonText');
+    if (el) el.textContent = 'Cancelando análise…';
+    try { await api(`/api/ui/source/analyze/cancel/${encodeURIComponent(traceId)}`, {method: 'POST'}); }
+    catch (_) { /* the in-flight analyze will still settle */ }
+    finally { if (btn) btn.disabled = false; }
+  });
+
+  // Single flight, same shape as refreshBootstrap below. Every start
+  // entrypoint -- the button, Enter on the URL or name field, the retry
+  // button -- lands here, and the lock is taken synchronously, before any
+  // await, so a burst of clicks cannot open a second chain. Disabling the
+  // button is UX; this is the concurrency contract. The database settles what
+  // survives a genuinely simultaneous submission.
+  // Keep a short-lived single-flight identity after the request resolves.  The
+  // button can be re-rendered while the job is being adopted, so a DOM
+  // `disabled` flag alone is not a sufficient duplicate-submit guard.
+  function currentStartFingerprint() {
+    const form = syncSourceFormState();
+    return [
+      appState.selectedSourceType || 'url',
+      form.url || form.localFolder || '',
+      form.chapterName || '',
+      appState.selectedScope || 'full',
+      appState.selectedMode || 'quality',
+    ].join('|');
+  }
+  function startTranslation() {
+    const sequence = ++startAttemptSequence;
+    const fingerprint = currentStartFingerprint();
+    const startButton = $('#startBtn');
+    traceTranslationStartControlState('click_received', startButton);
+    sourceTrace('TRANSLATION_START_CLICK', {
+      sequence, elapsed_ms: 0, sync_state: String(appState.status || 'unknown'),
+      bootstrap_ready: Boolean(getGlobal('__komystControlPlane')?.state?.ready),
+      wallet_ready: Boolean(getGlobal('__komystControlPlane')?.state?.walletLoaded),
+      auth_ready: Boolean(getGlobal('__komystControlPlane')?.state?.authenticated),
+      review_state: String(appState.sourceReview?.status || appState.status || 'none'),
+      form_valid: minimumSourceInputIsValid(), button_enabled: Boolean(startButton && !startButton.disabled),
+      request_count: 0,
+    });
+    if (startInFlight || (activeStartFingerprint && activeStartFingerprint === fingerprint)) {
+      uiTrace('TRANSLATION_START_IGNORED_IN_FLIGHT', {
+        fingerprint: fingerprint.slice(0, 120),
+        has_request: Boolean(startInFlight),
+      });
+      sourceTrace('TRANSLATION_START_SINGLE_FLIGHT_SKIP', {
+        sequence, elapsed_ms: 0, block_reason: 'single_flight', request_count: 0,
+        button_enabled: Boolean(startButton && !startButton.disabled),
+      });
+      return startInFlight;
+    }
+    activeStartFingerprint = fingerprint;
+    uiTrace('TRANSLATION_START_ACCEPTED', {fingerprint: fingerprint.slice(0, 120)});
+    sourceTrace('TRANSLATION_START_HANDLER_ENTER', {sequence, elapsed_ms: 0, request_count: 0});
+    traceTranslationStartControlState('handler_enter', startButton);
+    startInFlight = runStartTranslation(sequence).then(result => {
+      if (!result || !result.job_id) { activeStartFingerprint = ''; clearOptimisticExecutionBusy(); }
+      return result;
+    }).catch(error => {
+      activeStartFingerprint = '';
+      clearOptimisticExecutionBusy();
+      uiTrace('TRANSLATION_START_UNHANDLED_ERROR', {
+        code: String(error?.code || error?.message || 'start_failed').slice(0, 80),
+      });
+      return undefined;
+    }).finally(() => {
+      traceTranslationStartControlState('finally_before_clear', $('#startBtn'));
+      startInFlight = null;
+      // Recompute after the single-flight promise is actually cleared.  The
+      // dry-run path previously called this while startInFlight was still set,
+      // immediately disabling the button again and making later trusted
+      // gestures appear to be lost.
+      updateTranslationStartControls();
+      traceTranslationStartControlState('finally_after_clear', $('#startBtn'));
+    });
+    traceTranslationStartControlState('controls_after_inflight_set', startButton);
+    return startInFlight;
+  }
+  async function runStartTranslation(sequence = 0) {
+    // Take the visual lock synchronously, before policy/bootstrap awaits.  This
+    // makes the first valid click visibly pending and prevents a second click
+    // from looking like a required retry.
+    const button = $('#startBtn');
+    const previousLabel = button ? button.textContent : '';
+    if (button) {
+      button.dataset.busy = '1';
+      button.disabled = true;
+      button.setAttribute('aria-busy', 'true');
+      button.textContent = 'Iniciando processamento…';
+    }
+    sourceTrace('TRANSLATION_START_PENDING', {sequence, elapsed_ms: 0, request_count: 0, button_enabled: Boolean(button && !button.disabled)});
+    traceTranslationStartControlState('start_in_flight_set', button);
+    if (window.__komystTranslationStartDryRun === true) {
+      sourceTrace('TRANSLATION_START_DRY_RUN_BLOCKED', {
+        sequence, elapsed_ms: 0, request_count: 0, reason: 'diagnostic_only',
+      });
+      traceTranslationStartControlState('dry_run_blocked', button);
+      if (button) {
+        button.disabled = false;
+        button.removeAttribute('aria-busy');
+        delete button.dataset.busy;
+        button.textContent = previousLabel || 'Iniciar tradução';
+      }
+      updateTranslationStartControls();
+      return {dry_run: true, job_id: ''};
+    }
+    const traceId = beginSourceAttempt();
+    const sourceType = appState.selectedSourceType || 'unknown';
+    sourceTrace('SOURCE_UI_CLICK', {trace_id: traceId, source_type: sourceType});
+    if (!validateForm()) {
+      sourceTrace('TRANSLATION_START_BLOCKED', {sequence, elapsed_ms: 0, block_reason: 'form_invalid', form_valid: false, request_count: 0});
+      if (button) {
+        button.textContent = previousLabel || 'Iniciar tradução';
+        delete button.dataset.busy;
+        button.removeAttribute('aria-busy');
+      }
+      return;
+    }
+    sourceTrace('FORM_VALIDATION', {trace_id: traceId, status: 'pass'});
+    const policy = appState.settings?.workspace_source_policy || {};
+    const policyPresent = Object.keys(policy).length > 0;
+    const policyAllows = workspacePolicyAllowsProcessing();
+    sourceTrace('SOURCE_POLICY_GUARD_CHECK', {
+      trace_id: traceId, source_type: sourceType, policy_present: policyPresent,
+      policy_status: String(policy.status || ''),
+      all_submitted_sources_authorized: policy.all_submitted_sources_authorized === true,
+      guard_result: sourceType === 'url' ? (policyAllows ? 'ALLOW' : 'BLOCK') : 'ALLOW',
+    });
+    // The authorization used to live only in Configurações; it is asked where it is
+    // needed, once, through the same endpoint.
+    if (sourceType === 'url' && !policyAllows && await komystConfirm(
+      'Para traduzir por URL, confirme que você só processará conteúdo próprio, licenciado, autorizado ou de domínio público. A confirmação vale para os próximos capítulos e nada é publicado automaticamente.',
+      {title: 'Autorizar fontes', confirmLabel: 'Confirmo'})) {
+      try {
+        const result = await api('/api/ui/source-policy', {method: 'POST', body: JSON.stringify({active: true})});
+        appState.settings = appState.settings || {};
+        appState.settings.workspace_source_policy = result.policy || {};
+      } catch (_) { /* stays blocked below */ }
+    }
+    if (sourceType === 'url' && !workspacePolicyAllowsProcessing()) {
+      sourceTrace('TRANSLATION_START_BLOCKED', {sequence, elapsed_ms: 0, block_reason: 'workspace_policy_blocked', form_valid: true, request_count: 0});
+      sourceTrace('SOURCE_POLICY_GUARD_BLOCKED', {
+        trace_id: traceId,
+        reason_code: !policyPresent ? 'POLICY_MISSING' : (policy.status !== 'active' ? 'POLICY_INACTIVE' : 'SOURCES_NOT_AUTHORIZED'),
+      });
+      updateTranslationStartControls();
+      showToast('Esta origem não está autorizada para processamento.', 'warn');
+      if (button) {
+        button.textContent = previousLabel || 'Iniciar tradução';
+        delete button.dataset.busy;
+        button.removeAttribute('aria-busy');
+      }
+      return;
+    }
+    if (button) {
+      button.dataset.busy = '1';
+      button.disabled = true;
+      button.textContent = appState.selectedSourceType === 'url'
+        ? 'Analisando a fonte…' : 'Iniciando processamento…';
+    }
+    hideStartError();
+    const controlPlane = getGlobal('__komystControlPlane');
+    let controlPlaneRefreshOk = true;
+    if (controlPlane?.state?.authenticated && typeof controlPlane.bootstrap === 'function') {
+      // The authenticated bootstrap is already the authoritative policy snapshot.  A
+      // second network bootstrap on every click created a race where a transient wallet/
+      // license refresh failure blocked an otherwise valid, ready session.  Refresh only
+      // while the control plane is not ready; heartbeat keeps the ready snapshot current.
+      const readySnapshot = controlPlane.state.ready === true
+        && controlPlane.state.bootstrap
+        && typeof controlPlane.state.bootstrap === 'object';
+      let refreshed = readySnapshot;
+      if (readySnapshot) {
+        sourceTrace('TRANSLATION_POLICY_REFRESH_SKIPPED_READY', {trace_id: traceId});
+      } else {
+        try {
+          refreshed = await controlPlane.bootstrap();
+        } catch (error) {
+          sourceTrace('TRANSLATION_POLICY_REFRESH_FAILED', {
+            trace_id: traceId, reason_code: String(error?.code || 'control_plane_refresh_failed'),
+          });
+          showStartError(error);
+          if (button) { button.textContent = previousLabel || 'Iniciar tradução'; button.removeAttribute('aria-busy'); delete button.dataset.busy; }
+          updateTranslationStartControls();
+          return;
+        }
+      }
+      // A failed refresh must not be converted into a disabled translation job.
+      // Stop before source analysis/job creation so a transient control-plane
+      // failure cannot silently change the user's authoritative policy.
+      controlPlaneRefreshOk = Boolean(refreshed);
+      if (!controlPlaneRefreshOk) {
+        sourceTrace('TRANSLATION_POLICY_REFRESH_FAILED', {
+          trace_id: traceId, reason_code: 'control_plane_refresh_failed',
+        });
+        const error = new Error('Não foi possível confirmar a política de tradução.');
+        error.code = 'control_plane_refresh_failed';
+        showStartError(error);
+        if (button) { button.textContent = previousLabel || 'Iniciar tradução'; button.removeAttribute('aria-busy'); }
+        if (button) delete button.dataset.busy;
+        updateTranslationStartControls();
+        return;
+      }
+    }
+    if (controlPlaneRefreshOk) syncAuthoritativeTranslationFlag();
+    const payload = formPayload();
+    if (appState.selectedSourceType === 'url' && payload.pipeline_intent
+        && typeof payload.pipeline_intent === 'object') {
+      // Explicitly distinguish the Start action from the standalone source
+      // preflight control.  The server may auto-continue only this one-click path.
+      payload.pipeline_intent.continue_after_analysis = true;
+    }
+    if (appState.selectedSourceType === 'url') {
+      appState.sourceValidation = {
+        status: 'validating', analysisResultId: '', sourceUrl: String(payload.url || ''),
+        reasonCode: '', analysis: null,
+      };
+      updateTranslationStartControls();
+      resetActivePipelineIdentity(payload.url || '');
+      renderLocalPipelineState('source_analysis', {
+        status: 'staging',
+        message: 'Analisando a fonte...',
+      });
+      appState.sourceAnalysisTraceId = traceId;
+      const stopProgressPoll = startSourceAnalysisProgressPoll(traceId);
+      let analysisResult;
+      try {
+        sourceTrace('TRANSLATION_START_REQUEST', {sequence, elapsed_ms: 0, request_count: 1, route: '/api/ui/source/analyze'});
+        sourceTrace('START_REQUEST', {trace_id: traceId, route: '/api/ui/source/analyze', source_type: sourceType});
+        sourceTrace('SOURCE_ANALYZE_REQUEST_STARTED', {trace_id: traceId, route: '/api/ui/source/analyze', source_type: sourceType});
+        const startedAt = performance.now();
+        analysisResult = await api('/api/ui/source/analyze', {
+          method: 'POST', body: JSON.stringify({...payload, trace_id: traceId}), timeoutMs: 190000,
+        });
+        sourceTrace('TRANSLATION_START_RESPONSE', {sequence, elapsed_ms: Math.round(performance.now() - startedAt), request_count: 1, status: 'ok'});
+        sourceTrace('SOURCE_ANALYZE_REQUEST_FINISHED', {trace_id: traceId, status: 'ok', ready: analysisResult?.ready === true, duration_ms: Math.round(performance.now() - startedAt)});
+      } catch (error) {
+        sourceTrace('TRANSLATION_START_ERROR', {sequence, elapsed_ms: 0, request_count: 1, error_code: String(error.code || 'source_analyze_failed').slice(0, 80)});
+        sourceTrace('SOURCE_ANALYZE_REQUEST_FAILED', {trace_id: traceId, reason_code: String(error.code || 'source_analyze_failed')});
+        if (String(error.code || '') === 'challenge_required') {
+          // Create the durable job only after the explicit source probe reports a
+          // challenge. The worker will keep this same job waiting; no CAPTCHA solver
+          // or alternate fetch is attempted here.
+          try {
+            const pendingPayload = {...payload, source_verification_pending: true};
+            const pending = await api('/api/ui/run', {
+              method: 'POST', body: JSON.stringify({...pendingPayload, trace_id: traceId}),
+            });
+            appState.currentJobId = String(pending.job_id || '');
+            appState.currentRunId = String(pending.run_id || '');
+            appState.suppressHistoricalResult = false;
+            ensurePolling();
+            renderLocalPipelineState('waiting_source_verification', {
+              status: 'waiting_source_verification',
+              message: 'Aguardando verificação da fonte no navegador…',
+            });
+            showToast('Conclua a verificação legítima no navegador e tente continuar este job.', 'warn');
+            return pending;
+          } catch (pendingError) {
+            showSourceValidationError(pendingError);
+            return;
+          }
+        }
+        showSourceValidationError(error);
+        if (button) { button.textContent = previousLabel || 'Iniciar tradução'; button.removeAttribute('aria-busy'); }
+        if (button) delete button.dataset.busy;
+        updateTranslationStartControls();
+        return;
+      }
+      finally {
+        stopProgressPoll();
+        appState.sourceAnalysisTraceId = '';
+      }
+      // `ready` is the semantic authorization for the next stage.  Older clients
+      // incorrectly treated a non-canonical status string as a block even when the
+      // backend had returned ready=true, which stranded the one-click flow after
+      // source analysis.  Keep status informational; require the analysis id for
+      // a usable continuation payload.
+      const ready = analysisResult?.ready === true
+        && Boolean(String(analysisResult?.analysis_result_id || ''));
+      sourceTrace('AUTO_CONTINUE_DECISION', {
+        trace_id: traceId, route: '/api/ui/run', status: ready ? 'continue' : 'blocked',
+        reason_code: String(analysisResult?.reason_code || ''),
+      });
+      appState.sourceValidation = {
+        status: ready ? 'ready' : 'blocked',
+        analysisResultId: ready ? String(analysisResult.analysis_result_id || '') : '',
+        sourceUrl: String(payload.url || ''),
+        reasonCode: String(analysisResult?.reason_code || ''),
+        analysis: analysisResult?.analysis || null,
+      };
+      if (analysisResult?.policy && typeof analysisResult.policy === 'object') {
+        appState.settings = appState.settings || {};
+        appState.settings.workspace_source_policy = analysisResult.policy;
+      }
+      if (!ready) {
+        sourceTrace('TRANSLATION_START_BLOCKED', {sequence, elapsed_ms: 0, block_reason: 'source_not_ready', form_valid: true, request_count: 1});
+        const error = new Error(analysisResult?.reason_code || 'source_extraction_failed');
+        error.code = analysisResult?.reason_code || 'source_extraction_failed';
+        error.analysis = analysisResult?.analysis || null;
+        showSourceValidationError(error);
+        if (button) { button.textContent = previousLabel || 'Iniciar tradução'; button.removeAttribute('aria-busy'); }
+        if (button) delete button.dataset.busy;
+        updateTranslationStartControls();
+        return;
+      }
+      $('#balloonText') && ($('#balloonText').textContent = 'Fonte reconhecida. Preparando tradução...');
+      if (button) button.textContent = 'Preparando tradução…';
+      payload.source_validation_required = true;
+      payload.source_analysis_result_id = appState.sourceValidation.analysisResultId;
+    } else {
+      resetActivePipelineIdentity(payload.url || payload.local_folder || '');
+    }
+    renderLocalPipelineState('queued', {
+      status: 'staging',
+      message: 'Criando job de processamento',
+    });
+
+    let runStartedAt = performance.now();
+    try {
+      sourceTrace('TRANSLATION_START_REQUEST', {sequence, elapsed_ms: 0, request_count: 2, route: '/api/ui/run'});
+      sourceTrace('AUTO_CONTINUE_BEGIN', {trace_id: getGlobal('__sourceTraceId') || '', route: '/api/ui/run'});
+      sourceTrace('SOURCE_RUN_REQUEST_STARTED', {trace_id: traceId, route: '/api/ui/run', source_type: sourceType});
+      runStartedAt = performance.now();
+      const result = await api('/api/ui/run', {method: 'POST', body: JSON.stringify({...payload, trace_id: traceId})});
+      sourceTrace('TRANSLATION_START_RESPONSE', {sequence, elapsed_ms: Math.round(performance.now() - runStartedAt), request_count: 2, status: 'ok'});
+      sourceTrace('RUN_REQUEST_FINISHED', {trace_id: traceId, route: '/api/ui/run', status: 'ok', reason_code: String(result?.reason_code || ''), duration_ms: Math.round(performance.now() - runStartedAt)});
+      if (!result || result.ok === false) {
+        const error = new Error((result && (result.message || result.reason_code)) || 'Não foi possível analisar esta fonte com segurança.');
+        error.code = result && result.reason_code;
+        error.stage = (result && result.stage) || 'análise da fonte';
+        error.action = (result && result.action) || 'Revise a URL e tente novamente.';
+        throw error;
+      }
+      appState.lastFinishedId = '';
+      resetRunPreview();                            // never carry the previous job's card over
+      appState.currentJobId = String(result.job_id || '');
+      appState.currentRunId = String(result.run_id || '');
+      appState.suppressHistoricalResult = false;
+      persistPipelineIdentity(result.stage || 'queued');
+      uiTrace('pipeline_job_created', {
+        request_id: appState.currentRequestId,
+        job_id: appState.currentJobId,
+        run_id: appState.currentRunId,
+        stage: result.stage || 'queued',
+      });
+      const awaitingReview = Boolean(result.awaiting_source_review);
+      ensurePolling();
+      renderLocalPipelineState(awaitingReview ? 'awaiting_source_review' : (result.stage || 'queued'), {
+        status: awaitingReview ? 'awaiting_source_review' : (result.status || 'queued'),
+        message: awaitingReview ? 'Aguardando revisão das páginas' : 'Na fila',
+      });
+      setRunControls(true, awaitingReview);
+      if (awaitingReview) {
+        renderSourceReview({
+          id: result.job_id,
+          source_analysis: result.analysis || {},
+          source_provenance: result.source_provenance || {},
+        });
+        showToast('Revise as páginas encontradas antes de iniciar o OCR.', 'warn');
+      } else if (result && result.worker && result.worker.online === false) {
+        showToast('Job enfileirado, mas o worker não está online.', 'warn');
+      } else {
+        showToast(result && result.duplicate
+          ? 'Este capítulo já está na fila.' : 'Pipeline real iniciado.', 'ok');
+      }
+      activateTab('nova', {preservePipeline: true});
+      return result;
+    } catch (error) {
+      sourceTrace('TRANSLATION_START_ERROR', {sequence, elapsed_ms: Math.round(performance.now() - runStartedAt), request_count: 2, error_code: String(error.code || 'run_failed').slice(0, 80)});
+      sourceTrace('RUN_REQUEST_FAILED', {trace_id: traceId, route: '/api/ui/run', status: 'error', reason_code: String(error.code || 'run_failed'), duration_ms: Math.round(performance.now() - runStartedAt)});
+      // The backend rejected it: return control to the user with a readable reason.
+      if (button) { button.textContent = previousLabel || 'Iniciar tradução'; button.removeAttribute('aria-busy'); }
+      showStartError(error);
+    } finally {
+      if (button) { delete button.dataset.busy; button.removeAttribute('aria-busy'); }
+      updateTranslationStartControls();
+    }
+  }
+  function visibleCancelControl() {
+    return [$('#runCancelAction'), $('#cancelBtn')]
+      .find(button => button && !button.hidden && button.offsetParent !== null) || null;
+  }
+  async function cancelTranslation(queue = false, jobId = '') {
+    if (appState.cancelBusy) return;
+    if (!await komystConfirm('Deseja cancelar este processamento? Os arquivos ja produzidos serao preservados.', {title: 'Cancelar processamento', confirmLabel: 'Cancelar processamento', cancelLabel: 'Continuar', danger: true})) return;
+    appState.cancelBusy = true;
+    const button = visibleCancelControl() || $('#cancelSourceReview');
+    if (button) { button.disabled = true; button.textContent = 'Cancelando...'; }
+    try {
+      const payload = {queue};
+      if (jobId) payload.job_id = jobId;
+      const endpoint = jobId ? `/api/ui/jobs/${encodeURIComponent(jobId)}/cancel` : '/api/ui/cancel';
+      const result = await api(endpoint, {method: 'POST', body: JSON.stringify(payload), timeoutMs: 10000});
+      showToast(result?.message || 'Cancelamento solicitado. Os arquivos parciais serao preservados.', 'warn');
+      pollState();
+    } catch (error) {
+      showToast(error.message || 'Nao foi possivel cancelar.', 'error');
+      if (button) { button.disabled = false; button.textContent = 'Cancelar processamento'; }
+    } finally {
+      appState.cancelBusy = false;
+      if (button && !button.hidden) { button.disabled = false; button.textContent = 'Cancelar processamento'; }
+    }
+  }
+  function setRunControls(active, awaitingReview = false) {
+    updateTranslationStartControls();
+    setTranslationFormLocked(active);
+    const start = $('#startBtn');
+    if (start && active) start.disabled = true;
+    if (start && active) start.textContent = awaitingReview ? 'Aguardando revisão…' : 'Processando…';
+    const cancelBtn = $('#cancelBtn');
+    if (cancelBtn) {
+      cancelBtn.hidden = !active;
+      cancelBtn.disabled = !active;
+      cancelBtn.classList.toggle('show', active);
+      cancelBtn.textContent = 'Cancelar';
+    }
+    const action = $('#runCancelAction');
+    if (action && !appState.cancelBusy) { action.hidden = !active; action.disabled = !active; action.textContent = 'Cancelar processamento'; }
+    if (!active) appState.cancelBusy = false;
+  }
+  function setTranslationFormLocked(active) {
+    const panel = $('#newTranslationFormPanel');
+    if (!panel) return;
+    panel.classList.toggle('translation-form-locked', active);
+    panel.setAttribute('aria-busy', active ? 'true' : 'false');
+    panel.querySelectorAll('input, select, button').forEach(control => {
+      if (['startBtn', 'cancelBtn'].includes(control.id)) return;
+      if (active) {
+        if (control.dataset.runLockDisabled === undefined) {
+          control.dataset.runLockDisabled = control.disabled ? '1' : '0';
+        }
+        control.disabled = true;
+      } else if (control.dataset.runLockDisabled !== undefined) {
+        control.disabled = control.dataset.runLockDisabled === '1';
+        delete control.dataset.runLockDisabled;
+      }
+    });
+    panel.querySelectorAll('.scope-card').forEach(control => {
+      control.setAttribute('aria-disabled', active ? 'true' : 'false');
+    });
+  }
+  // Bind the start gesture at the stable document boundary.  The translation
+  // panel can be rerendered while readiness/profile state settles; a listener
+  // attached directly to the old button node can then observe pointerdown but
+  // miss the semantic click on the replacement node.  Delegation preserves the
+  // normal click/keyboard contract and keeps single-flight inside startTranslation.
+  function startButtonFromEvent(event) {
+    const target = event?.target;
+    const button = target && typeof target.closest === 'function' ? target.closest('#startBtn') : null;
+    if (button) observeStartButtonGeneration(button);
+    return button;
+  }
+  const startGestureNodeIds = new WeakMap();
+  let nextStartGestureNodeId = 1;
+  let startGestureSequence = 0;
+  let startGestureObserver = null;
+  let startGestureDown = null;
+  let lastObservedStartButton = null;
+  // Lossless input audit: keep the primary evidence in-memory and emit one
+  // bounded dump, rather than relying on one host/bridge message per event.
+  const inputAudit = window.__komystInputAudit = window.__komystInputAudit || {events: [], counts: {}, next_seq: 0, dumped: false};
+  const inputAuditRecord = (eventType, event, scope) => {
+    const target = event?.target;
+    const button = target && typeof target.closest === 'function' ? target.closest('#startBtn') : null;
+    const x = Number(event?.clientX || 0), y = Number(event?.clientY || 0);
+    let top = null, topStart = null;
+    try { top = document.elementFromPoint(x, y); topStart = top?.closest?.('#startBtn') || null; } catch (_) {}
+    const record = {
+      seq: ++inputAudit.next_seq, performance_ms: Number(performance.now().toFixed(3)), event_type: eventType,
+      scope, isTrusted: event?.isTrusted === true, event_phase: Number(event?.eventPhase || 0),
+      target_node_id: startGestureNodeId(target), closest_start_node_id: startGestureNodeId(button),
+      clientX: x, clientY: y, button: Number(event?.button ?? -1), buttons: Number(event?.buttons || 0),
+      pointerId: Number(event?.pointerId || 0), pointerType: String(event?.pointerType || ''),
+      defaultPrevented: event?.defaultPrevented === true, hasFocus: document.hasFocus?.() === true,
+      visibility: String(document.visibilityState || ''), render_generation: Number(window.__KOMYST_FORM_RENDER_GENERATION || 0),
+      disabled: button?.disabled === true, top_element_node_id: startGestureNodeId(top),
+      top_is_start: Boolean(topStart), down_inside_start: eventType.endsWith('down') ? Boolean(topStart) : undefined,
+    };
+    inputAudit.events.push(record); if (inputAudit.events.length > 200) inputAudit.events.shift();
+    inputAudit.counts[`${scope}_${eventType}`] = Number(inputAudit.counts[`${scope}_${eventType}`] || 0) + 1;
+    if (window.__komystInputAuditVisible === true && eventType === 'mousedown' && event?.isTrusted === true && button && !inputAudit.marker) {
+      const marker = document.createElement('div'); marker.textContent = 'PHYSICAL_GESTURES_SEEN_BY_DOM=0';
+      marker.id = 'komyst-input-audit-marker'; marker.style.cssText = 'position:fixed;left:4px;top:4px;z-index:2147483647;pointer-events:none;background:#111;color:#9f9;font:11px monospace;padding:2px 4px;';
+      document.documentElement.appendChild(marker); inputAudit.marker = marker;
+    }
+    if (window.__komystInputAuditVisible === true && eventType === 'mousedown' && event?.isTrusted === true && button && inputAudit.marker) {
+      const n = Number(inputAudit.counts.DOCUMENT_mousedown || 0); inputAudit.marker.textContent = `PHYSICAL_GESTURES_SEEN_BY_DOM=${n}`;
+    }
+    if (Number(inputAudit.counts.DOCUMENT_mousedown || 0) >= 20 && !inputAudit.dumped) dumpInputAudit();
+  };
+  function dumpInputAudit() {
+    if (inputAudit.dumped) return;
+    inputAudit.dumped = true;
+    sourceTrace('DUMP_INPUT_AUDIT', {
+      audit_event_count: inputAudit.events.length,
+      audit_counts: JSON.stringify(inputAudit.counts),
+      audit_buffer: JSON.stringify(inputAudit.events),
+    });
+  }
+  window.__komystDumpInputAudit = dumpInputAudit;
+  for (const scopeTarget of [window, document]) {
+    const scope = scopeTarget === window ? 'WINDOW' : 'DOCUMENT';
+    for (const type of ['pointerdown','pointerup','pointercancel','lostpointercapture','mousedown','mouseup','click','dblclick']) {
+      scopeTarget.addEventListener(type, event => inputAuditRecord(type, event, scope), {capture: true, passive: true});
+    }
+  }
+  window.addEventListener('focus', () => inputAuditRecord('focus', null, 'WINDOW'), {capture: true, passive: true});
+  window.addEventListener('blur', () => inputAuditRecord('blur', null, 'WINDOW'), {capture: true, passive: true});
+  document.addEventListener('visibilitychange', () => inputAuditRecord('visibilitychange', null, 'DOCUMENT'), {capture: true, passive: true});
+  function startGestureNodeId(node) {
+    if (!node || (typeof node !== 'object' && typeof node !== 'function')) return '';
+    if (!startGestureNodeIds.has(node)) startGestureNodeIds.set(node, `start-node-${nextStartGestureNodeId++}`);
+    return startGestureNodeIds.get(node);
+  }
+  function startGestureEventFields(event, button) {
+    const target = event?.target;
+    const active = document.activeElement;
+    return {
+      node_instance_id: startGestureNodeId(button), target_node_id: startGestureNodeId(target),
+      closest_start_button_node_id: startGestureNodeId(target?.closest?.('#startBtn')),
+      is_connected: button?.isConnected === true, disabled: button?.disabled === true,
+      aria_disabled: button?.getAttribute?.('aria-disabled') || '',
+      ready: String(appState.status || 'unknown'), event_phase: Number(event?.eventPhase || 0),
+      default_prevented: event?.defaultPrevented === true, pointer_id: Number(event?.pointerId || 0),
+      trusted: event?.isTrusted === true, active_element_node_id: startGestureNodeId(active),
+      document_has_focus: document.hasFocus?.() === true,
+    };
+  }
+  function observeStartButtonGeneration(button) {
+    if (!button || button === lastObservedStartButton) return Number(window.__KOMYST_FORM_RENDER_GENERATION || 0);
+    lastObservedStartButton = button;
+    const generation = Number(window.__KOMYST_FORM_RENDER_GENERATION || 0) + 1;
+    window.__KOMYST_FORM_RENDER_GENERATION = generation;
+    sourceTrace('TRANSLATION_START_BUTTON_NODE_OBSERVED', {node_instance_id: startGestureNodeId(button), render_generation: generation});
+    return generation;
+  }
+  function finishStartGestureDiagnostics(result = 'TIMEOUT') {
+    if (startGestureDown) {
+      const button = startGestureDown.node;
+      sourceTrace('TRANSLATION_START_GESTURE_SUMMARY', {
+        sequence: startGestureDown.sequence, result,
+        node_instance_id: startGestureDown.node_id,
+        current_start_button_node_id: startGestureNodeId($('#startBtn')),
+        current_button_is_connected: $('#startBtn')?.isConnected === true,
+        disabled: button?.disabled === true,
+        render_generation: Number(window.__KOMYST_FORM_RENDER_GENERATION || 0),
+        same_node_down_up: Boolean(startGestureDown.same_node_down_up),
+        click_seen: Boolean(startGestureDown.click_seen),
+        mutation_count: Number(startGestureDown.mutation_count || 0),
+      });
+    }
+    if (startGestureObserver) { startGestureObserver.disconnect(); startGestureObserver = null; }
+    startGestureDown = null;
+  }
+  function beginStartGestureDiagnostics(button) {
+    finishStartGestureDiagnostics();
+    const sequence = ++startGestureSequence;
+    startGestureDown = {sequence, node: button, node_id: startGestureNodeId(button), render_generation: Number(window.__KOMYST_FORM_RENDER_GENERATION || 0), disabled: button?.disabled === true, same_node_down_up: false, click_seen: false, mutation_count: 0};
+    sourceTrace('TRANSLATION_START_GESTURE_BEGIN', {sequence, ...startGestureEventFields({target: button}, button), render_generation: startGestureDown.render_generation});
+    const panel = $('#newTranslationFormPanel');
+    if (panel && typeof MutationObserver === 'function') {
+      startGestureObserver = new MutationObserver(mutations => {
+        for (const mutation of mutations) {
+          if (startGestureDown) startGestureDown.mutation_count += 1;
+          const target = mutation.target;
+          const current = $('#startBtn');
+          sourceTrace('TRANSLATION_START_GESTURE_MUTATION', {
+            sequence, mutation_type: mutation.type, attribute: mutation.attributeName || '',
+            start_button_present: Boolean(current), start_button_node_id: startGestureNodeId(current),
+            disabled: current?.disabled === true, render_generation: Number(window.__KOMYST_FORM_RENDER_GENERATION || 0),
+            child_count: mutation.addedNodes?.length + mutation.removedNodes?.length,
+            target_node_id: startGestureNodeId(target),
+          });
+        }
+      });
+      startGestureObserver.observe(panel, {subtree: true, childList: true, attributes: true, attributeFilter: ['disabled', 'aria-disabled', 'class', 'style']});
+    }
+    window.setTimeout(() => finishStartGestureDiagnostics('NO_CLICK_TIMEOUT'), 750);
+  }
+  document.addEventListener('mousedown', event => {
+    const button = startButtonFromEvent(event);
+    sourceTrace('TRANSLATION_START_MOUSEDOWN', startGestureEventFields(event, button));
+  }, {capture: true});
+  document.addEventListener('mouseup', event => {
+    const button = startButtonFromEvent(event);
+    sourceTrace('TRANSLATION_START_MOUSEUP', startGestureEventFields(event, button));
+  }, {capture: true});
+  document.addEventListener('pointerdown', event => {
+    const button = startButtonFromEvent(event);
+    if (!button) return;
+    beginStartGestureDiagnostics(button);
+    sourceTrace('TRANSLATION_START_POINTER', {
+      ...startGestureEventFields(event, button), sync_state: String(appState.status || 'unknown'),
+      render_generation: Number(window.__KOMYST_FORM_RENDER_GENERATION || 0),
+    });
+  }, {capture: true});
+  document.addEventListener('pointerup', event => {
+    const button = startButtonFromEvent(event);
+    if (!button) return;
+    const sameNode = Boolean(startGestureDown && startGestureDown.node === button);
+    if (startGestureDown) startGestureDown.same_node_down_up = sameNode;
+    sourceTrace('TRANSLATION_START_POINTERUP', {
+      ...startGestureEventFields(event, button),
+      same_node_down_up: sameNode,
+      render_generation: Number(window.__KOMYST_FORM_RENDER_GENERATION || 0),
+    });
+  }, {capture: true});
+  document.addEventListener('click', event => {
+    const button = startButtonFromEvent(event);
+    if (!button) return;
+    sourceTrace('TRANSLATION_START_CLICK_CAPTURE', {
+      ...startGestureEventFields(event, button), render_generation: Number(window.__KOMYST_FORM_RENDER_GENERATION || 0),
+    });
+    if (startGestureDown) startGestureDown.click_seen = true;
+    startTranslation();
+    if (startGestureDown) window.setTimeout(() => finishStartGestureDiagnostics('CLICK'), 0);
+  }, {capture: true});
+  document.addEventListener('click', event => {
+    sourceTrace('TRANSLATION_START_ANY_CLICK', {
+      target_node_id: startGestureNodeId(event?.target), trusted: event?.isTrusted === true,
+      default_prevented: event?.defaultPrevented === true, event_phase: Number(event?.eventPhase || 0),
+      render_generation: Number(window.__KOMYST_FORM_RENDER_GENERATION || 0),
+    });
+    // The capture listener schedules the CLICK summary after startTranslation;
+    // keep this listener observational so it cannot clear the gesture first.
+  }, {capture: false});
+  $('#sourceReportSend')?.addEventListener('click', sendSourceSupportReport);
+  $('#sourceReportDismiss')?.addEventListener('click', closeSourceReportDialog);
+  $('#cancelBtn')?.addEventListener('click', () => cancelTranslation(
+    false, appState.sourceReview?.job_id || ''));
+  $('#runCancelAction')?.addEventListener('click', () => cancelTranslation(false, appState.activeJobId || ''));
+  $('#urlInput')?.addEventListener('keydown', event => {
+    if (event.key === 'Enter') { event.preventDefault(); startTranslation(); }
+  });
+  $('#urlInput')?.addEventListener('input', () => {
+    if (!appState.currentSourceUrl || $('#urlInput').value.trim() !== appState.currentSourceUrl) {
+      appState.newTranslationDraft = true;
+      clearNewTranslationDraftPanels();
+    }
+  });
+  $('#localFolderInput')?.addEventListener('keydown', event => {
+    if (event.key === 'Enter') { event.preventDefault(); startTranslation(); }
+  });
+
+  /* ---------- real pipeline presentation ---------- */
+  const stageOrder = ['source_analysis', 'awaiting_source_review', 'waiting_source_verification', 'download', 'validation', 'ocr', 'translate', 'render', 'pdf', 'quality_review'];
+  const stageAliases = {
+    idle: 'idle',
+    prepare: 'idle',
+    creating_job: 'source_analysis',
+    queued: 'source_analysis',
+    starting: 'source_analysis',
+    starting_worker: 'source_analysis',
+    worker_starting: 'source_analysis',
+    validating_source: 'source_analysis',
+    source_validation: 'source_analysis',
+    source_verified: 'source_analysis',
+    source_analysis: 'source_analysis',
+    source_analysis_ready: 'source_analysis',
+    browser_loading: 'source_analysis',
+    collecting_candidates: 'source_analysis',
+    clustering_candidates: 'source_analysis',
+    source_lazy_resolution: 'source_analysis',
+    source_selection: 'awaiting_source_review',
+    awaiting_source_review: 'awaiting_source_review',
+    waiting_source_verification: 'waiting_source_verification',
+    reviewing_pages: 'awaiting_source_review',
+    'baixando imagens': 'download',
+    downloading: 'download',
+    downloading_pages: 'download',
+    validating_pages: 'download',
+    download: 'download',
+    'validando imagens': 'validation',
+    detecting_balloons: 'validation',
+    validation: 'validation',
+    'ocr': 'ocr',
+    'classificação': 'ocr',
+    reading_text: 'ocr',
+    classification: 'ocr',
+    'tradução': 'translate',
+    // Kept for jobs persisted before the stage label became provider-neutral.
+    'tradução nvidia': 'translate',
+    translating: 'translate',
+    translation: 'translate',
+    translate: 'translate',
+    'renderização': 'render',
+    redrawing: 'render',
+    rendering: 'render',
+    render: 'render',
+    'geração de pdf': 'pdf',
+    generating_pdf: 'pdf',
+    pdf: 'pdf',
+    'relatórios': 'quality_review',
+    'finalizado': 'quality_review',
+    reports: 'pdf',
+    quality_review: 'quality_review',
+    review_rerun: 'quality_review',
+    quality_gate: 'quality_review',
+    review_required: 'quality_review',
+    review_completed: 'quality_review',
+    finished: 'quality_review',
+    failed: 'failed',
+    cancelled: 'cancelled',
+    final: 'quality_review',
+  };
+  const visualStageKey = key => stageAliases[String(key || '').toLowerCase()] || String(key || 'idle').toLowerCase();
+  function terminalIdentity(record) {
+    const jobId = String(record?.id || record?.job_id || '');
+    const runId = String(record?.run_id || '');
+    return jobId || runId ? `${jobId}:${runId}` : '';
+  }
+  function terminalNotificationKey(record) {
+    const identity = terminalIdentity(record);
+    if (!identity) return '';
+    const status = String(record?.status || '').toLowerCase();
+    const stage = String(record?.stage || '');
+    return `${identity}:${status}:${stage}`;
+  }
+  function terminalNotificationMessage(record) {
+    const status = String(record?.status || '').toLowerCase();
+    if (record?.operation_kind === 'review_rerun') {
+      if (status === 'review_required') return {message: 'Rerun concluído — revisão recomendada.', type: 'warn'};
+      if (status === 'finished') return {message: 'Rerun seletivo concluído.', type: 'ok'};
+    }
+    if (status === 'review_required') {
+      return {message: `${outputFormatLabel(record)} concluído — revisão recomendada.`, type: 'warn'};
+    }
+    if (['finished', 'review_completed'].includes(status) && (record?.pdf_path || record?.quality_report_path || record?.output_folder)) {
+      return {message: `${outputFormatLabel(record)} finalizado e registrado no histórico.`, type: 'ok'};
+    }
+    return null;
+  }
+  function releaseStaleInterfaceBusy(runtime = null) {
+    if (document.body) {
+      document.body.removeAttribute('aria-busy');
+      document.body.inert = false;
+    }
+    $$('.modal-overlay:not(.show)').forEach(overlay => {
+      overlay.setAttribute('aria-hidden', 'true');
+    });
+    const startButton = $('#startBtn');
+    if (startButton && !inFlightStatuses.has(appState.status)) {
+      startButton.dataset.busy = '0';
+      updateTranslationStartControls();
+    }
+    // A terminal observation closes the duplicate-submit window.  Until then,
+    // an identical click remains a no-op even if a render recreated the button.
+    const terminalRecord = runtime?.active || runtime?.source_review || runtime?.source_ready
+      || runtime?.latest || runtime?.latest_result || null;
+    const terminalStatus = String(terminalRecord?.status || runtime?.status || appState.status || '').toLowerCase();
+    if (terminalRunStatuses.has(terminalStatus)) {
+      activeStartFingerprint = '';
+    }
+    const boot = $('#boot');
+    if (boot && !document.documentElement.dataset.visualBootTest) boot.classList.add('hide');
+  }
+  function rememberRuntimeTerminalState(runtime) {
+    const record = runtime.active || runtime.source_review || runtime.source_ready || runtime.latest || null;
+    const identity = terminalIdentity(record);
+    if (!identity) return;
+    const status = String(record?.status || runtime.status || '').toLowerCase();
+    appState.terminalStatusByIdentity.set(identity, status);
+    if (terminalRunStatuses.has(status)) {
+      const key = terminalNotificationKey(record);
+      rememberBounded(consumedTerminalNotifications, key);
+      persistConsumedTerminalNotifications();
+    }
+  }
+  async function refreshWalletAfterTerminal(record) {
+    const cp = window.__komystControlPlane;
+    if (!cp?.call || !cp?.applyWallet) return;
+    try {
+      uiTrace('YK_WALLET_POST_FINALIZE_REFRESH_START', {
+        job_id: record?.id || '',
+        status: record?.status || '',
+      });
+      const wallet = await cp.call('wallet-summary');
+      cp.applyWallet(wallet, 'translation-terminal');
+      cp.render?.();
+      uiTrace('YK_WALLET_POST_FINALIZE_REFRESH_RESULT', {
+        job_id: record?.id || '',
+        usable_now: Number(wallet?.usable_now ?? NaN),
+        daily_stored: Number(wallet?.daily_stored ?? NaN),
+      });
+    } catch (errorValue) {
+      uiTrace('YK_WALLET_POST_FINALIZE_REFRESH_ERROR', {
+        job_id: record?.id || '',
+        code: String(errorValue?.code || errorValue?.message || 'wallet_refresh_failed').slice(0, 80),
+      });
+    }
+  }
+  function handleTerminalRuntimeTransition(runtime) {
+    const record = runtime.active || runtime.source_review || runtime.source_ready || runtime.latest || null;
+    const identity = terminalIdentity(record);
+    if (!identity) return;
+    const status = String(record?.status || runtime.status || '').toLowerCase();
+    const previous = appState.terminalStatusByIdentity.get(identity) || '';
+    appState.terminalStatusByIdentity.set(identity, status);
+    if (!terminalRunStatuses.has(status)) return;
+    // Financial reconciliation is independent from notification deduplication.
+    // The first terminal observation commonly has no previous status; it must
+    // still refresh the canonical wallet before the notification early-return.
+    const shouldRefreshWallet = !previous || !terminalRunStatuses.has(previous);
+    if (shouldRefreshWallet) void refreshWalletAfterTerminal(record);
+    releaseStaleInterfaceBusy(runtime);
+    if (shouldRefreshWallet) void refreshBootstrap();
+    const key = terminalNotificationKey(record);
+    const notification = terminalNotificationMessage(record);
+    if (!previous || terminalRunStatuses.has(previous) || !notification) {
+      rememberBounded(consumedTerminalNotifications, key);
+      persistConsumedTerminalNotifications();
+      uiTrace('TERMINAL_NOTIFICATION_DEDUPED', {job_id: record?.id || '', run_id: record?.run_id || '', stage: record?.stage || '', status});
+      return;
+    }
+    uiTrace('TERMINAL_EVENT_RECEIVED', {job_id: record?.id || '', run_id: record?.run_id || '', stage: record?.stage || '', status});
+    if (consumedTerminalNotifications.has(key)) {
+      uiTrace('TERMINAL_NOTIFICATION_DEDUPED', {job_id: record?.id || '', run_id: record?.run_id || '', stage: record?.stage || '', status});
+      return;
+    }
+    rememberBounded(consumedTerminalNotifications, key);
+    persistConsumedTerminalNotifications();
+    flashFrame();
+    showToast(notification.message, notification.type, {key, kind: 'terminal'});
+    uiTrace('TERMINAL_NOTIFICATION_EMITTED', {job_id: record?.id || '', run_id: record?.run_id || '', stage: record?.stage || '', status});
+  }
+  function canonicalProgressStage(runtime, record, progress) {
+    const raw = String(progress?.stage_key || record?.stage || runtime?.stage || runtime?.status || 'idle').toLowerCase();
+    if (String(record?.status || runtime?.status || '').toLowerCase() === 'review_required') return 'quality_review';
+    if (String(record?.status || runtime?.status || '').toLowerCase() === 'finished') return 'finished';
+    return raw || 'idle';
+  }
+  function metricFromProgress(progress, fallback = '') {
+    if (progress?.total) return `${Number(progress.current || 0)}/${Number(progress.total || 0)}`;
+    return fallback;
+  }
+  function buildPipelineState(runtime, progress = {}) {
+    const record = runtime.active || runtime.source_review || runtime.source_ready || runtime.latest || runtime.latest_result || null;
+    const status = String(record?.status || runtime.status || 'ready').toLowerCase();
+    const rawStage = canonicalProgressStage(runtime, record, progress);
+    const visualStage = visualStageKey(rawStage);
+    const current = Number(progress.current || 0);
+    const total = Number(progress.total || 0);
+    const fraction = progress.fraction != null && Number.isFinite(Number(progress.fraction))
+      ? Number(progress.fraction) : (total ? current / total : null);
+    const isTerminal = terminalRunStatuses.has(status) || ['failed', 'cancelled'].includes(status);
+    const totalPages = Number(record?.target_page_count || record?.page_count || record?.pages || progress.pages || progress.total_pages || 0);
+    const pendingReview = Number(runtime.quality_review?.pending_count || record?.manual_review_count || record?.rejected_count || 0);
+    return {
+      requestId: appState.currentRequestId,
+      jobId: String(record?.id || record?.job_id || appState.currentJobId || ''),
+      runId: String(record?.run_id || appState.currentRunId || ''),
+      sourceUrl: String(record?.url || appState.currentSourceUrl || ''),
+      title: String(record?.chapter_name || appState.currentChapterName || 'Capítulo atual'),
+      status,
+      stage: rawStage,
+      visualStage,
+      stageStartedAt: record?.stage_started_at || '',
+      createdAt: record?.created_at || record?.started_at || '',
+      updatedAt: progress.updated_at || record?.updated_at || record?.finished_at || '',
+      heartbeatAt: progress.updated_at || record?.updated_at || '',
+      totalPages,
+      completedPages: total ? current : Number(progress.pages || 0),
+      currentPage: total ? current : 0,
+      totalGroups: Number(progress.groups || record?.group_count || 0),
+      completedGroups: Number(progress.completed_groups || 0),
+      totalTranslations: Number(progress.total_translations || 0),
+      completedTranslations: Number(progress.completed_translations || 0),
+      progressPercent: fraction == null ? null : Math.max(0, Math.min(99, Math.round(fraction * 100))),
+      elapsedSeconds: progress.elapsed_seconds ?? null,
+      etaSeconds: progress.eta_seconds ?? null,
+      message: String(progress.last_message || progress.stage || stageMessages[rawStage] || ''),
+      reasonCode: String(record?.reason_code || ''),
+      pendingReview,
+      isTerminal,
+      progress,
+      record,
+    };
+  }
+  function canonicalStageMetric(stage, state, progress) {
+    const activeMetric = metricFromProgress(progress, 'em andamento');
+    if (stage === state.visualStage && activeMetric !== '0/0') return activeMetric || 'em andamento';
+    if (stage === 'awaiting_source_review' && state.totalPages) return `${state.totalPages} páginas`;
+    if (stage === 'quality_review' && state.pendingReview) return `${state.pendingReview} pendências`;
+    return '';
+  }
+  function renderPipelinePreview(state) {
+    const balloon = $('#balloonText');
+    if (!balloon) return;
+    const messageKey = state.status === 'ready' && !state.jobId ? 'idle' : (state.status === 'review_required' ? 'review_required' : state.stage);
+    const message = stageMessages[messageKey] || stageMessages[state.visualStage] || 'Processando...';
+    const detail = state.progress?.total
+      ? `Página ${Number(state.progress.current || 0)} de ${Number(state.progress.total || 0)}`
+      : state.pendingReview
+        ? `Revisão: ${state.pendingReview} pendências`
+        : '';
+    balloon.innerHTML = detail ? `${escapeHtml(message)}<br><small>${escapeHtml(detail)}</small>` : escapeHtml(message);
+  }
+  function runtimeHasActiveTranslation(runtime, runtimeStatus, queuedRecord) {
+    const status = String(runtimeStatus || '').toLowerCase();
+    if (activeOperationStatuses.has(status)) return true;
+    const activeStatus = String(runtime?.active?.status || '').toLowerCase();
+    if (activeOperationStatuses.has(activeStatus)) return true;
+    return Boolean(queuedRecord && activeOperationStatuses.has(String(queuedRecord.status || '').toLowerCase()));
+  }
+  function renderRuntime(runtime) {
+    if (appState.suppressHistoricalResult) {
+      const sourceAnalysisPending = appState.sourceValidation.status === 'validating'
+        || Boolean(startInFlight);
+      if (sourceAnalysisPending) appState.status = 'staging';
+      appState.activeJobId = '';
+      appState.latestJobId = '';
+      setRunControls(sourceAnalysisPending, false);
+      // Source analysis has its own progress poll until a durable job exists.
+      if (!sourceAnalysisPending) $('#runStatusCard') && ($('#runStatusCard').hidden = true);
+      $('#jobCompletionPanel') && ($('#jobCompletionPanel').hidden = true);
+      $('#artifactActions') && ($('#artifactActions').innerHTML = '');
+      return;
+    }
+    appState.status = runtime.status || 'ready';
+    appState.queue = runtime.queue || [];
+    const awaitingReview = appState.status === 'awaiting_source_review';
+    const latestStatus = String(runtime.latest?.status || '').toLowerCase();
+    const queuedRecord = appState.queue.find(record =>
+      activeOperationStatuses.has(String(record?.status || '').toLowerCase())) || null;
+    // `runtime.latest` is historical metadata and may still carry an old
+    // queued/staging status after the operation has failed or been reconciled.
+    // It must never keep the new-translation form locked.  Only the effective
+    // runtime status, a verified active record, or the current queued state can
+    // represent live work.
+    const running = runtimeHasActiveTranslation(runtime, appState.status, queuedRecord);
+    const analyzing = appState.status === 'staging';
+    const visibleProgress = {...(runtime.progress || {})};
+    const terminalLatest = runtime.latest || null;
+    let presentationStatus = appState.status;
+    if (!runtime.active && !runtime.source_review && !runtime.source_ready && terminalLatest
+        && ['failed', 'cancelled'].includes(String(terminalLatest.status || '').toLowerCase())) {
+      presentationStatus = String(terminalLatest.status || appState.status);
+      visibleProgress.stage_key = terminalLatest.stage || visibleProgress.stage_key || 'source_analysis';
+      visibleProgress.stage = stageMessages[visibleProgress.stage_key] || visibleProgress.stage || visibleProgress.stage_key;
+    }
+    const pipelineState = buildPipelineState(runtime, visibleProgress);
+    appState.currentPipelineState = pipelineState;
+    const activeRecord = runtime.active || runtime.source_review || runtime.source_ready
+      || (appState.status === 'queued' && queuedRecord) || null;
+    appState.activeJobId = String(activeRecord?.id || activeRecord?.job_id || '');
+    appState.latestJobId = String(runtime.latest?.id || runtime.latest?.job_id || '');
+    const incoming = activeRecord || runtime.latest || null;
+    const incomingJobId = String(incoming?.id || incoming?.job_id || '');
+    // Keep progress plan-aware: the active job's effective operations drive which pipeline
+    // stages are shown. Download-only has its own stage set; a legacy job without the field
+    // leaves this null so every stage stays visible (unchanged behaviour).
+    if (incoming && Array.isArray(incoming.effective_operations)) {
+      appState.activeEffectiveOps = incoming.effective_operations;
+    } else if (incoming && incoming.download_only === true) {
+      appState.activeEffectiveOps = [];
+    }
+    adoptPipelineIdentity(incoming, {
+      authoritative: Boolean(activeRecord),
+      stage: visibleProgress.stage_key || incoming?.stage || appState.status,
+    });
+    setRunControls(running || analyzing, awaitingReview);
+    const status = $('#appStatus');
+    status.textContent = runStatusLabels[appState.status] || appState.status;
+    status.dataset.state = appState.status;
+    const standaloneReady = Boolean(runtime.source_ready)
+      && !String(runtime.source_ready?.job_id || runtime.source_ready?.id || '').match(/^[0-9a-f]{32}$/i);
+    if (standaloneReady) clearLoadingSurface();
+    else renderProgress(visibleProgress, pipelineState);
+    const draftOnly = appState.newTranslationDraft && !appState.reviewMode && !running;
+    if (draftOnly) clearNewTranslationDraftPanels();
+    else if (runtime.source_ready) {
+      $('#runStatusCard') && ($('#runStatusCard').hidden = true);
+    } else renderRunStatus({...runtime, status: presentationStatus, progress: visibleProgress});
+    renderResumableJobs(runtime.resumable);
+    renderQueue();
+    appendLogs(runtime.logs || []);
+    if (appState.status === 'waiting_source_verification' && runtime.source_verification) {
+      renderSourceVerification(runtime.source_verification);
+    } else if (awaitingReview && runtime.source_review && shouldRenderSourceReview(runtime.source_review)) {
+      renderSourceReview(runtime.source_review);
+    }
+    else if (!awaitingReview) $('#sourceReviewPanel') && ($('#sourceReviewPanel').hidden = true);
+    if (appState.status === 'source_analysis_ready' && runtime.source_ready) {
+      renderSourceAnalysisReady(runtime.source_ready);
+    } else if ($('#sourceReadyPanel')) {
+      $('#sourceReadyPanel').hidden = true;
+    }
+    // After the user leaves review_mode the form belongs to a new chapter, so an
+    // idle runtime's leftover review must not reappear over it.
+    const reviewDismissed = appState.reviewPanelDismissed && !inFlightStatuses.has(appState.status);
+    const qualityReviewJobId = String(runtime.quality_review?.job_id || '');
+    const reviewOwnerJobId = String(
+      appState.reviewMode?.jobId || appState.currentJobId || incomingJobId || '');
+    const qualityReviewBelongsToOperation = Boolean(
+      qualityReviewJobId && reviewOwnerJobId && qualityReviewJobId === reviewOwnerJobId);
+    if (!runtime.source_ready && !draftOnly && !reviewDismissed
+        && qualityReviewBelongsToOperation) renderQualityReview(runtime.quality_review);
+    // In explicit review_mode the panel is owned by the selected finished chapter,
+    // so a background poll of the (idle) active runtime must not hide it.
+    else if (!appState.reviewMode && $('#qualityReviewPanel')) $('#qualityReviewPanel').hidden = true;
+    const resultRecord = runtime.latest_result || runtime.latest;
+    if (!runtime.source_ready && resultRecord && !awaitingReview && !draftOnly) {
+      const latestId = String(resultRecord.id || resultRecord.job_id || '');
+      const operationLatest = runtime.latest || null;
+      const operationLatestId = String(operationLatest?.id || operationLatest?.job_id || '');
+      const operationFailedWithoutResult = operationLatestId && operationLatestId !== latestId
+        && ['failed', 'cancelled'].includes(String(operationLatest?.status || '').toLowerCase());
+      if (operationFailedWithoutResult) {
+        $('#artifactActions') && ($('#artifactActions').innerHTML = '');
+        $('#runSummary') && ($('#runSummary').hidden = true);
+        $('#jobCompletionPanel') && ($('#jobCompletionPanel').hidden = true);
+      } else if (!appState.currentJobId || latestId === appState.currentJobId || terminalRunStatuses.has(presentationStatus)) {
+        renderResult(resultRecord);
+      } else {
+        uiTrace('old_pipeline_event_discarded', {request_id: appState.currentRequestId});
+      }
+    }
+    // Only when both sides actually report a revision and the values differ.
+    // Treating "not reported" as "changed" made every render ask for another
+    // bootstrap, and refreshBootstrap renders again on the way out: a
+    // signed-out shell issued ~164 bootstrap requests a second.
+    if (isReportedRevision(runtime.history_revision)
+        && isReportedRevision(appState.historyRevision)
+        && runtime.history_revision !== appState.historyRevision) {
+      uiTrace('HISTORY_REVISION_CHANGED', {
+        history_revision: Number(runtime.history_revision),
+        reason: 'runtime_poll',
+        ...historyScrollMetrics(getHistoryScrollOwner()),
+      });
+      refreshBootstrap();
+    }
+  }
+  function renderRunStatus(runtime) {
+    const card = $('#runStatusCard');
+    if (!card) return;
+    const active = activeOperationStatuses.has(runtime.status);
+    const record = runtime.active || runtime.latest || null;
+    const status = runtime.status === 'ready' && record ? record.status : runtime.status;
+    const completionPanel = $('#jobCompletionPanel');
+    if (completionPanel && active) completionPanel.hidden = true;
+    if (active) {
+      ['#runStatusHuman', '#runProgressHuman', '#runEtaHuman', '#runUpdatedHuman', '#runNextHuman']
+        .forEach(selector => { const node = $(selector); if (node) node.hidden = false; });
+    }
+    const progress = runtime.progress || {};
+    const pipelineState = appState.currentPipelineState || buildPipelineState(runtime, progress);
+    card.hidden = !active && !record;
+    if (card.hidden) return;
+    const recordJobId = String(record?.id || record?.job_id || '');
+    const recordRunId = String(record?.run_id || '');
+    adoptPipelineIdentity(record, {
+      authoritative: active,
+      stage: progress.stage_key || record?.stage || status,
+    });
+    card.dataset.currentJobId = appState.currentJobId || recordJobId;
+    card.dataset.currentRunId = appState.currentRunId || recordRunId;
+    card.dataset.currentStage = pipelineState.stage || progress.stage_key || record.stage || status;
+    const failed = status === 'failed';
+    $('#runStatusHuman').textContent = failed ? 'Não foi possível iniciar o processamento' : (stageMessages[pipelineState.stage] || stageMessages[pipelineState.visualStage] || runStatusLabels[status] || 'Processamento');
+    const count = progress.total ? `${progress.current || 0} de ${progress.total}` : 'progresso sendo calculado';
+    const terminalCount = pipelineState.pendingReview ? `${pipelineState.pendingReview} itens aguardando revisão` : (pipelineState.totalPages ? `${pipelineState.totalPages} páginas` : '');
+    $('#runProgressHuman').textContent = active ? count : (status === 'finished' ? (terminalCount || `${outputFormatLabel(record)} pronto`) : status === 'review_required' ? `${runStatusLabels.review_required}${terminalCount ? ` · ${terminalCount}` : ''}` : failed ? (reasonText(record?.reason_code) || record?.error_message || 'O processamento não foi concluído.') : runStatusLabels[status] || '');
+    $('#runEtaHuman').textContent = active ? (progress.eta_label || 'Tempo variavel nesta etapa') : '';
+    const updated = progress.updated_at ? new Date(Number(progress.updated_at) * 1000) : null;
+    $('#runUpdatedHuman').textContent = updated && !Number.isNaN(updated.getTime()) ? `Atualizado ha ${Math.max(0, Math.floor((Date.now() - updated.getTime()) / 1000))}s` : '';
+    const canonicalIdentity = record?.source_analysis?.canonical_identity || {};
+    const canonicalNotice = canonicalIdentity.validation_status
+      ? 'Link oficial do episódio confirmado.' : '';
+    $('#runNextHuman').textContent = progress.stale
+      ? 'O processamento esta demorando mais que o esperado.'
+      : [canonicalNotice, active ? 'Processamento em andamento' : failed ? 'Voce pode tentar novamente.' : '']
+          .filter(Boolean).join(' ');
+    const retry = $('#runRetryAction');
+    if (retry) {
+      const retryable = Boolean(record) && ['failed', 'cancelled'].includes(status)
+        && record?.recoverable === true && /^[0-9a-f]{32}$/i.test(recordJobId)
+        && Boolean(recordRunId);
+      retry.hidden = !retryable;
+      retry.dataset.jobId = retryable ? recordJobId : '';
+      retry.dataset.runId = retryable ? recordRunId : '';
+      retry.dataset.status = status || '';
+    }
+    const cancel = $('#runCancelAction');
+    if (cancel && !appState.cancelBusy) cancel.hidden = !active;
+  }
+
+  // ---------- interrupted job recovery ----------
+  // A job that stopped without finishing is neither active nor terminal, so it never
+  // reaches the run status card. The backend lists it under runtime.resumable and marks
+  // each entry with can_resume; that flag - not the status string - is what decides
+  // whether the user is offered the action, because "interrupted" alone does not mean the
+  // saved state can be continued.
+  async function resumeInterruptedJob(jobId, button) {
+    if (appState.resumeBusyJobId) return;           // one activation, one request
+    const id = String(jobId || '');
+    if (!/^[0-9a-f]{32}$/i.test(id)) {
+      showToast('Não foi possível identificar o trabalho interrompido.', 'error');
+      return;
+    }
+    appState.resumeBusyJobId = id;
+    if (button) { button.disabled = true; button.textContent = 'Retomando…'; }
+    try {
+      await api('/api/ui/resume', {method: 'POST', body: JSON.stringify({job_id: id})});
+      showToast('Retomando o processamento a partir do ponto seguro salvo.', 'ok');
+    } catch (error) {
+      showToast(error.message || 'Não foi possível retomar este trabalho.', 'error');
+    } finally {
+      appState.resumeBusyJobId = '';
+      if (button) { button.disabled = false; button.textContent = 'Retomar'; }
+      // Never assume the outcome: the next authoritative state decides what is shown,
+      // including a backend that rejected the request because the job already moved on.
+      pollState();
+    }
+  }
+
+  async function dismissInterruptedJob(jobId, button) {
+    if (appState.resumeBusyJobId) return;
+    const id = String(jobId || '');
+    if (!/^[0-9a-f]{32}$/i.test(id)) return;
+    if (!await komystConfirm('Descartar esta tentativa interrompida? O histórico será preservado.', {title: 'Descartar tentativa', confirmLabel: 'Descartar', danger: true})) return;
+    appState.resumeBusyJobId = id;
+    if (button) { button.disabled = true; button.textContent = 'Descartando…'; }
+    try {
+      await api('/api/ui/resume/dismiss', {method: 'POST', body: JSON.stringify({job_id: id})});
+      showToast('Tentativa removida da lista de retomáveis.', 'ok');
+    } catch (error) {
+      showToast(error.message || 'Não foi possível descartar esta tentativa.', 'error');
+    } finally {
+      appState.resumeBusyJobId = '';
+      pollState();
+    }
+  }
+  function sourceTrace(event = 'SOURCE_UI_CLICK', fields = {}) {
+    const traceId = getGlobal('__sourceTraceId') || correlationId();
+    setGlobal('__sourceTraceId', traceId);
+    uiTrace(event, {trace_id: traceId, ...fields});
+    // A rejected fetch is asynchronous: try/catch alone left it as an uncaught
+    // promise rejection in the console whenever the server was unreachable.
+    try { void fetch('/api/ui/source-trace', {method:'POST', headers:{'Content-Type':'application/json'}, credentials:'same-origin', body: JSON.stringify({trace_id: traceId, event, ...fields}), keepalive:true}).catch(() => {}); } catch (_) { /* diagnostics must never affect UX */ }
+    return traceId;
+  }
+
+  function beginSourceAttempt() {
+    const traceId = correlationId();
+    setGlobal('__sourceTraceId', traceId);
+    appState.sourceValidation = {status: 'idle', analysisResultId: '', sourceUrl: '', reasonCode: '', analysis: null};
+    hideStartError();
+    $('#balloonText') && ($('#balloonText').textContent = 'Pronto para iniciar');
+    return traceId;
+  }
+
+  function renderResumableJobs(records) {
+    const panel = $('#interruptedJobsPanel');
+    const list = $('#interruptedJobsList');
+    if (!panel || !list) return;
+    const items = (Array.isArray(records) ? records : []).filter(record =>
+      record && record.can_resume === true
+      && /^[0-9a-f]{32}$/i.test(String(record.id || record.job_id || '')));
+    panel.hidden = items.length === 0;
+    list.replaceChildren(...items.map(record => {
+      const jobId = String(record.id || record.job_id || '');
+      const row = document.createElement('div');
+      row.className = 'interrupted-job';
+      row.dataset.jobId = jobId;
+      const label = document.createElement('span');
+      label.className = 'interrupted-job-name';
+      label.textContent = String(record.chapter_name || record.slug || 'Tradução de capítulo');
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'btn-primary';
+      button.dataset.jobId = jobId;
+      button.textContent = 'Retomar';
+      button.setAttribute('aria-label', `Retomar ${label.textContent}`);
+      if (appState.resumeBusyJobId === jobId) {
+        button.disabled = true;
+        button.textContent = 'Retomando…';
+      }
+      button.addEventListener('click', () => resumeInterruptedJob(jobId, button));
+      const dismiss = document.createElement('button');
+      dismiss.type = 'button';
+      dismiss.className = 'btn-ghost interrupted-job-dismiss';
+      dismiss.textContent = 'Descartar';
+      dismiss.setAttribute('aria-label', `Descartar ${label.textContent}`);
+      dismiss.addEventListener('click', () => dismissInterruptedJob(jobId, dismiss));
+      row.append(label, button, dismiss);
+      return row;
+    }));
+  }
+
+  // Short labels for the summary line and filter chips.
+  const VISUAL_STATE_LABELS = {
+    applied: 'aplicadas',
+    rejected_visual_regression: 'rejeitadas',
+    manual_review: 'revisão manual',
+    unchanged: 'sem alteração',
+    pending: 'pendentes',
+    report_only: 'somente relatório',
+  };
+
+  // Full sentence shown as each item's status, per the review spec.
+  const VISUAL_STATE_STATUS = {
+    applied: 'Alteração aplicada',
+    rejected_visual_regression: 'Alternativa não aplicada',
+    manual_review: 'Precisa de revisão',
+    unchanged: 'Sem alteração',
+    pending: 'Aguardando sua decisão',
+    report_only: 'Informativo',
+  };
+
+  // Why the visual gate refused a region, in plain pt-BR. Unknown codes fall
+  // back to the raw code so a new gate is never silently invisible.
+  const VISUAL_REASON_LABELS = {
+    translated_render_base_unavailable: 'Página traduzida-base indisponível',
+    unsafe_incremental_mask: 'Máscara de alteração insegura',
+    unexpected_pixels_outside_changed_regions: 'Pixels externos à região foram alterados',
+    text_overlap_regression_detected: 'Possível texto sobreposto detectado',
+    clean_region_background_unavailable: 'Não foi possível reconstruir o fundo com segurança',
+    excessive_cleanup_mask: 'A máscara removeria uma área excessiva',
+    empty_previous_text_mask: 'Não foi possível localizar o texto anterior',
+    cleanup_mask_crosses_artwork: 'A limpeza pode atingir a arte',
+    ambiguous_text_polarity: 'Não foi possível distinguir o texto do fundo com segurança',
+    unsafe_inverted_cleanup_mask: 'A máscara invertida do balão escuro não era segura',
+    dark_region_background_reconstruction_failed: 'Não foi possível reconstruir o fundo escuro',
+    light_text_components_not_isolated: 'O que seria apagado parece arte, não letras',
+    render_dimension_mismatch: 'O redesenho saiu com dimensões diferentes da página',
+    reviewed_page_write_failed: 'A página revisada não pôde ser gravada',
+    source_image_missing: 'A imagem de origem da página não foi encontrada',
+  };
+
+  function visualReasonLabel(code) {
+    const key = String(code || '');
+    if (!key) return '';
+    return VISUAL_REASON_LABELS[key] || 'O resultado precisa de uma verificação adicional.';
+  }
+
+  // Linguistic-QC warning codes -> plain pt-BR (Mission 8). Codes stay English internally;
+  // mirrors review_item.WARNING_LABELS. Unknown ALL_CAPS codes fall back to a generic message
+  // so a new code is never shown raw, but human text (with spaces/lowercase) passes through.
+  const REVIEW_WARNING_LABELS = {
+    OCR_LOW_CONFIDENCE: 'OCR com baixa confiança',
+    OCR_MISSED: 'Possível texto não detectado',
+    OCR_INCORRECT: 'OCR possivelmente incorreto',
+    ENGLISH_RESIDUAL: 'Possível texto em inglês',
+    SEMANTIC_VALIDATION: 'Tradução requer revisão',
+    TERMINOLOGY_WARNING: 'Terminologia a verificar',
+    TRANSLATION_SKIPPED: 'Tradução não aplicada',
+    SOURCE_FALLBACK: 'Texto original mantido',
+    CROSS_PAGE: 'Continuidade entre páginas',
+    FOOTNOTE: 'Nota de rodapé',
+    TITLE: 'Título',
+    VISUAL_REVIEW: 'Revisão visual recomendada no PSD',
+    OTHER: 'Este trecho precisa de atenção',
+  };
+  const REVIEW_WARNING_GENERIC = 'Este trecho precisa de atenção antes de confirmar o resultado.';
+
+  function reviewWarningLabel(value) {
+    const key = String(value || '').trim();
+    if (!key) return REVIEW_WARNING_GENERIC;
+    if (REVIEW_WARNING_LABELS[key]) return REVIEW_WARNING_LABELS[key];
+    // already human text (has a space or a lowercase letter) -> show as-is
+    if (/\s/.test(key) || /[a-zà-ÿ]/.test(key)) return key;
+    return REVIEW_WARNING_GENERIC;
+  }
+
+  function updateQualityReviewFilterControls(items, activeFilter) {
+    const counts = {
+      all: items.length,
+      pending: items.filter(item => item.state === 'pending').length,
+      completed: items.filter(item => item.state !== 'pending').length,
+      rejected: items.filter(item => item.state === 'rejected').length,
+    };
+    Object.keys(VISUAL_STATE_LABELS).forEach(state => {
+      if (!(state in counts)) {
+        counts[state] = items.filter(item => String(item.visual_state || '') === state).length;
+      }
+    });
+    $$('[data-review-filter]').forEach(button => {
+      const filter = String(button.dataset.reviewFilter || 'pending');
+      const filterLabels = {
+        pending: 'Aguardando decisão',
+        completed: 'Decisões registradas',
+      };
+      if (filterLabels[filter] && button.firstChild?.nodeType === Node.TEXT_NODE) {
+        button.firstChild.nodeValue = `${filterLabels[filter]} `;
+      }
+      const selected = filter === activeFilter;
+      button.classList.toggle('selected', selected);
+      button.setAttribute('aria-pressed', selected ? 'true' : 'false');
+      const count = button.querySelector('[data-review-filter-count]');
+      if (count) count.textContent = String(counts[filter] || 0);
+    });
+  }
+
+  function renderQualityReview(review) {
+    const panel = $('#qualityReviewPanel');
+    const list = $('#qualityReviewList');
+    if (!panel || !list) return;
+    appState.qualityReview = review;
+    const reexportFormat = $('#qualityReviewReexportFormat');
+    if (reexportFormat && !reexportFormat.dataset.userSelected) reexportFormat.value = ['png','pdf','psd'].includes(review.output_format) ? review.output_format : 'pdf';
+    if (review.latest_rerun?.id) {
+      appState.reviewRerunChildId = String(review.latest_rerun.id);
+      renderReviewRerunActivity(review.latest_rerun);
+      if (!REVIEW_RERUN_TERMINAL.has(String(review.latest_rerun.status || ''))) {
+        void pollReviewRerunStatus(appState.reviewRerunChildId);
+      }
+    } else {
+      appState.reviewRerunChildId = '';
+      renderReviewRerunActivity(null);
+    }
+    if (review.latest_reexport?.job_id) {
+      const gen = review.latest_reexport;
+      if (['queued','claiming','starting','running'].includes(String(gen.status || ''))) {
+        void pollQualityReviewReexport(gen.job_id, review.job_id);
+      } else if (appState.reviewReexportPollingJobId === gen.job_id) {
+        appState.reviewReexportPollingJobId = '';
+      }
+    }
+    panel.hidden = false;
+    updateQualityReviewDeveloperActions();
+    const items = Array.isArray(review.items) ? review.items : [];
+    const filter = appState.qualityReviewFilter || 'pending';
+    updateQualityReviewFilterControls(items, filter);
+    const visible = items.filter(item => {
+      if (filter === 'pending') return item.state === 'pending';
+      if (filter === 'completed') return item.state !== 'pending';
+      if (filter === 'rejected') return item.state === 'rejected';
+      if (filter === 'all') return true;
+      if (VISUAL_STATE_LABELS[filter]) return String(item.visual_state || '') === filter;
+      return false;
+    });
+    const counts = items.reduce((acc, item) => {
+      const risk = String(item.risk || 'LOW').toUpperCase();
+      acc[risk] = (acc[risk] || 0) + 1;
+      return acc;
+    }, {LOW: 0, MEDIUM: 0, HIGH: 0});
+    const visualSummary = review.visual_state_summary || {};
+    // The chapter-wide gate summary counts the reviewed regions only; report-only
+    // items are a panel bucket, appended separately so the region total stays 108.
+    const visualParts = Object.keys(VISUAL_STATE_LABELS)
+      .filter(state => state !== 'report_only' && Number(visualSummary[state] || 0) > 0)
+      .map(state => `${VISUAL_STATE_LABELS[state]} ${Number(visualSummary[state])}`);
+    const reportOnly = Number(review.report_only_count || 0);
+    if (reportOnly > 0) visualParts.push(`somente relatório ${reportOnly}`);
+    $('#qualityReviewMeta').textContent = `${review.pending_count || 0} pendentes · ${items.length} itens · LOW ${counts.LOW || 0} · MEDIUM ${counts.MEDIUM || 0} · HIGH ${counts.HIGH || 0}${visualParts.length ? ` · gate visual: ${visualParts.join(' · ')}` : ''} · ${review.confirmed ? 'Revisão concluída' : 'confirmação necessária'}`;
+    const chapter = review.chapter_counts || {};
+    const decisions = review.decision_counts || {};
+    $('#qualityReviewMeta').textContent = `${Number(chapter.pending || review.pending_count || 0)} itens aguardando sua decisão · ${visible.length} exibidos${review.confirmed ? ' · revisão concluída' : ''}`;
+    renderReviewPreviewAccess();
+    // Separate, clearly labelled action for the reviewed PDF; shown only when the
+    // revision manifest points to a real reviewed file (never a glob).
+    const reviewedPdf = $('#reviewedPdfAction');
+    if (reviewedPdf) {
+      const rp = review.reviewed_pdf;
+      if (rp && rp.path) {
+        reviewedPdf.hidden = false;
+        reviewedPdf.innerHTML = `<button type="button" class="btn-primary" data-open-reviewed-pdf>ABRIR PDF REVISADO</button>`
+          + `<span class="reviewed-pdf-name">${escapeHtml(rp.name || '')}${rp.sha256 ? ` · SHA ${escapeHtml(String(rp.sha256).slice(0, 16))}…` : ''}</span>`;
+      } else {
+        reviewedPdf.hidden = true;
+        reviewedPdf.innerHTML = '';
+      }
+    }
+    const visibleKeys = new Set(visible.map(item => String(item.key || '')));
+    appState.qualityReviewSelection = new Set([...appState.qualityReviewSelection].filter(key => visibleKeys.has(key)));
+    const dirtySnapshot = snapshotDirtyReviewEditors();
+    list.innerHTML = visible.length ? visible.map(item => {
+      const actionClass = item.state === 'pending' ? ' show' : '';
+      const checked = appState.qualityReviewSelection.has(String(item.key || '')) ? ' checked' : '';
+      const risk = String(item.risk || 'LOW').toUpperCase();
+      const visualState = String(item.visual_state || '');
+      const visualBadge = visualState
+        ? `<span class="quality-review-visual" data-visual-state="${escapeAttr(visualState)}">${escapeHtml(VISUAL_STATE_STATUS[visualState] || visualState)}</span>`
+        : '';
+      const visualReason = visualReasonLabel(item.visual_reason_code);
+      const visualNote = visualState === 'rejected_visual_regression' && visualReason
+        ? `<div class="quality-review-visual-reason">${escapeHtml(visualReason)}</div>` : '';
+      const compare = visualState && item.page_url
+        ? `<button type="button" class="btn-ghost review-compare show" data-review-compare="${escapeAttr(item.page)}">Abrir comparação</button>`
+          + `<button type="button" class="btn-ghost review-compare show" data-revise-page="${escapeAttr(item.page)}">Revisar esta página</button>` : '';
+      const isSmartSplit = String(item.type || '') === 'smart_split';
+      const splitMeta = isSmartSplit
+        ? `<details class="technical-details"><summary>Ver detalhes técnicos</summary><div class="quality-review-visual-reason">Tipo interno: smart_split · limite: ${escapeHtml(item.boundary || '—')} · motivo: ${escapeHtml(item.reason_code || item.visual_reason_code || 'requires_review')}</div></details>`
+        : '';
+      // Prefer human reason text; otherwise map a known warning code to a specific pt-BR label
+      // (Mission 8 §14) instead of collapsing every code to one generic sentence.
+      const reasonCode = item.review_reason_code || item.reason_code
+        || (item.reason && /^[A-Z0-9_]+$/.test(String(item.reason).trim()) ? item.reason : '');
+      const humanReason = item.reason && !/^[A-Z0-9_]+$/.test(String(item.reason).trim())
+        ? item.reason : reviewWarningLabel(reasonCode);
+      // Report-only items are not part of the revision: no checkbox, no
+      // mark/preserve actions, so they can never enter a bulk operation.
+      const isReportOnly = visualState === 'report_only' || isSmartSplit;
+      const selectBox = isReportOnly ? '' : `<input type="checkbox" class="quality-review-select" data-review-select="${escapeAttr(item.key)}"${checked}> `;
+      const effectiveSource = item.source_text_effective != null ? item.source_text_effective : (item.original || '');
+      const effectiveTarget = item.target_text_effective != null ? item.target_text_effective : (item.translation || '');
+      const staleNote = item.translation_stale ? `<div class="review-edit-stale">Texto detectado foi editado — a tradução pode precisar de revisão.</div>` : '';
+      const reviewActions = isReportOnly ? '' : `<div class="review-edit-fields"><label class="review-edit-label">Texto detectado<textarea class="quality-review-editor" data-review-source data-effective="${escapeAttr(effectiveSource)}" aria-label="Texto detectado (OCR)">${escapeHtml(effectiveSource)}</textarea></label><label class="review-edit-label">Tradução<textarea class="quality-review-editor" data-review-translation data-review-version="${escapeAttr(item.revision_version || item.version || 0)}" data-effective="${escapeAttr(effectiveTarget)}" aria-label="Tradução revisada">${escapeHtml(effectiveTarget)}</textarea></label></div>${staleNote}<input class="quality-review-reason-input" data-review-reason placeholder="Motivo da decisão (opcional)" aria-label="Motivo da revisão"><div class="review-edit-savestate" data-review-savestate data-state="idle"></div><div class="cta-row"><button type="button" class="btn-ghost show" data-review-deep-action="edited">Salvar alterações</button><button type="button" class="btn-ghost show" data-review-cancel>Cancelar alterações</button><button type="button" class="btn-ghost show" data-review-deep-action="reviewed">Aprovar</button><button type="button" class="btn-ghost show" data-review-deep-action="rejected">Rejeitar</button><button type="button" class="btn-ghost show" data-review-deep-action="preserved_original">Manter original</button><button type="button" class="btn-ghost show" data-review-deep-action="manual_review">Revisar novamente</button></div>`;
+      const regionTypes = ['speech','dialogue','thought','narration','system_message','location','title','sfx','decorative','editorial','credit','watermark','url','proper_name','logo','branding','unknown'];
+      const selectedType = String(item.region_type_effective || item.classification || 'unknown');
+      const regionControls = isReportOnly ? '' : `<details class="review-region-controls" data-region-controls data-version="${escapeAttr(item.region_control_version || 0)}" data-effective-mode="${escapeAttr(item.translate_mode_effective || 'auto')}" data-effective-type="${escapeAttr(selectedType)}" data-effective-bbox="${escapeAttr(JSON.stringify(item.bounding_box_effective || item.bounding_box || null))}"><summary>Opções avançadas da região</summary><label>Comportamento<select data-region-mode><option value="auto"${(item.translate_mode_effective || 'auto') === 'auto' ? ' selected' : ''}>Automático</option><option value="translate"${item.translate_mode_effective === 'translate' ? ' selected' : ''}>Traduzir</option><option value="ignore"${item.translate_mode_effective === 'ignore' ? ' selected' : ''}>Ignorar</option></select></label><label>Tipo<select data-region-type>${regionTypes.map(type => `<option value="${type}"${selectedType === type ? ' selected' : ''}>${escapeHtml(type)}</option>`).join('')}</select></label><button type="button" class="btn-ghost" data-save-region-control>Salvar opções</button>${item.is_manual_region ? '<button type="button" class="btn-ghost danger" data-remove-manual-region>Remover região manual</button>' : ''}<span class="review-region-save-state" data-region-save-state role="status" aria-live="polite"></span></details>`;
+      return `<article class="quality-review-item" data-state="${escapeAttr(item.state)}" data-risk="${escapeAttr(risk)}" data-visual-state="${escapeAttr(visualState)}" data-review-type="${escapeAttr(item.type || 'region')}" data-review-key="${escapeAttr(item.key)}"><div class="quality-review-item-head"><label>${selectBox}<strong>Página ${escapeHtml(item.page)} · ${escapeHtml(item.label)}</strong></label><span class="quality-review-risk">${escapeHtml(risk)}</span><span class="quality-review-state">${escapeHtml(item.state === 'pending' ? 'aguardando sua decisão' : item.state === 'rejected' ? 'não aplicada' : item.state === 'preserved_original' ? 'resultado atual mantido' : 'revisado')}</span>${visualBadge}</div><div class="quality-review-reason">${escapeHtml(humanReason)}</div>${splitMeta}${visualNote}<div class="quality-review-text"><div><small>Contexto original</small>${escapeHtml(item.original || '—')}</div><div><small>Resultado atual</small>${escapeHtml(item.translation || '—')}</div>${item.proposed_translation ? `<div><small>Alternativa</small>${escapeHtml(item.proposed_translation)}</div>` : ''}</div>${item.page_url ? `<img class="quality-review-thumb" src="${escapeAttr(item.page_url)}" alt="Miniatura da página ${escapeAttr(item.page)}" loading="lazy">` : ''}<details class="technical-details"><summary>Ver detalhes técnicos</summary><div>Identificação interna e evidências disponíveis neste item.</div></details><div class="quality-review-actions">${reviewActions}${regionControls}${compare}</div></article>`;
+      }).join('') : '<div class="muted">Nenhum item neste filtro.</div>';
+    // Never discard in-progress edits when a poll refresh or a sibling save rebuilds
+    // the list: re-apply any editor still dirty after the rebuild.
+    restoreDirtyReviewEditors(dirtySnapshot);
+    appState.reviewVisibleKeys = visible.map(item => String(item.key || ''));
+    syncReviewPreviewSelection();
+    const confirm = $('#confirmQualityReview');
+    if (confirm) {
+      confirm.hidden = Boolean(review.confirmed);
+      confirm.disabled = Boolean(review.confirmed) || Number(review.pending_count || 0) > 0;
+      confirm.title = confirm.disabled && !review.confirmed ? 'Revise cada item ou mantenha o original antes de confirmar.' : '';
+    }
+    updateQualityReviewSelectionUi();
+    pollQualityRevisionStatus(review.job_id, {once: true});
+  }
+
+  // --- R2: persistent source/translation editing state ---------------------------
+  const REVIEW_SAVE_LABELS = {
+    idle: '', dirty: 'Alterações não salvas', saving: 'Salvando…',
+    saved: 'Salvo', error: 'Não foi possível salvar', conflict: 'Conflito de versão — recarregado',
+  };
+  function setReviewSaveState(article, state) {
+    const chip = article?.querySelector?.('[data-review-savestate]');
+    if (!chip) return;
+    chip.dataset.state = state;
+    chip.textContent = REVIEW_SAVE_LABELS[state] ?? '';
+  }
+  function reviewEditorDirty(article) {
+    if (!article) return false;
+    const s = article.querySelector('[data-review-source]');
+    const t = article.querySelector('[data-review-translation]');
+    const controls = article.querySelector('[data-region-controls]');
+    const mode = controls?.querySelector('[data-region-mode]');
+    const type = controls?.querySelector('[data-region-type]');
+    return (s && s.value !== (s.dataset.effective || '')) || (t && t.value !== (t.dataset.effective || ''))
+      || (mode && mode.value !== (controls.dataset.effectiveMode || 'auto'))
+      || (type && type.value !== (controls.dataset.effectiveType || 'unknown'));
+  }
+  function reviewTextDirty(article) {
+    if (!article) return false;
+    const s = article.querySelector('[data-review-source]');
+    const t = article.querySelector('[data-review-translation]');
+    return Boolean((s && s.value !== (s.dataset.effective || '')) || (t && t.value !== (t.dataset.effective || '')));
+  }
+  function snapshotDirtyReviewEditors() {
+    const snap = {};
+    const list = $('#qualityReviewList');
+    if (!list) return snap;
+    $$('.quality-review-item[data-review-key]', list).forEach(article => {
+      if (!reviewEditorDirty(article)) return;
+      const s = article.querySelector('[data-review-source]');
+      const t = article.querySelector('[data-review-translation]');
+      const r = article.querySelector('[data-review-reason]');
+      const c = article.querySelector('[data-region-controls]');
+      snap[String(article.dataset.reviewKey || '')] = {
+        source: s ? s.value : null, target: t ? t.value : null, reason: r ? r.value : '',
+        mode: c?.querySelector('[data-region-mode]')?.value, type: c?.querySelector('[data-region-type]')?.value,
+      };
+    });
+    return snap;
+  }
+  function restoreDirtyReviewEditors(snap) {
+    if (!snap) return;
+    const list = $('#qualityReviewList');
+    if (!list) return;
+    for (const [key, values] of Object.entries(snap)) {
+      const article = $(`.quality-review-item[data-review-key="${key}"]`, list);
+      if (!article) continue;
+      const s = article.querySelector('[data-review-source]');
+      const t = article.querySelector('[data-review-translation]');
+      const r = article.querySelector('[data-review-reason]');
+      const c = article.querySelector('[data-region-controls]');
+      if (s && values.source != null) s.value = values.source;
+      if (t && values.target != null) t.value = values.target;
+      if (r && values.reason) r.value = values.reason;
+      if (c && values.mode) c.querySelector('[data-region-mode]').value = values.mode;
+      if (c && values.type) c.querySelector('[data-region-type]').value = values.type;
+      setReviewSaveState(article, 'dirty');
+    }
+  }
+  function selectedReviewArticleDirty() {
+    const list = $('#qualityReviewList');
+    if (!list || !appState.reviewSelectedKey) return false;
+    return reviewEditorDirty($(`.quality-review-item[data-review-key="${appState.reviewSelectedKey}"]`, list));
+  }
+  function guardUnsavedReviewEdits() {
+    if (appState.reviewDraw) {
+      showToast('Conclua ou cancele o desenho da região antes de trocar de item.', 'warn');
+      return false;
+    }
+    if (selectedReviewArticleDirty()) {
+      showToast('Salve ou cancele suas alterações antes de trocar de item.', 'warn');
+      return false;
+    }
+    return true;
+  }
+
+  // --- R1: full page preview + region overlay for the selected pending item ------
+  function resetReviewPreview() {
+    appState.reviewSelectedKey = '';
+    appState.reviewVisibleKeys = [];
+    appState.reviewPreviewToken++;
+    clearReviewPreviewBlob();
+    const panel = $('#reviewPagePreview');
+    if (panel) panel.hidden = true;
+    const img = $('#reviewPreviewImage');
+    if (img) { img.onload = null; img.onerror = null; img.removeAttribute('src'); }
+    const overlay = $('#reviewBboxOverlay');
+    if (overlay) overlay.hidden = true;
+  }
+
+  function reviewItemByKey(key) {
+    const items = Array.isArray(appState.qualityReview?.items) ? appState.qualityReview.items : [];
+    return items.find(item => String(item.key || '') === String(key || '')) || null;
+  }
+
+  function syncReviewPreviewSelection() {
+    const keys = appState.reviewVisibleKeys || [];
+    let key = String(appState.reviewSelectedKey || '');
+    if (!key || !keys.includes(key)) key = keys[0] || '';
+    // Re-apply without scrolling: a poll refresh must never yank the view around.
+    applyReviewSelection(key, {scroll: false});
+  }
+
+  function applyReviewSelection(key, {scroll = false} = {}) {
+    appState.reviewSelectedKey = String(key || '');
+    const selectedItem = reviewItemByKey(appState.reviewSelectedKey);
+    const addButton = $('#reviewAddRegion');
+    const adjustButton = $('#reviewAdjustRegion');
+    if (addButton) addButton.disabled = !selectedItem?.page_url || selectedItem?.type === 'smart_split';
+    if (adjustButton) adjustButton.disabled = !selectedItem?.page_url || selectedItem?.type === 'smart_split';
+    const list = $('#qualityReviewList');
+    if (list) {
+      $$('.quality-review-item', list).forEach(article => {
+        const selected = String(article.dataset.reviewKey || '') === appState.reviewSelectedKey;
+        article.classList.toggle('is-selected', selected);
+        if (selected && scroll) article.scrollIntoView({block: 'nearest'});
+      });
+    }
+    renderReviewPreview();
+  }
+
+  function selectReviewItem(key, options = {}) {
+    if (!key) return;
+    if ((String(key) !== String(appState.reviewSelectedKey || '') || appState.reviewDraw) && !guardUnsavedReviewEdits()) return;
+    applyReviewSelection(key, options);
+  }
+
+  function setReviewPreviewState(state, message = '') {
+    const stage = $('#reviewPreviewStage');
+    const status = $('#reviewPreviewStatus');
+    const retry = $('#reviewPreviewRetry');
+    if (stage) stage.dataset.state = state;
+    if (status) status.textContent = message || '';
+    if (retry) retry.hidden = !(state === 'preview_error' || state === 'page_processing');
+  }
+
+  function clearReviewPreviewBlob() {
+    if (appState.reviewPreviewBlobUrl) {
+      try { URL.revokeObjectURL(appState.reviewPreviewBlobUrl); } catch (_) {}
+      appState.reviewPreviewBlobUrl = '';
+    }
+  }
+
+  // Pure geometry: map a bbox in original-image pixels to a rect inside the frame,
+  // accounting for object-fit: contain letterboxing (the rendered content rect is
+  // smaller than the element box, offset to center). Returns null when unmappable.
+  function computeReviewOverlayRect(natural, client, box) {
+    const nw = Number(natural?.width), nh = Number(natural?.height);
+    const cw = Number(client?.width), ch = Number(client?.height);
+    if (!Array.isArray(box) || box.length < 4) return null;
+    if (!(nw > 0) || !(nh > 0) || !(cw > 0) || !(ch > 0)) return null;
+    const scale = Math.min(cw / nw, ch / nh);
+    const offX = (cw - nw * scale) / 2, offY = (ch - nh * scale) / 2;
+    const [x, y, w, h] = box.map(Number);
+    return {left: offX + x * scale, top: offY + y * scale, width: w * scale, height: h * scale};
+  }
+
+  function positionReviewBbox() {
+    const img = $('#reviewPreviewImage');
+    const overlay = $('#reviewBboxOverlay');
+    if (!img || !overlay) return;
+    const item = reviewItemByKey(appState.reviewSelectedKey);
+    const box = item && item.bounding_box_valid ? item.bounding_box : null;
+    const rect = box ? computeReviewOverlayRect(
+      {width: img.naturalWidth, height: img.naturalHeight},
+      {width: img.clientWidth, height: img.clientHeight}, box) : null;
+    if (!rect) { overlay.hidden = true; return; }
+    overlay.style.left = `${rect.left}px`;
+    overlay.style.top = `${rect.top}px`;
+    overlay.style.width = `${rect.width}px`;
+    overlay.style.height = `${rect.height}px`;
+    overlay.hidden = false;
+  }
+  try {
+    window.__komystUiTestHooks = Object.assign(window.__komystUiTestHooks || {},
+      {computeReviewOverlayRect});
+  } catch (_) { /* diagnostic/test hook only */ }
+
+  async function renderReviewPreview() {
+    const panel = $('#reviewPagePreview');
+    const img = $('#reviewPreviewImage');
+    const overlay = $('#reviewBboxOverlay');
+    const title = $('#reviewPreviewTitle');
+    if (!panel || !img) return;
+    const item = reviewItemByKey(appState.reviewSelectedKey);
+    if (!item) { panel.hidden = true; return; }
+    panel.hidden = false;
+    updateReviewPreviewNav();
+    if (title) title.textContent = `Página ${item.page_index ?? item.page ?? '—'} · ${item.label || 'Região'}`;
+    if (overlay) overlay.hidden = true;
+    if (!item.page_url) {
+      clearReviewPreviewBlob();
+      img.removeAttribute('src');
+      setReviewPreviewState('preview_unavailable', 'A prévia desta página não está disponível.');
+      return;
+    }
+    const token = ++appState.reviewPreviewToken;
+    setReviewPreviewState('preview_loading', 'Carregando a página…');
+    let result;
+    try {
+      const resp = await fetch(item.page_url, {headers: {Accept: 'image/*'}, credentials: 'same-origin'});
+      if (resp.ok) {
+        const blob = await resp.blob();
+        result = {state: 'preview_ready', blobUrl: URL.createObjectURL(blob)};
+      } else {
+        let code = '';
+        try { code = String((await resp.json())?.detail?.code || ''); } catch (_) {}
+        if (resp.status === 409 || code === 'page_processing') result = {state: 'page_processing'};
+        else if (code === 'preview_unavailable' || resp.status === 404) result = {state: 'preview_unavailable'};
+        else result = {state: 'preview_error'};
+      }
+    } catch (_) {
+      result = {state: 'preview_error'};
+    }
+    if (token !== appState.reviewPreviewToken) {
+      if (result.blobUrl) { try { URL.revokeObjectURL(result.blobUrl); } catch (e) {} }
+      return;  // a newer selection superseded this load
+    }
+    if (result.state === 'preview_ready') {
+      clearReviewPreviewBlob();
+      appState.reviewPreviewBlobUrl = result.blobUrl;
+      img.onload = () => {
+        if (token !== appState.reviewPreviewToken) return;
+        const invalid = item.bounding_box && !item.bounding_box_valid;
+        if (!item.bounding_box || item.bounding_box_valid) {
+          positionReviewBbox();
+          setReviewPreviewState('preview_ready', '');
+        } else if (invalid) {
+          if (overlay) overlay.hidden = true;
+          setReviewPreviewState('invalid_region', 'Destaque da região indisponível.');
+        }
+      };
+      img.onerror = () => {
+        if (token !== appState.reviewPreviewToken) return;
+        setReviewPreviewState('preview_error', 'Não foi possível carregar a página.');
+      };
+      img.src = result.blobUrl;
+    } else if (result.state === 'page_processing') {
+      clearReviewPreviewBlob(); img.removeAttribute('src');
+      setReviewPreviewState('page_processing', 'A página ainda está sendo processada.');
+    } else if (result.state === 'preview_unavailable') {
+      clearReviewPreviewBlob(); img.removeAttribute('src');
+      setReviewPreviewState('preview_unavailable', 'A prévia desta página não está disponível.');
+    } else {
+      clearReviewPreviewBlob(); img.removeAttribute('src');
+      setReviewPreviewState('preview_error', 'Não foi possível carregar a página.');
+    }
+  }
+
+  function updateReviewPreviewNav() {
+    const keys = appState.reviewVisibleKeys || [];
+    const index = keys.indexOf(String(appState.reviewSelectedKey || ''));
+    const prev = $('#reviewPreviewPrev');
+    const next = $('#reviewPreviewNext');
+    if (prev) prev.disabled = index <= 0;
+    if (next) next.disabled = index < 0 || index >= keys.length - 1;
+  }
+
+  function stepReviewSelection(delta) {
+    const keys = appState.reviewVisibleKeys || [];
+    if (!keys.length) return;
+    const current = keys.indexOf(String(appState.reviewSelectedKey || ''));
+    const nextIndex = Math.min(keys.length - 1, Math.max(0, (current < 0 ? 0 : current) + delta));
+    selectReviewItem(keys[nextIndex], {scroll: true});
+  }
+
+  // --- R3: explicit human region controls; these endpoints only persist review data. ---
+  const REVIEW_REGION_TYPES = ['speech','dialogue','thought','narration','system_message','location','title','sfx','decorative','editorial','credit','watermark','url','proper_name','logo','branding','unknown'];
+  function fillReviewRegionTypeSelect(select, selected = 'speech') {
+    if (!select) return;
+    select.innerHTML = REVIEW_REGION_TYPES.map(value => `<option value="${value}">${escapeHtml(value)}</option>`).join('');
+    select.value = REVIEW_REGION_TYPES.includes(selected) ? selected : 'unknown';
+  }
+  function reviewDrawStatus(message = '') {
+    const node = $('#reviewDrawStatus');
+    if (node) node.textContent = message;
+  }
+  function cancelReviewDraw({keepForm = false} = {}) {
+    const frame = $('#reviewPreviewFrame');
+    const overlay = $('#reviewDrawOverlay');
+    appState.reviewDraw = keepForm ? appState.reviewDraw : null;
+    if (frame) { frame.dataset.drawing = '0'; frame.style.touchAction = ''; }
+    if (overlay) overlay.hidden = true;
+    $('#reviewCancelDraw') && ($('#reviewCancelDraw').hidden = true);
+    if (!keepForm) {
+      const form = $('#reviewManualRegionForm');
+      if (form) form.hidden = true;
+      reviewDrawStatus('');
+    }
+  }
+  function reviewPointerToImage(clientX, clientY, {clampOutside = false} = {}) {
+    const img = $('#reviewPreviewImage');
+    const frame = $('#reviewPreviewFrame');
+    if (!img || !frame || !(img.naturalWidth > 0) || !(img.naturalHeight > 0)) return null;
+    const rect = frame.getBoundingClientRect();
+    const scale = Math.min(rect.width / img.naturalWidth, rect.height / img.naturalHeight);
+    if (!(scale > 0)) return null;
+    const offsetX = (rect.width - img.naturalWidth * scale) / 2;
+    const offsetY = (rect.height - img.naturalHeight * scale) / 2;
+    const px = clientX - rect.left - offsetX;
+    const py = clientY - rect.top - offsetY;
+    if (!clampOutside && (px < 0 || py < 0 || px > img.naturalWidth * scale || py > img.naturalHeight * scale)) return null;
+    return {x: Math.max(0, Math.min(img.naturalWidth, px / scale)),
+      y: Math.max(0, Math.min(img.naturalHeight, py / scale)), scale, offsetX, offsetY};
+  }
+  function reviewBoxFromDrag(start, end, width, height) {
+    if (!start || !end || !(width > 0) || !(height > 0)) return null;
+    const x = Math.max(0, Math.min(width, Math.floor(Math.min(start.x, end.x))));
+    const y = Math.max(0, Math.min(height, Math.floor(Math.min(start.y, end.y))));
+    const right = Math.max(x, Math.min(width, Math.ceil(Math.max(start.x, end.x))));
+    const bottom = Math.max(y, Math.min(height, Math.ceil(Math.max(start.y, end.y))));
+    if (right <= x || bottom <= y) return null;
+    return [x, y, right - x, bottom - y];
+  }
+  function updateReviewDrawRect(point) {
+    const draw = appState.reviewDraw;
+    const overlay = $('#reviewDrawOverlay');
+    const img = $('#reviewPreviewImage');
+    if (!draw || !draw.start || !point || !overlay || !img) return;
+    const frame = $('#reviewPreviewFrame');
+    const frameRect = frame.getBoundingClientRect();
+    const scale = Math.min(frameRect.width / img.naturalWidth, frameRect.height / img.naturalHeight);
+    const left = draw.offsetX + Math.min(draw.start.x, point.x) * scale;
+    const top = draw.offsetY + Math.min(draw.start.y, point.y) * scale;
+    overlay.style.left = `${left}px`; overlay.style.top = `${top}px`;
+    overlay.style.width = `${Math.abs(point.x - draw.start.x) * scale}px`;
+    overlay.style.height = `${Math.abs(point.y - draw.start.y) * scale}px`;
+    overlay.hidden = false;
+  }
+  function startReviewRegionDraw(mode) {
+    if (!guardUnsavedReviewEdits()) return;
+    const item = reviewItemByKey(appState.reviewSelectedKey);
+    const img = $('#reviewPreviewImage');
+    if (!item || !img?.naturalWidth || !img?.naturalHeight || $('#reviewPreviewStage')?.dataset.state !== 'preview_ready') {
+      showToast('Carregue a prévia da página antes de desenhar uma região.', 'warn'); return;
+    }
+    appState.reviewDraw = {mode, key: item.key, start: null, pageIndex: Number(item.page_index), confirmedBox: null};
+    const frame = $('#reviewPreviewFrame');
+    frame.dataset.drawing = '1'; frame.style.touchAction = 'none';
+    $('#reviewCancelDraw').hidden = false;
+    reviewDrawStatus(mode === 'add' ? 'Arraste sobre a página para marcar o texto.' : 'Redesenhe a área inteira da região.');
+  }
+  async function saveReviewRegionControl(article, boundingBoxOverride) {
+    const item = reviewItemByKey(article?.dataset.reviewKey);
+    const controls = article?.querySelector('[data-region-controls]');
+    if (!item || !controls || reviewTextDirty(article)) {
+      if (reviewTextDirty(article)) showToast('Salve ou cancele as alterações de texto deste item primeiro.', 'warn');
+      return false;
+    }
+    const mode = controls.querySelector('[data-region-mode]')?.value || 'auto';
+    const type = controls.querySelector('[data-region-type]')?.value || item.region_type_original || 'unknown';
+    const effectiveBox = boundingBoxOverride === undefined
+      ? (item.bounding_box_edited ? item.bounding_box_effective : null) : boundingBoxOverride;
+    const payload = {
+      job_id: appState.qualityReview.job_id, item_key: item.key,
+      expected_version: Number(controls.dataset.version || 0),
+      translate_override: mode === 'auto' ? null : mode,
+      region_type_override: type === item.region_type_original ? null : type,
+      bounding_box_override: effectiveBox,
+    };
+    const state = controls.querySelector('[data-region-save-state]');
+    if (state) state.textContent = 'Salvando…';
+    try {
+      const result = await api('/api/ui/quality-review/region-control', {method:'POST', body:JSON.stringify(payload)});
+      renderQualityReview(result.review);
+      showToast('Opções da região salvas. A saída publicada ainda não foi regenerada.', 'ok');
+      return true;
+    } catch (error) {
+      if (state) { state.textContent = error.status === 409 ? 'Conflito de versão — recarregue a Review.' : (error.message || 'Falha ao salvar.'); controls.dataset.error = '1'; }
+      return false;
+    }
+  }
+  function finishReviewDraw(event) {
+    const draw = appState.reviewDraw;
+    if (!draw || !draw.start) return;
+    const img = $('#reviewPreviewImage');
+    const end = reviewPointerToImage(event.clientX, event.clientY, {clampOutside:true});
+    const box = reviewBoxFromDrag(draw.start, end, img?.naturalWidth, img?.naturalHeight);
+    draw.start = null;
+    if (!box || box[2] < 6 || box[3] < 6) {
+      cancelReviewDraw(); reviewDrawStatus('Área inválida ou pequena demais.'); return;
+    }
+    draw.confirmedBox = box;
+    if (draw.mode === 'add') {
+      cancelReviewDraw({keepForm:true});
+      const form = $('#reviewManualRegionForm');
+      if (form) form.hidden = false;
+      fillReviewRegionTypeSelect($('#reviewManualType'), 'speech');
+      $('#reviewManualSource').value = ''; $('#reviewManualTarget').value = '';
+      $('#reviewManualMode').value = 'auto';
+      $('#reviewManualSource').focus();
+      reviewDrawStatus(`Área selecionada: ${box[2]} × ${box[3]} px. Preencha e salve.`);
+      return;
+    }
+    const article = $(`.quality-review-item[data-review-key="${CSS.escape(draw.key)}"]`);
+    void saveReviewRegionControl(article, box).then(saved => {
+      cancelReviewDraw();
+      if (saved) reviewDrawStatus('Área atualizada. Saída publicada ainda não foi regenerada.');
+    });
+  }
+  $('#reviewPreviewFrame')?.addEventListener('pointerdown', event => {
+    const draw = appState.reviewDraw;
+    if (!draw || $('#reviewManualRegionForm')?.hidden === false) return;
+    const point = reviewPointerToImage(event.clientX, event.clientY);
+    if (!point) return;
+    event.preventDefault();
+    draw.start = {x:point.x,y:point.y}; draw.offsetX = point.offsetX; draw.offsetY = point.offsetY;
+    event.currentTarget.setPointerCapture?.(event.pointerId);
+    updateReviewDrawRect(point);
+  });
+  $('#reviewPreviewFrame')?.addEventListener('pointermove', event => {
+    if (!appState.reviewDraw?.start) return;
+    updateReviewDrawRect(reviewPointerToImage(event.clientX, event.clientY, {clampOutside:true}));
+  });
+  $('#reviewPreviewFrame')?.addEventListener('pointerup', finishReviewDraw);
+  $('#reviewPreviewFrame')?.addEventListener('pointercancel', () => { if (appState.reviewDraw?.start) cancelReviewDraw(); });
+  $('#reviewAddRegion')?.addEventListener('click', () => startReviewRegionDraw('add'));
+  $('#reviewAdjustRegion')?.addEventListener('click', () => startReviewRegionDraw('adjust'));
+  $('#reviewCancelDraw')?.addEventListener('click', () => cancelReviewDraw());
+  $('#reviewManualCancel')?.addEventListener('click', () => cancelReviewDraw());
+  $('#reviewManualSave')?.addEventListener('click', async () => {
+    const draw = appState.reviewDraw;
+    const source = String($('#reviewManualSource')?.value || '').trim();
+    if (!draw || !draw.confirmedBox || !source) { showToast('Informe o texto detectado antes de salvar.', 'warn'); return; }
+    const button = $('#reviewManualSave'); button.disabled = true;
+    try {
+      const result = await api('/api/ui/quality-review/manual-region', {method:'POST', body:JSON.stringify({
+        job_id:appState.qualityReview.job_id, page_index:draw.pageIndex, bbox:draw.confirmedBox,
+        source_text:source, target_text:String($('#reviewManualTarget')?.value || ''),
+        region_type:$('#reviewManualType')?.value || 'speech', translate_override:$('#reviewManualMode')?.value || 'auto',
+      })});
+      appState.reviewDraw = null; cancelReviewDraw(); renderQualityReview(result.review);
+      const manual = result.review.items.find(entry => entry.is_manual_region && entry.region_id === result.region.region_id);
+      if (manual) selectReviewItem(manual.key, {scroll:true});
+      showToast('Região adicionada à Review. Nenhum provider ou YK foi usado; gere novamente a saída em uma fase futura.', 'ok');
+    } catch (error) { showToast(error.message || 'Não foi possível adicionar a região.', 'error'); }
+    finally { button.disabled = false; }
+  });
+  $('#qualityReviewList')?.addEventListener('change', event => {
+    if (event.target.matches('[data-region-mode], [data-region-type]')) {
+      const controls = event.target.closest('[data-region-controls]');
+      const article = event.target.closest('[data-review-key]');
+      const dirty = reviewEditorDirty(article);
+      if (controls) controls.dataset.dirty = dirty ? '1' : '0';
+      const state = controls?.querySelector('[data-region-save-state]');
+      if (state) state.textContent = dirty ? 'Alterações não salvas' : '';
+    }
+  });
+  $('#qualityReviewList')?.addEventListener('click', async event => {
+    const save = event.target.closest('[data-save-region-control]');
+    if (save) { const article = save.closest('[data-review-key]'); if (article) await saveReviewRegionControl(article); return; }
+    const remove = event.target.closest('[data-remove-manual-region]');
+    if (!remove) return;
+    const article = remove.closest('[data-review-key]');
+    const item = reviewItemByKey(article?.dataset.reviewKey);
+    if (!item || !item.is_manual_region || !await komystConfirm('Desativar esta região manual? O histórico será preservado.', {title: 'Desativar região', confirmLabel: 'Desativar', danger: true})) return;
+    try {
+      const result = await api('/api/ui/quality-review/manual-region/remove', {method:'POST', body:JSON.stringify({
+        job_id:appState.qualityReview.job_id, region_id:item.region_id, expected_version:Number(item.region_control_version || 0),
+      })});
+      renderQualityReview(result.review); showToast('Região manual removida da Review.', 'ok');
+    } catch (error) { showToast(error.message || 'Não foi possível remover a região.', 'error'); }
+  });
+  document.addEventListener('keydown', event => { if (event.key === 'Escape' && appState.reviewDraw) cancelReviewDraw(); });
+
+  $('#reviewPreviewPrev')?.addEventListener('click', () => stepReviewSelection(-1));
+  $('#reviewPreviewNext')?.addEventListener('click', () => stepReviewSelection(1));
+  $('#reviewPreviewRetry')?.addEventListener('click', () => renderReviewPreview());
+  window.addEventListener('resize', () => {
+    if ($('#reviewPreviewStage')?.dataset.state === 'preview_ready') positionReviewBbox();
+  });
+  if (typeof ResizeObserver !== 'undefined') {
+    const frame = $('#reviewPreviewFrame');
+    if (frame) new ResizeObserver(() => {
+      if ($('#reviewPreviewStage')?.dataset.state === 'preview_ready') positionReviewBbox();
+    }).observe(frame);
+  }
+
+  function visibleQualityReviewKeys({risk = ''} = {}) {
+    const root = $('#qualityReviewList');
+    if (!root) return [];
+    return $$('.quality-review-item', root)
+      // Report-only items are not part of the revision, so bulk actions and
+      // select-all must never include them.
+      .filter(item => item.dataset.visualState !== 'report_only')
+      .filter(item => item.dataset.reviewType !== 'smart_split')
+      .filter(item => !risk || String(item.dataset.risk || '').toUpperCase() === String(risk).toUpperCase())
+      .map(item => String(item.dataset.reviewKey || ''))
+      .filter(Boolean);
+  }
+
+  function updateQualityReviewSelectionUi() {
+    const count = appState.qualityReviewSelection.size;
+    const label = $('#qualityReviewSelectedCount');
+    const visible = visibleQualityReviewKeys();
+    if (label) label.textContent = `${visible.length} exibido${visible.length === 1 ? '' : 's'} · ${count} selecionado${count === 1 ? '' : 's'}`;
+    const all = $('#qualityReviewSelectAll');
+    if (all) {
+      all.checked = visible.length > 0 && visible.every(key => appState.qualityReviewSelection.has(key));
+      all.indeterminate = !all.checked && visible.some(key => appState.qualityReviewSelection.has(key));
+    }
+    const undo = $('#undoBulkReview');
+    if (undo) undo.disabled = appState.qualityReviewUndo.length === 0 || appState.qualityReviewBulkBusy;
+  }
+
+  function setQualityReviewBulkMessage(message, type = '') {
+    const node = $('#qualityReviewBulkMessage');
+    if (!node) return;
+    node.textContent = message || '';
+    node.dataset.state = type || '';
+  }
+
+  function renderQualityReviewLoading(identity) {
+    const panel = $('#qualityReviewPanel');
+    const list = $('#qualityReviewList');
+    if (!panel || !list) return;
+    panel.hidden = false;
+    appState.qualityReview = {
+      job_id: identity?.jobId || '',
+      run_id: identity?.runId || '',
+      items: [],
+      pending_count: 0,
+      confirmed: false,
+    };
+    const meta = $('#qualityReviewMeta');
+    if (meta) meta.textContent = 'Carregando revisão deste capítulo…';
+    updateQualityReviewFilterControls([], appState.qualityReviewFilter || 'pending');
+    list.innerHTML = '<div class="muted">Abrindo revisão existente…</div>';
+    setQualityReviewBulkMessage('', '');
+    updateQualityReviewSelectionUi();
+  }
+
+  function closeReviewRerunDialog() {
+    const overlay = $('#reviewRerunConfirm');
+    if (overlay) {
+      overlay.classList.remove('show');
+      overlay.setAttribute('aria-hidden', 'true');
+    }
+    appState.reviewRerunPlan = null;
+    appState.reviewRerunBusy = false;
+    const apply = $('#reviewRerunApply');
+    if (apply) { apply.disabled = false; apply.textContent = 'Iniciar rerun'; }
+  }
+
+  function renderReviewRerunPlan(plan) {
+    const summary = $('#reviewRerunSummary');
+    if (!summary) return;
+    const reasons = new Map();
+    (plan.targets || []).forEach(item => {
+      const reason = String(item.reason_code || 'review_required');
+      reasons.set(reason, (reasons.get(reason) || 0) + 1);
+    });
+    summary.innerHTML = [
+      ['Regiões', Number(plan.region_count || 0)],
+      ['Páginas', Number(plan.page_count || 0)],
+      ['Somente reconstrução', Number(plan.reconstruction_only || 0)],
+      ['Precisam de NVIDIA', Number(plan.provider_required || 0)],
+      ['Reutilizam tradução', Number(plan.reconstruction_only || 0)],
+      ['Requests estimadas', Number(plan.estimated_provider_requests || 0)],
+    ].map(([label, value]) => `<div class="pub-meta"><small>${escapeHtml(label)}</small><strong>${escapeHtml(value)}</strong></div>`).join('')
+      + `<div class="review-rerun-reasons"><small>Motivos</small><span>${escapeHtml([...reasons.entries()].map(([reason, count]) => `${reason} (${count})`).join(' · ') || '—')}</span></div>`;
+    const providerRow = $('#reviewRerunProviderRow');
+    if (providerRow) providerRow.hidden = Number(plan.provider_required || 0) <= 0;
+    if ($('#reviewRerunAllowProvider')) $('#reviewRerunAllowProvider').checked = false;
+    if ($('#reviewRerunError')) $('#reviewRerunError').hidden = true;
+  }
+
+  const REVIEW_RERUN_TERMINAL = new Set(['finished', 'review_required', 'failed', 'cancelled', 'interrupted']);
+  const REVIEW_RERUN_STATE_LABELS = {
+    queued: 'Aguardando worker', claimed: 'Worker iniciou o reprocessamento',
+    running: 'Reprocessamento em andamento', cancel_requested: 'Cancelamento solicitado',
+    cancelling: 'Aguardando o worker interromper a região atual',
+    cancelled: 'Rerun cancelado', review_required: 'Rerun concluído — revisão recomendada',
+    completed: 'Rerun concluído', failed: 'Rerun falhou',
+  };
+  const REVIEW_RERUN_STEP_LABELS = {
+    creating_mask_and_analyzing_neighbors: 'Criando máscara e analisando cores',
+    validating_residual: 'Validando texto residual', completed: 'Validação concluída',
+    cancelled: 'Cancelado',
+  };
+
+  function renderReviewRerunActivity(record = null) {
+    const panel = $('#reviewRerunActivity');
+    if (!panel) return;
+    if (!record) { panel.hidden = true; return; }
+    panel.hidden = false;
+    const current = Number(record.progress_current || 0);
+    const total = Number(record.progress_total || 0);
+    const state = String(record.status || 'queued');
+    const lifecycle = String(record.lifecycle_state || state);
+    const meta = $('#reviewRerunActivityMeta');
+    if (meta) meta.textContent = `${state} · ${current}/${total || '?'} · ${String(record.progress_message || 'aguardando worker')}`;
+    const stateNode = $('#reviewRerunActivityState');
+    if (stateNode) {
+      stateNode.textContent = record.cancellation_timed_out
+        ? 'Worker sem resposta' : (REVIEW_RERUN_STATE_LABELS[lifecycle] || lifecycle);
+      stateNode.dataset.state = record.cancellation_timed_out ? 'failed' : lifecycle;
+    }
+    const title = $('#reviewRerunActivityTitle');
+    if (title) title.textContent = record.chapter_name
+      ? `Rerun de pendências · ${String(record.chapter_name)}` : 'Rerun de pendências';
+    const counts = record.rerun_counts || {};
+    const heartbeat = record.worker_heartbeat_age_seconds == null
+      ? (record.worker_lease === 'unclaimed' ? 'Worker ainda não assumiu' : 'Heartbeat indisponível')
+      : `Worker ativo há ${Math.max(0, Math.round(Number(record.worker_heartbeat_age_seconds)))} s`;
+    const location = [
+      Number(record.current_page || 0) ? `Página ${Number(record.current_page)}` : '',
+      record.current_region_id ? `Região ${String(record.current_region_id)}` : '',
+      REVIEW_RERUN_STEP_LABELS[String(record.current_step || '')] || String(record.current_step || ''),
+    ].filter(Boolean).join(' · ');
+    if (meta) meta.innerHTML = [
+      lifecycle === 'queued' && record.queue_position ? `Posição na fila: ${Number(record.queue_position)}` : '',
+      location,
+      `Progresso: ${Number(counts.processed || 0)} de ${Number(counts.targets || total || 0)} regiões`,
+      `Aprovadas ${Number(counts.approved || 0)} · rejeitadas ${Number(counts.rejected || 0)} · restantes ${Number(counts.remaining || 0)} · canceladas ${Number(counts.cancelled || 0)}`,
+      heartbeat,
+      record.updated_at ? `Última atualização: ${String(record.updated_at)}` : '',
+      record.cancellation_elapsed_seconds != null
+        ? `Cancelamento solicitado há ${Math.round(Number(record.cancellation_elapsed_seconds))} s (limite ${Number(record.cancellation_timeout_seconds || 15)} s)` : '',
+    ].filter(Boolean).map(value => `<span>${escapeHtml(value)}</span>`).join('');
+    const cancel = $('#cancelReviewRerunAction');
+    if (cancel) {
+      const active = ['queued', 'claimed', 'running', 'cancel_requested', 'cancelling'].includes(lifecycle);
+      cancel.hidden = !active;
+      cancel.disabled = ['cancel_requested', 'cancelling'].includes(lifecycle) || appState.reviewRerunBusy;
+    }
+    const retry = $('#retryReviewRerunStatus');
+    if (retry) retry.hidden = !record.cancellation_timed_out;
+  }
+
+  async function pollReviewRerunStatus(jobId) {
+    if (!jobId || appState.reviewRerunChildId !== jobId) return;
+    if (appState.reviewRerunPoll) { clearTimeout(appState.reviewRerunPoll); appState.reviewRerunPoll = null; }
+    try {
+      const record = await api('/api/ui/review-rerun/status', {
+        method: 'POST', body: JSON.stringify({job_id: jobId}),
+      });
+      renderReviewRerunActivity(record);
+      if (REVIEW_RERUN_TERMINAL.has(String(record.status || ''))) {
+        const message = record.status === 'review_required'
+          ? 'Rerun concluído — revisão humana recomendada.'
+          : record.status === 'finished' ? 'Rerun concluído.'
+          : record.status === 'cancelled' ? 'Rerun cancelado.'
+          : `Rerun encerrado: ${String(record.status || 'erro')}.`;
+        setQualityReviewBulkMessage(message, ['finished', 'review_required'].includes(record.status) ? 'ok' : 'warn');
+        return;
+      }
+      appState.reviewRerunPoll = setTimeout(() => pollReviewRerunStatus(jobId), 750);
+    } catch (error) {
+      setQualityReviewBulkMessage(error.message || 'Não foi possível atualizar o rerun.', 'error');
+    }
+  }
+
+  async function cancelReviewRerun() {
+    const jobId = appState.reviewRerunChildId;
+    if (!jobId || appState.reviewRerunBusy) return;
+    appState.reviewRerunBusy = true;
+    renderReviewRerunActivity({status: 'cancelling', progress_message: 'solicitação enviada'});
+    try {
+      const record = await api('/api/ui/review-rerun/cancel', {
+        method: 'POST', body: JSON.stringify({job_id: jobId}),
+      });
+      renderReviewRerunActivity(record);
+      setQualityReviewBulkMessage('Cancelamento solicitado ao child run.', 'warn');
+      await pollReviewRerunStatus(jobId);
+    } catch (error) {
+      setQualityReviewBulkMessage(error.message || 'Não foi possível cancelar o rerun.', 'error');
+    } finally {
+      appState.reviewRerunBusy = false;
+    }
+  }
+
+  async function openReviewRerunDialog() {
+    const jobId = String(appState.qualityReview?.job_id || '');
+    if (!jobId || appState.reviewRerunBusy) return;
+    const trigger = $('#rerunPendingReview');
+    appState.reviewRerunBusy = true;
+    if (trigger) { trigger.disabled = true; trigger.textContent = 'Preparando...'; }
+    setQualityReviewBulkMessage('Localizando somente as regiões pendentes...', 'busy');
+    try {
+      const plan = await api('/api/ui/review-rerun/plan', {
+        method: 'POST', body: JSON.stringify({job_id: jobId}),
+      });
+      if (!Number(plan.region_count || 0)) {
+        setQualityReviewBulkMessage('Nenhuma região pendente foi encontrada.', 'ok');
+        return;
+      }
+      const selectedRegions = new Set((appState.qualityReview?.items || [])
+        .filter(item => appState.qualityReviewSelection.has(String(item.key || '')))
+        .map(item => String(item.region_id || ''))
+        .filter(Boolean));
+      if (selectedRegions.size > 20) {
+        throw new Error('Selecione no máximo 20 regiões para um rerun controlado.');
+      }
+      const selectedTargets = selectedRegions.size
+        ? (plan.targets || []).filter(item => selectedRegions.has(String(item.region_id || '')))
+        : (plan.targets || []);
+      if (selectedRegions.size && selectedTargets.length !== selectedRegions.size) {
+        throw new Error('A seleção contém itens que não são elegíveis para rerun.');
+      }
+      const pages = [...new Set(selectedTargets.map(item => Number(item.page || 0)).filter(Boolean))];
+      const scopedPlan = selectedRegions.size ? {
+        ...plan,
+        targets: selectedTargets,
+        pages,
+        region_count: selectedTargets.length,
+        page_count: pages.length,
+        reconstruction_only: selectedTargets.filter(item => item.requires_provider !== true).length,
+        provider_required: selectedTargets.filter(item => item.requires_provider === true).length,
+        estimated_provider_requests: selectedTargets.filter(item => item.requires_provider === true).length,
+        selection_applied: true,
+      } : plan;
+      appState.reviewRerunPlan = scopedPlan;
+      renderReviewRerunPlan(scopedPlan);
+      const overlay = $('#reviewRerunConfirm');
+      if (overlay) { overlay.classList.add('show'); overlay.setAttribute('aria-hidden', 'false'); }
+      $('#reviewRerunApply')?.focus();
+      setQualityReviewBulkMessage('Confira o escopo antes de iniciar o rerun.', '');
+    } catch (error) {
+      setQualityReviewBulkMessage(error.message || 'Não foi possível preparar o rerun.', 'error');
+      showToast(error.message || 'Não foi possível preparar o rerun.', 'error');
+    } finally {
+      appState.reviewRerunBusy = false;
+      if (trigger) { trigger.disabled = false; trigger.textContent = 'Reprocessar pendências'; }
+    }
+  }
+
+  async function startReviewRerun() {
+    const plan = appState.reviewRerunPlan;
+    const apply = $('#reviewRerunApply');
+    const errorNode = $('#reviewRerunError');
+    if (!plan || appState.reviewRerunBusy) return;
+    const mode = $('input[name="reviewRerunMode"]:checked')?.value || 'all_pending';
+    const providerRequired = mode !== 'reconstruction' && Number(plan.provider_required || 0) > 0;
+    const allowProvider = $('#reviewRerunAllowProvider')?.checked === true;
+    if (providerRequired && !allowProvider) {
+      if (errorNode) {
+        errorNode.textContent = 'Autorize a NVIDIA para os trechos sem tradução válida ou escolha somente reconstruções.';
+        errorNode.hidden = false;
+      }
+      return;
+    }
+    appState.reviewRerunBusy = true;
+    if (apply) { apply.disabled = true; apply.textContent = 'Enfileirando...'; }
+    if (errorNode) errorNode.hidden = true;
+    try {
+      const child = await api('/api/ui/review-rerun/start', {
+        method: 'POST',
+        body: JSON.stringify({
+          job_id: plan.job_id,
+          modes: [mode],
+          allow_provider: allowProvider,
+          parent_run_id: plan.run_id || undefined,
+          target_region_ids: plan.selection_applied
+            ? (plan.targets || []).map(item => String(item.region_id || '')) : undefined,
+        }),
+      });
+      closeReviewRerunDialog();
+      appState.reviewRerunChildId = String(child.id || '');
+      renderReviewRerunActivity(child);
+      showToast(`Rerun enfileirado para ${Number(child.target_region_count || 0)} região(ões).`, 'ok');
+      setQualityReviewBulkMessage('Rerun de pendências adicionado à fila.', 'ok');
+      await pollState();
+      pollReviewRerunStatus(appState.reviewRerunChildId);
+    } catch (error) {
+      if (errorNode) { errorNode.textContent = error.message || 'Não foi possível iniciar o rerun.'; errorNode.hidden = false; }
+      if (apply) { apply.disabled = false; apply.textContent = 'Iniciar rerun'; }
+    } finally {
+      appState.reviewRerunBusy = false;
+    }
+  }
+
+  function qualityReviewDeveloperMode() {
+    try {
+      const params = new URLSearchParams(window.location.search || '');
+      return params.get('dev') === '1' || params.get('review_dev') === '1' || localStorage.getItem('komystDeveloperMode') === '1';
+    } catch (_) {
+      return false;
+    }
+  }
+
+  function updateQualityReviewDeveloperActions() {
+    const dev = qualityReviewDeveloperMode();
+    const canary = $('#nvidiaContractCanary');
+    if (canary) canary.hidden = !dev;
+    const diagnostics = $('#runtimeDiagnostics');
+    if (!diagnostics) return;
+    diagnostics.hidden = !dev;
+    // Which build is actually serving this page — developer mode only, so a
+    // regular user never sees process internals.
+    if (dev && !diagnostics.dataset.loaded) {
+      diagnostics.dataset.loaded = '1';
+      api('/api/ui/diagnostics').then(info => {
+        diagnostics.textContent = `build ${String(info.git_head || '').slice(0, 7)} · pid ${info.pid}`
+          + ` · worker ${info.worker_online ? `online (pid ${info.worker_pid ?? '?'})` : 'offline'}`
+          + ` · taxonomia v${info.taxonomy_version} · gate v${info.gate_version ?? '?'}`
+          + ` · detector OCR v${info.ocr_plausibility_version ?? '?'}`
+          + ` · schema ${info.review_schema_version} · desde ${String(info.server_started_at || '').slice(0, 19)}`;
+      }).catch(() => { diagnostics.textContent = 'diagnóstico indisponível'; delete diagnostics.dataset.loaded; });
+    }
+  }
+
+  const REVISION_CANCELLABLE_STATES = new Set(['queued', 'running', 'cancelling']);
+  const REVISION_RESUMABLE_STATES = new Set(['cancelled', 'interrupted', 'failed']);
+
+  function renderQualityRevisionStatus(status = null) {
+    const panel = $('#qualityRevisionStatus');
+    if (!panel) return;
+    if (!status || status.status === 'not_started') {
+      panel.hidden = true;
+      return;
+    }
+    panel.hidden = false;
+    const phase = $('#qualityRevisionPhase');
+    const meta = $('#qualityRevisionMeta');
+    const label = status.phase_label || status.phase || 'Revisão em andamento';
+    const pages = status.total_pages ? `${status.total_pages} páginas` : 'páginas sendo calculadas';
+    const regions = status.total_regions ? `${status.total_regions} regiões` : 'regiões sendo calculadas';
+    const requests = Number(status.requests || 0);
+    const responseStats = [
+      status.valid_response_batches ? `${status.valid_response_batches} válidas` : '',
+      status.repaired_batches ? `${status.repaired_batches} reparadas` : '',
+      status.fallback_individual_requests ? `${status.fallback_individual_requests} fallback` : '',
+      status.invalid_response_batches ? `${status.invalid_response_batches} inválidas` : '',
+      status.manual_review ? `${status.manual_review} manual` : '',
+      status.validity_rate != null ? `${Math.round(Number(status.validity_rate || 0) * 100)}%` : '',
+    ].filter(Boolean).join(' · ');
+    if (phase) phase.textContent = label;
+    if (meta) {
+      // Live per-region counters come from the running loop's checkpoint, so a
+      // revision in flight shows real progress instead of a stale zero.
+      const done = Number(status.regions_completed || 0);
+      const pending = Number(status.regions_pending || 0);
+      const progressBits = [
+        status.suspicious_regions != null ? `${status.suspicious_regions} suspeitas` : '',
+        status.skipped_unchanged_regions != null ? `${status.skipped_unchanged_regions} não selecionadas` : '',
+        (done || pending) ? `${done} concluídas · ${pending} pendentes` : '',
+        status.resumed_regions ? `${status.resumed_regions} reaproveitadas` : '',
+        status.cache_hits ? `${status.cache_hits} cache` : '',
+        status.retries ? `${status.retries} retry` : '',
+        status.elapsed_ms ? `${Math.round(Number(status.elapsed_ms) / 1000)}s` : '',
+      ].filter(Boolean).join(' · ');
+      meta.textContent = `revision_id ${String(status.revision_id || '—').slice(0, 8)} · ${pages} · ${regions} · ${requests} requisições · ${status.status || 'running'}${progressBits ? ' · ' + progressBits : ''}${responseStats ? ' · ' + responseStats : ''}`;
+    }
+    // A revision must always offer the next honest action: stop it while it runs,
+    // or continue it from the checkpoint once it stopped.
+    const state = String(status.status || '');
+    const cancelBtn = $('#cancelRevisionAction');
+    const resumeBtn = $('#resumeRevisionAction');
+    if (cancelBtn) {
+      cancelBtn.hidden = !REVISION_CANCELLABLE_STATES.has(state);
+      cancelBtn.disabled = state === 'cancelling';
+      cancelBtn.textContent = state === 'cancelling' ? 'CANCELANDO…' : 'CANCELAR REVISÃO';
+    }
+    if (resumeBtn) resumeBtn.hidden = !REVISION_RESUMABLE_STATES.has(state);
+  }
+
+  async function pollQualityRevisionStatus(jobId, {once = false} = {}) {
+    if (!jobId) return null;
+    try {
+      const status = await api(`/api/ui/quality-review/revision/${encodeURIComponent(jobId)}`);
+      renderQualityRevisionStatus(status);
+      if (!once && ['running', 'starting'].includes(String(status.status || ''))) {
+        clearTimeout(appState.qualityRevisionPoll);
+        appState.qualityRevisionPoll = setTimeout(() => pollQualityRevisionStatus(jobId), 2500);
+      } else if (!once && status.status) {
+        clearTimeout(appState.qualityRevisionPoll);
+        appState.qualityRevisionPoll = null;
+        pollState();
+      }
+      return status;
+    } catch (error) {
+      renderQualityRevisionStatus(null);
+      return null;
+    }
+  }
+
+  async function qualityReviewBulkAction({action = 'reviewed', keys = [], riskFilter = '', confirmation = false} = {}) {
+    if (!appState.qualityReview?.job_id || appState.qualityReviewBulkBusy) return;
+    const selected = keys.length ? keys : [...appState.qualityReviewSelection];
+    if (!selected.length) { setQualityReviewBulkMessage('Selecione ao menos um item.', 'warn'); return; }
+    if (confirmation && selected.length) {
+      const highCount = (appState.qualityReview.items || []).filter(item => selected.includes(String(item.key)) && String(item.risk || '').toUpperCase() === 'HIGH').length;
+      const pages = Array.from(new Set((appState.qualityReview.items || []).filter(item => selected.includes(String(item.key))).map(item => item.page))).sort((a, b) => Number(a) - Number(b));
+      const ok = await komystConfirm(`Você está prestes a aceitar ${selected.length} itens pendentes em ${pages.length} páginas. Alto risco: ${highCount}. Esta ação não publica o capítulo.`, {title: 'Aceitar itens pendentes', confirmLabel: 'Aceitar'});
+      if (!ok) return;
+      if (highCount > 0 && !await komystConfirm('Esta seleção inclui itens de alto risco. Confirme novamente para continuar.', {title: 'Itens de alto risco', confirmLabel: 'Aceitar mesmo assim', danger: true})) {
+        setQualityReviewBulkMessage('Ação cancelada: itens de alto risco não foram aceitos.', 'warn');
+        return;
+      }
+    }
+    appState.qualityReviewBulkBusy = true;
+    setQualityReviewBulkMessage('Aplicando ação em massa...', 'busy');
+    try {
+      appState.qualityReviewUndo.push({keys: selected, previous: (appState.qualityReview.items || []).filter(item => selected.includes(String(item.key))).map(item => [String(item.key), String(item.state || 'pending')])});
+      const review = await api('/api/ui/quality-review/bulk-action', {method: 'POST', body: JSON.stringify({job_id: appState.qualityReview.job_id, item_keys: selected, action, risk_filter: riskFilter})});
+      appState.qualityReviewSelection = new Set();
+      renderQualityReview(review);
+      setQualityReviewBulkMessage(`${review.bulk?.count || selected.length} itens atualizados.`, 'ok');
+      showToast('Ação em massa aplicada.', 'ok');
+    } catch (error) {
+      setQualityReviewBulkMessage(error.message || 'Não foi possível aplicar a ação em massa.', 'error');
+      showToast(error.message || 'Não foi possível aplicar a ação em massa.', 'error');
+    } finally {
+      appState.qualityReviewBulkBusy = false;
+      updateQualityReviewSelectionUi();
+    }
+  }
+
+  // Side-by-side of the page as published versus the page the revision produced,
+  // so a rejected region can be judged instead of just read about.
+  function openVisualComparison(page) {
+    const jobId = appState.qualityReview?.job_id;
+    if (!jobId || !page) return;
+    const dialog = $('#visualComparisonDialog');
+    const body = $('#visualComparisonBody');
+    if (!dialog || !body) return;
+    const base = `/api/ui/quality-review/${encodeURIComponent(jobId)}/page/${encodeURIComponent(page)}`;
+    body.innerHTML = `<figure><figcaption>PDF base (publicado)</figcaption><img src="${escapeAttr(base)}" alt="Página ${escapeAttr(page)} publicada"></figure>`
+      + `<figure><figcaption>PDF revisado</figcaption><img id="visualComparisonRevised" src="${escapeAttr(base)}?revision=latest" alt="Página ${escapeAttr(page)} revisada"></figure>`
+      + `<div class="visual-comparison-cta"><button type="button" class="btn-ghost" data-revise-page="${escapeAttr(page)}">REVISAR ESTA PÁGINA</button></div>`;
+    // A region that was not applied (manual review, or a report-only item) has
+    // no revised page: show a clear note instead of a broken/404 image.
+    const revised = $('#visualComparisonRevised');
+    if (revised) revised.addEventListener('error', () => {
+      const fig = revised.closest('figure');
+      if (fig) fig.innerHTML = '<figcaption>PDF revisado</figcaption><div class="visual-comparison-empty">Não há versão revisada — alteração não aplicada</div>';
+    }, {once: true});
+    dialog.hidden = false;
+    if (typeof dialog.showModal === 'function' && !dialog.open) dialog.showModal();
+  }
+
+  function openHumanPreviewComparison(item) {
+    if (!item) return;
+    const dialog = $('#visualComparisonDialog');
+    const body = $('#visualComparisonBody');
+    if (!dialog || !body) return;
+    const page = item.page_display_number || item.page_number || item.page_id || '';
+    const ready = item.approval_enabled === true && item.blocked !== true;
+    const status = ready ? 'PRONTA PARA REVISÃO HUMANA' : 'BLOQUEADA — REQUER RECONSTRUÇÃO DE ARTE';
+    const before = item.region_crop_url || '';
+    const after = item.preview_image_url || '';
+    const gates = [
+      `gate visual: ${item.visual_gate?.status || 'indisponível'}`,
+      `gate linguístico: ${item.linguistic_gate?.status || 'indisponível'}`,
+      `fora da máscara: ${Number(item.visual_gate?.isolation?.changed_pixels_outside_mask || 0)}`,
+      `tinta residual: ${Number(item.visual_gate?.residual_source_pixels || 0)}`,
+      item.font_selection?.selected_font ? `fonte: ${item.font_selection.selected_font}` : '',
+      item.font_runtime_validation?.actual_font_identity ? `fonte real: ${item.font_runtime_validation.actual_font_identity}` : '',
+      item.font_runtime_validation?.fallback_used ? 'fallback de fonte detectado' : '',
+      item.font_gate?.status ? `gate fonte: ${item.font_gate.status}` : '',
+    ].filter(Boolean).join(' · ');
+    body.innerHTML = `<section class="human-preview-comparison">`
+      + `<div class="human-preview-comparison-head"><strong>PRÉVIA DA PÁGINA ${escapeHtml(page)}</strong>`
+      + `<span class="${ready ? 'ok' : 'warn'}">${escapeHtml(status)}</span>`
+      + `<small>${escapeHtml(item.region_id || '')} · ${escapeHtml(gates)}</small></div>`
+      + `<div class="preview-compare">`
+      + `<figure><figcaption>ANTES</figcaption>${before ? `<img data-human-preview-url="${escapeAttr(before)}" alt="Trecho original antes da prévia">` : '<div class="visual-comparison-empty">Imagem original indisponível</div>'}</figure>`
+      + `<figure><figcaption>DEPOIS</figcaption>${after ? `<img data-human-preview-url="${escapeAttr(after)}" alt="Rascunho isolado depois da prévia">` : '<div class="visual-comparison-empty">Prévia não renderizada</div>'}</figure>`
+      + `</div><div class="preview-approval-note">Aprovar, pedir ajuste, rejeitar ou descartar fica no painel de revisão aberto atrás desta comparação. Nenhum clique foi executado automaticamente.</div>`
+      + `</section>`;
+    dialog.hidden = false;
+    if (typeof dialog.showModal === 'function' && !dialog.open) dialog.showModal();
+    void loadHumanComparisonImages(body);
+  }
+
+  async function loadHumanComparisonImages(root) {
+    for (const img of $$('img[data-human-preview-url]', root || document)) {
+      const path = String(img.dataset.humanPreviewUrl || '');
+      if (!path || img.dataset.loaded === '1') continue;
+      img.dataset.loaded = '1';
+      try {
+        const response = await api(path, {rawResponse: true});
+        const url = URL.createObjectURL(await response.blob());
+        const key = `dialog:${path}`;
+        if (previewCropUrls.get(key)) URL.revokeObjectURL(previewCropUrls.get(key));
+        previewCropUrls.set(key, url);
+        img.src = url;
+      } catch (error) {
+        img.replaceWith(Object.assign(document.createElement('div'), {
+          className: 'visual-comparison-empty',
+          textContent: `Imagem indisponível: ${error.message || ''}`,
+        }));
+      }
+    }
+  }
+
+  async function qualityReviewAction(event) {
+    // Clicking the card body (not an interactive control) selects the item and
+    // loads its page preview + region overlay, without scrolling the view.
+    const interactive = event.target.closest('button, input, textarea, select, a, summary, label, [contenteditable]');
+    if (!interactive) {
+      const article = event.target.closest('.quality-review-item[data-review-key]');
+      if (article) { selectReviewItem(String(article.dataset.reviewKey || ''), {scroll: false}); return; }
+    }
+    const revise = event.target.closest('[data-revise-page]');
+    if (revise) { openPageRevision(Number(revise.dataset.revisePage)); return; }
+    const compare = event.target.closest('[data-review-compare]');
+    if (compare) { openVisualComparison(compare.dataset.reviewCompare); return; }
+    const cancel = event.target.closest('[data-review-cancel]');
+    if (cancel) {
+      const item = cancel.closest('[data-review-key]');
+      if (!item) return;
+      // Restore the persisted (effective) values; already-saved revisions are untouched.
+      const s = item.querySelector('[data-review-source]');
+      const t = item.querySelector('[data-review-translation]');
+      const r = item.querySelector('[data-review-reason]');
+      if (s) s.value = s.dataset.effective || '';
+      if (t) t.value = t.dataset.effective || '';
+      if (r) r.value = '';
+      setReviewSaveState(item, 'idle');
+      return;
+    }
+    const deep = event.target.closest('[data-review-deep-action]');
+    if (deep) {
+      if (deep.dataset.busy === '1') return;
+      const item = deep.closest('[data-review-key]');
+      if (!item || !appState.qualityReview?.job_id) return;
+      const editor = item.querySelector('[data-review-translation]');
+      const sourceEditor = item.querySelector('[data-review-source]');
+      const reasonInput = item.querySelector('[data-review-reason]');
+      const action = String(deep.dataset.reviewDeepAction || '');
+      const reason = String(reasonInput?.value || '').trim();
+      if (action === 'rejected' && !reason) {
+        showToast('Informe um motivo para rejeitar esta tradução.', 'warn');
+        reasonInput?.focus();
+        return;
+      }
+      deep.dataset.busy = '1'; deep.disabled = true;
+      setReviewSaveState(item, 'saving');
+      try {
+        const body = {
+          job_id: appState.qualityReview.job_id,
+          item_key: item.dataset.reviewKey,
+          expected_version: Number(editor?.dataset.reviewVersion || 0),
+          action,
+          translation: editor?.value || '',
+          reason,
+        };
+        // Human source (OCR) correction — persisted as an override, never re-translated.
+        if (sourceEditor) body.source_text = sourceEditor.value;
+        const result = await api('/api/ui/quality-review/edit', {
+          method: 'POST', body: JSON.stringify(body),
+        });
+        renderQualityReview(result.review);
+        showToast(`Revisão salva · versão ${result.revision?.version || '?'}.`, 'ok');
+      } catch (error) {
+        if (error.status === 409 || error.code === 'review_version_conflict') {
+          // Another writer advanced the version: reload the current values so the
+          // reviewer edits on top of the latest, never a silent last-write-wins.
+          setReviewSaveState(item, 'conflict');
+          showToast('Este item mudou em outro lugar. Recarregamos os valores atuais.', 'warn');
+          try {
+            const fresh = await api(`/api/ui/quality-review/${appState.qualityReview.job_id}`);
+            renderQualityReview(fresh, {force: true});
+          } catch (_) { /* keep current DOM; values remain editable */ }
+        } else {
+          setReviewSaveState(item, 'error');
+          showToast(error.message || 'Não foi possível salvar a revisão.', 'error');
+        }
+        deep.disabled = false;
+      } finally { delete deep.dataset.busy; }
+      return;
+    }
+    const button = event.target.closest('[data-review-action]');
+    if (!button || button.dataset.busy === '1') return;
+    const item = button.closest('[data-review-key]');
+    if (!item || !appState.qualityReview?.job_id) return;
+    button.dataset.busy = '1'; button.disabled = true;
+    try {
+      const review = await api('/api/ui/quality-review/action', {method: 'POST', body: JSON.stringify({job_id: appState.qualityReview.job_id, item_key: item.dataset.reviewKey, action: button.dataset.reviewAction})});
+      renderQualityReview(review); showToast(button.dataset.reviewAction === 'preserved_original' ? 'Texto original mantido.' : 'Item marcado como revisado.', 'ok');
+    } catch (error) { showToast(error.message || 'Nao foi possivel atualizar o item.', 'error'); button.disabled = false; }
+    finally { delete button.dataset.busy; }
+  }
+
+  async function confirmQualityReview() {
+    const button = $('#confirmQualityReview');
+    if (!appState.qualityReview?.job_id || !button || button.disabled || button.dataset.busy === '1') return;
+    button.dataset.busy = '1'; button.disabled = true;
+    try { await api('/api/ui/quality-review/confirm', {method: 'POST', body: JSON.stringify({job_id: appState.qualityReview.job_id})}); showToast('Revisao confirmada.', 'ok'); pollState(); }
+    catch (error) { showToast(error.message || 'Nao foi possivel confirmar a revisao.', 'error'); button.disabled = false; }
+    finally { delete button.dataset.busy; }
+  }
+
+  $('#qualityReviewList')?.addEventListener('click', qualityReviewAction);
+  $('#qualityReviewList')?.addEventListener('input', event => {
+    const field = event.target.closest?.('[data-review-source], [data-review-translation]');
+    if (!field) return;
+    const article = field.closest('[data-review-key]');
+    if (!article) return;
+    setReviewSaveState(article, reviewEditorDirty(article) ? 'dirty' : 'idle');
+  });
+  $('#reviewedPdfAction')?.addEventListener('click', event => {
+    if (!event.target.closest('[data-open-reviewed-pdf]')) return;
+    const jobId = appState.qualityReview?.job_id;
+    if (jobId) openArtifact(jobId, 'pdf');
+  });
+  $('#visualComparisonClose')?.addEventListener('click', () => {
+    const dialog = $('#visualComparisonDialog');
+    if (!dialog) return;
+    if (typeof dialog.close === 'function' && dialog.open) dialog.close();
+    dialog.hidden = true;
+  });
+
+  /* ---------- targeted page revision (BLOCO 1) ---------- */
+  const pageRevisionState = {page: null, pageRevisionId: null, regions: [], manifest: null};
+
+  function pageRevisionIdentity() {
+    let runId = '';
+    try { runId = String(new URLSearchParams(window.location.search || '').get('run_id') || ''); } catch (_) {}
+    return {job_id: String(appState.qualityReview?.job_id || ''), run_id: runId};
+  }
+
+  function pageRevisionMessage(message, type = '') {
+    const node = $('#pageRevisionMessage');
+    if (node) { node.textContent = message || ''; node.dataset.state = type || ''; }
+  }
+
+  function pageRevisionSyncUrl() {
+    try {
+      const url = new URL(window.location.href);
+      if (pageRevisionState.pageRevisionId) {
+        url.searchParams.set('page_rev', pageRevisionState.pageRevisionId);
+        url.searchParams.set('page_rev_page', String(pageRevisionState.page || ''));
+      } else {
+        url.searchParams.delete('page_rev'); url.searchParams.delete('page_rev_page');
+      }
+      window.history.replaceState({}, '', url);
+    } catch (_) {}
+  }
+
+  async function openPageRevision(page, {restore = false, pageRevisionId = '', focusRegion = ''} = {}) {
+    const id = pageRevisionIdentity();
+    const pageNo = Number(page);
+    if (!id.job_id || !pageNo) { showToast('Abra um capítulo em revisão primeiro.', 'error'); return; }
+    pageRevisionState.page = pageNo;
+    pageRevisionState.pageRevisionId = pageRevisionId || null;
+    pageRevisionState.focusRegion = focusRegion || '';
+    const dialog = $('#pageRevisionPanel');
+    if (dialog) { dialog.hidden = false; if (typeof dialog.showModal === 'function' && !dialog.open) dialog.showModal(); }
+    $('#pageRevisionTitle').textContent = `Revisão da página ${pageNo}`;
+    pageRevisionMessage('Carregando regiões detectadas…');
+    try {
+      const listing = await api('/api/ui/page-revision/regions', {method: 'POST', body: JSON.stringify({...id, page: pageNo})});
+      pageRevisionState.regions = listing.regions || [];
+      renderPageRevisionRegions(listing);
+    } catch (error) { pageRevisionMessage(error.message || 'Falha ao listar regiões.', 'error'); }
+    if (pageRevisionId) await refreshPageRevisionStatus();
+    pageRevisionSyncUrl();
+  }
+
+  function renderPageRevisionRegions(listing) {
+    const root = $('#pageRevisionRegions');
+    if (!root) return;
+    const focus = String(pageRevisionState.focusRegion || '');
+    const rows = (listing.regions || []).map(r => {
+      // Badges render the backend's resolved policy; the UI never infers one
+      // from a classification string.
+      const badge = !r.reviewable ? '<span class="pr-badge pr-preserved">preservada</span>'
+        : r.cache_hit ? '<span class="pr-badge pr-cache">cache</span>'
+        : r.translatable ? '<span class="pr-badge pr-auth">exige NVIDIA</span>'
+        : '<span class="pr-badge pr-review">revisão humana</span>';
+      const checked = focus && focus === String(r.region_id) ? ' checked' : '';
+      const box = r.reviewable ? `<input type="checkbox" class="pr-select" data-pr-region="${escapeAttr(r.region_id)}"${checked}>` : '';
+      const normalized = r.classification_normalized
+        ? `<em class="pr-normalized">${escapeHtml(r.classification_normalized)}</em>` : '';
+      return `<label class="pr-region"${focus === String(r.region_id) ? ' data-focus="1"' : ''}>`
+        + `<span class="pr-region-head">${box}<strong>${escapeHtml(r.region_id)}</strong> <em>${escapeHtml(r.classification)}</em> ${normalized} ${badge}</span>`
+        + `<span class="pr-region-text"><small>fonte</small> ${escapeHtml(r.source_text || '—')}</span>`
+        + `<span class="pr-region-text"><small>tradução</small> ${escapeHtml(r.current_translation || '—')}</span></label>`;
+    }).join('');
+    root.innerHTML = `<div class="pr-summary">${listing.reviewable_regions || 0} revisáveis · ${listing.requests_needed || 0} exigiriam NVIDIA (não serão chamadas)</div>${rows || '<div class="muted">Nenhuma região.</div>'}`;
+  }
+
+  function selectedPageRegions() {
+    return $$('.pr-select', $('#pageRevisionRegions')).filter(c => c.checked).map(c => String(c.dataset.prRegion || ''));
+  }
+
+  async function startPageRevisionDraft(regionIds) {
+    const id = pageRevisionIdentity();
+    pageRevisionMessage('Criando prévia a partir do cache…');
+    try {
+      const manifest = await api('/api/ui/page-revision/start', {method: 'POST',
+        body: JSON.stringify({...id, page: pageRevisionState.page, region_ids: regionIds || null})});
+      pageRevisionState.pageRevisionId = manifest.page_revision_id;
+      renderPageRevisionStatus(manifest);
+      pageRevisionSyncUrl();
+    } catch (error) { pageRevisionMessage(error.message || 'Falha ao criar a prévia.', 'error'); }
+  }
+
+  async function refreshPageRevisionStatus() {
+    if (!pageRevisionState.pageRevisionId) return;
+    const id = pageRevisionIdentity();
+    try {
+      const manifest = await api('/api/ui/page-revision/status', {method: 'POST',
+        body: JSON.stringify({...id, page_revision_id: pageRevisionState.pageRevisionId})});
+      renderPageRevisionStatus(manifest);
+    } catch (error) { pageRevisionMessage(error.message || 'Falha ao consultar estado.', 'error'); }
+  }
+
+  function renderPageRevisionStatus(manifest) {
+    pageRevisionState.manifest = manifest;
+    pageRevisionState.pageRevisionId = manifest.page_revision_id || pageRevisionState.pageRevisionId;
+    const auth = Number(manifest.requests_needed || 0);
+    $('#pageRevisionMeta').textContent = `id ${String(manifest.page_revision_id || '').slice(0, 8)} · ${manifest.status}`
+      + ` · ${manifest.safe_changes_applied || 0} aplicadas` + (auth ? ` · ${auth} exigem autorização NVIDIA` : '');
+    const preview = $('#pageRevisionPreview');
+    const id = pageRevisionIdentity();
+    const draft = manifest.draft_page_path
+      ? `/api/ui/page-revision/${encodeURIComponent(id.job_id)}/${encodeURIComponent(manifest.page_revision_id)}/draft?run_id=${encodeURIComponent(id.run_id)}`
+      : '';
+    if (preview) preview.innerHTML = draft
+      ? `<figure><figcaption>Prévia (rascunho)</figcaption><img src="${escapeAttr(draft)}" alt="Prévia da página ${escapeAttr(manifest.page)}"></figure>`
+      : (auth ? '<div class="muted">Sem prévia: regiões selecionadas exigem autorização do provedor.</div>' : '');
+    const active = ['running', 'cancelling'].includes(String(manifest.status));
+    const resumable = ['cancelled', 'awaiting_provider_authorization'].includes(String(manifest.status));
+    $('#pageRevisionCancel').hidden = !active;
+    $('#pageRevisionResume').hidden = !resumable;
+    // A rejected draft still has files on disk, so it must stay discardable;
+    // only approve is limited to a ready draft.
+    const status = String(manifest.status);
+    $('#pageRevisionDecision').hidden = !['draft_ready', 'rejected'].includes(status);
+    const approve = $('[data-page-decision="approved"]');
+    if (approve) approve.disabled = status !== 'draft_ready';
+    if (manifest.status === 'awaiting_provider_authorization')
+      pageRevisionMessage(`${auth} região(ões) exigem autorização NVIDIA. Nenhuma chamada foi feita.`, 'warn');
+    else if (manifest.status === 'draft_ready') pageRevisionMessage('Prévia pronta. Aprove, rejeite ou descarte.', 'ok');
+    else pageRevisionMessage(`Estado: ${manifest.status}.`);
+  }
+
+  async function pageRevisionDecision(outcome) {
+    if (!pageRevisionState.pageRevisionId) return;
+    const id = pageRevisionIdentity();
+    try {
+      const manifest = await api('/api/ui/page-revision/decision', {method: 'POST',
+        body: JSON.stringify({...id, page_revision_id: pageRevisionState.pageRevisionId, outcome})});
+      renderPageRevisionStatus(manifest);
+      showToast(`Rascunho: ${manifest.status}. O v8 permanece intacto.`, 'ok');
+    } catch (error) { pageRevisionMessage(error.message || 'Falha na decisão.', 'error'); }
+  }
+
+  async function pageRevisionForgotten() {
+    const id = pageRevisionIdentity();
+    pageRevisionMessage('Procurando texto esquecido nesta página…');
+    try {
+      const result = await api('/api/ui/page-revision/forgotten-text', {method: 'POST',
+        body: JSON.stringify({...id, page: pageRevisionState.page})});
+      const rows = (result.candidates || []).map(c => `<div class="pr-candidate">${escapeHtml(c.region_id)} · ${escapeHtml(c.classification)}`
+        + `${c.do_not_translate ? ' · <em>não traduzir</em>' : ' · decisão humana'} — ${escapeHtml(c.source_text || c.current_translation || '')}</div>`).join('');
+      $('#pageRevisionPreview').innerHTML = `<div class="pr-candidates"><strong>${result.candidate_count} candidato(s)</strong>${rows}</div>`;
+      pageRevisionMessage('Candidatos exibidos para decisão humana. Nada foi traduzido.', 'ok');
+    } catch (error) { pageRevisionMessage(error.message || 'Falha na busca.', 'error'); }
+  }
+
+  async function pageRevisionLifecycle(kind) {
+    if (!pageRevisionState.pageRevisionId) return;
+    const id = pageRevisionIdentity();
+    try {
+      const manifest = await api(`/api/ui/page-revision/${kind}`, {method: 'POST',
+        body: JSON.stringify({...id, page_revision_id: pageRevisionState.pageRevisionId})});
+      renderPageRevisionStatus(manifest);
+    } catch (error) { pageRevisionMessage(error.message || 'Falha na ação.', 'error'); }
+  }
+
+  $('#openPageRevision')?.addEventListener('click', () => openPageRevision(Number($('#pageRevisionPageInput')?.value || 0)));
+  $('#pageRevisionClose')?.addEventListener('click', () => {
+    const d = $('#pageRevisionPanel'); if (d) { if (typeof d.close === 'function' && d.open) d.close(); d.hidden = true; }
+    pageRevisionState.pageRevisionId = null; pageRevisionSyncUrl();
+  });
+  $('#pageRevisionStart')?.addEventListener('click', () => startPageRevisionDraft(selectedPageRegions().length ? selectedPageRegions() : null));
+  $('#pageRevisionReconstruct')?.addEventListener('click', () => startPageRevisionDraft(selectedPageRegions().length ? selectedPageRegions() : null));
+  $('#pageRevisionBalloon')?.addEventListener('click', () => {
+    const sel = selectedPageRegions();
+    if (sel.length !== 1) { pageRevisionMessage('Selecione exatamente um balão para revisar.', 'warn'); return; }
+    startPageRevisionDraft(sel);
+  });
+  $('#pageRevisionForgotten')?.addEventListener('click', pageRevisionForgotten);
+  $('#pageRevisionCancel')?.addEventListener('click', () => pageRevisionLifecycle('cancel'));
+  $('#pageRevisionResume')?.addEventListener('click', () => pageRevisionLifecycle('resume'));
+  $('#pageRevisionDecision')?.addEventListener('click', event => {
+    const btn = event.target.closest('[data-page-decision]');
+    if (btn) pageRevisionDecision(btn.dataset.pageDecision);
+  });
+  $('#visualComparisonBody')?.addEventListener('click', event => {
+    const btn = event.target.closest('[data-revise-page]');
+    if (!btn) return;
+    const cmp = $('#visualComparisonDialog');
+    if (cmp) { if (typeof cmp.close === 'function' && cmp.open) cmp.close(); cmp.hidden = true; }
+    openPageRevision(Number(btn.dataset.revisePage));
+  });
+
+  // F5 restore: reopen a page revision from the URL once the chapter review is up.
+  function restorePageRevisionFromUrl() {
+    let params;
+    try { params = new URLSearchParams(window.location.search || ''); } catch (_) { return; }
+    const prid = String(params.get('page_rev') || '');
+    const page = Number(params.get('page_rev_page') || 0);
+    if (prid && page) openPageRevision(page, {restore: true, pageRevisionId: prid});
+  }
+
+  /* ---------- linguistic audit review (BLOCO 3) ---------- */
+  const auditState = {review: null, mode: 'list', triage: null, providerSet: null,
+    ocrCandidates: null, editorial: null, previews: null, selection: new Set()};
+
+  function auditMessage(text, type = '') {
+    const node = $('#auditMessage');
+    if (node) { node.textContent = text || ''; node.dataset.state = type || ''; }
+  }
+
+  function auditSyncUrl(open) {
+    try {
+      const url = new URL(window.location.href);
+      if (open) {
+        url.searchParams.set('audit', '1');
+        // The audit lives inside a chapter review, so its URL has to carry the
+        // chapter's identity too — 'audit=1' alone cannot be reopened after F5.
+        const id = pageRevisionIdentity();
+        const jobId = id.job_id || String(appState.reviewMode?.jobId || '');
+        const runId = id.run_id || String(appState.reviewMode?.runId || '');
+        if (jobId) {
+          url.searchParams.set('view', 'review');
+          url.searchParams.set('job_id', jobId);
+          if (runId) url.searchParams.set('run_id', runId);
+        }
+      } else {
+        url.searchParams.delete('audit');
+      }
+      window.history.replaceState({}, '', url);
+    } catch (_) {}
+  }
+
+  async function openLinguisticAudit({restore = false} = {}) {
+    const id = pageRevisionIdentity();
+    if (!id.job_id) { showToast('Abra um capítulo em revisão primeiro.', 'error'); return; }
+    const dialog = $('#linguisticAuditPanel');
+    if (dialog) { dialog.hidden = false; if (typeof dialog.showModal === 'function' && !dialog.open) dialog.showModal(); }
+    auditMessage('Carregando auditoria…');
+    try {
+      // On an F5 restore the auth token can still be initialising; retry a few
+      // times (condition, not a fixed sleep) so the panel populates once ready.
+      const attempts = restore ? 6 : 1;
+      let review, lastError;
+      for (let i = 0; i < attempts; i++) {
+        try { review = await api('/api/ui/audit/review', {method: 'POST', body: JSON.stringify(pageRevisionIdentity())}); break; }
+        catch (err) {
+          lastError = err;
+          if (!/authentication|401|forbidden|expired/i.test(String(err.message || ''))) throw err;
+          await new Promise(r => setTimeout(r, 400));
+        }
+      }
+      if (!review) throw lastError;
+      auditState.review = review;
+      renderAuditSummary(review);
+      populateAuditCategoryFilter(review);
+      // Restoring a non-default mode must re-render that mode, not the list.
+      if (auditState.mode && auditState.mode !== 'list') await setAuditMode(auditState.mode);
+      else renderAuditList();
+      auditMessage('');
+    } catch (error) { auditMessage(error.message || 'Falha ao carregar a auditoria.', 'error'); }
+    auditSyncUrl(true);
+  }
+
+  function renderAuditSummary(review) {
+    const s = review.summary || {};
+    $('#auditMeta').textContent = `revisão ${String(review.revision_id || '').slice(0, 8)} · taxonomia v${review.taxonomy_version || '?'}`;
+    const cats = Object.entries(s.by_normalized_category || {}).map(([k, v]) => `${escapeHtml(k)} ${Number(v)}`).join(' · ');
+    $('#auditSummary').innerHTML = `<div><strong>${Number(s.total_regions_audited || 0)}</strong> regiões · `
+      + `report_only ${Number(s.report_only_total || 0)} (traduzíveis ${Number(s.report_only_now_translatable || 0)}) · `
+      + `revisão humana ${Number(s.needs_human_review_total || 0)} · exigem provider ${Number(s.provider_required_total || 0)}</div>`
+      + (cats ? `<div class="audit-cats">${cats}</div>` : '');
+  }
+
+  function populateAuditCategoryFilter(review) {
+    const select = $('#auditFilterCategory');
+    if (!select) return;
+    const current = select.value;
+    const cats = Object.keys(review.summary?.by_normalized_category || {}).sort();
+    select.innerHTML = '<option value="">todas</option>' + cats.map(c => `<option value="${escapeAttr(c)}">${escapeHtml(c)}</option>`).join('');
+    select.value = current;
+  }
+
+  function auditVisibleRecords() {
+    const review = auditState.review;
+    if (!review) return [];
+    const cat = $('#auditFilterCategory')?.value || '';
+    const action = $('#auditFilterAction')?.value || '';
+    const hr = $('#auditFilterHumanReview')?.checked;
+    const ro = $('#auditFilterReportOnly')?.checked;
+    const prov = $('#auditFilterProvider')?.checked;
+    const cacheHit = $('#auditFilterCacheHit')?.checked;
+    const page = Number($('#auditFilterPage')?.value || 0);
+    return (review.records || []).filter(r =>
+      (!cat || r.classification_normalized === cat)
+      && (!action || r.suggested_action === action)
+      && (!hr || r.needs_human_review)
+      && (!ro || r.report_only)
+      && (!prov || r.provider_required)
+      && (!cacheHit || r.cache_status === 'answered')
+      && (!page || Number(r.page_number) === page));
+  }
+
+  const AUDIT_DECISIONS = [['translate', 'TRADUZÍVEL'], ['preserve', 'PRESERVAR'],
+    ['ocr_invalid', 'OCR INVÁLIDO'], ['needs_review', 'REVISÃO HUMANA'], ['dismissed', 'DESCARTAR DECISÃO']];
+
+  function renderAuditList() {
+    const list = $('#auditList');
+    if (!list) return;
+    const records = auditVisibleRecords();
+    if (!records.length) { list.innerHTML = '<div class="muted">Nenhum item neste filtro.</div>'; return; }
+    list.innerHTML = records.map(r => {
+      const decided = r.human_decision ? String(r.human_decision.decision) : '';
+      const decisionBadge = decided ? `<span class="audit-decided" data-decision="${escapeAttr(decided)}">decisão: ${escapeHtml(decided)}</span>` : '';
+      const buttons = AUDIT_DECISIONS.map(([value, label]) =>
+        `<button type="button" class="btn-ghost audit-decide${decided === value ? ' selected' : ''}" data-audit-decision="${escapeAttr(value)}" data-region="${escapeAttr(r.region_id)}">${label}</button>`).join('');
+      const remove = r.human_decision ? `<button type="button" class="btn-ghost" data-audit-remove="${escapeAttr(r.human_decision.audit_decision_id)}">Remover decisão</button>` : '';
+      return `<article class="audit-item" data-region="${escapeAttr(r.region_id)}" data-page="${escapeAttr(r.page_number)}">`
+        + `<div class="audit-item-head"><strong>${escapeHtml(r.region_id)}</strong> `
+        + `<span class="audit-cls">${escapeHtml(r.classification_original)} → ${escapeHtml(r.classification_normalized)}</span>`
+        + `<span class="audit-flags">${r.report_only ? ' report_only' : ''}${r.revision_linked ? ' vinculada' : ''}${r.provider_required ? ' provider' : ''} · cache:${escapeHtml(r.cache_status)}</span>${decisionBadge}</div>`
+        + `<div class="audit-texts"><small>fonte</small> ${escapeHtml(r.source_text || '—')}<br><small>tradução</small> ${escapeHtml(r.current_translation || '—')}</div>`
+        + `<div class="audit-reasons">ação sugerida: <strong>${escapeHtml(r.suggested_action)}</strong> · reasons: ${escapeHtml((r.reason_codes || []).join(', '))} · confiança: ${escapeHtml(String(r.confidence ?? '—'))}</div>`
+        + `<div class="audit-actions"><button type="button" class="btn-ghost" data-audit-open-page="${escapeAttr(r.page_number)}">ABRIR PÁGINA</button>`
+        + `<button type="button" class="btn-ghost" data-audit-revise-page="${escapeAttr(r.page_number)}">REVISAR ESTA PÁGINA</button>`
+        // Region-scoped review is only offered when the backend policy says the
+        // region is reviewable; a preserved class shows a disabled control.
+        + `<button type="button" class="btn-ghost" data-audit-revise-region="${escapeAttr(r.region_id)}" data-region-page="${escapeAttr(r.page_number)}"${r.reviewable ? '' : ' disabled aria-disabled="true" title="Região preservada pela política atual"'}>REVISAR ESTA REGIÃO</button>`
+        + `${buttons}${remove}</div></article>`;
+    }).join('');
+  }
+
+  // A preserved region can still have been read wrong. The corrected reading
+  // travels with the verdict as audit metadata; it never rewrites the page.
+  function auditCorrectedReading(regionId) {
+    const field = $(`#auditList [data-corrected-reading="${CSS.escape(String(regionId))}"]`);
+    return field ? String(field.value || '').trim() : '';
+  }
+
+  async function auditDecide(regionId, decision) {
+    const id = pageRevisionIdentity();
+    const corrected = auditCorrectedReading(regionId);
+    try {
+      await api('/api/ui/audit/decision', {method: 'POST', body: JSON.stringify({
+        ...id, region_id: regionId, decision,
+        notes: corrected ? `leitura_correta: ${corrected}` : ''})});
+      await refreshAuditReview();
+      auditMessage('Decisão registrada (não altera o PDF nem a revisão histórica).', 'ok');
+    } catch (error) { auditMessage(error.message || 'Falha ao registrar decisão.', 'error'); }
+  }
+
+  async function auditRemoveDecision(decisionId) {
+    const id = pageRevisionIdentity();
+    try {
+      await api('/api/ui/audit/decision/delete', {method: 'POST', body: JSON.stringify({...id, decision_id: decisionId})});
+      await refreshAuditReview();
+      auditMessage('Decisão removida.', 'ok');
+    } catch (error) { auditMessage(error.message || 'Falha ao remover decisão.', 'error'); }
+  }
+
+  async function refreshAuditReview() {
+    const id = pageRevisionIdentity();
+    const review = await api('/api/ui/audit/review', {method: 'POST', body: JSON.stringify(id)});
+    auditState.review = review;
+    renderAuditSummary(review);
+    // A decision taken from a queue must refresh that queue, not drop the
+    // operator back into the flat list.
+    if (auditState.mode && auditState.mode !== 'list') await setAuditMode(auditState.mode);
+    else renderAuditList();
+  }
+
+  function closeLinguisticAudit() {
+    const d = $('#linguisticAuditPanel');
+    if (d) { if (typeof d.close === 'function' && d.open) d.close(); d.hidden = true; }
+    auditSyncUrl(false);
+  }
+
+  $('#openLinguisticAudit')?.addEventListener('click', () => openLinguisticAudit());
+  $('#linguisticAuditClose')?.addEventListener('click', closeLinguisticAudit);
+  // A native <dialog> closes itself on Escape; mirror that into our own state so
+  // the panel really hides and the URL stops advertising an open audit. The
+  // explicit keydown guarantees Escape works even when the native path does not
+  // fire (focus inside a select, embedded browsers).
+  $('#linguisticAuditPanel')?.addEventListener('close', () => {
+    const d = $('#linguisticAuditPanel');
+    if (d) d.hidden = true;
+    auditSyncUrl(false);
+  });
+  $('#linguisticAuditPanel')?.addEventListener('keydown', event => {
+    if (event.key === 'Escape') { event.preventDefault(); closeLinguisticAudit(); }
+  });
+  $('#pageRevisionPanel')?.addEventListener('keydown', event => {
+    if (event.key !== 'Escape') return;
+    event.preventDefault();
+    const d = $('#pageRevisionPanel');
+    if (d) { if (typeof d.close === 'function' && d.open) d.close(); d.hidden = true; }
+    pageRevisionState.pageRevisionId = null;
+    pageRevisionSyncUrl();
+  });
+  $('#pageRevisionPanel')?.addEventListener('close', () => {
+    const d = $('#pageRevisionPanel');
+    if (d) d.hidden = true;
+    pageRevisionState.pageRevisionId = null;
+    pageRevisionSyncUrl();
+  });
+  $('#auditFilters')?.addEventListener('input', renderAuditList);
+  $('#auditFilters')?.addEventListener('change', renderAuditList);
+  $('#auditList')?.addEventListener('click', event => {
+    const preview = event.target.closest('[data-preview-action]');
+    if (preview) {
+      if (preview.disabled) return;
+      void previewAction(preview.dataset.previewAction, String(preview.dataset.region || ''), preview);
+      return;
+    }
+    const decide = event.target.closest('[data-audit-decision]');
+    if (decide) { auditDecide(decide.dataset.region, decide.dataset.auditDecision); return; }
+    const remove = event.target.closest('[data-audit-remove]');
+    if (remove) { auditRemoveDecision(remove.dataset.auditRemove); return; }
+    const reviseRegion = event.target.closest('[data-audit-revise-region]');
+    if (reviseRegion) {
+      if (reviseRegion.disabled) return;
+      closeLinguisticAudit();
+      openPageRevision(Number(reviseRegion.dataset.regionPage), {focusRegion: reviseRegion.dataset.auditReviseRegion});
+      return;
+    }
+    const revise = event.target.closest('[data-audit-revise-page]');
+    if (revise) { closeLinguisticAudit(); openPageRevision(Number(revise.dataset.auditRevisePage)); return; }
+    const openPage = event.target.closest('[data-audit-open-page]');
+    if (openPage) { openVisualComparison(Number(openPage.dataset.auditOpenPage)); }
+  });
+  function restoreAuditFromUrl() {
+    try {
+      const params = new URLSearchParams(window.location.search || '');
+      if (params.get('audit') !== '1') return;
+      const mode = String(params.get('audit_mode') || 'list');
+      if (AUDIT_MODES.includes(mode)) auditState.mode = mode;
+      openLinguisticAudit({restore: true});
+    } catch (_) {}
+  }
+
+  /* ---------- triage, bulk decisions and provider set (BLOCO 5) ---------- */
+  function auditModeSyncUrl() {
+    try {
+      const url = new URL(window.location.href);
+      if (auditState.mode && auditState.mode !== 'list') url.searchParams.set('audit_mode', auditState.mode);
+      else url.searchParams.delete('audit_mode');
+      window.history.replaceState({}, '', url);
+    } catch (_) {}
+  }
+
+  const AUDIT_MODES = ['list', 'triage', 'ocr', 'editorial', 'provider', 'previews'];
+  // Bulk selection is only meaningful where every row is individually pickable.
+  const AUDIT_BULK_MODES = ['triage', 'ocr'];
+
+  async function setAuditMode(mode) {
+    auditState.mode = mode;
+    $$('[data-audit-mode]').forEach(b => b.classList.toggle('selected', b.dataset.auditMode === mode));
+    const bulk = $('#auditBulk');
+    if (bulk) bulk.hidden = !AUDIT_BULK_MODES.includes(mode);
+    auditModeSyncUrl();
+    const id = pageRevisionIdentity();
+    try {
+      if (mode === 'triage') {
+        auditState.triage = await api('/api/ui/audit/triage', {method: 'POST', body: JSON.stringify(id)});
+        renderTriageQueue();
+      } else if (mode === 'ocr') {
+        auditState.ocrCandidates = await api('/api/ui/audit/ocr-invalid-candidates', {method: 'POST', body: JSON.stringify(id)});
+        renderOcrCandidates();
+      } else if (mode === 'editorial') {
+        auditState.editorial = await api('/api/ui/audit/editorial-pending', {method: 'POST', body: JSON.stringify(id)});
+        renderEditorialPending();
+      } else if (mode === 'provider') {
+        auditState.providerSet = await api('/api/ui/audit/provider-set', {method: 'POST', body: JSON.stringify(id)});
+        renderProviderSet();
+      } else if (mode === 'previews') {
+        auditState.previews = await api('/api/ui/human-translation/review', {method: 'POST', body: JSON.stringify(id)});
+        renderHumanPreviews();
+        void loadPreviewGates();
+      } else {
+        renderAuditCounters(null);
+        renderAuditList();
+      }
+      auditMessage('');
+    } catch (error) { auditMessage(error.message || 'Falha ao carregar.', 'error'); }
+  }
+
+  // FASE 12 — three separate totals. Merging them would hide which step is
+  // actually blocking the chapter.
+  function renderAuditCounters(counters) {
+    const box = $('#auditCounters');
+    if (!box) return;
+    if (!counters) { box.hidden = true; box.innerHTML = ''; return; }
+    box.hidden = false;
+    const cells = [
+      ['OCR DIRECIONADO FUTURO', counters.targeted_ocr_pending, 'ocr'],
+      ['DECISÃO EDITORIAL PENDENTE', counters.awaiting_editorial_decision, 'editorial'],
+      ['PRONTO PARA REVISÃO COM IA', counters.ready_for_ai_review, 'ready'],
+    ].map(([label, value, kind]) =>
+      `<span class="audit-counter" data-counter="${escapeAttr(kind)}">`
+      + `<strong>${Number(value || 0)}</strong> ${escapeHtml(label)}</span>`).join('');
+    box.innerHTML = cells + (counters.authorization_blocked
+      ? '<span class="audit-counter" data-counter="blocked">autorização bloqueada</span>' : '');
+  }
+
+  function auditTextsBlock(item) {
+    return `<div class="audit-texts"><small>fonte</small> ${escapeHtml(item.source_text || '—')}`
+      + `<br><small>tradução</small> ${escapeHtml(item.current_translation || '—')}</div>`;
+  }
+
+  // The region's own pixels. A transcription can only be judged against them.
+  // The <img> is filled in by loadAuditCrops: a plain src cannot carry the
+  // authorization header, so the bytes are fetched through the same helper as
+  // every other authenticated call.
+  function auditCropBlock(item) {
+    if (!item.bounding_box) return '<div class="audit-crop-missing">recorte indisponível: região sem geometria</div>';
+    return `<figure class="audit-crop"><img data-crop-region="${escapeAttr(item.region_id)}" alt=""`
+      + ` aria-label="Recorte da região ${escapeAttr(item.region_id)} na página ${escapeAttr(item.page_number)}">`
+      + `<figcaption>página ${escapeHtml(item.page_number)} · caixa ${escapeHtml((item.bounding_box || []).join(', '))}</figcaption></figure>`;
+  }
+
+  const auditCropUrls = new Map();
+
+  async function loadAuditCrops() {
+    const id = pageRevisionIdentity();
+    if (!id.job_id) return;
+    for (const img of $$('#auditList img[data-crop-region]')) {
+      const region = String(img.dataset.cropRegion || '');
+      if (!region || img.dataset.cropLoaded === '1') continue;
+      img.dataset.cropLoaded = '1';
+      try {
+        const response = await api('/api/ui/audit/region-crop?' + new URLSearchParams({
+          job_id: id.job_id, run_id: id.run_id || '', region_id: region}), {rawResponse: true});
+        const url = URL.createObjectURL(await response.blob());
+        const previous = auditCropUrls.get(region);
+        if (previous) URL.revokeObjectURL(previous);
+        auditCropUrls.set(region, url);
+        img.src = url;
+      } catch (error) {
+        img.replaceWith(Object.assign(document.createElement('div'), {
+          className: 'audit-crop-missing',
+          textContent: `recorte indisponível: ${error.message || 'falha ao carregar'}`,
+        }));
+      }
+    }
+  }
+
+  // Every label the panel offers, including the reclassifications. Kept apart
+  // from AUDIT_DECISIONS so the flat list keeps its five original buttons.
+  const AUDIT_DECISION_LABELS = Object.assign(
+    Object.fromEntries(AUDIT_DECISIONS),
+    {needs_review: 'EXIGIR REVISÃO HUMANA',
+     classify_credit: 'CLASSIFICAR COMO CRÉDITO',
+     classify_title_name: 'CLASSIFICAR COMO TÍTULO/NOME',
+     classify_editorial: 'CLASSIFICAR COMO TEXTO EDITORIAL',
+     classify_sfx: 'CLASSIFICAR COMO SFX',
+     classify_watermark: 'CLASSIFICAR COMO WATERMARK/URL'});
+
+  function auditDecisionButtons(region, decided, values, overrides = {}) {
+    return values.map(value => {
+      const label = overrides[value] || AUDIT_DECISION_LABELS[value] || value;
+      return `<button type="button" class="btn-ghost audit-decide${decided === value ? ' selected' : ''}"`
+        + ` data-audit-decision="${escapeAttr(value)}" data-region="${escapeAttr(region)}">${escapeHtml(label)}</button>`;
+    }).join('');
+  }
+
+  function auditRemoveButton(item) {
+    if (!item.human_decision_id) return '';
+    return `<button type="button" class="btn-ghost" data-audit-remove="${escapeAttr(item.human_decision_id)}">REMOVER DECISÃO</button>`;
+  }
+
+  // What actually happens to this region once it is ruled on. Derived from the
+  // backend's own booleans, never from the text.
+  function auditImpact(item) {
+    if (item.human_decision === 'ocr_invalid') return 'sai da fila de tradução, entra em OCR direcionado futuro';
+    if (item.translatable && item.provider_required) return 'se TRADUZIR: entra no conjunto do provider (1 request estimada)';
+    if (item.translatable) return 'traduzível, já respondido pelo cache: sem request nova';
+    if (item.preservable) return 'preservada: nenhuma request, texto original mantido';
+    return 'sem política definida: permanece fora do conjunto do provider';
+  }
+
+  // FASE 6 — proposed candidates only. Nothing here is marked without a human.
+  function renderOcrCandidates() {
+    const list = $('#auditList');
+    const data = auditState.ocrCandidates;
+    if (!list || !data) return;
+    renderAuditCounters(data.editorial_counters);
+    const card = (item, group) => {
+      const a = item.ocr_assessment || {};
+      const evidence = (a.strong_evidence || []).concat(a.weak_evidence || []);
+      // Only unambiguous evidence may be acted on in bulk; an ambiguous read
+      // has to be judged one region at a time.
+      const pickable = group === 'auto';
+      const checked = auditState.selection.has(String(item.region_id)) ? ' checked' : '';
+      const pick = pickable
+        ? `<label class="triage-pick"><input type="checkbox" data-triage-select="${escapeAttr(item.region_id)}"${checked}> `
+        : '<label class="triage-pick">';
+      return `<article class="audit-item" data-region="${escapeAttr(item.region_id)}" data-page="${escapeAttr(item.page_number)}" data-ocr-group="${escapeAttr(group)}">`
+        + `<div class="audit-item-head">${pick}<strong>${escapeHtml(item.region_id)}</strong></label> `
+        + `<span class="audit-cls">${escapeHtml(item.classification_original)} → ${escapeHtml(item.classification_normalized)}</span>`
+        + `<span class="triage-gate" data-gate="${escapeAttr(a.status || '')}">${escapeHtml(a.status || '—')}</span>`
+        + `<span class="audit-flags">OCR ${escapeHtml(String(item.confidence ?? '—'))}`
+        + ` · cache:${escapeHtml(item.cache_status)}${item.cache_correction_available ? ' (correção)' : ''}`
+        + ` · provider:${item.provider_required ? 'sim' : 'não'}</span>`
+        + (item.human_decision ? `<span class="audit-decided">decisão: ${escapeHtml(item.human_decision)}</span>` : '')
+        + `</div><div class="audit-body">${auditCropBlock(item)}<div class="audit-body-text">`
+        + auditTextsBlock(item)
+        + `<div class="audit-reasons">evidência contra a leitura: ${escapeHtml(evidence.join(', ') || 'nenhuma')}`
+        + `<br>evidência protetora: ${escapeHtml((a.positive_evidence || []).join(', ') || 'nenhuma')}`
+        + `<br>confiança do detector: ${escapeHtml(String(a.confidence ?? '—'))}`
+        + ` · vogais ${escapeHtml(String(a.vowel_ratio ?? '—'))} · alfabético ${escapeHtml(String(a.alphabetic_ratio ?? '—'))}`
+        + `<br>impacto: ${escapeHtml(auditImpact(item))}</div></div></div>`
+        + `<div class="audit-corrected"><label>leitura correta (opcional, vai para os metadados)`
+        + ` <input type="text" data-corrected-reading="${escapeAttr(item.region_id)}"`
+        + ` placeholder="o que a imagem realmente diz"></label></div>`
+        + `<div class="audit-actions">`
+        + auditDecisionButtons(item.region_id, item.human_decision,
+            ['ocr_invalid', 'translate', 'needs_review', 'preserve',
+             'classify_sfx', 'classify_watermark'],
+            {ocr_invalid: 'CONFIRMAR OCR INVÁLIDO', translate: 'MANTER COMO TEXTO',
+             preserve: 'MARCAR COMO PRESERVÁVEL'})
+        + auditRemoveButton(item)
+        + `<button type="button" class="btn-ghost" data-audit-revise-region="${escapeAttr(item.region_id)}" data-region-page="${escapeAttr(item.page_number)}">REVISAR ESTA REGIÃO</button>`
+        + `</div></article>`;
+    };
+    const section = (title, note, items, group) => !items.length ? '' :
+      `<div class="audit-group"><h4>${escapeHtml(title)} <span class="muted">${items.length}</span></h4>`
+      + `<p class="muted">${escapeHtml(note)}</p>${items.map(i => card(i, group)).join('')}</div>`;
+    list.innerHTML = section('EVIDÊNCIA INEQUÍVOCA', 'Podem ser confirmadas em massa. A confirmação continua sendo sua.',
+        data.auto_markable || [], 'auto')
+      + section('EXIGEM ANÁLISE INDIVIDUAL', 'A leitura é duvidosa, mas pode ser um nome, uma sigla ou um termo legítimo.',
+        data.review_required || [], 'review')
+      + section('JÁ CONFIRMADAS', 'Retiradas da fila de tradução, aguardando OCR direcionado futuro.',
+        data.confirmed || [], 'confirmed')
+      || '<div class="muted">Nenhuma leitura suspeita.</div>';
+    updateBulkCount();
+    void loadAuditCrops();
+  }
+
+  // FASE 9 — the questions a human has to answer before any provider call.
+  function renderEditorialPending() {
+    const list = $('#auditList');
+    const data = auditState.editorial;
+    if (!list || !data) return;
+    renderAuditCounters(data.editorial_counters);
+    const rows = (data.items || []).map(item => {
+      const a = item.ocr_assessment || {};
+      const gate = (item.linguistic_gate || {}).status || '—';
+      return `<article class="audit-item" data-region="${escapeAttr(item.region_id)}" data-page="${escapeAttr(item.page_number)}">`
+        + `<div class="audit-item-head"><strong>${escapeHtml(item.region_id)}</strong> `
+        + `<span class="audit-cls">${escapeHtml(item.classification_original)} → ${escapeHtml(item.classification_normalized)}</span>`
+        + `<span class="audit-flags">papel:${escapeHtml(item.semantic_role || '—')}`
+        + ` · cache:${escapeHtml(item.cache_status)}${item.cache_correction_available ? ' (correção)' : ''}`
+        + ` · provider:${item.provider_required ? 'sim' : 'não'}</span>`
+        + `<span class="triage-gate" data-gate="${escapeAttr(gate)}">gate ${escapeHtml(gate)}</span>`
+        + (item.human_decision ? `<span class="audit-decided">decisão: ${escapeHtml(item.human_decision)}</span>` : '')
+        + `</div><div class="audit-body">${auditCropBlock(item)}<div class="audit-body-text">`
+        + auditTextsBlock(item)
+        + `<div class="audit-context"><small>antes</small> ${escapeHtml(item.context_before || '—')}`
+        + `<br><small>depois</small> ${escapeHtml(item.context_after || '—')}</div>`
+        + `<div class="audit-reasons">pendente porque: ${escapeHtml((item.editorial_reasons || []).join(', '))}`
+        + `<br>leitura: ${escapeHtml(a.status || '—')} · evidência: `
+        + escapeHtml(((a.strong_evidence || []).concat(a.weak_evidence || [])).join(', ') || 'nenhuma')
+        + `<br>gate: ${escapeHtml(((item.linguistic_gate || {}).reason_codes || []).join(', ') || 'sem alertas')}`
+        + `<br>recomendação da taxonomia: <strong>${escapeHtml(item.suggested_action || '—')}</strong>`
+        + ` (motivos: ${escapeHtml((item.reason_codes || []).join(', ') || 'nenhum')})`
+        + `<br>impacto: ${escapeHtml(auditImpact(item))}</div></div></div>`
+        + `<div class="audit-corrected"><label>leitura correta (opcional, vai para os metadados)`
+        + ` <input type="text" data-corrected-reading="${escapeAttr(item.region_id)}"`
+        + ` placeholder="o que a imagem realmente diz"></label></div>`
+        + `<div class="audit-actions">`
+        + auditDecisionButtons(item.region_id, item.human_decision,
+            ['translate', 'preserve', 'needs_review', 'classify_credit',
+             'classify_title_name', 'classify_editorial', 'classify_sfx',
+             'classify_watermark'],
+            {translate: 'TRADUZIR', preserve: 'PRESERVAR', needs_review: 'MANTER PENDENTE'})
+        + auditRemoveButton(item)
+        + `<button type="button" class="btn-ghost" data-audit-revise-region="${escapeAttr(item.region_id)}" data-region-page="${escapeAttr(item.page_number)}">REVISAR ESTA REGIÃO</button>`
+        + `<button type="button" class="btn-ghost" data-audit-open-page="${escapeAttr(item.page_number)}">ABRIR PÁGINA</button>`
+        + `</div></article>`;
+    }).join('');
+    list.innerHTML = `<div class="pr-summary"><strong>${Number(data.item_count || 0)}</strong> região(ões) aguardando decisão editorial`
+      + ` em ${Number(data.page_count || 0)} página(s). Enquanto houver pendências, a autorização fica bloqueada.</div>`
+      + (rows || '<div class="muted">Nenhuma decisão editorial pendente.</div>');
+    void loadAuditCrops();
+  }
+
+  function renderTriageQueue() {
+    const list = $('#auditList');
+    const data = auditState.triage;
+    if (!list || !data) return;
+    renderAuditCounters(null);
+    const counters = Object.entries(data.counters || {}).filter(([k]) => !k.startsWith('class_'))
+      .map(([k, v]) => `${escapeHtml(k)} ${Number(v)}`).join(' · ');
+    const rows = (data.queue || []).map(item => {
+      const gate = (item.linguistic_gate || {}).status || '—';
+      const decided = item.human_decision ? String(item.human_decision.decision) : '';
+      const checked = auditState.selection.has(String(item.region_id)) ? ' checked' : '';
+      return `<article class="audit-item" data-region="${escapeAttr(item.region_id)}" data-page="${escapeAttr(item.page_number)}">`
+        + `<div class="audit-item-head"><label class="triage-pick"><input type="checkbox" data-triage-select="${escapeAttr(item.region_id)}"${checked}> `
+        + `<strong>${escapeHtml(item.region_id)}</strong></label> `
+        + `<span class="audit-cls">${escapeHtml(item.classification_original)} → ${escapeHtml(item.classification_normalized)}</span>`
+        + `<span class="triage-gate" data-gate="${escapeAttr(gate)}">gate ${escapeHtml(gate)}</span>`
+        + `<span class="triage-score">prioridade ${Number(item.triage_score)}</span>`
+        + (decided ? `<span class="audit-decided">decisão: ${escapeHtml(decided)}</span>` : '') + `</div>`
+        + `<div class="audit-texts"><small>fonte</small> ${escapeHtml(item.source_text || '—')}<br><small>tradução</small> ${escapeHtml(item.current_translation || '—')}</div>`
+        + `<div class="audit-reasons">motivo da prioridade: ${escapeHtml((item.triage_reasons || []).join(', '))}`
+        + ` · gate: ${escapeHtml(((item.linguistic_gate || {}).reason_codes || []).join(', ') || 'sem alertas')}</div>`
+        + `<div class="audit-actions"><button type="button" class="btn-ghost" data-audit-revise-region="${escapeAttr(item.region_id)}" data-region-page="${escapeAttr(item.page_number)}"${item.reviewable ? '' : ' disabled aria-disabled="true" title="Região preservada pela política atual"'}>REVISAR ESTA REGIÃO</button></div></article>`;
+    }).join('');
+    list.innerHTML = `<div class="pr-summary">${Number(data.total || 0)} na fila · ${escapeHtml(counters)}</div>`
+      + (rows || '<div class="muted">Fila vazia.</div>');
+    updateBulkCount();
+  }
+
+  function renderProviderSet() {
+    const list = $('#auditList');
+    const data = auditState.providerSet;
+    if (!list || !data) return;
+    renderAuditCounters(data.editorial_counters);
+    const blocked = Number(data.awaiting_editorial_count || 0);
+    const rows = (data.items || []).map(item =>
+      `<article class="audit-item" data-region="${escapeAttr(item.region_id)}">`
+      + `<div class="audit-item-head"><strong>${escapeHtml(item.region_id)}</strong>`
+      + `<span class="audit-cls">${escapeHtml(item.classification_normalized)}</span>`
+      + `<span class="triage-gate" data-gate="${escapeAttr(item.risk)}">risco ${escapeHtml(item.risk)}</span></div>`
+      + `<div class="audit-texts"><small>fonte</small> ${escapeHtml(item.source_text || '—')}<br><small>tradução</small> ${escapeHtml(item.current_translation || '—')}</div></article>`).join('');
+    const excluded = (data.excluded || []).reduce((acc, e) => {
+      acc[e.excluded_reason] = (acc[e.excluded_reason] || 0) + 1; return acc;
+    }, {});
+    const excludedText = Object.entries(excluded).map(([k, v]) => `${escapeHtml(k)} ${v}`).join(' · ');
+    // Regions held back for a human ruling are shown, never billed.
+    const held = (data.awaiting_editorial || []).map(item =>
+      `<article class="audit-item" data-region="${escapeAttr(item.region_id)}" data-held="1">`
+      + `<div class="audit-item-head"><strong>${escapeHtml(item.region_id)}</strong>`
+      + `<span class="audit-cls">${escapeHtml(item.classification_normalized)}</span>`
+      + `<span class="triage-gate" data-gate="${escapeAttr(item.ocr_status || '')}">${escapeHtml(item.ocr_status || '')}</span></div>`
+      + auditTextsBlock(item)
+      + `<div class="audit-reasons">retida porque: ${escapeHtml((item.editorial_reasons || []).join(', '))}</div></article>`).join('');
+    const auth = data.authorization || {};
+    const AUTH_TEXT = {
+      ready_for_human_authorization: 'Pronto para autorização humana. Cria apenas um pedido pendente; nenhuma chamada externa é feita agora.',
+      blocked_pending_editorial_decisions: 'Bloqueado: há regiões aguardando decisão editorial.',
+      blocked_by_ocr_review: 'Bloqueado: há leituras de OCR ainda não resolvidas.',
+    };
+    const authText = AUTH_TEXT[auth.status] || 'Estado da autorização indisponível.';
+    list.innerHTML = `<div class="pr-summary"><strong>${Number(data.estimated_requests || 0)}</strong> regiões exigiriam a IA`
+      + ` · ${Number(data.page_count || 0)} páginas · excluídas: ${escapeHtml(excludedText || 'nenhuma')}`
+      + (blocked ? ` · <strong>${blocked}</strong> retida(s) aguardando decisão editorial` : '') + `</div>`
+      + `<div class="audit-counter" data-counter="${escapeAttr(auth.status === 'ready_for_human_authorization' ? 'ready' : 'blocked')}">`
+      + `autorização: ${escapeHtml(auth.status || '—')}</div>`
+      + `<div class="provider-cta"><button type="button" class="btn-primary" id="requestProviderAuth"`
+      + (blocked ? ' disabled aria-disabled="true" title="Decida as regiões pendentes antes de autorizar"' : '')
+      + `>SOLICITAR AUTORIZAÇÃO PARA REVISÃO COM IA</button>`
+      + `<span class="muted">${escapeHtml(authText)} provider_executed: ${String(auth.provider_executed === true)}</span></div>`
+      + (rows || '<div class="muted">Nenhuma região exige a IA.</div>')
+      + (held ? `<div class="audit-group"><h4>RETIDAS PARA DECISÃO EDITORIAL <span class="muted">${blocked}</span></h4>${held}</div>` : '');
+  }
+
+  // FASE 13 — every state a human needs to judge a preview, side by side.
+  function renderHumanPreviews() {
+    const list = $('#auditList');
+    const data = auditState.previews;
+    if (!list || !data) return;
+    renderAuditCounters(null);
+    const rows = (data.items || []).map(item => {
+      const region = String(item.region_id || '');
+      const human = item.human_candidate || '';
+      const decided = !!item.human_decision;
+      const pending = pendingPreviewItems().find(candidate =>
+        String(candidate.region_id || '') === region &&
+        String(candidate.job_id || '').toLowerCase() === String(appState.qualityReview?.job_id || '').toLowerCase());
+      const blocked = pending?.blocked === true || pending?.approval_enabled === false;
+      const ready = pending?.approval_enabled === true && pending?.blocked !== true;
+      const previewStatus = pending ? (ready ? 'PRONTA PARA REVISÃO HUMANA' : 'BLOQUEADA — REQUER RECONSTRUÇÃO DE ARTE') : '';
+      const fontButton = `<button type="button" class="btn-ghost" data-preview-action="font-options" data-region="${escapeAttr(region)}"${decided ? '' : ' disabled aria-disabled="true" title="Aprove um texto antes de escolher tipografia"'}>ESCOLHER TIPOGRAFIA</button>`;
+      const refineButton = `<button type="button" class="btn-ghost" data-preview-action="refine-ptbr" data-region="${escapeAttr(region)}">REFINAR PT-BR</button>`;
+      const actionButtons = blocked
+        ? `<button type="button" class="btn-ghost" data-preview-action="compare" data-region="${escapeAttr(region)}">VER DETALHES</button>`
+          + refineButton + fontButton
+          + `<button type="button" class="btn-ghost" data-preview-action="mask-editor" data-region="${escapeAttr(region)}">REFINAR MÁSCARA</button>`
+        : `<button type="button" class="btn-ghost" data-preview-action="approve" data-region="${escapeAttr(region)}">APROVAR TEXTO PARA PRÉVIA</button>`
+          + `<button type="button" class="btn-ghost" data-preview-action="edit" data-region="${escapeAttr(region)}">EDITAR TRADUÇÃO HUMANA</button>`
+          + refineButton + fontButton
+          + `<button type="button" class="btn-ghost" data-preview-action="render" data-region="${escapeAttr(region)}"${decided ? '' : ' disabled aria-disabled="true" title="Aprove um texto antes de renderizar"'}>RENDERIZAR NOVA TENTATIVA</button>`
+          + `<button type="button" class="btn-primary" data-preview-action="compare" data-region="${escapeAttr(region)}">${ready ? 'ABRIR PRÉVIA DA PÁGINA' : 'ABRIR COMPARAÇÃO'}</button>`
+          + `<button type="button" class="btn-ghost" data-preview-action="mask-editor" data-region="${escapeAttr(region)}">REFINAR MÁSCARA</button>`
+          + `<button type="button" class="btn-ghost" data-preview-action="residual" data-region="${escapeAttr(region)}">VER TINTA RESIDUAL</button>`
+          + `<button type="button" class="btn-ghost" data-preview-action="reject" data-region="${escapeAttr(region)}"${decided ? '' : ' disabled aria-disabled="true"'}>PEDIR AJUSTE / REJEITAR PRÉVIA</button>`
+          + `<button type="button" class="btn-ghost" data-preview-action="discard" data-region="${escapeAttr(region)}"${decided ? '' : ' disabled aria-disabled="true"'}>DESCARTAR RASCUNHO</button>`;
+      return `<article class="audit-item preview-item" data-region="${escapeAttr(region)}" data-page="${escapeAttr(item.page_number)}">`
+        + `<div class="audit-item-head"><strong>${escapeHtml(region)}</strong>`
+        + `<span class="audit-cls">${escapeHtml(item.classification_normalized || '')}</span>`
+        + `<span class="audit-flags">página ${escapeHtml(item.page_number)}</span>`
+        + (previewStatus ? `<span class="triage-gate" data-gate="${ready ? 'passed' : 'failed'}">${escapeHtml(previewStatus)}</span>` : '')
+        + `<span class="triage-gate" data-gate="" data-preview-visual="${escapeAttr(region)}">gate visual …</span>`
+        + `<span class="triage-gate" data-gate="" data-preview-linguistic="${escapeAttr(region)}">gate linguístico …</span>`
+        + `</div>`
+        + `<dl class="preview-states">`
+        + `<dt>SOURCE OCR</dt><dd>${escapeHtml(item.ocr_source_text || '—')}</dd>`
+        + `<dt>SOURCE CORRIGIDO</dt><dd>${escapeHtml(item.sent_text || '—')}`
+        + `<small> (${escapeHtml(item.text_origin || '')})</small></dd>`
+        + `<dt>TRADUÇÃO ATUAL</dt><dd>${escapeHtml(item.current_translation || '—')}</dd>`
+        + `<dt>RESPOSTA DO PROVIDER</dt><dd>${escapeHtml(item.provider_candidate || '—')}</dd>`
+        + `<dt>DECISÃO HUMANA</dt><dd>${escapeHtml(human || '— ainda não decidida —')}</dd>`
+        + `<dt>MÁSCARAS</dt><dd data-preview-mask-summary="${escapeAttr(region)}">aguardando gate visual</dd>`
+        + `<dt>FONTE</dt><dd data-preview-font-summary="${escapeAttr(region)}">aguardando perfil visual</dd>`
+        + `</dl>`
+        + `<div class="preview-compare">`
+        + `<figure><figcaption>ATUAL</figcaption>`
+        + `<img data-preview-crop="${escapeAttr(region)}" data-preview-kind="base" alt=""`
+        + ` aria-label="Região ${escapeAttr(region)} como está hoje"></figure>`
+        + `<figure><figcaption>PRÉVIA</figcaption>`
+        + `<img data-preview-crop="${escapeAttr(region)}" data-preview-kind="draft" alt=""`
+        + ` aria-label="Região ${escapeAttr(region)} na prévia"></figure>`
+        + `</div>`
+        + `<div class="preview-reasons" data-preview-reasons="${escapeAttr(region)}"></div>`
+        + (pending ? `<div class="preview-approval-note">${ready ? 'A prévia isolada está pronta para comparação. Aprovar a página, pedir ajuste, rejeitar ou descartar exige clique humano; nada é aplicado automaticamente.' : 'Este rascunho não passou pelos critérios seguros. Não há botão de aplicar ou nova renderização aqui; requer reconstrução de arte.'}</div>` : '')
+        + `<div class="audit-corrected"><label>tradução humana`
+        + ` <input type="text" data-human-candidate="${escapeAttr(region)}"`
+        + ` value="${escapeAttr(human)}" placeholder="escreva a linha aprovada"${blocked ? ' disabled aria-disabled="true"' : ''}></label></div>`
+        + `<div class="audit-actions">${actionButtons}</div></article>`;
+    }).join('');
+    list.innerHTML = `<div class="pr-summary">${Number(data.item_count || 0)} região(ões) do pedido`
+      + ` <strong>${escapeHtml(String(data.authorization_request_id || '').slice(0, 8))}</strong>`
+      + ` · modelo ${escapeHtml(data.provider_model || '—')} · ${Number(data.api_requests || 0)} request(s) já feita(s)`
+      + ` · nenhuma nova chamada é feita nesta tela.</div>`
+      + (rows || '<div class="muted">Nenhuma execução de provider para revisar.</div>');
+    bindPreviewActionButtons(list);
+    void loadPreviewCrops();
+  }
+
+  const previewCropUrls = new Map();
+
+  function bindPreviewActionButtons(root = $('#auditList')) {
+    if (!root) return;
+    $$('[data-preview-action]', root).forEach(button => {
+      if (button.dataset.previewBound === '1') return;
+      button.dataset.previewBound = '1';
+      button.addEventListener('click', event => {
+        event.preventDefault();
+        event.stopPropagation();
+        const target = event.currentTarget;
+        if (target.disabled) return;
+        void previewAction(target.dataset.previewAction, String(target.dataset.region || ''), target);
+      });
+    });
+  }
+
+  async function loadPreviewCrops() {
+    const id = pageRevisionIdentity();
+    if (!id.job_id) return;
+    for (const img of $$('#auditList img[data-preview-crop]')) {
+      if (img.dataset.cropLoaded === '1') continue;
+      img.dataset.cropLoaded = '1';
+      const region = String(img.dataset.previewCrop || '');
+      const kind = String(img.dataset.previewKind || 'draft');
+      try {
+        const response = await api('/api/ui/human-translation/preview-crop?' + new URLSearchParams({
+          job_id: id.job_id, run_id: id.run_id || '', region_id: region, kind}), {rawResponse: true});
+        const url = URL.createObjectURL(await response.blob());
+        const key = `${region}:${kind}`;
+        if (previewCropUrls.get(key)) URL.revokeObjectURL(previewCropUrls.get(key));
+        previewCropUrls.set(key, url);
+        img.src = url;
+      } catch (error) {
+        img.replaceWith(Object.assign(document.createElement('div'), {
+          className: 'audit-crop-missing',
+          textContent: kind === 'draft' ? `prévia indisponível: ${error.message || 'não renderizada'}`
+                                        : `imagem indisponível: ${error.message || ''}`,
+        }));
+      }
+    }
+  }
+
+  // Gates are fetched per region: a measured verdict, never inferred from the
+  // presence of a file.
+  async function loadPreviewGates() {
+    const id = pageRevisionIdentity();
+    if (!id.job_id) return;
+    for (const item of (auditState.previews?.items || [])) {
+      const region = String(item.region_id || '');
+      if (!item.human_candidate) continue;
+      try {
+        const gates = await api('/api/ui/human-translation/gates', {method: 'POST',
+          body: JSON.stringify({...id, region_id: region})});
+        const visual = $(`#auditList [data-preview-visual="${CSS.escape(region)}"]`);
+        const ling = $(`#auditList [data-preview-linguistic="${CSS.escape(region)}"]`);
+        if (visual) {
+          visual.textContent = `gate visual ${gates.visual_gate.status}`;
+          visual.dataset.gate = gates.visual_gate.status === 'passed' ? 'passed'
+            : (gates.visual_gate.status === 'failed' ? 'failed' : 'needs_review');
+        }
+        if (ling) {
+          ling.textContent = `gate linguístico ${gates.linguistic_gate.status}`;
+          ling.dataset.gate = gates.linguistic_gate.status;
+        }
+        const box = $(`#auditList [data-preview-reasons="${CSS.escape(region)}"]`);
+        if (box) {
+          const iso = gates.visual_gate.isolation || {};
+          box.innerHTML = `<div class="audit-reasons">reason codes: `
+            + escapeHtml((gates.visual_gate.reason_codes || []).join(', ') || 'nenhum')
+            + (iso.changed_pixels_total !== undefined && iso.changed_pixels_total !== null
+              ? `<br>pixels alterados: ${Number(iso.changed_pixels_total)} · dentro da máscara `
+                + `${Number(iso.changed_pixels_inside_mask)} · <strong>fora da máscara `
+                + `${Number(iso.changed_pixels_outside_mask)}</strong>` : '')
+            + `<br>tinta residual: ${Number(gates.visual_gate.residual_source_pixels || 0)}`
+            + ` · componentes ${Number(gates.visual_gate.residual_component_count || 0)}`
+            + `<br>estado: ${escapeHtml(gates.state || '')}</div>`;
+        }
+        const maskSummary = $(`#auditList [data-preview-mask-summary="${CSS.escape(region)}"]`);
+        if (maskSummary) {
+          const refinement = gates.mask_refinement || {};
+          const expansion = refinement.expansion || {};
+          const halo = gates.visual_gate.validation_halo || {};
+          maskSummary.textContent = `original ${JSON.stringify(refinement.original_box || gates.visual_gate.original_mask_bounds || [])}`
+            + ` · expandida ${JSON.stringify(refinement.expanded_box || [])}`
+            + ` · halo ${JSON.stringify((halo.boxes || [])[0] || [])}`
+            + ` · expansão L${Number(expansion.left || 0)} R${Number(expansion.right || 0)}`
+            + ` T${Number(expansion.top || 0)} B${Number(expansion.bottom || 0)}`;
+        }
+        const fontSummary = $(`#auditList [data-preview-font-summary="${CSS.escape(region)}"]`);
+        if (fontSummary) {
+          const selection = gates.font_selection || {};
+          fontSummary.textContent = `${selection.selected_font || '—'}`
+            + ` · score ${Number(selection.font_match_score || 0).toFixed(3)}`
+            + ((selection.font_reason_codes || []).length
+              ? ` · ${selection.font_reason_codes.join(', ')}` : '');
+        }
+      } catch (error) { /* a region with no decision yet has no gate */ }
+    }
+  }
+
+  function bindBoundaryEditor(panel, data, region) {
+    if (!panel) return;
+    const boundary = data.boundary_review || {};
+    const storageKey = `komyst-boundary-review:${boundary.conflict_artifact_id || region}`;
+    let state = {};
+    try { state = JSON.parse(localStorage.getItem(storageKey) || '{}'); } catch (_) { /* fail closed */ }
+    state.decisions ||= {};
+    state.history ||= [];
+    state.redo ||= [];
+    state.current ||= boundary.first_pending_segment_id || '';
+    const persist = () => {
+      state.opacity = Number(panel.querySelector('[data-boundary-opacity]')?.value || 50);
+      localStorage.setItem(storageKey, JSON.stringify(state));
+      const pending = (boundary.segments || []).filter(segment =>
+        !state.decisions[segment.segment_id] || state.decisions[segment.segment_id] === 'uncertain').length;
+      const status = panel.querySelector('[data-boundary-status]');
+      if (status) status.textContent = pending
+        ? `${pending} segmento(s) pendente(s). Rascunho restaurável após F5; confirmar continua bloqueado.`
+        : 'Todos os segmentos foram classificados. Salve o rascunho antes de confirmar.';
+    };
+    const select = id => {
+      state.current = id;
+      panel.querySelectorAll('[data-boundary-segment]').forEach(button =>
+        button.classList.toggle('is-current', button.dataset.boundarySegment === id));
+      persist();
+    };
+    panel.querySelectorAll('[data-boundary-segment]').forEach(button =>
+      button.addEventListener('click', () => select(button.dataset.boundarySegment)));
+    panel.querySelectorAll('[data-boundary-class]').forEach(button =>
+      button.addEventListener('click', () => {
+        if (!state.current) return;
+        state.history.push(JSON.stringify(state.decisions));
+        state.redo.length = 0;
+        state.decisions[state.current] = button.dataset.boundaryClass;
+        persist();
+      }));
+    panel.querySelectorAll('[data-boundary-tool]').forEach(button =>
+      button.addEventListener('click', () => {
+        const tool = button.dataset.boundaryTool;
+        if (tool === 'undo' && state.history.length) {
+          state.redo.push(JSON.stringify(state.decisions));
+          state.decisions = JSON.parse(state.history.pop());
+        } else if (tool === 'redo' && state.redo.length) {
+          state.history.push(JSON.stringify(state.decisions));
+          state.decisions = JSON.parse(state.redo.pop());
+        } else if (tool === 'restore') {
+          state.history.push(JSON.stringify(state.decisions));
+          state.decisions = {};
+          state.redo.length = 0;
+        }
+        persist();
+      }));
+    const opacity = panel.querySelector('[data-boundary-opacity]');
+    if (opacity) {
+      opacity.value = String(state.opacity ?? 50);
+      const apply = () => {
+        const value = Number(opacity.value);
+        const overlay = panel.querySelector('.boundary-overlay');
+        if (overlay) overlay.style.opacity = String(value / 100);
+        const output = panel.querySelector('[data-boundary-opacity-value]');
+        if (output) output.textContent = `${value}%`;
+        persist();
+      };
+      opacity.addEventListener('input', apply);
+      apply();
+    }
+    select(state.current);
+  }
+
+  async function previewAction(action, region, sourceElement = null) {
+    const id = pageRevisionIdentity();
+    const field = $(`#auditList [data-human-candidate="${CSS.escape(region)}"]`);
+    const item = (auditState.previews?.items || []).find(i => String(i.region_id) === region) || {};
+    try {
+      if (action === 'edit') { field?.focus(); field?.select(); return; }
+      if (action === 'refine-ptbr') {
+        const box = $(`#auditList [data-preview-reasons="${CSS.escape(region)}"]`);
+        const refinementPayload = {
+          ...id, revision_id: item.revision_id || '', page_id: item.page_id || String(item.page_number || ''),
+          region_id: region, source_text: item.sent_text || item.ocr_source_text || '',
+          current_translation: item.current_translation || item.human_candidate || field?.value || '',
+          context_before: item.context_before || '', context_after: item.context_after || '',
+          region_type: item.region_type || item.classification || '', speaker: item.speaker || '',
+          tone: item.tone || '', emotion: item.emotion || '', register: item.register || '',
+          visual_character_limit: item.visual_character_limit || 0, glossary: item.glossary || {},
+          previous_decision_id: item.human_translation_decision_id || ''
+        };
+        if (box) box.innerHTML = `<section class="natural-refinement-panel" aria-live="polite"><h4>REFINAR PT-BR</h4>`
+          + `<p>Original: <strong>${escapeHtml(item.sent_text || item.ocr_source_text || '—')}</strong></p>`
+          + `<p>Tradução atual: <strong>${escapeHtml(item.current_translation || item.human_candidate || '—')}</strong></p>`
+          + `<p class="muted">A NVIDIA exige autorização explícita. Uma sugestão nunca substitui uma decisão humana sem confirmação.</p>`
+          + `<div data-refinement-result class="muted">Nenhuma sugestão solicitada.</div>`
+          + `<div class="audit-actions"><button type="button" class="btn-primary" data-refinement-action="request">GERAR SUGESTÕES</button>`
+          + `<button type="button" class="btn-ghost" data-refinement-action="natural">USAR NATURAL</button><button type="button" class="btn-ghost" data-refinement-action="compact">USAR COMPACTA</button>`
+          + `<button type="button" class="btn-ghost" data-refinement-action="neutral">USAR NEUTRA</button><button type="button" class="btn-ghost" data-refinement-action="manual">EDITAR MANUALMENTE</button>`
+          + `<button type="button" class="btn-ghost" data-refinement-action="keep_current">MANTER ATUAL</button><button type="button" class="btn-ghost" data-refinement-action="request">PEDIR NOVA SUGESTÃO</button>`
+          + `<button type="button" class="btn-ghost" data-refinement-action="discard">DESCARTAR</button></div>`
+          + `<p class="muted">Warnings, confiança e limite visual aparecerão após uma resposta estruturada válida.</p></section>`;
+        let refinement = null;
+        const resultBox = box?.querySelector('[data-refinement-result]');
+        const showResult = value => {
+          refinement = value || null;
+          const result = refinement?.result || {};
+          const trace = refinement?.provider_trace || {};
+          const repairCount = (trace.repair_attempts || []).length;
+          if (resultBox) resultBox.innerHTML = refinement
+            ? `<p>Status: ${escapeHtml(refinement.status || '—')} · confiança: ${escapeHtml(String(result.confidence ?? '—'))}</p>`
+              + `<p>Formato: ${escapeHtml(trace.status || 'validando tradução')} · correções JSON: ${repairCount}</p>`
+              + `<p>Natural: ${escapeHtml(result.natural_ptbr || '—')}</p><p>Compacta: ${escapeHtml(result.compact_ptbr || '—')}</p>`
+              + `<p>Neutra: ${escapeHtml(result.neutral_ptbr || '—')}</p><p>Warnings: ${escapeHtml((result.warnings || refinement.reason_codes || []).join(', ') || 'nenhum')}</p>`
+            : 'Nenhuma sugestão solicitada.';
+        };
+        const showSelection = selection => {
+          if (!selection || !resultBox) return;
+          const label = selection.selected_action === 'keep_current' ? 'MANTER ATUAL' : 'USAR NATURAL';
+          resultBox.insertAdjacentHTML('beforeend',
+            `<p><strong>Decisão humana confirmada:</strong> ${escapeHtml(label)}</p>`
+            + `<p>Tradução linguística efetiva: ${escapeHtml(selection.effective_translation_after || '—')}</p>`
+            + '<p class="muted">Aplicação visual ainda não realizada.</p>');
+        };
+        try {
+          const restored = await api('/api/ui/human-translation/refinement', {method: 'POST',
+            body: JSON.stringify({...refinementPayload, operation: 'restore'})});
+          if (restored.restored) showResult(restored.refinement);
+          showSelection(restored.selection);
+        } catch (_) { /* no persisted suggestion is expected on first use */ }
+        box?.querySelectorAll('[data-refinement-action]').forEach(button => button.addEventListener('click', async () => {
+          const operation = button.dataset.refinementAction;
+          if (operation === 'discard') { box.innerHTML = ''; return; }
+          if (operation === 'request') {
+            const authorized = await auditConfirm({
+              title: 'AUTORIZAR REFINAMENTO LINGUÍSTICO',
+              summary: '<p>Solicita três opções contextuais em PT-BR ao provider configurado.</p>',
+              effect: 'Nenhuma sugestão substitui uma decisão humana automaticamente.'
+            });
+            if (!authorized) return;
+            if (resultBox) resultBox.textContent = 'Gerando sugestão e validando estrutura...';
+            const response = await api('/api/ui/human-translation/refinement', {method: 'POST',
+              body: JSON.stringify({...refinementPayload, authorized: true})});
+            showResult(response.refinement); return;
+          }
+          if (!refinement) { auditMessage('Gere ou restaure sugestões antes de escolher.', 'warn'); return; }
+          const manualText = operation === 'manual' ? String(field?.value || '').trim() : '';
+          if (operation === 'manual' && !manualText) {
+            auditMessage('Edite a tradução no campo da região antes de confirmar a opção manual.', 'warn');
+            field?.focus(); return;
+          }
+          const response = await api('/api/ui/human-translation/refinement/decision', {method: 'POST',
+            body: JSON.stringify({result: refinement, option: operation, manual_text: manualText,
+              authorization: 'delegated_by_user', previous_decision_id: refinementPayload.previous_decision_id})});
+          showSelection(response.decision);
+          auditMessage(`Decisão linguística registrada: ${response.decision?.status || 'confirmada'}.`, 'ok');
+        }));
+        return;
+      }
+      if (action === 'compare') {
+        const pending = pendingPreviewItems().find(candidate =>
+          String(candidate.region_id || '') === region &&
+          String(candidate.job_id || '').toLowerCase() === String(id.job_id || '').toLowerCase());
+        if (pending) {
+          if (pending.comparison_url) {
+            try { window.history.replaceState({}, '', pending.comparison_url); } catch (_) { /* url is advisory */ }
+          }
+          openHumanPreviewComparison(pending);
+        }
+        else openVisualComparison(Number(item.page_number));
+        return;
+      }
+      if (action === 'mask') { auditMessage('A máscara original, a expandida e o halo estão no bloco de evidências desta região.', 'ok'); return; }
+      if (action === 'mask-editor') {
+        const data = await api('/api/ui/human-mask/editor-state', {method: 'POST',
+          body: JSON.stringify({...id, region_id: region})});
+        const box = $(`#auditList [data-preview-reasons="${CSS.escape(region)}"]`);
+        if (box) {
+          const assets = data.assets || {};
+          const maskAssetUrl = (asset) => `/api/ui/human-mask/asset?job_id=${encodeURIComponent(id.job_id || '')}&asset=${encodeURIComponent(asset)}`;
+          const assetImg = (key, label) => assets[key]
+            ? `<figure><figcaption>${escapeHtml(label)}</figcaption><img src="${maskAssetUrl(assets[key])}" alt="${escapeAttr(label)} da região ${region}"></figure>`
+            : `<figure><figcaption>${escapeHtml(label)}</figcaption><div class="visual-comparison-empty">camada indisponível</div></figure>`;
+          const auto = data.automatic_segmentation || {};
+          const boundary = data.boundary_review || {};
+          const segments = (boundary.segments || []).map((segment, index) =>
+            `<button type="button" class="btn-ghost boundary-segment${index === 0 ? ' is-current' : ''}" data-boundary-segment="${escapeAttr(segment.segment_id || '')}">SEGMENTO ${index + 1} · ${Number(segment.pixel_count || 0)} px</button>`).join('');
+          box.innerHTML = `<section class="hm-refine-panel" aria-live="polite">`
+            + `<p>${escapeHtml(data.message || 'Refine a máscara com segurança antes de qualquer reconstrução local.')}</p>`
+            + `<dl><dt>estado</dt><dd>${escapeHtml(auto.status || 'blocked_pending_human_mask')}</dd>`
+            + `<dt>ratio</dt><dd>${Number(auto.mask_ratio || 0).toFixed(4)}</dd>`
+            + `<dt>precisão</dt><dd>${Number(auto.mask_precision || 0).toFixed(4)}</dd>`
+            + `<dt>guards</dt><dd>${escapeHtml((auto.reason_codes || []).join(', ') || 'sem bloqueio automático')}</dd></dl>`
+            + `<div class="hm-refine-tools" role="toolbar" aria-label="Ferramentas de refinamento de máscara">`
+            + `<button type="button" class="btn-ghost" data-mask-tool="include_text">INCLUIR TEXTO</button>`
+            + `<button type="button" class="btn-ghost" data-mask-tool="exclude_art">EXCLUIR ARTE</button>`
+            + `<button type="button" class="btn-ghost" data-mask-tool="protect_lines">PROTEGER LINHAS</button>`
+            + `<button type="button" class="btn-ghost" data-mask-tool="mark_uncertain">MARCAR INCERTO</button>`
+            + `<button type="button" class="btn-ghost" data-mask-tool="eraser">BORRACHA</button>`
+            + `<button type="button" class="btn-ghost" data-mask-tool="undo">DESFAZER</button>`
+            + `<button type="button" class="btn-ghost" data-mask-tool="redo">REFAZER</button>`
+            + `<button type="button" class="btn-ghost" data-mask-tool="restore_automatic">RESTAURAR AUTOMÁTICA</button>`
+            + `<button type="button" class="btn-ghost" data-preview-action="mask-save" data-region="${escapeAttr(region)}">SALVAR RASCUNHO</button>`
+            + `<button type="button" class="btn-primary" data-preview-action="mask-confirm" data-region="${escapeAttr(region)}">CONFIRMAR MÁSCARA</button></div>`
+            + `<section class="boundary-editor" data-boundary-editor="${escapeAttr(region)}"><h4>REVISAR TEXTO × ARTE</h4>`
+            + `<p><strong>${Number(boundary.conflict_pixel_count || 0)}</strong> pixels em conflito. Sugestões não são decisões.</p>`
+            + `<label>OPACIDADE <input type="range" min="0" max="100" value="50" data-boundary-opacity> <output data-boundary-opacity-value>50%</output></label>`
+            + `<div class="boundary-stage" tabindex="0" aria-label="Original com camadas de revisão">`
+            + (assets.auto_segmentation ? `<img class="boundary-base" src="${maskAssetUrl(assets.auto_segmentation)}" alt="Imagem original">` : '')
+            + (assets.glyph_art_conflict ? `<img class="boundary-overlay" src="${maskAssetUrl(assets.glyph_art_conflict)}" alt="Pixels em conflito">` : '')
+            + `</div><div class="boundary-segments" aria-label="Segmentos pendentes">${segments || '<span>Sem segmentos</span>'}</div>`
+            + `<div class="hm-refine-tools"><button type="button" class="btn-ghost" data-boundary-class="glyph_outline">MARCAR COMO TEXTO</button>`
+            + `<button type="button" class="btn-ghost" data-boundary-class="protected_art">MARCAR COMO ARTE</button>`
+            + `<button type="button" class="btn-ghost" data-boundary-class="uncertain">MANTER INCERTO</button>`
+            + `<button type="button" class="btn-ghost" data-boundary-tool="undo">DESFAZER</button>`
+            + `<button type="button" class="btn-ghost" data-boundary-tool="redo">REFAZER</button>`
+            + `<button type="button" class="btn-ghost" data-boundary-tool="restore">RESTAURAR</button></div>`
+            + `<p class="muted" data-boundary-status>A confirmação permanece bloqueada enquanto houver incerteza.</p></section>`
+            + `<div class="hm-layer-grid">${assetImg('auto_segmentation', 'original/recorte')}`
+            + assetImg('text_core_mask', 'texto core') + assetImg('outline_mask', 'contorno')
+            + assetImg('antialias_mask', 'antialias') + assetImg('combined_text_mask', 'máscara combinada')
+            + assetImg('validation_halo', 'halo de validação')
+            + assetImg('protected_edge_mask', 'arte protegida') + assetImg('background_art_mask', 'fundo/arte') + `</div>`
+            + `<p class="muted">Sem confirmação humana, o inpainting permanece bloqueado: ${escapeHtml(data.inpainting_status || 'blocked_pending_human_mask')}.</p>`
+            + `</section>`;
+          bindPreviewActionButtons(box);
+          bindBoundaryEditor(box.querySelector('[data-boundary-editor]'), data, region);
+        }
+        return;
+      }
+      if (action === 'mask-save' || action === 'mask-confirm') {
+        auditMessage(action === 'mask-confirm'
+          ? 'Confirmação real da máscara exige edição humana na ferramenta; nenhum inpainting foi iniciado.'
+          : 'Rascunho visual preparado. Nenhum inpainting ou página definitiva foi alterado.', 'warn');
+        return;
+      }
+      if (action === 'residual') { auditMessage('A contagem de tinta residual está no gate visual medido desta região.', 'ok'); return; }
+      if (action === 'font-options') {
+        const data = await api('/api/ui/human-translation/font-candidates', {method: 'POST',
+          body: JSON.stringify({...id, region_id: region})});
+        const box = $(`#auditList [data-preview-reasons="${CSS.escape(region)}"]`);
+        if (box) {
+          const selected = data.selected_choice || {};
+          const cards = (data.candidates || []).map(candidate => {
+            const chosen = selected.candidate_id && String(selected.candidate_id) === String(candidate.candidate_id);
+            return `<article class="font-choice-card${chosen ? ' is-selected' : ''}">`
+              + `<strong>${escapeHtml(candidate.option_label || 'OPÇÃO')}</strong>`
+              + `<img src="${escapeAttr(candidate.preview_asset || '')}" alt="Comparação tipográfica ${escapeAttr(candidate.option_label || '')}">`
+              + `<dl><dt>Fonte real</dt><dd>${escapeHtml(candidate.actual_font || '—')}</dd>`
+              + `<dt>fallback</dt><dd>${candidate.fallback_used ? 'sim' : 'não'}</dd>`
+              + `<dt>glyphs</dt><dd>${escapeHtml(candidate.glyph_support?.status || '—')}</dd>`
+              + `<dt>score</dt><dd>${Number(candidate.overall_score || 0).toFixed(3)}</dd>`
+              + `<dt>estilo</dt><dd>${Number(candidate.style_score || 0).toFixed(3)}</dd>`
+              + `<dt>encaixe</dt><dd>${Number(candidate.fit_score || 0).toFixed(3)}</dd></dl>`
+              + `<button type="button" class="btn-primary" data-preview-action="font-choose" data-region="${escapeAttr(region)}" data-candidate-id="${escapeAttr(candidate.candidate_id || '')}">ESCOLHER ESTA TIPOGRAFIA</button>`
+              + `</article>`;
+          }).join('');
+          box.innerHTML = `<section class="font-choice-panel" aria-live="polite">`
+            + `<p>${escapeHtml(data.message || 'Escolher cria uma nova tentativa de prévia; nada é aplicado automaticamente.')}</p>`
+            + `<div class="font-choice-grid">${cards || '<div class="visual-comparison-empty">Nenhuma fonte compatível encontrada.</div>'}</div>`
+            + `<div class="audit-actions"><button type="button" class="btn-ghost" data-preview-action="compare" data-region="${escapeAttr(region)}">ABRIR AMPLIADO</button>`
+            + `<button type="button" class="btn-ghost" data-preview-action="font-options" data-region="${escapeAttr(region)}">PEDIR OUTRAS OPÇÕES</button>`
+            + `<button type="button" class="btn-ghost" data-preview-action="compare" data-region="${escapeAttr(region)}">MANTER PENDENTE</button></div></section>`;
+          bindPreviewActionButtons(box);
+        }
+        return;
+      }
+      if (action === 'font-choose') {
+        const candidateId = String(sourceElement?.dataset?.candidateId || '');
+        if (!candidateId) { auditMessage('Candidato de fonte indisponível.', 'error'); return; }
+        const result = await api('/api/ui/human-translation/font-choice', {method: 'POST',
+          body: JSON.stringify({...id, region_id: region, candidate_id: candidateId})});
+        auditMessage(`Tipografia escolhida (${String(result.font_choice?.font_choice_decision_id || '').slice(0, 8)}). Renderize uma nova tentativa quando quiser; nada foi aplicado automaticamente.`, 'ok');
+        await previewAction('font-options', region);
+        return;
+      }
+      if (action === 'approve') {
+        const text = String(field?.value || '').trim();
+        if (!text) { auditMessage('Escreva a tradução humana antes de aprovar.', 'warn'); return; }
+        await api('/api/ui/human-translation/record', {method: 'POST',
+          body: JSON.stringify({...id, region_id: region, human_candidate: text})});
+        auditMessage('Texto aprovado para prévia. Nenhum PDF ou página foi alterado.', 'ok');
+      } else if (action === 'render') {
+        const ok = await auditConfirm({
+          title: `RENDERIZAR PRÉVIA — ${region}`,
+          summary: `<p>Cria um rascunho isolado da página, alterando somente esta região.</p>`,
+          effect: 'Nenhum PDF, nenhuma página final e nenhuma publicação são alterados. '
+            + 'Nenhuma chamada ao provider é feita.',
+        });
+        if (!ok) { auditMessage('Operação cancelada.', 'warn'); return; }
+        let fontChoiceId = '';
+        try {
+          const fontData = await api('/api/ui/human-translation/font-candidates', {method: 'POST',
+            body: JSON.stringify({...id, region_id: region})});
+          fontChoiceId = String(fontData.selected_choice?.font_choice_decision_id || '');
+        } catch (_) { /* draft can still use the generic font selection */ }
+        const result = await api('/api/ui/human-translation/draft', {method: 'POST',
+          body: JSON.stringify({...id, region_id: region, font_choice_decision_id: fontChoiceId})});
+        auditMessage(`Rascunho ${String(result.manifest?.page_revision_id || '').slice(0, 8)} criado `
+          + '(aguardando sua aprovação visual).', 'ok');
+      } else if (action === 'reject' || action === 'discard') {
+        const decision = item.human_decision;
+        if (!decision) { auditMessage('Nada a remover nesta região.', 'warn'); return; }
+        const ok = await auditConfirm({
+          title: `${action === 'reject' ? 'REJEITAR PRÉVIA' : 'DESCARTAR RASCUNHO'} — ${region}`,
+          summary: `<p>Remove a decisão humana registrada para esta região.</p>`,
+          effect: 'Nenhum PDF ou tradução aplicada é alterado.',
+        });
+        if (!ok) { auditMessage('Operação cancelada.', 'warn'); return; }
+        await api('/api/ui/human-translation/delete', {method: 'POST',
+          body: JSON.stringify({...id, decision_id: decision.human_translation_decision_id})});
+        auditMessage('Decisão removida.', 'ok');
+      }
+      await setAuditMode('previews');
+    } catch (error) { auditMessage(error.message || 'Falha na operação.', 'error'); }
+  }
+
+  function selectedTriageRegions() {
+    return [...auditState.selection];
+  }
+
+  function updateBulkCount() {
+    const label = $('#auditBulkCount');
+    if (label) label.textContent = `${auditState.selection.size} selecionado${auditState.selection.size === 1 ? '' : 's'}`;
+  }
+
+  // An in-page dialog, not window.confirm: the operator has to see exactly what
+  // is about to change, and what is not.
+  function auditConfirm({title, summary, effect}) {
+    const dialog = $('#auditConfirmDialog');
+    if (!dialog) return Promise.resolve(true);
+    $('#auditConfirmTitle').textContent = title;
+    $('#auditConfirmSummary').innerHTML = summary;
+    $('#auditConfirmEffect').textContent = effect;
+    dialog.hidden = false;
+    if (typeof dialog.showModal === 'function' && !dialog.open) dialog.showModal();
+    return new Promise(resolve => {
+      const finish = value => {
+        $('#auditConfirmApply').removeEventListener('click', onApply);
+        $('#auditConfirmCancel').removeEventListener('click', onCancel);
+        dialog.removeEventListener('keydown', onKey);
+        if (typeof dialog.close === 'function' && dialog.open) dialog.close();
+        dialog.hidden = true;
+        resolve(value);
+      };
+      const onApply = () => finish(true);
+      const onCancel = () => finish(false);
+      const onKey = event => { if (event.key === 'Escape') { event.preventDefault(); finish(false); } };
+      $('#auditConfirmApply').addEventListener('click', onApply);
+      $('#auditConfirmCancel').addEventListener('click', onCancel);
+      dialog.addEventListener('keydown', onKey);
+    });
+  }
+
+  // FASE 13 — the operator sees the whole shape of the operation before it runs,
+  // including what is deliberately left out of it.
+  function bulkBreakdown(regions) {
+    const data = auditState.mode === 'ocr' ? auditState.ocrCandidates : auditState.triage;
+    if (!data) return '';
+    const pool = (data.auto_markable || []).concat(data.review_required || [], data.queue || []);
+    const picked = pool.filter(i => regions.includes(String(i.region_id)));
+    if (!picked.length) return '';
+    const tally = (values) => Object.entries(values.reduce((acc, v) => {
+      acc[v] = (acc[v] || 0) + 1; return acc;
+    }, {})).map(([k, v]) => `${escapeHtml(k)} ${v}`).join(' · ') || '—';
+    const pages = [...new Set(picked.map(i => String(i.page_id || '')))].sort();
+    const reasons = picked.flatMap(i => ((i.ocr_assessment || {}).strong_evidence || [])
+      .concat((i.ocr_assessment || {}).weak_evidence || []));
+    const confidences = picked.map(i => Number(i.confidence)).filter(n => Number.isFinite(n));
+    const ambiguous = (data.review_required || []).length;
+    const plausible = (data.auto_markable || []).length
+      ? pool.filter(i => (i.ocr_assessment || {}).status === 'plausible_semantic_text').length : 0;
+    return '<dl class="audit-confirm-facts">'
+      + `<dt>páginas</dt><dd>${pages.length} (${escapeHtml(pages.join(', '))})</dd>`
+      + `<dt>classes</dt><dd>${tally(picked.map(i => String(i.classification_normalized || '')))}</dd>`
+      + `<dt>reason codes</dt><dd>${tally(reasons)}</dd>`
+      + `<dt>confiança OCR mínima</dt><dd>${confidences.length ? Math.min(...confidences).toFixed(3) : '—'}</dd>`
+      + `<dt>ambíguos não incluídos</dt><dd>${ambiguous}</dd>`
+      + `<dt>semanticamente plausíveis não incluídos</dt><dd>${plausible}</dd>`
+      + '</dl>';
+  }
+
+  const BULK_EFFECTS = {
+    ocr_invalid: 'Estas regiões serão retiradas da fila de tradução e encaminhadas para '
+      + 'OCR direcionado futuro. Nenhum PDF ou tradução será alterado.',
+    translate: 'Estas regiões passam a valer como texto traduzível. Nenhum PDF ou tradução será alterado agora.',
+    preserve: 'Estas regiões passam a valer como texto preservado. Nenhum PDF ou tradução será alterado.',
+    needs_review: 'Estas regiões ficam marcadas para revisão humana. Nenhum PDF ou tradução será alterado.',
+    dismissed: 'Estas regiões saem da fila sem decisão de conteúdo. Nenhum PDF ou tradução será alterado.',
+    remove: 'As decisões registradas por você nestas regiões serão removidas. Nenhum PDF ou tradução será alterado.',
+  };
+
+  async function applyBulkDecision(decision) {
+    const regions = selectedTriageRegions();
+    if (!regions.length) { auditMessage('Selecione ao menos uma região.', 'warn'); return; }
+    const id = pageRevisionIdentity();
+    const source = auditState.mode === 'ocr' ? auditState.ocrCandidates : auditState.triage;
+    const hash = source?.source_audit_hash || '';
+    const label = decision === 'remove' ? 'REMOVER DECISÃO'
+      : (AUDIT_DECISION_LABELS[decision] || decision);
+    const preview = regions.slice(0, 8).map(r => `<li>${escapeHtml(r)}</li>`).join('');
+    const ok = await auditConfirm({
+      title: `${label} — ${regions.length} região(ões)`,
+      summary: `<ul class="audit-confirm-list">${preview}</ul>`
+        + (regions.length > 8 ? `<p class="muted">e mais ${regions.length - 8}.</p>` : '')
+        + bulkBreakdown(regions),
+      effect: BULK_EFFECTS[decision] || 'Nenhum PDF ou tradução será alterado.',
+    });
+    if (!ok) { auditMessage('Operação cancelada.', 'warn'); return; }
+    try {
+      if (decision === 'remove') {
+        // Removing is per-decision; resolve each region's decision id first.
+        const review = await api('/api/ui/audit/review', {method: 'POST', body: JSON.stringify(id)});
+        const byRegion = new Map((review.records || []).filter(r => r.human_decision)
+          .map(r => [String(r.region_id), r.human_decision.audit_decision_id]));
+        for (const region of regions) {
+          const decisionId = byRegion.get(region);
+          if (decisionId) await api('/api/ui/audit/decision/delete', {method: 'POST', body: JSON.stringify({...id, decision_id: decisionId})});
+        }
+        auditMessage(`Decisões removidas: ${regions.length}.`, 'ok');
+      } else {
+        const result = await api('/api/ui/audit/decision/bulk', {method: 'POST',
+          body: JSON.stringify({...id, region_ids: regions, decision, source_audit_hash: hash})});
+        auditMessage(`${result.applied} decisão(ões) aplicadas em ${result.pages.length} página(s).`, 'ok');
+      }
+      auditState.selection.clear();
+      await setAuditMode(auditState.mode);
+    } catch (error) { auditMessage(error.message || 'Falha na operação em massa.', 'error'); }
+  }
+
+  $$('[data-audit-mode]').forEach(button => button.addEventListener('click', () => setAuditMode(button.dataset.auditMode)));
+  $('#auditBulk')?.addEventListener('click', event => {
+    const btn = event.target.closest('[data-audit-bulk]');
+    if (btn) applyBulkDecision(btn.dataset.auditBulk);
+  });
+  $('#auditList')?.addEventListener('change', event => {
+    const box = event.target.closest('[data-triage-select]');
+    if (!box) return;
+    const region = String(box.dataset.triageSelect || '');
+    if (box.checked) auditState.selection.add(region); else auditState.selection.delete(region);
+    updateBulkCount();
+  });
+  $('#auditList')?.addEventListener('click', async event => {
+    if (!event.target.closest('#requestProviderAuth')) return;
+    const id = pageRevisionIdentity();
+    try {
+      const request = await api('/api/ui/audit/provider-authorization', {method: 'POST',
+        body: JSON.stringify({...id, confirm: true})});
+      auditMessage(`Pedido ${String(request.authorization_request_id).slice(0, 8)} criado: `
+        + `${request.estimated_requests} região(ões), ${request.pages.length} página(s). `
+        + 'Nenhuma chamada externa foi feita.', 'ok');
+    } catch (error) { auditMessage(error.message || 'Falha ao registrar o pedido.', 'error'); }
+  });
+  $('#qualityReviewList')?.addEventListener('change', event => {
+    const checkbox = event.target.closest?.('[data-review-select]');
+    if (!checkbox) return;
+    const key = String(checkbox.dataset.reviewSelect || '');
+    if (!key) return;
+    if (checkbox.checked) appState.qualityReviewSelection.add(key);
+    else appState.qualityReviewSelection.delete(key);
+    updateQualityReviewSelectionUi();
+  });
+  $$('[data-review-filter]').forEach(button => button.addEventListener('click', () => {
+    appState.qualityReviewFilter = button.dataset.reviewFilter || 'pending';
+    if (appState.qualityReview) renderQualityReview(appState.qualityReview);
+  }));
+  $('#confirmQualityReview')?.addEventListener('click', confirmQualityReview);
+  function syncReexportTypesettingField() {
+    const isPsd = ($('#qualityReviewReexportFormat')?.value === 'psd');
+    const select = $('#qualityReviewReexportTypesetting');
+    const label = $('#qualityReviewReexportTypesettingLabel');
+    if (select) select.hidden = !isPsd;
+    if (label) label.hidden = !isPsd;
+  }
+  $('#qualityReviewReexportFormat')?.addEventListener('change', event => { event.currentTarget.dataset.userSelected = '1'; syncReexportTypesettingField(); });
+  $('#qualityReviewReexport')?.addEventListener('click', async event => {
+    const button = event.currentTarget;
+    const status = $('#qualityReviewReexportStatus');
+    const review = appState.qualityReview;
+    if (!review?.job_id) return;
+    if (Object.keys(snapshotDirtyReviewEditors()).length || $$('.quality-review-item[data-review-key]').some(reviewEditorDirty) || appState.reviewDraw) {
+      if (status) status.textContent = 'Salve ou cancele as alterações pendentes antes de gerar novamente.';
+      return;
+    }
+    button.disabled = true;
+    if (status) status.textContent = 'Validando revisão…';
+    try {
+      const output_format = $('#qualityReviewReexportFormat')?.value || 'pdf';
+      const body = {job_id: review.job_id, output_format};
+      if (output_format === 'psd') body.typesetting_mode = ($('#qualityReviewReexportTypesetting')?.value === 'off') ? 'off' : 'on';
+      const result = await api('/api/ui/quality-review/reexport', {method:'POST', body:JSON.stringify(body)});
+      if (status) status.textContent = `Geração criada · ${result.output_format.toUpperCase()} · custo adicional: 0 YK`;
+      if (result.job_id) void pollQualityReviewReexport(result.job_id, review.job_id);
+    } catch (error) {
+      const detail = error?.detail || error?.data?.detail || {};
+      const blockers = Array.isArray(detail.review_blockers) ? detail.review_blockers : [];
+      if (status) status.textContent = blockers.length
+        ? `Bloqueado · ${blockers.length} região(ões): ${blockers.map(x => `p${x.page_index} ${x.region_id}: ${x.reason}`).join('; ')}`
+        : `Falha ao gerar novamente · ${detail.code || error.message || 'erro local'}`;
+    } finally { button.disabled = false; }
+  });
+  async function pollQualityReviewReexport(jobId, sourceJobId) {
+    const id = String(jobId || '');
+    if (!id || appState.reviewReexportPollingJobId === id) return;
+    appState.reviewReexportPollingJobId = id;
+    const statusNode = $('#qualityReviewReexportStatus');
+    try {
+      const current = await api('/api/ui/quality-review/reexport/status', {
+        method:'POST', body:JSON.stringify({job_id:id, source_job_id:sourceJobId})
+      });
+      if (statusNode) {
+        const stages = {queued:'Na fila…', claiming:'Preparando worker…', starting:'Iniciando…',
+          validating_review:'Validando revisão…', loading_artifacts:'Carregando artefatos…',
+          reconstructing:'Gerando páginas…', exporting:'Exportando…',
+          validating_output:'Validando saída…', finished:'Concluído', interrupted:'Interrompido', failed:'Falhou'};
+        const count = current.progress_total ? ` · ${current.progress_current}/${current.progress_total} páginas` : '';
+        statusNode.textContent = `${stages[current.stage] || stages[current.status] || current.stage} · ${current.output_format?.toUpperCase() || ''}${count} · custo adicional: 0 YK`;
+        statusNode.querySelector('[data-reexport-retry]')?.remove();
+        if (['interrupted','failed'].includes(current.status) && current.recoverable) {
+          const retry = document.createElement('button');
+          retry.type = 'button'; retry.dataset.reexportRetry = '1'; retry.className = 'btn-ghost';
+          retry.textContent = 'TENTAR NOVAMENTE';
+          retry.addEventListener('click', async () => {
+            retry.disabled = true;
+            try {
+              const next = await api('/api/ui/quality-review/reexport/retry', {
+                method:'POST', body:JSON.stringify({job_id:id, source_job_id:sourceJobId})
+              });
+              statusNode.textContent = 'Nova tentativa de re-export criada · custo adicional: 0 YK';
+              void pollQualityReviewReexport(next.job_id, sourceJobId);
+            } catch (error) {
+              statusNode.textContent = `Não foi possível retomar o re-export: ${error.message || 'erro local'}`;
+              retry.disabled = false;
+            }
+          });
+          statusNode.append(' ', retry);
+        }
+      }
+      if (['queued','claiming','starting','running'].includes(String(current.status || ''))) {
+        appState.reviewReexportPollingJobId = '';
+        window.setTimeout(() => void pollQualityReviewReexport(id, sourceJobId), 1200);
+      } else {
+        appState.reviewReexportPollingJobId = '';
+      }
+    } catch (error) {
+      appState.reviewReexportPollingJobId = '';
+      if (statusNode) statusNode.textContent = `Status do re-export indisponível: ${error.message || 'falha local'}`;
+    }
+  }
+  $('#rerunPendingReview')?.addEventListener('click', openReviewRerunDialog);
+  $('#reviewRerunApply')?.addEventListener('click', startReviewRerun);
+  $('#reviewRerunCancel')?.addEventListener('click', closeReviewRerunDialog);
+  $('#reviewRerunClose')?.addEventListener('click', closeReviewRerunDialog);
+  $('#cancelReviewRerunAction')?.addEventListener('click', cancelReviewRerun);
+  $('#retryReviewRerunStatus')?.addEventListener('click', () => {
+    const jobId = appState.reviewRerunChildId;
+    if (jobId) void pollReviewRerunStatus(jobId);
+  });
+  $('#reviewRerunConfirm')?.addEventListener('click', event => {
+    if (event.target === $('#reviewRerunConfirm')) closeReviewRerunDialog();
+  });
+  $('#qualityReviewSelectAll')?.addEventListener('change', event => {
+    const keys = visibleQualityReviewKeys();
+    if (event.target.checked) keys.forEach(key => appState.qualityReviewSelection.add(key));
+    else keys.forEach(key => appState.qualityReviewSelection.delete(key));
+    renderQualityReview(appState.qualityReview);
+  });
+  $('#undoBulkReview')?.addEventListener('click', async () => {
+    if (!appState.qualityReview?.job_id || appState.qualityReviewBulkBusy || !appState.qualityReviewUndo.length) return;
+    const last = appState.qualityReviewUndo.pop();
+    const restore = Object.fromEntries(last.previous || []);
+    appState.qualityReviewBulkBusy = true;
+    setQualityReviewBulkMessage('Desfazendo última ação em massa...', 'busy');
+    try {
+      const review = await api('/api/ui/quality-review/bulk-action', {method: 'POST', body: JSON.stringify({job_id: appState.qualityReview.job_id, item_keys: last.keys || [], action: 'pending', undo: true, restore_actions: restore})});
+      renderQualityReview(review);
+      setQualityReviewBulkMessage('Última ação em massa desfeita.', 'ok');
+    } catch (error) {
+      setQualityReviewBulkMessage(error.message || 'Não foi possível desfazer.', 'error');
+    } finally {
+      appState.qualityReviewBulkBusy = false;
+      updateQualityReviewSelectionUi();
+    }
+  });
+  $('#nvidiaContractCanary')?.addEventListener('click', async () => {
+    if (!qualityReviewDeveloperMode() || !appState.qualityReview?.job_id || appState.qualityReviewBulkBusy) return;
+    appState.qualityReviewBulkBusy = true;
+    setQualityReviewBulkMessage('Preparando canário NVIDIA escalonado...', 'busy');
+    try {
+      const current = await pollQualityRevisionStatus(appState.qualityReview.job_id, {once: true});
+      const passed = String(current?.status || '') === 'contract_canary_passed';
+      const reviewed = Number(current?.reviewed_regions || 0);
+      const validity = Number(current?.validity_rate || 0);
+      const maxRegions = passed && reviewed >= 3 && validity >= 0.9 ? 10 : (passed && reviewed >= 1 ? 3 : 1);
+      setQualityReviewBulkMessage(`Enviando canário NVIDIA de ${maxRegions} região${maxRegions === 1 ? '' : 'ões'}...`, 'busy');
+      const status = await api('/api/ui/quality-review/revision/canary/start', {method: 'POST', body: JSON.stringify({job_id: appState.qualityReview.job_id, max_regions: maxRegions})});
+      renderQualityRevisionStatus(status);
+      setQualityReviewBulkMessage(`Canário iniciado: ${status.phase_label || status.phase || 'em andamento'}.`, 'ok');
+      showToast('Canário do contrato NVIDIA iniciado.', 'ok');
+      clearTimeout(appState.qualityRevisionPoll);
+      appState.qualityRevisionPoll = setTimeout(() => pollQualityRevisionStatus(appState.qualityReview.job_id), 1000);
+    } catch (error) {
+      setQualityReviewBulkMessage(error.message || 'Não foi possível iniciar o canário NVIDIA.', 'error');
+      showToast(error.message || 'Não foi possível iniciar o canário NVIDIA.', 'error');
+    } finally {
+      appState.qualityReviewBulkBusy = false;
+      updateQualityReviewSelectionUi();
+    }
+  });
+  $('#cancelRevisionAction')?.addEventListener('click', async () => {
+    const jobId = appState.qualityReview?.job_id;
+    if (!jobId || appState.qualityReviewBulkBusy) return;
+    if (!await komystConfirm('Cancelar a revisão em andamento? O progresso já revisado é preservado e você pode retomar depois.', {title: 'Cancelar revisão', confirmLabel: 'Cancelar revisão', cancelLabel: 'Continuar', danger: true})) return;
+    appState.qualityReviewBulkBusy = true;
+    setQualityReviewBulkMessage('Cancelando revisão...', 'busy');
+    try {
+      const status = await api('/api/ui/quality-review/revision/cancel', {method: 'POST', body: JSON.stringify({job_id: jobId})});
+      renderQualityRevisionStatus(status);
+      setQualityReviewBulkMessage(`Revisão ${status.status === 'cancelling' ? 'sendo cancelada' : status.status || 'cancelada'}.`, 'ok');
+      clearTimeout(appState.qualityRevisionPoll);
+      appState.qualityRevisionPoll = setTimeout(() => pollQualityRevisionStatus(jobId), 1000);
+    } catch (error) {
+      setQualityReviewBulkMessage(error.message || 'Não foi possível cancelar a revisão.', 'error');
+    } finally {
+      appState.qualityReviewBulkBusy = false;
+      updateQualityReviewSelectionUi();
+    }
+  });
+
+  $('#resumeRevisionAction')?.addEventListener('click', () => {
+    // Resuming continues from the persisted checkpoint; the backend skips the
+    // regions that already have a stored answer instead of re-requesting them.
+    $('#globalAiReview')?.click();
+  });
+
+  $('#globalAiReview')?.addEventListener('click', async () => {
+    if (!appState.qualityReview?.job_id || appState.qualityReviewBulkBusy) return;
+    appState.qualityReviewBulkBusy = true;
+    setQualityReviewBulkMessage('Iniciando revisão completa pela UI...', 'busy');
+    try {
+      const status = await api('/api/ui/quality-review/revision/start', {method: 'POST', body: JSON.stringify({job_id: appState.qualityReview.job_id})});
+      renderQualityRevisionStatus(status);
+      setQualityReviewBulkMessage(`Revisão iniciada: ${status.phase_label || status.phase || 'em andamento'}.`, 'ok');
+      showToast('Revisão completa iniciada pela UI.', 'ok');
+      clearTimeout(appState.qualityRevisionPoll);
+      appState.qualityRevisionPoll = setTimeout(() => pollQualityRevisionStatus(appState.qualityReview.job_id), 1000);
+    } catch (error) {
+      setQualityReviewBulkMessage(error.message || 'Não foi possível iniciar a revisão completa.', 'error');
+      showToast(error.message || 'Não foi possível iniciar a revisão completa.', 'error');
+    } finally {
+      appState.qualityReviewBulkBusy = false;
+      updateQualityReviewSelectionUi();
+    }
+  });
+  function openRetryDialog(context, trigger = null) {
+    const jobId = String(context?.jobId || '').trim();
+    if (!/^[0-9a-f]{32}$/i.test(jobId)) {
+      showToast('Não foi possível identificar a execução selecionada.', 'error');
+      return;
+    }
+    const dialog = $('#retryConfirmDialog');
+    if (!dialog) return;
+    if (dialog.parentElement !== document.body) document.body.appendChild(dialog);
+    appState.retryDialogContext = {
+      jobId,
+      runId: String(context?.runId || ''),
+      operationId: String(context?.operationId || ''),
+      status: String(context?.status || ''),
+      reasonCode: String(context?.reasonCode || ''),
+      sourceView: String(context?.sourceView || ''),
+      trigger,
+    };
+    dialog.hidden = false;
+    if (!dialog.open) dialog.showModal();
+    $('#retryConfirmApply')?.focus();
+  }
+  function closeRetryDialog() {
+    const dialog = $('#retryConfirmDialog');
+    const trigger = appState.retryDialogContext?.trigger;
+    if (dialog?.open) dialog.close();
+    if (dialog) dialog.hidden = true;
+    appState.retryDialogContext = null;
+    if (trigger?.focus) trigger.focus();
+  }
+  $('#runRetryAction')?.addEventListener('click', event => {
+    const button = event.currentTarget;
+    openRetryDialog({
+      jobId: button?.dataset?.jobId,
+      runId: button?.dataset?.runId,
+      status: button?.dataset?.status,
+      sourceView: 'pipeline',
+    }, button);
+  });
+  $('#retryConfirmCancel')?.addEventListener('click', () => {
+    closeRetryDialog();
+  });
+  $('#retryConfirmApply')?.addEventListener('click', async () => {
+    const id = appState.retryDialogContext?.jobId || '';
+    if (!id) return;
+    const button = $('#retryConfirmApply');
+    if (button?.disabled) return;
+    if (button) { button.disabled = true; button.textContent = 'CRIANDO…'; }
+    try {
+      const retry = await api('/api/ui/retry', {
+        method: 'POST', body: JSON.stringify({job_id: id}),
+      });
+      closeRetryDialog();
+      showToast(`Nova tentativa vinculada: ${String(retry.id || retry.job_id || '').slice(0, 8)}.`, 'ok');
+      pollState();
+    } catch (error) {
+      showToast(error.message || 'Nao foi possivel tentar novamente.', 'error');
+    } finally {
+      if (button) { button.disabled = false; button.textContent = 'CRIAR RETRY'; }
+    }
+  });
+
+  function moderationRoles() {
+    const state = window.__komystAuthState || {};
+    const user = state.user || {};
+    return new Set([...(state.roles || []), ...(user.roles || [])].map(value => String(value)));
+  }
+
+  async function loadModeration() {
+    const moderationEventCodes = ['moderation_hide', 'moderation_restore', 'moderation_remove'];
+    const panel = $('#moderationPanel');
+    const roles = moderationRoles();
+    const allowed = roles.has('moderator') || roles.has('admin');
+    if (panel) panel.hidden = !allowed;
+    if (!allowed) return;
+    const params = new URLSearchParams({
+      status: $('#moderationStatus')?.value || '',
+      q: $('#moderationSearch')?.value || '',
+    });
+    const list = $('#moderationList');
+    if (list) list.innerHTML = '<div class="empty-real-state">carregando moderação…</div>';
+    try {
+      const result = await api(`/api/community/moderation/posts?${params}`);
+      void moderationEventCodes;
+      const posts = result.posts || [];
+      if (list) list.innerHTML = posts.length ? posts.map(post => `
+        <article class="hist-item" data-moderation-post="${escapeAttr(post.id)}">
+          <div class="hist-info"><strong>${escapeHtml(post.title || post.series_title || 'Publicação')}</strong>
+          <span>${escapeHtml(post.moderation_status || '')} · ${escapeHtml(String(post.user_id || '').slice(0, 8))}</span></div>
+          <div class="cta-row">
+            <button type="button" class="btn-ghost" data-moderation-action="hide">Ocultar</button>
+            <button type="button" class="btn-ghost" data-moderation-action="restore">Restaurar</button>
+            <button type="button" class="btn-ghost danger" data-moderation-action="remove">Remover</button>
+          </div>
+        </article>`).join('') : '<div class="empty-real-state">nenhuma publicação neste filtro</div>';
+    } catch (error) {
+      if (list) list.innerHTML = `<div class="empty-real-state">${escapeHtml(error.message || 'Falha ao carregar moderação.')}</div>`;
+    }
+  }
+
+  $('#moderationRefresh')?.addEventListener('click', loadModeration);
+  $('#moderationStatus')?.addEventListener('change', loadModeration);
+  $('#moderationSearch')?.addEventListener('search', loadModeration);
+  function requestModerationReason(action) {
+    const dialog = $('#moderationReasonDialog');
+    const input = $('#moderationReasonInput');
+    const error = $('#moderationReasonError');
+    if (!dialog || !input) return Promise.resolve(null);
+    $('#moderationReasonTitle').textContent = `Confirmar ${action}`;
+    input.value = '';
+    if (error) error.textContent = '';
+    dialog.hidden = false;
+    if (!dialog.open) dialog.showModal();
+    return new Promise(resolve => {
+      const finish = value => {
+        $('#moderationReasonApply')?.removeEventListener('click', apply);
+        $('#moderationReasonCancel')?.removeEventListener('click', cancel);
+        if (dialog.open) dialog.close();
+        dialog.hidden = true;
+        resolve(value);
+      };
+      const apply = () => {
+        const value = input.value.trim();
+        if (['hide', 'remove'].includes(action) && !value) {
+          if (error) error.textContent = 'Informe um motivo para esta ação.';
+          input.focus();
+          return;
+        }
+        finish(value);
+      };
+      const cancel = () => finish(null);
+      $('#moderationReasonApply')?.addEventListener('click', apply);
+      $('#moderationReasonCancel')?.addEventListener('click', cancel);
+    });
+  }
+  $('#moderationList')?.addEventListener('click', async event => {
+    const actionButton = event.target.closest('[data-moderation-action]');
+    const post = event.target.closest('[data-moderation-post]');
+    if (!actionButton || !post) return;
+    const action = actionButton.dataset.moderationAction;
+    const labels = {hide: 'ocultar', restore: 'restaurar', remove: 'remover'};
+    const reason = await requestModerationReason(action);
+    if (reason === null) return;
+    if (['hide', 'remove'].includes(action) && !reason.trim()) {
+      showToast('Informe um motivo para esta ação.', 'error');
+      return;
+    }
+    actionButton.disabled = true;
+    try {
+      await api(`/api/community/moderation/posts/${encodeURIComponent(post.dataset.moderationPost)}/${action}`, {
+        method: 'POST', body: JSON.stringify({reason}),
+      });
+      showToast(`Ação de moderação concluída: moderation_${action}.`, 'ok');
+      await loadModeration();
+      await loadCommunityFeed();
+    } catch (error) {
+      showToast(error.message || 'Falha na moderação.', 'error');
+    } finally {
+      actionButton.disabled = false;
+    }
+  });
+  window.addEventListener('komyst-auth-changed', loadModeration);
+
+  // The single place where real state becomes a loading view. It only forwards
+  // fields; every decision about wording, progress, duration, status and
+  // available actions belongs to loading_view.js, and the renderer only draws
+  // what that returns.
+  function renderLoadingSurface(state, progress, options = {}) {
+    const view = window.KomystLoadingView;
+    const surface = window.KomystProcessingSurface;
+    const root = $('#loadingSurface');
+    if (!view || !surface || !root) return;
+    if (!state || state.status === 'ready'
+        || (options.mode !== 'bootstrap' && terminalRunStatuses.has(state.status) && !state.jobId)) {
+      clearLoadingSurface();
+      return;
+    }
+    root.hidden = false;
+
+    const record = state.record || {};
+    const reducedMotion = Boolean(window.matchMedia
+      && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
+
+    const model = view.mapJobStateToLoadingView({
+      mode: options.mode === 'bootstrap' ? 'bootstrap' : 'pipeline',
+      status: state.status,
+      stage: state.visualStage || state.stage,
+      reason_code: state.reasonCode,
+      message: state.message,
+      started_at: state.createdAt,
+      updated_at: state.updatedAt,
+      pending_review_count: state.pendingReview,
+      // Only what the backend reported; absent stays absent. Field names are the
+      // runtime's own: `recoverable` gates retry, `output_folder` and `pdf_path`
+      // gate the result actions, and the log entries live at the top level of
+      // the state payload rather than on the job record.
+      progress: progress || {},
+      // appState.logs already holds the runtime's sanitised entries; reading it
+      // avoids a second store that could drift from the panel's own history.
+      events: Array.isArray(appState.logs) ? appState.logs.slice(-40) : [],
+      result_available: Boolean(record.output_folder),
+      pdf_available: Boolean(record.pdf_path),
+      retry_available: Boolean(record.recoverable),
+      review_available: Boolean(record.review_available),
+      reduced_motion: reducedMotion,
+      // Source and target language are not part of the job record today, so the
+      // languages row stays absent rather than guessed.
+    });
+    surface.renderProcessingSurface(root, model);
+  }
+
+  // PIPELINE-UI-REGRESSION-002.
+  //
+  // #loadingSurface is a whole-page experience: its own <h1>, a three-column
+  // grid, a progress dial and a row of stage cards. It is mounted inline in the
+  // "Nova tradução" column, between the balloon preview and the compact
+  // #stageList pipeline, so painting it for an ordinary job covered the form
+  // with a second and much larger copy of a pipeline the column already shows —
+  // one whose terminal buttons no handler in this bundle listens for.
+  //
+  // #80 gated renderBootstrapSurface (mode 'bootstrap', bootHasClosed latch).
+  // This is the pipeline-mode repaint, it comes from renderProgress, and it was
+  // never gated. The compact #stageList below is driven by the same job state a
+  // few lines down, so nothing is lost by leaving the surface unpainted.
+  //
+  // It stays reachable for diagnostics behind the server's own fail-closed
+  // visual-test flag — the same one pipeline_loading_harness.js requires — and
+  // nowhere else. A bootstrap paint is left alone: closing the boot clears it.
+  function paintPipelineSurface(state, progress) {
+    if (window.__komystVisualTestEnabled === true) { renderLoadingSurface(state, progress); return; }
+    const root = $('#loadingSurface');
+    if (root && !root.hidden && root.dataset.lsMode !== 'bootstrap') clearLoadingSurface();
+  }
+
+  // Stages that only run for certain operations. A stage is hidden when the active plan
+  // requests none of its operations, so a translate-only run never shows "Reconstruindo
+  // páginas"/"Preparando documento" and a clean-only run never shows "Tradução". Stages not
+  // listed here (source, download, regions, OCR, verification) run for every plan.
+  const STAGE_OP_REQUIREMENT = {translate: ['translate'], render: ['clean', 'typeset'], pdf: ['pdf']};
+  function applyPlanStageVisibility(ops) {
+    const hasPlan = Array.isArray(ops) && ops.length > 0;
+    $$('.stage-item').forEach(item => {
+      const req = STAGE_OP_REQUIREMENT[item.dataset.stage];
+      // Legacy/unknown plan or a non-optional stage stays visible (never hide by accident).
+      item.hidden = Boolean(hasPlan && req && !req.some(op => ops.includes(op)));
+    });
+  }
+
+  function renderProgress(progress, pipelineState = null) {
+    applyPlanStageVisibility(appState.activeEffectiveOps);
+    const state = pipelineState || buildPipelineState({status: appState.status}, progress);
+    const runtimeKey = state.stage || progress.stage_key || 'idle';
+    const key = state.visualStage || visualStageKey(runtimeKey);
+    const activeIndex = stageOrder.indexOf(key);
+    const terminalOk = ['finished', 'review_required', 'review_completed'].includes(state.status);
+    const sourceReady = appState.status === 'source_analysis_ready';
+    const stageActiveStatus = String(state.status || appState.status || '').toLowerCase();
+    const timing = $('#pipelineTiming');
+    if (timing) {
+      const active = inFlightStatuses.has(stageActiveStatus);
+      timing.hidden = !active;
+      const elapsed = progress.elapsed_label || 'Calculando…';
+      const eta = progress.stale ? 'Aguardando atualização do processamento'
+        : progress.eta_seconds != null ? `Cerca de ${progress.eta_label} restantes nesta etapa`
+        : progress.eta_label || 'Calculando estimativa após as primeiras páginas';
+      timing.textContent = `${elapsed} decorridos · ${eta}`;
+    }
+    $$('.stage-item').forEach(item => {
+      const index = stageOrder.indexOf(item.dataset.stage);
+      const pct = $('.stage-pct', item);
+      const fill = $('.stage-fill', item);
+      const failedHere = ['failed', 'cancelled'].includes(state.status) && item.dataset.stage === key;
+      item.classList.toggle('done', terminalOk || key === 'final'
+        || (sourceReady && item.dataset.stage === 'source_analysis')
+        || (activeIndex >= 0 && index < activeIndex));
+      item.classList.toggle('active', item.dataset.stage === key && !terminalOk && inFlightStatuses.has(stageActiveStatus));
+      item.classList.toggle('failed', failedHere && state.status === 'failed');
+      item.classList.toggle('cancelled', failedHere && state.status === 'cancelled');
+      item.classList.toggle('indeterminate', item.classList.contains('active') && progress.indeterminate);
+      if (sourceReady && item.dataset.stage === 'source_analysis') {
+        pct.textContent = 'concluída';
+        fill.style.width = '100%';
+      }
+      else if (item.classList.contains('done')) { pct.textContent = '100%'; fill.style.width = '100%'; }
+      else if (item.classList.contains('active') && progress.fraction != null) {
+        const percent = Math.max(0, Math.min(100, Math.round(progress.fraction * 100)));
+        pct.textContent = progress.total ? `${progress.current}/${progress.total} · ${percent}%` : `${percent}%`;
+        fill.style.width = `${percent}%`;
+      } else if (item.classList.contains('active')) { pct.textContent = 'em andamento'; fill.style.width = '38%'; }
+      else {
+        const metric = canonicalStageMetric(item.dataset.stage, state, progress);
+        pct.textContent = metric || '—';
+        fill.style.width = '0%';
+      }
+      item.dataset.state = item.classList.contains('done') ? 'completed' : item.classList.contains('active') ? 'active' : item.classList.contains('failed') ? 'failed' : item.classList.contains('cancelled') ? 'cancelled' : 'future';
+    });
+    if (key !== appState.activeStage) {
+      appState.activeStage = key;
+      sfxPop(runtimeKey);
+    }
+    renderPipelinePreview(state);
+    paintPipelineSurface(state, progress);
+    $('#scanline')?.classList.toggle('run', appState.status === 'running' && ['ocr', 'classification', 'render'].includes(runtimeKey));
+    const summary = $('#runSummary');
+    if (appState.status === 'running') {
+      summary.hidden = false;
+      const counterOwner = progress.counter_stage || progress.stage_key || '';
+      const ownsCounter = !counterOwner || counterOwner === (progress.stage_key || '');
+      const count = (ownsCounter && progress.total)
+        ? `${progress.current}/${progress.total}`
+        : 'contador indisponível';
+      // elapsed_label is authoritative: the server freezes it and emits 'Tempo indisponível'
+      // for an unusable timestamp. Never substitute a locally computed number here.
+      const elapsed = progress.elapsed_label || 'Tempo indisponível';
+      const stale = progress.stale ? `<br><em>${escapeHtml(progress.stale_label || 'Sem atualização recente')}</em>` : '';
+      summary.innerHTML = `<strong>${escapeHtml(progress.stage || 'Preparando')}</strong><br>${escapeHtml(count)} · ${escapeHtml(elapsed)}${stale}<br>${escapeHtml(progress.last_message || '')}`;
+    } else if (appState.status === 'awaiting_source_review') {
+      summary.hidden = false;
+      summary.innerHTML = '<strong>Revisão das páginas necessária</strong><br>O OCR ainda não foi iniciado.';
+    }
+  }
+  function shouldRenderSourceReview(record) {
+    const incomingJobId = String(record?.id || record?.job_id || '');
+    // Source analyses are frozen while awaiting review. Replacing this DOM on every polling
+    // tick would silently restore removed pages and discard an intentional manual reorder.
+    return !appState.sourceReview || appState.sourceReview.job_id !== incomingJobId;
+  }
+  function renderSourceReview(record) {
+    const analysis = record?.source_analysis || record?.analysis || {};
+    const provenance = record?.source_provenance || {};
+    const panel = $('#sourceReviewPanel');
+    if (!panel) return;
+    const accepted = Array.isArray(analysis.accepted) ? analysis.accepted : [];
+    appState.sourceReview = {job_id: record?.id || record?.job_id || '', analysis};
+    panel.hidden = false;
+    const warnings = Array.isArray(analysis.warnings) && analysis.warnings.length ? ` · avisos: ${analysis.warnings.map(escapeHtml).join(', ')}` : '';
+    const safeReason = value => /^[a-z][a-z0-9_]{0,79}$/.test(String(value || '')) ? String(value) : '';
+    const reasons = new Map();
+    (Array.isArray(analysis.discarded) ? analysis.discarded : []).forEach(item => {
+      const reason = safeReason(item?.reason);
+      if (reason) reasons.set(reason, (reasons.get(reason) || 0) + 1);
+    });
+    const reasonText = Array.from(reasons.entries()).slice(0, 6)
+      .map(([reason, count]) => `${escapeHtml(reason)} (${count})`).join(', ');
+    const outcome = safeReason(analysis.outcome);
+    const adapter = provenance.adapter_name || analysis.adapter || 'universal';
+    const version = provenance.adapter_version || analysis.adapter_version || '—';
+    const transport = provenance.transport_name || 'pending';
+    const score = provenance.score ?? analysis.confidence ?? '—';
+    const candidates = Number(provenance.candidate_count ?? analysis.candidate_count ?? accepted.length);
+    const acceptedCount = Number(provenance.accepted_page_count ?? analysis.accepted_count ?? accepted.length);
+    const rejectedCount = Number(provenance.rejected_page_count ?? analysis.discarded_count ?? 0);
+    $('#sourceReviewMeta').innerHTML = `Adapter: <strong>${escapeHtml(adapter)}</strong> v${escapeHtml(version)} · transporte: <strong>${escapeHtml(transport)}</strong> · confiança: <strong>${escapeHtml(score)}</strong> · ${candidates} candidatos · ${acceptedCount} páginas aceitas · ${rejectedCount} descartadas${outcome ? ` · resultado: <code>${escapeHtml(outcome)}</code>` : ''}${reasonText ? ` · motivos: ${reasonText}` : ''}${warnings}`;
+    $('#sourceReviewList').innerHTML = accepted.length ? accepted.map((item, index) => `<label class="source-page-option"><input type="checkbox" data-source-candidate-id="${escapeAttr(item.id || '')}" checked><span><strong>Página ${escapeHtml(Number(item.order || index + 1))}</strong><span>${escapeHtml(item.width || '—')} × ${escapeHtml(item.height || '—')} · ${escapeHtml(item.origin || 'dom')}</span></span></label>`).join('') : '<div class="muted">Nenhuma página confirmável foi preservada.</div>';
+    prepareSourceReviewControls();
+    $('#confirmSourcePages').hidden = false;
+    $('#retrySourceReview').textContent = 'Tentar novamente';
+    $('#confirmSourcePages').disabled = !accepted.length;
+  }
+  function renderSourceVerification(record) {
+    const panel = $('#sourceReviewPanel');
+    if (!panel) return;
+    appState.sourceReview = {job_id: record?.id || record?.job_id || '', verification: true};
+    panel.hidden = false;
+    $('#sourceReviewMeta').textContent = 'A fonte solicitou uma verificação interativa. Conclua-a no navegador legítimo e depois tente continuar este mesmo job.';
+    $('#sourceReviewList').innerHTML = '<div class="muted">Nenhuma página foi descartada; o job está aguardando a verificação da fonte.</div>';
+    $('#confirmSourcePages').hidden = true;
+    $('#retrySourceReview').textContent = 'Continuar após verificação';
+    $('#cancelSourceReview').hidden = false;
+  }
+  function safeReviewThumbnail(value) {
+    const thumbnail = String(value || '').trim();
+    return /^data:image\/(?:jpeg|png);base64,[A-Za-z0-9+/=]{16,24000}$/i.test(thumbnail) ? thumbnail : '';
+  }
+  function prepareSourceReviewControls() {
+    const list = $('#sourceReviewList');
+    if (!list) return;
+    const thumbnails = new Map(
+      (appState.sourceReview?.analysis?.accepted || [])
+        .map(item => [String((item && item.id) || ''), safeReviewThumbnail((item && item.thumbnail) || '')])
+        .filter(([id, thumbnail]) => id && thumbnail));
+    $$('.source-page-option', list).forEach(option => {
+      const card = document.createElement('div');
+      card.className = 'source-page-review-card';
+      option.parentNode?.insertBefore(card, option);
+      option.classList.add('source-page-select');
+      card.appendChild(option);
+      const candidateId = option.querySelector('[data-source-candidate-id]')?.dataset.sourceCandidateId || '';
+      const thumbnail = thumbnails.get(candidateId);
+      if (thumbnail) {
+        const preview = document.createElement('img');
+        preview.className = 'source-page-thumbnail';
+        preview.src = thumbnail;
+        preview.alt = 'Miniatura local da pagina detectada';
+        preview.decoding = 'async';
+        preview.loading = 'lazy';
+        option.insertBefore(preview, option.querySelector('span'));
+      }
+      const position = document.createElement('small');
+      position.dataset.sourceReviewPosition = '';
+      option.querySelector('span')?.appendChild(position);
+      const controls = document.createElement('div');
+      controls.className = 'source-page-order-actions';
+      controls.setAttribute('aria-label', 'Ordem da pagina');
+      controls.innerHTML = '<button type="button" class="btn-ghost source-page-order-button" data-source-move="up" aria-label="Mover para cima">&uarr;</button><button type="button" class="btn-ghost source-page-order-button" data-source-move="down" aria-label="Mover para baixo">&darr;</button>';
+      card.appendChild(controls);
+    });
+    refreshSourceReviewOrder();
+  }
+  function refreshSourceReviewOrder() {
+    const entries = $$('.source-page-review-card', $('#sourceReviewList'));
+    entries.forEach((entry, index) => {
+      const position = entry.querySelector('[data-source-review-position]');
+      if (position) position.textContent = `Posicao de processamento ${index + 1}`;
+      const up = entry.querySelector('[data-source-move="up"]');
+      const down = entry.querySelector('[data-source-move="down"]');
+      if (up) up.disabled = index === 0;
+      if (down) down.disabled = index === entries.length - 1;
+    });
+  }
+  function moveSourceReviewPage(event) {
+    const button = event.target.closest('[data-source-move]');
+    if (!button) return;
+    const entry = button.closest('.source-page-review-card');
+    const list = $('#sourceReviewList');
+    if (!entry || !list) return;
+    if (button.dataset.sourceMove === 'up') {
+      const previous = entry.previousElementSibling;
+      if (previous) list.insertBefore(entry, previous);
+    } else if (button.dataset.sourceMove === 'down') {
+      const next = entry.nextElementSibling;
+      if (next) list.insertBefore(next, entry);
+    }
+    refreshSourceReviewOrder();
+  }
+  async function confirmSourcePages() {
+    const review = appState.sourceReview;
+    const ids = $$('.source-page-option input:checked').map(input => input.dataset.sourceCandidateId).filter(Boolean);
+    if (!review?.job_id || !ids.length) { showToast('Selecione ao menos uma página.', 'warn'); return; }
+    const button = $('#confirmSourcePages');
+    if (button) button.disabled = true;
+    try {
+      const result = await api('/api/ui/source/confirm', {method: 'POST', body: JSON.stringify({job_id: review.job_id, candidate_ids: ids})});
+      if (!result?.ok) throw new Error('Não foi possível confirmar as páginas.');
+      $('#sourceReviewPanel').hidden = true;
+      appState.sourceReview = null;
+      showToast('Páginas confirmadas. O processamento foi enfileirado.', 'ok');
+    } catch (error) {
+      showToast(error.message || 'Não foi possível confirmar as páginas.', 'error');
+      if (button) button.disabled = false;
+    }
+  }
+  async function retrySourceReview() {
+    const review = appState.sourceReview;
+    if (!review?.job_id) return;
+    const button = $('#retrySourceReview');
+    if (button) button.disabled = true;
+    try {
+      const verification = appState.status === 'waiting_source_verification';
+      const result = await api(verification ? '/api/ui/source/verification/resume' : '/api/ui/source/retry', {
+        method: 'POST', body: JSON.stringify({job_id: review.job_id}),
+      });
+      if (!result?.ok) throw new Error(result?.reason_code || 'A nova análise foi recusada.');
+      appState.sourceReview = null;
+      if (result.awaiting_source_review) {
+        renderSourceReview({
+          id: result.job_id,
+          source_analysis: result.analysis || {},
+          source_provenance: result.source_provenance || {},
+        });
+        showToast('Análise refeita. Revise as páginas novamente.', 'warn');
+      } else {
+        $('#sourceReviewPanel').hidden = true;
+        showToast(verification ? 'Verificação reenviada. O mesmo job voltou para a análise.' : 'Análise refeita e processamento enfileirado.', 'ok');
+      }
+    } catch (error) {
+      showToast(error.message || 'Não foi possível repetir a análise.', 'error');
+      if (button) button.disabled = false;
+    }
+  }
+  $('#confirmSourcePages')?.addEventListener('click', confirmSourcePages);
+  $('#retrySourceReview')?.addEventListener('click', retrySourceReview);
+  $('#sourceReviewList')?.addEventListener('click', moveSourceReviewPage);
+  $('#cancelSourceReview')?.addEventListener('click', () => cancelTranslation(
+    false, appState.sourceReview?.job_id || ''));
+  function renderResult(record) {
+    const summary = $('#runSummary');
+    if (!record || record.status === 'running' || record.status === 'staging' || record.status === 'awaiting_source_review') return;
+    if (summary) summary.hidden = true;
+    renderJobCompletion(record);
+    const legacyActions = $('#artifactActions');
+    if (legacyActions) legacyActions.replaceChildren();
+  }
+
+  function completionReviewCountText(count) {
+    return `${count} ${count === 1 ? 'item recomendado para revisão.' : 'itens recomendados para revisão.'}`;
+  }
+  function renderJobCompletion(record) {
+    const panel = $('#jobCompletionPanel');
+    const model = record?.completion_summary;
+    if (!panel || !model || !terminalRunStatuses.has(String(model.terminal_state || '').toLowerCase())) return;
+    panel.hidden = false;
+    const status = String(model.terminal_state || '').toLowerCase();
+    const downloadOnly = model.download_only === true;
+    const reviewRequired = model.review_required === true || status === 'review_required';
+    const profile = model.output_profile === 'professional_qc' ? 'professional_qc' : 'automatic';
+    const title = $('#jobCompletionTitle');
+    const badge = $('#jobCompletionBadge');
+    const pages = $('#jobCompletionPages');
+    const message = $('#jobCompletionMessage');
+    const review = $('#jobCompletionReview');
+    const artifacts = $('#jobCompletionArtifacts');
+    const actions = $('#jobCompletionActions');
+    if (!title || !pages || !message || !artifacts || !actions) return;
+    [$('#runStatusHuman'), $('#runProgressHuman'), $('#runEtaHuman'), $('#runUpdatedHuman'), $('#runNextHuman')]
+      .forEach(node => { if (node) node.hidden = true; });
+    const effOps = Array.isArray(model.effective_operations) ? model.effective_operations : [];
+    const cleanOnly = effOps.length > 0 && effOps.includes('clean')
+      && !effOps.includes('translate') && !effOps.includes('typeset');
+    title.textContent = status === 'failed' ? 'Não foi possível concluir a tradução'
+      : status === 'cancelled' ? 'Tradução cancelada'
+        : downloadOnly ? 'Download concluído'
+          : cleanOnly ? 'Imagens limpas prontas' : 'Tradução concluída';
+    const showBadge = status === 'review_required' || reviewRequired
+      || (status === 'review_completed' && !downloadOnly);
+    if (badge) {
+      badge.hidden = !showBadge;
+      badge.textContent = status === 'review_completed' ? 'Revisão concluída' : 'Revisão recomendada';
+    }
+    const pageCount = Number(model.logical_pages);
+    pages.textContent = downloadOnly
+      ? (Number.isFinite(pageCount) && pageCount > 0 ? `${pageCount} imagens salvas` : 'As imagens encontradas foram salvas.')
+      : (Number.isFinite(pageCount) && pageCount > 0 ? `${pageCount} ${pageCount === 1 ? 'página processada' : 'páginas processadas'}` : 'Contagem de páginas indisponível.');
+    if (status === 'failed') {
+      message.textContent = String(reasonText(record.reason_code) || record.error_message || 'O processamento não foi concluído.');
+    } else if (status === 'cancelled') {
+      message.textContent = 'O processamento foi cancelado. Você pode iniciar uma nova tradução quando quiser.';
+    } else if (downloadOnly) {
+      message.textContent = 'O conteúdo original está pronto na pasta de saída.';
+    } else if (reviewRequired) {
+      message.textContent = 'Seu resultado foi gerado normalmente. A revisão é recomendada para melhorar alguns trechos.';
+    } else if (profile === 'professional_qc') {
+      message.textContent = 'Todos os arquivos foram gerados.';
+    } else {
+      message.textContent = 'Seu resultado está pronto.';
+    }
+    const pending = Number(model.review_pending);
+    if (review) {
+      review.hidden = !reviewRequired;
+      review.textContent = Number.isFinite(pending) && pending > 0
+        ? completionReviewCountText(pending)
+        : 'A revisão é recomendada para conferir o resultado.';
+    }
+    artifacts.replaceChildren();
+    // Produced-artifact driven: list only what was actually generated, in a stable order.
+    // No phantom entries, and an operation the plan never requested is simply absent (never
+    // shown as "Não gerado"). Covers clean-only, translate-only (Tradução) and the rest.
+    const ARTIFACT_DISPLAY_ORDER = ['final_pdf', 'translated_image', 'clean_image',
+      'editable_psd', 'quality_report', 'translation_manifest'];
+    let visibleTypes = downloadOnly ? []
+      : ARTIFACT_DISPLAY_ORDER.filter(kind => model.artifacts?.[kind]?.available === true);
+    // When the PDF is the deliverable, the translated page images are intermediate: headline
+    // the PDF instead of listing both (Tradução pronta/Completo stay about the final result).
+    if (visibleTypes.includes('final_pdf')) {
+      visibleTypes = visibleTypes.filter(kind => kind !== 'translated_image');
+    }
+    for (const kind of visibleTypes) {
+      const artifact = model.artifacts?.[kind] || {};
+      const item = document.createElement('li');
+      item.dataset.status = artifact.status || 'produced';
+      const mark = document.createElement('span');
+      mark.setAttribute('aria-hidden', 'true');
+      mark.textContent = '✓';
+      const label = document.createElement('span');
+      label.textContent = `${artifact.label || kind} — Pronto`;
+      item.append(mark, label);
+      artifacts.appendChild(item);
+    }
+    actions.replaceChildren();
+    const addAction = (label, action, primary = false) => {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = primary ? 'btn-primary' : 'btn-ghost';
+      button.dataset.completionAction = action;
+      button.dataset.jobId = String(model.job_id || record.job_id || '');
+      button.textContent = label;
+      actions.appendChild(button);
+    };
+    // "Ver tradução": translate modes without a final typeset (translate-only, translate+clean)
+    // deliver the translation data. Show a readable viewer instead of raw JSON. Primary for
+    // translate-only, where it is the main result.
+    const hasTranslationView = effOps.includes('translate') && !effOps.includes('typeset');
+    const translateOnlyMode = hasTranslationView && !effOps.includes('clean');
+    if (status !== 'failed' && !downloadOnly && model.actions?.pdf) addAction('Abrir PDF', 'pdf', true);
+    if (status !== 'failed' && !downloadOnly && hasTranslationView) addAction('Ver tradução', 'translation', translateOnlyMode);
+    if (status !== 'failed' && !downloadOnly && model.actions?.review) addAction('Abrir Review', 'review');
+    if (status !== 'failed' && !downloadOnly && model.actions?.psd_folder) addAction('Abrir PSDs', 'psd_folder');
+    if (status !== 'failed' && !downloadOnly && model.actions?.qc_folder) addAction('Abrir pasta de QC', 'qc_folder');
+    if (model.actions?.output_folder) addAction('Abrir pasta', 'folder');
+    if (status !== 'failed') addAction('Nova tradução', 'new-translation');
+    const retry = $('#runRetryAction');
+    if (retry && status !== 'failed') retry.hidden = true;
+  }
+  $('#jobCompletionActions')?.addEventListener('click', event => {
+    const button = event.target.closest('[data-completion-action]');
+    if (!button) return;
+    const action = String(button.dataset.completionAction || '');
+    const jobId = String(button.dataset.jobId || '');
+    if (action === 'review') {
+      const record = appState.history.find(item => String(item.job_id || item.id || '') === jobId)
+        || appState.currentPipelineState?.record;
+      if (record) void openChapterReview(record);
+      else showToast('A revisão deste trabalho não está disponível.', 'warn');
+    } else if (action === 'new-translation') {
+      if (appState.reviewMode) exitReviewMode();
+      activateTab('nova');
+      $('#urlInput')?.focus();
+    } else if (action === 'translation') {
+      void openTranslationView(jobId);
+    } else if (['pdf', 'folder', 'psd_folder', 'qc_folder'].includes(action)) {
+      void openArtifact(jobId, action);
+    }
+  });
+
+  // Read-only translation viewer: source -> target per page/region. No raw JSON, no editing.
+  async function openTranslationView(jobId) {
+    let view;
+    try {
+      view = await api(`/api/ui/translation/${encodeURIComponent(jobId)}`);
+    } catch (_) {
+      showToast('Não foi possível abrir a tradução deste capítulo.', 'warn');
+      return;
+    }
+    const pages = Array.isArray(view?.pages) ? view.pages : [];
+    const overlay = document.createElement('div');
+    overlay.className = 'translation-view-overlay';
+    overlay.tabIndex = -1;
+    const close = () => { overlay.remove(); document.removeEventListener('keydown', onKey); };
+    const onKey = e => { if (e.key === 'Escape') close(); };
+    document.addEventListener('keydown', onKey);
+    overlay.addEventListener('click', e => { if (e.target === overlay) close(); });
+    const sum = view?.summary || {};
+    const head = `<div class="tv-head"><div><h3>Tradução</h3><p>${Number(sum.pages || pages.length)} páginas · ${Number(sum.translated_regions || sum.regions || 0)} textos traduzidos · nenhuma imagem foi alterada</p></div><button type="button" class="btn-ghost tv-close" aria-label="Fechar">Fechar</button></div>`;
+    const body = pages.length
+      ? pages.map(p => `<section class="tv-page"><h4>Página ${Number(p.page_index || 0)}</h4>${(p.regions || []).map(r => `<div class="tv-pair"><div class="tv-src">${escapeHtml(r.source || '')}</div><div class="tv-arrow" aria-hidden="true">→</div><div class="tv-tgt">${escapeHtml(r.target || '')}</div></div>`).join('')}</section>`).join('')
+      : '<p class="tv-empty">Nenhum texto traduzido foi encontrado.</p>';
+    overlay.innerHTML = `<div class="translation-view-modal" role="dialog" aria-modal="true" aria-label="Tradução">${head}<div class="tv-body">${body}</div></div>`;
+    overlay.querySelector('.tv-close')?.addEventListener('click', close);
+    document.body.appendChild(overlay);
+    overlay.focus();
+  }
+
+  /* ---------- logs ---------- */
+  function appendLogs(entries) {
+    const terminal = $('#terminal');
+    entries.forEach(entry => {
+      appState.cursor = Math.max(appState.cursor, Number(entry.seq || 0));
+      appState.logs.push(entry);
+      if (Number(entry.seq || 0) <= appState.visualLogClearedAt) return;
+      const row = document.createElement('div');
+      row.innerHTML = `<span class="l-time">${escapeHtml(entry.time || '')}</span><span class="log-${escapeAttr(entry.kind || 'info')}">${escapeHtml(entry.text || '')}</span>`;
+      terminal.appendChild(row);
+    });
+    appState.logs = appState.logs.slice(-3000);
+    if (entries.length) terminal.scrollTop = terminal.scrollHeight;
+  }
+  $('#copyLogsBtn')?.addEventListener('click', async () => {
+    const text = appState.logs.map(entry => `[${entry.time}] ${entry.text}`).join('\n');
+    try { await navigator.clipboard.writeText(text); showToast('Logs copiados.', 'ok'); }
+    catch (_) { showToast('Não foi possível copiar os logs.', 'error'); }
+  });
+  $('#clearLogsBtn')?.addEventListener('click', () => {
+    $('#terminal').innerHTML = '';
+    appState.visualLogClearedAt = appState.cursor;
+  });
+
+  /* ---------- history ---------- */
+  function seriesFromRecord(record) {
+    if (record.series_name) return String(record.series_name);
+    const title = String(record.chapter_name || record.slug || '');
+    const explicit = title.split(/\s[-—]\s/)[0].trim();
+    try {
+      const parts = new URL(record.url || '').pathname.split('/').filter(Boolean);
+      if (parts.at(-1)?.toLowerCase() === 'viewer') parts.pop();
+      const fromUrl = parts.at(-2);
+      if (fromUrl) return titleCase(fromUrl);
+    } catch (_) { /* history discovered without URL */ }
+    return explicit || 'Sem série identificada';
+  }
+  function formatSeconds(value) {
+    if (value === null || value === undefined || value === '') return 'Tempo indisponível';
+    const seconds = Number(value);
+    if (!Number.isFinite(seconds) || seconds < 0) return 'Tempo indisponível';
+    const whole = Math.floor(seconds);
+    const hours = Math.floor(whole / 3600);
+    const minutes = Math.floor((whole % 3600) / 60);
+    if (hours) return `${hours}h ${String(minutes).padStart(2, '0')}min`;
+    if (minutes) return `${minutes}min ${String(whole % 60).padStart(2, '0')}s`;
+    return `${whole}s`;
+  }
+  // Compatibility copy retained for the local confirmation dialog: Excluir capítulo local.
+  function actionButton(label, action, path = '') {
+    if (!path && !['reprocess','delete'].includes(action)) return '';
+    const icons = {
+      pdf: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M6 3h9l3 3v15H6z"/><path d="M15 3v4h4"/><path d="M8 16h1.2a1.2 1.2 0 0 0 0-2.4H8V18m5-4.4V18h1.1a2.2 2.2 0 0 0 0-4.4zm5 0h3M18 16h2"/></svg>',
+      folder: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M3 7h7l2 2h9v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="M3 7V5a2 2 0 0 1 2-2h5l2 2h5"/></svg>',
+      report: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M6 3h12v18H6z"/><path d="M9 9h6M9 13h3M9 17h6"/><path d="M15 14v3M12 15v2"/></svg>',
+      compare: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M4 5h7v14H4zM13 5h7v14h-7z"/><path d="m9 9-2 2 2 2M15 15l2-2-2-2"/></svg>',
+      context: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M4 5h16v10H8l-4 4z"/><path d="M8 9h8M8 12h5"/></svg>',
+      reprocess: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M4 12a8 8 0 0 1 13.7-5.7L20 8"/><path d="M20 4v4h-4M20 12a8 8 0 0 1-13.7 5.7L4 16"/><path d="M4 20v-4h4"/></svg>',
+      retry: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M4 12a8 8 0 0 1 13.7-5.7L20 8"/><path d="M20 4v4h-4M20 12a8 8 0 0 1-13.7 5.7L4 16"/><path d="M4 20v-4h4"/></svg>',
+      delete: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M4 7h16"/><path d="M9 7V4h6v3"/><path d="M7 7l1 14h8l1-14"/><path d="M10 11v6M14 11v6"/></svg>',
+      translation: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M4 5h9M8.5 3v2M6 5c0 4 3 7 6 8M11 5c-.6 3.6-3.4 6.6-6 8"/><path d="m13 21 4-9 4 9M14.5 18h5"/></svg>',
+      psd_folder: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="m12 3 9 5-9 5-9-5z"/><path d="m3 13 9 5 9-5"/><path d="m3 17.5 9 5 9-5"/></svg>',
+      review: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><circle cx="11" cy="11" r="6"/><path d="m20 20-4.5-4.5M8.5 11l1.8 1.8L14 9"/></svg>',
+    };
+    // Every action carries a visible icon; an unknown one falls back to a generic
+    // mark instead of drawing an empty, invisible button.
+    const icon = icons[action] || '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><circle cx="12" cy="12" r="8"/><path d="M12 8v5M12 16h.01"/></svg>';
+    return `<button class="btn-ghost icon-action" data-action="${action}" data-path="${encodeURIComponent(path || '')}" aria-label="${escapeAttr(label)}" title="${escapeAttr(label)}">${icon}<span class="sr-only">${escapeHtml(label)}</span></button>`;
+  }
+  function artifactIsAvailable(record, kind, legacyValue = '') {
+    const summary = record?.completion_summary;
+    const artifacts = summary && typeof summary.artifacts === 'object' ? summary.artifacts : null;
+    if (artifacts && Object.prototype.hasOwnProperty.call(artifacts, kind)) {
+      return artifacts[kind]?.available === true;
+    }
+    if (Array.isArray(record?.produced_artifacts)) {
+      return record.produced_artifacts.includes(kind);
+    }
+    return Boolean(legacyValue);
+  }
+  function producedArtifactActions(record) {
+    const actions = [];
+    if (artifactIsAvailable(record, 'final_pdf', record.pdf_path)) {
+      actions.push(actionButton('Abrir ' + 'PDF', 'pdf', record.pdf_path));
+    }
+    if (artifactIsAvailable(record, 'clean_image', record.png_path)) {
+      actions.push(actionButton('Imagens limpas', 'folder', record.output_folder));
+    }
+    if (artifactIsAvailable(record, 'translation_manifest', record.translation_manifest_path)) {
+      actions.push(actionButton('Ver tradução', 'translation', record.translation_manifest_path || record.output_folder));
+    }
+    if (artifactIsAvailable(record, 'editable_psd', record.psd_path)) {
+      actions.push(actionButton('PSDs editáveis', 'psd_folder', record.output_folder));
+    }
+    if (artifactIsAvailable(record, 'quality_report', record.quality_report_path)) {
+      const legacyQualityReportAction = record.output_profile === 'professional_qc' ? actionButton('Relatório', 'report', record.quality_report_path) : '';
+      actions.push(legacyQualityReportAction || actionButton('Relatório de QC', 'report', record.quality_report_path));
+    }
+    if (artifactIsAvailable(record, 'review_manifest', record.review_manifest_path)) {
+      actions.push(reviewAction(record) || actionButton('Revisão', 'review'));
+    }
+    return actions.join('');
+  }
+  // Reading a finished chapter happens inside the app. The external viewer stays as
+  // an explicit secondary action, never as the default way to read.
+  function readAction(record) {
+    if (!record.pdf_path) return '';
+    const jobId = String(record.job_id || '');
+    if (!jobId) return '';
+    const title = record.chapter_name || record.slug || 'capítulo';
+    return `<button class="btn-ghost hm-read-action" data-action="read" data-job-id="${escapeAttr(jobId)}" title="Ler dentro do Komyst" aria-label="${escapeAttr(`Ler: ${title}`)}">LER</button>`;
+  }
+  // Compatibility contract: actionButton('Abrir PDF', 'pdf', record.pdf_path)
+  function retryAction(record) {
+    const status = String(record?.status || '').toLowerCase();
+    const jobId = String(record?.job_id || '').toLowerCase();
+    const runId = String(record?.run_id || '').trim();
+    const retryable = ['failed', 'cancelled'].includes(status) && record?.recoverable === true;
+    if (!retryable || !/^[0-9a-f]{32}$/.test(jobId) || !runId) return '';
+    const icon = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M4 12a8 8 0 0 1 13.7-5.7L20 8"/><path d="M20 4v4h-4M20 12a8 8 0 0 1-13.7 5.7L4 16"/><path d="M4 20v-4h4"/></svg>';
+    return `<button class="btn-ghost icon-action" data-action="retry" data-job-id="${escapeAttr(jobId)}" data-run-id="${escapeAttr(runId)}" aria-label="Retry" title="Retry">${icon}<span class="sr-only">Retry</span></button>`;
+  }
+  function publicationEligibility(record) {
+    const status = String(record.status || '').toLowerCase();
+    const terminal = terminalRunStatuses.has(status);
+    const publishableTerminal = ['finished', 'review_completed'].includes(status);
+    const hasPdf = Boolean(record.pdf_path);
+    const manifest = record.output_verification === 'manifest_verified'
+      || record.publication_manifest_ready === true;
+    const authenticated = isCanonicalCommunityAuthenticated();
+    const technicalGatePassed = boolish(record.quality_gate) === true;
+    const reviewCompleted = record.review_status === 'completed' || record.review_confirmed === true;
+    const review = !technicalGatePassed;
+    const qualityApproved = technicalGatePassed || reviewCompleted;
+    const published = String(record.publication_status || '').toLowerCase() === 'published';
+    const changed = published && record.publication_pdf_sha256 && record.pdf_sha256 && record.publication_pdf_sha256 !== record.pdf_sha256;
+    const ownership = String(record.community_ownership || '');
+    const ownerReady = ownership !== 'legacy' && ownership !== 'unowned_new';
+    // Canonical publication identity is resolved server-side from the trusted source
+    // lineage; the browser never holds one, so it is not a client-side precondition.
+    const baseEligible = hasPdf && manifest && terminal && authenticated;
+    return {terminal, hasPdf, manifest, authenticated, review, reviewCompleted,
+      technicalGatePassed, published, changed,
+      ownership, ownerReady, baseEligible, qualityApproved, publishableTerminal,
+      eligible: baseEligible && ownerReady && qualityApproved && publishableTerminal};
+  }
+  function publicationAction(record) {
+    const eligibility = publicationEligibility(record);
+    if (!eligibility.hasPdf) return '';
+    if (eligibility.published && !eligibility.changed) {
+      const postId = escapeAttr(record.publication_id || '');
+      return `<button class="btn-ghost" data-action="open-publication" data-publication-id="${postId}" ${postId ? '' : 'disabled'} title="Abrir publicação existente">Publicado</button>`;
+    }
+    if (!eligibility.authenticated) return '<button class="btn-ghost" data-action="publish" disabled title="Entre para publicar">Publicação indisponível</button>';
+    if (!eligibility.manifest || !eligibility.terminal) return '<button class="btn-ghost" data-action="publish" disabled>Publicação indisponível</button>';
+    if (!eligibility.ownerReady) return '<button class="btn-ghost" data-action="publish" disabled>Vincule antes de publicar</button>';
+    if (!eligibility.qualityApproved) return '<button class="btn-ghost" data-action="publish" disabled title="Conclua a revis\u00e3o antes de publicar">Revis\u00e3o necess\u00e1ria</button>';
+    if (eligibility.published && !eligibility.changed) return '<button class="btn-ghost" data-action="publish">Publicado</button>';
+    return `<button class="btn-ghost" data-action="publish">${eligibility.changed ? 'Atualizar publicação' : 'Publicar na comunidade'}</button>`;
+  }
+  function claimEligibility(record) {
+    const eligibility = publicationEligibility(record);
+    const ownerState = String(record.community_ownership || '');
+    const hasIdentity = /^[0-9a-f]{32}$/.test(String(record.job_id || '')) &&
+      Boolean(String(record.run_id || '').trim()) && /^[0-9a-f]{64}$/.test(String(record.pdf_sha256 || '').toLowerCase());
+    return { ...eligibility,
+      eligible: ownerState === 'legacy' && hasIdentity && eligibility.baseEligible
+        && eligibility.qualityApproved && eligibility.publishableTerminal
+        && !eligibility.published };
+  }
+  function claimAction(record) {
+    if (!claimEligibility(record).eligible) return '';
+    return '<button class="btn-ghost" data-action="claim">Vincular à minha conta</button>';
+  }
+  // Canonical job/run identity for a finished chapter card. The review entry must
+  // adopt exactly this chapter's job_id + run_id, never runtime.latest or the title.
+  function reviewIdentity(record) {
+    // Only the canonical job id identifies the chapter; a presentation/history
+    // row id must never be used as the source job.
+    const jobId = String(record.job_id || '').toLowerCase();
+    const runId = String(record.run_id || '').trim();
+    if (!/^[0-9a-f]{32}$/.test(jobId) || !runId) return null;
+    if (!record.quality_report_path) return null;
+    return {jobId, runId};
+  }
+  function reviewActionLabel(record) {
+    const status = String(record.status || '').toLowerCase();
+    if (record.review_status === 'completed' || status === 'review_completed') return 'Ver revisão';
+    if (status === 'review_running' || status === 'running') return 'Continuar revisão';
+    return 'Revisar';
+  }
+  function reviewAction(record) {
+    const identity = reviewIdentity(record);
+    if (!identity) return '';
+    const label = reviewActionLabel(record);
+    return `<button class="btn-ghost hm-review-action" data-action="review" data-review-job="${escapeAttr(identity.jobId)}" title="Revisar OCR, tradução e qualidade deste capítulo" aria-label="${escapeAttr(`${label}: ${record.chapter_name || record.slug || 'capítulo'}`)}">${escapeHtml(label)}</button>`;
+  }
+  function renderSourceAnalysisReady(record) {
+    const panel = $('#sourceReadyPanel');
+    if (!panel) return;
+    const result = record?.source_analysis_result || {};
+    const analysis = record?.analysis || {};
+    const hydrated = rehydrateSourceValidationFromReadyRecord(record);
+    if (!hydrated.ready) {
+      panel.hidden = true;
+      appState.sourceReady = null;
+      uiTrace('source_validation_state', {state: hydrated.reason || 'missing'});
+      return;
+    }
+    uiTrace('source_validation_state', {state: hydrated.reason || 'rehydrated'});
+    appState.sourceReady = record || null;
+    const policy = appState.settings?.workspace_source_policy || {};
+    const safe = value => escapeHtml(String(value || '—'));
+    const operation = String(result.operation_id || '').slice(0, 12);
+    const completed = result.completed_at
+      ? new Date(Number(result.completed_at) * 1000).toLocaleString('pt-BR') : '—';
+    $('#sourceReadyMeta').innerHTML = [
+      '<strong>A fonte foi reconhecida. Nenhum job de tradução foi criado.</strong>',
+      `Fonte: ${safe(record?.source_type || result.source_kind)}`,
+      `Adapter: ${safe(result.adapter || analysis.adapter)}`,
+      `Páginas estimadas: ${safe(analysis.accepted_count ?? result.estimated_asset_count)}`,
+      `Inspeção: ${result.browser_inspection_performed ? 'navegador controlado' : 'preflight'}`,
+      `Navegador: ${safe(result.browser_engine)}`,
+      `Estrutura: ${result.public_structure_indicators_present ? 'compatível' : 'não confirmada'}`,
+      `Concluída: ${safe(completed)}`,
+      `Operação: ${safe(operation)}`,
+      `Motivo: <code>${safe(result.reason_code)}</code>`,
+    ].join('<br>');
+    panel.hidden = false;
+    const active = policy.status === 'active' && policy.all_submitted_sources_authorized === true;
+    const compatible = String(record?.status || '') === 'source_analysis_ready';
+    $('#sourceReadyPolicyState').textContent = !compatible
+      ? 'A estrutura da fonte não pôde ser validada com segurança.'
+      : active
+        ? 'Fonte autorizada. Pronta para processamento.'
+        : 'Fontes externas estão bloqueadas até ativar a política.';
+    $('#openSourcePolicySettings').hidden = active || !compatible;
+    updateTranslationStartControls();
+  }
+  $('#openSourcePolicySettings')?.addEventListener('click', () => activateTab('cfg'));
+  function pendingPreviewItems() {
+    return Array.isArray(appState.pendingHumanPreviews?.items) ? appState.pendingHumanPreviews.items : [];
+  }
+  function pendingPreviewsForRecord(record) {
+    const identity = reviewIdentity(record);
+    if (!identity) return [];
+    return pendingPreviewItems().filter(item =>
+      String(item.job_id || '').toLowerCase() === identity.jobId &&
+      String(item.run_id || '') === identity.runId);
+  }
+  function readyPreviewsForRecord(record) {
+    return pendingPreviewsForRecord(record).filter(item => item.approval_enabled === true && item.blocked !== true);
+  }
+  function pendingPreviewLabel(item) {
+    const page = item.page_display_number || item.page_number || item.page_id || '—';
+    const region = item.region_id || 'região';
+    return `página ${page} · ${region}`;
+  }
+  function firstReadyPreviewForRecord(record) {
+    return readyPreviewsForRecord(record)[0] || null;
+  }
+  function historyPreviewAction(record) {
+    const all = pendingPreviewsForRecord(record);
+    if (!all.length) return '';
+    const ready = all.filter(item => item.approval_enabled === true && item.blocked !== true);
+    const blocked = all.length - ready.length;
+    const label = ready.length ? `${ready.length} prévia${ready.length === 1 ? '' : 's'} pronta${ready.length === 1 ? '' : 's'}` : `${blocked} prévia${blocked === 1 ? '' : 's'} bloqueada${blocked === 1 ? '' : 's'}`;
+    const action = ready.length ? 'open-preview' : 'review';
+    return `<span class="badge preview ${ready.length ? 'ready' : 'blocked'}">${escapeHtml(label)}</span>`
+      + `<button class="btn-primary hm-preview-action" data-action="${escapeAttr(action)}">${ready.length ? 'Abrir prévia' : 'Ver bloqueio'}</button>`;
+  }
+  function renderPendingPreviewSummary(target, {compact = false} = {}) {
+    const node = typeof target === 'string' ? $(target) : target;
+    if (!node) return;
+    const items = pendingPreviewItems();
+    if (!items.length) {
+      node.hidden = true;
+      if (node.innerHTML) node.innerHTML = '';
+      return;
+    }
+    const ready = items.filter(item => item.approval_enabled === true && item.blocked !== true);
+    const blocked = items.filter(item => item.blocked === true);
+    const cards = items.slice(0, compact ? 2 : 4).map(item => {
+      const enabled = item.approval_enabled === true && item.blocked !== true;
+      const status = enabled ? 'PRONTA PARA REVISÃO HUMANA' : 'BLOQUEADA — REQUER RECONSTRUÇÃO DE ARTE';
+      return `<button type="button" class="pending-preview-row ${enabled ? 'ready' : 'blocked'}" data-open-pending-preview="${escapeAttr(item.region_id || '')}" data-job-id="${escapeAttr(item.job_id || '')}" data-run-id="${escapeAttr(item.run_id || '')}">`
+        + `<span><strong>${escapeHtml(item.chapter_display_name || item.chapter_name || 'Capítulo')}</strong>`
+        + `<small>${escapeHtml(pendingPreviewLabel(item))}</small></span>`
+        + `<span class="pending-preview-status">${escapeHtml(status)}</span></button>`;
+    }).join('');
+    const html = `<div class="pending-preview-head"><strong>Prévia humana pendente</strong>`
+      + `<span>${ready.length} pronta${ready.length === 1 ? '' : 's'} · ${blocked.length} bloqueada${blocked.length === 1 ? '' : 's'}</span></div>`
+      + cards;
+    node.hidden = false;
+    if (node.innerHTML !== html) node.innerHTML = html;
+  }
+  function renderPendingPreviewSurfaces() {
+    renderPendingPreviewSummary('#homePendingPreviews');
+    renderPendingPreviewSummary('#historyPendingPreviews', {compact: true});
+    const count = Number(appState.pendingHumanPreviews?.item_count || pendingPreviewItems().length || 0);
+    $$('[data-audit-mode="previews"]').forEach(button => {
+      button.textContent = count ? `PRÉVIAS HUMANAS (${count})` : 'PRÉVIAS HUMANAS';
+    });
+  }
+  function renderReviewPreviewAccess() {
+    const node = $('#reviewPreviewAccess');
+    if (!node) return;
+    const jobId = String(appState.reviewMode?.jobId || '').toLowerCase();
+    const runId = String(appState.reviewMode?.runId || '');
+    const items = pendingPreviewItems().filter(item =>
+      String(item.job_id || '').toLowerCase() === jobId && String(item.run_id || '') === runId);
+    if (!items.length) {
+      node.hidden = true;
+      node.innerHTML = '';
+      return;
+    }
+    const ready = items.filter(item => item.approval_enabled === true && item.blocked !== true);
+    const first = ready[0] || items[0];
+    node.hidden = false;
+    node.innerHTML = `<span>${ready.length} prévia${ready.length === 1 ? '' : 's'} pronta${ready.length === 1 ? '' : 's'} para inspeção · ${items.length - ready.length} bloqueada${items.length - ready.length === 1 ? '' : 's'}</span>`
+      + `<button type="button" class="btn-primary" data-open-pending-preview="${escapeAttr(first.region_id || '')}" data-job-id="${escapeAttr(first.job_id || '')}" data-run-id="${escapeAttr(first.run_id || '')}">Abrir prévia</button>`;
+  }
+  // Drops the cached list so one session's previews never survive into the next
+  // shell, authenticated or not.
+  function clearPendingHumanPreviews() {
+    appState.pendingHumanPreviews = {
+      items: [], item_count: 0, ready_count: 0, blocked_count: 0,
+    };
+    renderPendingPreviewSurfaces();
+    renderReviewPreviewAccess();
+    return appState.pendingHumanPreviews;
+  }
+  async function loadPendingHumanPreviews() {
+    // The endpoint requires a session. The guard lives here, not at the call
+    // site, because every caller would otherwise be free to reintroduce the
+    // logged-out request - which is how a signed-out browser produced thousands
+    // of 401s against this one endpoint.
+    if (!isCanonicalCommunityAuthenticated()) return clearPendingHumanPreviews();
+    try {
+      const data = await api('/api/ui/human-previews/pending');
+      appState.pendingHumanPreviews = {
+        ...data,
+        items: Array.isArray(data.items) ? data.items : [],
+      };
+    } catch (error) {
+      appState.pendingHumanPreviews = {items: [], item_count: 0, ready_count: 0, blocked_count: 0, error: error.message || 'preview_unavailable'};
+    }
+    renderPendingPreviewSurfaces();
+    renderReviewPreviewAccess();
+    restorePendingPreviewFromUrl();
+    return appState.pendingHumanPreviews;
+  }
+  function applyReviewMode(info) {
+    document.documentElement.dataset.reviewMode = '1';
+    const banner = $('#reviewModeBanner');
+    if (banner) {
+      banner.hidden = false;
+      const title = $('#reviewModeTitle');
+      const metaEl = $('#reviewModeMeta');
+      if (title) title.textContent = `Revisando ${info.chapterName}`;
+      if (metaEl) metaEl.textContent = `${info.validationSnapshot ? 'Snapshot isolado de validação · ' : ''}job ${String(info.jobId).slice(0, 8)}… · run ${String(info.runId).slice(0, 8)}…`;
+    }
+    const start = $('#startBtn');
+    if (start) start.hidden = true;
+    ['#urlInput', '#localFolderInput', '#nameInput', '#outputInput'].forEach(sel => {
+      const el = $(sel);
+      if (el) el.readOnly = true;
+    });
+  }
+  // Leave review_mode and hand the Nova tradução form back to the user: the
+  // reviewed chapter must not keep the form hostage. Never touches the
+  // revision's checkpoints or cancels background work.
+  function exitReviewMode({clearForm = true} = {}) {
+    const wasActive = Boolean(appState.reviewMode);
+    delete document.documentElement.dataset.reviewMode;
+    appState.reviewMode = null;
+    appState.currentJobId = '';
+    setGlobal('__komystCurrentJobId', '');
+    const banner = $('#reviewModeBanner');
+    if (banner) banner.hidden = true;
+    const start = $('#startBtn');
+    if (start) { start.hidden = false; start.disabled = false; }
+    ['#urlInput', '#localFolderInput', '#nameInput', '#outputInput'].forEach(sel => {
+      const el = $(sel);
+      if (el) el.readOnly = false;
+    });
+    if (wasActive && clearForm) {
+      appState.programmingFields = true;
+      ['#urlInput', '#localFolderInput', '#nameInput', '#outputInput'].forEach(sel => {
+        const el = $(sel);
+        if (el) el.value = '';
+      });
+      appState.programmingFields = false;
+      appState.nameDirty = false;
+      appState.outputDirty = false;
+      appState.qualityReview = null;
+    }
+    syncSourceFormState();
+    invalidateSourceValidation();
+    appState.reviewPanelDismissed = true;
+    const panel = $('#qualityReviewPanel');
+    if (panel) panel.hidden = true;
+    const revisionStatus = $('#qualityRevisionStatus');
+    if (revisionStatus) revisionStatus.hidden = true;
+    try {
+      const url = new URL(window.location.href);
+      ['view', 'job_id', 'run_id'].forEach(key => url.searchParams.delete(key));
+      window.history.replaceState({}, '', url);
+    } catch (_) { /* history is best-effort */ }
+    return wasActive;
+  }
+  function clearPrivateUiForAuthTransition(state, userId = '') {
+    const authenticated = String(state || '') === 'authenticated';
+    const nextUserId = authenticated ? String(userId || '') : '';
+    const previousUserId = String(appState.authUserId || '');
+    const identityChanged = Boolean(
+      previousUserId && nextUserId && previousUserId !== nextUserId);
+    if (!authenticated || identityChanged) {
+      exitReviewMode();
+      // The surface describes one owner's operation. Logging out or switching
+      // identity must not leave the previous one's state on screen.
+      clearLoadingSurface();
+      appState.history = [];
+      appState.logs = [];
+      appState.queue = [];
+      appState.qualityReview = null;
+      appState.qualityReviewSelection.clear();
+      appState.pendingHumanPreviews = {
+        items: [], item_count: 0, ready_count: 0, blocked_count: 0,
+      };
+      appState.communityCache = {
+        explore: [], favorites: [], reading: [], mine: [], notifications: [],
+      };
+    }
+    appState.authUserId = nextUserId;
+  }
+  // Adopt exactly this chapter's job/run and open the existing review panel in
+  // Nova tradução. Never creates a job, starts a run, or calls NVIDIA.
+  async function openChapterReview(record, {restore = false} = {}) {
+    const identity = reviewIdentity(record);
+    if (!identity) { showToast('Revisão indisponível para este capítulo.', 'warn'); return; }
+    const {jobId, runId} = identity;
+    appState.reviewMode = {jobId, runId, chapterName: record.chapter_name || record.slug || 'Capítulo', validationSnapshot: record.validation_snapshot === true};
+    appState.currentJobId = jobId;
+    appState.reviewPanelDismissed = false;
+    if (!restore) {
+      try {
+        const url = new URL(window.location.href);
+        url.searchParams.set('view', 'review');
+        url.searchParams.set('job_id', jobId);
+        url.searchParams.set('run_id', runId);
+        window.history.replaceState({}, '', url);
+      } catch (_) { /* history is best-effort; in-memory state still applies */ }
+    }
+    activateTab('nova');
+    applyReviewMode(appState.reviewMode);
+    renderQualityReviewLoading(identity);
+    const panel = $('#qualityReviewPanel');
+    if (panel) {
+      panel.hidden = false;
+      panel.scrollIntoView({behavior: 'smooth', block: 'start'});
+    }
+    // The user may leave review_mode while these run; a late response must not
+    // resurrect the panel over a fresh Nova tradução form.
+    const stillReviewing = () => appState.reviewMode?.jobId === jobId;
+    try {
+      const review = await api(`/api/ui/quality-review/${encodeURIComponent(jobId)}`);
+      if (!stillReviewing()) return;
+      if (review) renderQualityReview(review);
+    } catch (_) {
+      if (stillReviewing()) setQualityReviewBulkMessage('Não foi possível carregar a revisão deste capítulo.', 'error');
+    }
+    if (!stillReviewing()) return;
+    try {
+      const status = await api(`/api/ui/quality-review/revision/${encodeURIComponent(jobId)}`);
+      if (!stillReviewing()) return;
+      renderQualityRevisionStatus(status);
+    } catch (_) { /* revision status is optional context */ }
+    if (!stillReviewing()) return;
+    updateQualityReviewDeveloperActions();
+    const loadedPanel = $('#qualityReviewPanel');
+    if (loadedPanel) {
+      loadedPanel.hidden = false;
+      loadedPanel.scrollIntoView({behavior: 'smooth', block: 'start'});
+    }
+    if (restore) { restorePageRevisionFromUrl(); restoreAuditFromUrl(); }
+  }
+  async function openPendingPreview(item, {preserveUrl = false} = {}) {
+    if (!item) return;
+    const record = appState.history.find(candidate =>
+      String(candidate.job_id || '').toLowerCase() === String(item.job_id || '').toLowerCase() &&
+      String(candidate.run_id || '') === String(item.run_id || ''));
+    if (!record) {
+      showToast('Prévia encontrada, mas o capítulo não está no histórico carregado.', 'warn');
+      return;
+    }
+    if (!preserveUrl && item.comparison_url) {
+      try { window.history.replaceState({}, '', item.comparison_url); } catch (_) { /* url is advisory */ }
+    }
+    await openChapterReview(record, {restore: true});
+    await setAuditMode('previews');
+    if (item.page_number && item.page_revision_id) {
+      await openPageRevision(Number(item.page_number), {
+        restore: true,
+        pageRevisionId: String(item.page_revision_id || ''),
+        focusRegion: String(item.region_id || ''),
+      });
+    }
+    openHumanPreviewComparison(item);
+    const node = $(`#auditList [data-region="${CSS.escape(String(item.region_id || ''))}"]`);
+    if (node) node.scrollIntoView({behavior: 'smooth', block: 'center'});
+  }
+  function pendingPreviewFromDataset(element) {
+    if (!element) return null;
+    const region = String(element.dataset.openPendingPreview || '');
+    const jobId = String(element.dataset.jobId || '').toLowerCase();
+    const runId = String(element.dataset.runId || '');
+    return pendingPreviewItems().find(item =>
+      String(item.region_id || '') === region &&
+      String(item.job_id || '').toLowerCase() === jobId &&
+      String(item.run_id || '') === runId) || null;
+  }
+  function restorePendingPreviewFromUrl() {
+    if (appState.previewRestoreAttempted) return;
+    let params;
+    try { params = new URLSearchParams(window.location.search || ''); } catch (_) { return; }
+    if (params.get('preview_compare') !== '1') return;
+    const jobId = String(params.get('job_id') || '').toLowerCase();
+    const runId = String(params.get('run_id') || '');
+    const region = String(params.get('region_id') || '');
+    const item = pendingPreviewItems().find(candidate =>
+      String(candidate.job_id || '').toLowerCase() === jobId &&
+      String(candidate.run_id || '') === runId &&
+      String(candidate.region_id || '') === region);
+    if (!item) return;
+    appState.previewRestoreAttempted = true;
+    void openPendingPreview(item, {preserveUrl: true});
+  }
+  function restoreReviewModeFromUrl() {
+    let params;
+    try { params = new URLSearchParams(window.location.search || ''); } catch (_) { return; }
+    if (params.get('view') !== 'review') return;
+    const jobId = String(params.get('job_id') || '').toLowerCase();
+    if (!/^[0-9a-f]{32}$/.test(jobId)) return;
+    const record = appState.history.find(item => String(item.job_id || '').toLowerCase() === jobId);
+    if (record) void openChapterReview(record, {restore: true});
+  }
+  function outputFormatLabel(record) {
+    // Canonical job/manifest output_format is the single source of truth. Never infer the
+    // format from pdf_path: a PSD/PNG job carries an internal canonical PDF too.
+    const fmt = String((record && record.output_format) || 'pdf').toLowerCase();
+    return fmt === 'psd' ? 'PSD' : fmt === 'png' ? 'PNG' : 'PDF';
+  }
+  function historyTypeFormatLabel(record) {
+    if (record && record.download_only === true) return 'Download';
+    // Show the output mode the job was run under; legacy jobs carry an inferred plan label.
+    const planLabel = record && typeof record.output_plan_label === 'string' ? record.output_plan_label.trim() : '';
+    if (planLabel) return planLabel;
+    return `Tradução · ${outputFormatLabel(record)}`;
+  }
+  function renderHistoryCard(record) {
+    const title = record.chapter_name || record.slug || 'Capítulo';
+    const outputFormat = outputFormatLabel(record);
+    const engine = record.mode === 'fast' ? 'rapid' : 'paddle';
+    const isDownloadOnly = record.download_only === true;
+    const statusLabel = record.operation_kind === 'artifact_reconstruction'
+      ? (record.operation_label || 'Reconstrução corrigida')
+      : record.review_status === 'completed' ? 'revisão concluída' : (runStatusLabels[record.status] || record.status || 'local');
+    const gateValue = boolish(record.quality_gate);
+    const gate = gateValue === true ? 'gate aprovado' : gateValue === false ? 'gate reprovado' : 'gate pendente';
+    const provenance = record.output_verification === 'legacy_unverified' ? 'origem não verificada' : record.output_verification === 'e2e_evidence' ? 'evidência E2E' : record.output_verification === 'manifest_verified' ? 'manifest verificado' : 'origem não informada';
+    const downloadPages = Number.isFinite(Number(record.pages_processed)) ? Number(record.pages_processed) : null;
+    const downloadVerification = record.output_verification === 'manifest_verified'
+      ? 'resultado verificado' : 'resultado não verificado';
+    const meta = isDownloadOnly
+      ? `${record.download_report_valid === false ? 'resultado de download indisponível' : `${downloadPages ?? '—'} páginas baixadas`} · ${formatSeconds(record.total_seconds)} · ${downloadVerification}`
+      : `${Number(record.pages_processed || 0)} páginas · ${Number(record.groups_translated || 0)} grupos · ${formatSeconds(record.total_seconds)} · ${gate} · ${provenance}`;
+    const previewActionHtml = historyPreviewAction(record);
+    const retryActionHtml = retryAction(record) || actionButton('Reprocessar', 'reprocess');
+    const snapshotBadge = record.validation_snapshot === true
+      ? '<span class="badge snapshot">Snapshot isolado de validação</span>' : '';
+    const generations = Array.isArray(record.review_generations) ? record.review_generations : [];
+    const generationsHtml = generations.length ? `<div class="review-generation-history"><strong>Saídas revisadas</strong>${generations.map(gen => {
+      const status = runStatusLabels[gen.status] || gen.status || 'desconhecido';
+      const progress = gen.status === 'finished' ? 'concluída' : status;
+      const generationKey = String(gen.generation_id || gen.job_id || `${gen.output_format || 'output'}-${gen.attempt || 1}`);
+      return `<div class="review-generation-row" data-generation-id="${escapeAttr(generationKey)}" data-job-id="${escapeAttr(gen.job_id || '')}"><span>${escapeHtml(String(gen.output_format || '').toUpperCase())} · ${escapeHtml(progress)} · tentativa ${Number(gen.attempt || 1)}</span><small>${escapeHtml(gen.created_at || '')}</small>${gen.status === 'finished' ? `<button type="button" class="btn-ghost" data-action="review-generation-folder" data-generation-job-id="${escapeAttr(gen.job_id)}">Abrir saída revisada</button>` : ''}${gen.output_path ? `<small class="rg-path" title="${escapeAttr(gen.output_path)}">${escapeHtml(gen.output_path)}</small>` : ''}</div>`;
+    }).join('')}</div>` : '';
+    const selected = appState.historySelectedIds.has(String(record.id || ''));
+    // Always render the checkbox (hidden by CSS unless #histList.selection-active). This keeps
+    // entering/leaving selection mode a pure CSS toggle -- no re-render, no grid reflow -- so it
+    // never disturbs scroll. It is absolutely positioned, so it adds no grid column.
+    const selectionControl = `<label class="history-select-control"><input type="checkbox" data-history-select="${escapeAttr(record.id || '')}" ${selected ? 'checked' : ''} aria-label="Selecionar ${escapeAttr(title)}" /></label>`;
+    const itemClasses = selected ? 'hist-item history-item-selected' : 'hist-item';
+    return `<div class="${itemClasses}" data-id="${escapeAttr(record.id || '')}">
+      ${selectionControl}
+      <div class="hist-cover" style="background:${engine === 'rapid' ? '#2f7a6b' : '#c9a227'}">${escapeHtml(title.slice(0, 1).toUpperCase())}</div>
+      <div class="hist-meta"><div class="hm-title">${escapeHtml(title)}</div><div class="hm-sub">${escapeHtml(meta)}</div>
+      <div class="hm-badges"><span class="badge ep">${escapeHtml(statusLabel)}</span><span class="badge format">${escapeHtml(historyTypeFormatLabel(record))}</span>${isDownloadOnly ? '<span class="badge download-only">Download-only</span>' : ''}${snapshotBadge}${previewActionHtml && previewActionHtml.startsWith('<span') ? previewActionHtml.split('</span>')[0] + '</span>' : ''}</div></div>
+      <div class="hm-actions">${previewActionHtml ? previewActionHtml.replace(/^<span[^]*?<\/span>/, '') : ''}${readAction(record)}${producedArtifactActions(record)}${actionButton('Abrir pasta', 'folder', record.output_folder)}${actionButton('Comparar', 'compare', record.compare_sheet_path)}${actionButton('Contexto', 'context', record.session_context_path)}${retryActionHtml}${claimAction(record)}${publicationAction(record)}${actionButton('Excluir capítulo', 'delete')}</div>${generationsHtml}
+    </div>`;
+  }
+  function historyScrollOwnerName(owner) {
+    if (!owner) return 'none';
+    if (owner === document.scrollingElement) return 'document.scrollingElement';
+    if (owner.id) return `#${owner.id}`;
+    return String(owner.tagName || 'element').toLowerCase();
+  }
+  function getHistoryScrollOwner(list = $('#histList')) {
+    const root = document.scrollingElement || document.documentElement || document.body;
+    let firstOverflowAncestor = null;
+    for (let node = list; node && node.nodeType === 1; node = node.parentElement) {
+      const overflowY = window.getComputedStyle(node).overflowY;
+      if (!/(auto|scroll|overlay)/i.test(overflowY)) continue;
+      if (!firstOverflowAncestor) firstOverflowAncestor = node;
+      if (node.scrollHeight > node.clientHeight + 1) return node;
+    }
+    if (root && root.scrollHeight > root.clientHeight + 1) return root;
+    return firstOverflowAncestor || document.querySelector('main') || root;
+  }
+  function historyScrollMetrics(owner) {
+    const root = document.scrollingElement || document.documentElement || document.body;
+    return {
+      scroll_owner: historyScrollOwnerName(owner),
+      scroll_top: Math.round(Number(owner?.scrollTop || 0)),
+      window_scroll_y: Math.round(Number(window.scrollY || 0)),
+      document_element_scroll_top: Math.round(Number(document.documentElement?.scrollTop || 0)),
+      body_scroll_top: Math.round(Number(document.body?.scrollTop || 0)),
+      scrolling_element_scroll_top: Math.round(Number(root?.scrollTop || 0)),
+      history_revision: Number(appState.historyRevision || 0),
+    };
+  }
+  function restoreHistoryScroll(owner, offset) {
+    const target = owner?.isConnected ? owner : getHistoryScrollOwner();
+    if (!target || !Number.isFinite(Number(offset))) return;
+    if (target === document.scrollingElement || target === document.documentElement || target === document.body) {
+      window.scrollTo({top: Number(offset), behavior: 'instant'});
+    } else target.scrollTop = Number(offset);
+  }
+  function historyRenderKey(node) {
+    if (!node || node.nodeType !== 1) return '';
+    if (node.dataset?.folder) return `folder:${node.dataset.folder}`;
+    if (node.dataset?.id) return `chapter:${node.dataset.id}`;
+    if (node.dataset?.generationId) return `generation:${node.dataset.generationId}`;
+    if (node.dataset?.action) {
+      const identity = node.dataset.jobId || node.dataset.reviewJob || node.dataset.publicationId
+        || node.dataset.path || node.dataset.runId || '';
+      return `action:${node.dataset.action}:${identity}`;
+    }
+    if (node.id) return `id:${node.id}`;
+    return '';
+  }
+  function historyNodesCompatible(current, desired) {
+    return Boolean(current && desired && current.nodeType === desired.nodeType
+      && (current.nodeType !== 1 || current.tagName === desired.tagName));
+  }
+  function patchHistoryNode(current, desired, changes) {
+    if (!historyNodesCompatible(current, desired)) return desired.cloneNode(true);
+    if (current.nodeType === 3 || current.nodeType === 8) {
+      if (current.data !== desired.data) { current.data = desired.data; changes.count += 1; }
+      return current;
+    }
+    const desiredAttributes = new Map(Array.from(desired.attributes, attribute => [attribute.name, attribute.value]));
+    for (const attribute of Array.from(current.attributes)) {
+      if (!desiredAttributes.has(attribute.name)) { current.removeAttribute(attribute.name); changes.count += 1; }
+    }
+    for (const [name, value] of desiredAttributes) {
+      if (current.getAttribute(name) !== value) { current.setAttribute(name, value); changes.count += 1; }
+    }
+    syncHistoryChildren(current, desired, changes);
+    return current;
+  }
+  function syncHistoryChildren(parent, desiredParent, changes) {
+    const oldChildren = Array.from(parent.childNodes);
+    const used = new Set();
+    let cursor = parent.firstChild;
+    for (const desired of Array.from(desiredParent.childNodes)) {
+      const key = historyRenderKey(desired);
+      let match = key
+        ? oldChildren.find(node => !used.has(node) && historyRenderKey(node) === key) || null
+        : null;
+      if (!match && cursor && !used.has(cursor) && !historyRenderKey(cursor)
+          && historyNodesCompatible(cursor, desired)) match = cursor;
+      if (!match && !key) {
+        match = oldChildren.find(node => !used.has(node) && !historyRenderKey(node)
+          && historyNodesCompatible(node, desired)) || null;
+      }
+      if (match) {
+        used.add(match);
+        const patched = patchHistoryNode(match, desired, changes);
+        if (patched !== match) {
+          parent.insertBefore(patched, cursor);
+          match.remove();
+          changes.count += 1;
+          match = patched;
+        } else if (match !== cursor) {
+          parent.insertBefore(match, cursor);
+          changes.count += 1;
+        }
+      } else {
+        match = desired.cloneNode(true);
+        parent.insertBefore(match, cursor);
+        changes.count += 1;
+      }
+      cursor = match.nextSibling;
+    }
+    for (const old of oldChildren) {
+      if (!used.has(old) && old.parentNode === parent) { old.remove(); changes.count += 1; }
+    }
+  }
+  // Patch keyed groups/cards in place. A changed field updates its card; the
+  // scroll container and unaffected focused/expanded nodes stay mounted.
+  let renderedHistoryHtml = null;
+  // Set by the user-input listeners below; read by commitHistoryMarkup's scroll restore.
+  let lastUserHistoryScrollAt = 0;
+  function commitHistoryMarkup(list, html, reason = 'unspecified') {
+    const view = $('#view-hist');
+    const preserve = Boolean(view?.classList.contains('active') && !view.hidden);
+    const owner = preserve ? getHistoryScrollOwner(list) : null;
+    const before = historyScrollMetrics(owner);
+    const startedAt = performance.now();
+    const changed = renderedHistoryHtml !== html;
+    if (!changed && list.childNodes.length) {
+      uiTrace('HISTORY_RENDER_COMMIT', {...before, reason, markup_changed: false,
+        changed_nodes: 0, record_count: appState.history.length});
+      return;
+    }
+    const template = document.createElement('template');
+    template.innerHTML = html;
+    const changes = {count: 0};
+    syncHistoryChildren(list, template.content, changes);
+    renderedHistoryHtml = html;
+    if (preserve && owner) {
+      // The in-place patch should leave scrollTop untouched; restore synchronously only if it
+      // actually moved (e.g. nodes were replaced/reordered). The rAF pass compensates a LATE
+      // layout shift (images/max-height transitions) but must NEVER fight the user: if the user
+      // scrolled (wheel/touch/keyboard) after we captured the position, we leave their scroll
+      // alone. This is what caused the "volta/salta" during 850ms polling.
+      if (owner.scrollTop !== before.scroll_top) restoreHistoryScroll(owner, before.scroll_top);
+      window.requestAnimationFrame(() => {
+        if (lastUserHistoryScrollAt > startedAt) return;
+        if (Math.abs(Number(owner.scrollTop || 0) - before.scroll_top) > 1) {
+          restoreHistoryScroll(owner, before.scroll_top);
+        }
+      });
+    }
+    uiTrace('HISTORY_RENDER_COMMIT', {...before, reason, markup_changed: changed,
+      changed_nodes: changes.count, record_count: appState.history.length});
+  }
+  function renderHistory(reason = 'unspecified') {
+    const list = $('#histList');
+    if (!list) return;
+    renderPendingPreviewSurfaces();
+    const query = ($('#histSearch')?.value || '').trim().toLowerCase();
+    const records = appState.history.filter(record => !query || `${record.chapter_name || ''} ${record.slug || ''}`.toLowerCase().includes(query));
+    $('#histCount').textContent = query ? `${records.length} de ${appState.history.length}` : `${records.length} ${records.length === 1 ? 'capítulo' : 'capítulos'}`;
+    if (!records.length) {
+      commitHistoryMarkup(list, `<div class="empty-real-state">${appState.history.length ? 'nenhum capítulo corresponde à busca' : 'nenhum capítulo disponível no histórico'}</div>`, reason);
+      return;
+    }
+    const groups = new Map();
+    records.forEach(record => {
+      const series = seriesFromRecord(record);
+      const key = series.toLowerCase();
+      if (!groups.has(key)) groups.set(key, {series, records: []});
+      groups.get(key).records.push(record);
+    });
+    const html = Array.from(groups.entries()).map(([key, group]) => {
+      const open = Boolean(query) || appState.expandedFolders.has(key);
+      const folderIcon = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M3 7h7l2 2h9v10H3z"/><path d="M3 7V5h8l2 2"/></svg>';
+      const panelId = `series-panel-${slugify(key) || 'series'}`;
+      return `<div class="community-folder ${open ? 'open' : ''}" data-folder="${escapeAttr(key)}"><button type="button" class="cf-header" data-folder="${escapeAttr(key)}" aria-expanded="${open ? 'true' : 'false'}" aria-controls="${escapeAttr(panelId)}" aria-label="${escapeAttr(`Expandir ${group.series}`)}"><span class="cf-icon">${folderIcon}</span><span class="cf-name">${escapeHtml(group.series)}</span><span class="cf-count">${group.records.length} ${group.records.length === 1 ? 'capítulo' : 'capítulos'}</span><span class="cf-chevron">⌄</span></button><div class="cf-body" id="${escapeAttr(panelId)}" role="region" aria-hidden="${open ? 'false' : 'true'}">${group.records.map(renderHistoryCard).join('')}</div></div>`;
+    }).join('');
+    commitHistoryMarkup(list, html, reason);
+    syncHistorySelectionUi();
+  }
+  let historyScrollWatchTimer = 0;
+  function startHistoryScrollWatch() {
+    if (historyScrollWatchTimer) window.clearInterval(historyScrollWatchTimer);
+    const startedAt = performance.now();
+    const initial = historyScrollMetrics(getHistoryScrollOwner());
+    const watch = {min: initial.scroll_top, max: initial.scroll_top,
+      previous: initial.scroll_top, zeroCount: 0};
+    historyScrollWatchTimer = window.setInterval(() => {
+      if (!$('#view-hist')?.classList.contains('active')) {
+        window.clearInterval(historyScrollWatchTimer); historyScrollWatchTimer = 0; return;
+      }
+      const current = historyScrollMetrics(getHistoryScrollOwner());
+      watch.min = Math.min(watch.min, current.scroll_top);
+      watch.max = Math.max(watch.max, current.scroll_top);
+      if (watch.previous > 80 && current.scroll_top <= 2) {
+        watch.zeroCount += 1;
+        uiTrace('HISTORY_SCROLL_TO_TOP', {...current, reason: 'observed_transition'});
+      }
+      watch.previous = current.scroll_top;
+      if (performance.now() - startedAt >= 20000) {
+        window.clearInterval(historyScrollWatchTimer); historyScrollWatchTimer = 0;
+        uiTrace('HISTORY_SCROLL_WATCH_RESULT', {...current,
+          elapsed_ms: Math.round(performance.now() - startedAt), scroll_min: watch.min,
+          scroll_max: watch.max, zero_count: watch.zeroCount, reason: '20s_window'});
+      }
+    }, 100);
+  }
+  // A history refresh must never restore scroll over an input the user just made (see
+  // commitHistoryMarkup). lastUserHistoryScrollAt is declared above, next to renderedHistoryHtml.
+  function markUserHistoryScroll() {
+    if ($('#view-hist')?.classList.contains('active')) lastUserHistoryScrollAt = performance.now();
+  }
+  ['wheel', 'touchmove', 'touchstart', 'keydown'].forEach(type =>
+    document.addEventListener(type, event => {
+      if (type === 'keydown') {
+        const keys = ['ArrowDown', 'ArrowUp', 'PageDown', 'PageUp', 'Home', 'End', ' ', 'Spacebar'];
+        if (!keys.includes(event.key)) return;
+      }
+      markUserHistoryScroll();
+    }, {passive: true, capture: true}));
+  document.addEventListener('scroll', event => {
+    if (!$('#view-hist')?.classList.contains('active')) return;
+    const owner = getHistoryScrollOwner();
+    if (event.target !== owner && event.target !== document) return;
+    appState.historyScrollTop = historyScrollMetrics(owner).scroll_top;
+  }, true);
+  document.addEventListener('focusin', event => {
+    if (!$('#view-hist')?.contains(event.target)) return;
+    uiTrace('HISTORY_FOCUS_CHANGED', {
+      ...historyScrollMetrics(getHistoryScrollOwner()),
+      focus_target: String(event.target?.dataset?.action || event.target?.className
+        || event.target?.tagName || '').slice(0, 40),
+    });
+  }, true);
+  function applyCanonicalAuthSurface(state) {
+    const authenticated = String(state || '') === 'authenticated';
+    document.documentElement.dataset.shellState = authenticated ? 'authenticated' : 'unauthenticated';
+    const protectedSelectors = ['.rail-tab[data-tab="community"]', '#view-community'];
+    protectedSelectors.forEach(selector => $$(selector).forEach(element => {
+      element.hidden = !authenticated;
+      element.setAttribute('aria-hidden', authenticated ? 'false' : 'true');
+    }));
+    if (!authenticated && $('#view-community')?.classList.contains('active')) activateTab('inicio');
+  }
+  function toggleHistoryFolder(folder) {
+    const key = folder?.dataset?.folder;
+    if (!key) return;
+    appState.expandedFolders.has(key) ? appState.expandedFolders.delete(key) : appState.expandedFolders.add(key);
+    renderHistory('folder_toggle');
+    const list = $('#histList');
+    const replacement = list?.querySelector(`.cf-header[data-folder="${CSS.escape(key)}"]`);
+      window.setTimeout(() => replacement?.focus({preventScroll: true}), 0);
+  }
+  $('#histSearch')?.addEventListener('input', () => renderHistory('search_filter'));
+  $('#homePendingPreviews')?.addEventListener('click', event => {
+    const target = event.target.closest('[data-open-pending-preview]');
+    if (!target) return;
+    void openPendingPreview(pendingPreviewFromDataset(target));
+  });
+  $('#historyPendingPreviews')?.addEventListener('click', event => {
+    const target = event.target.closest('[data-open-pending-preview]');
+    if (!target) return;
+    void openPendingPreview(pendingPreviewFromDataset(target));
+  });
+  $('#reviewPreviewAccess')?.addEventListener('click', event => {
+    const target = event.target.closest('[data-open-pending-preview]');
+    if (!target) return;
+    void openPendingPreview(pendingPreviewFromDataset(target));
+  });
+  $('#reviewModeExit')?.addEventListener('click', () => {
+    const returnJobId = appState.reviewMode?.jobId || '';
+    exitReviewMode();
+    activateTab('hist');
+    const returnAction = $('#histList')?.querySelector(
+      `.hm-review-action[data-review-job="${CSS.escape(returnJobId)}"]`);
+    window.setTimeout(() => returnAction?.focus(), 0);
+  });
+  const developerModeToggle = $('#developerModeToggle');
+  if (developerModeToggle) {
+    developerModeToggle.checked = qualityReviewDeveloperMode();
+    developerModeToggle.addEventListener('change', () => {
+      try {
+        if (developerModeToggle.checked) localStorage.setItem('komystDeveloperMode', '1');
+        else localStorage.removeItem('komystDeveloperMode');
+      } catch (_) { /* private mode: dev toggle stays session-only */ }
+      updateQualityReviewDeveloperActions();
+    });
+  }
+  window.addEventListener('komyst-auth-changed', event => {
+    const state = String(event?.detail?.state || getGlobal('__komystAuthState') || '');
+    const userId = String(
+      event?.detail?.user_id || getGlobal('__komystCommunityUserId') || '');
+    clearPrivateUiForAuthTransition(state, userId);
+    if (state !== 'authenticated') clearCommunityObjectUrls();
+    applyCanonicalAuthSurface(state);
+    syncAuthoritativeTranslationFlag();
+    renderHistory('auth_transition');
+    const authenticated = state === 'authenticated';
+    uiTrace('UI_AUTH_EVENT_RECEIVED', {authenticated});
+    const authTransition = authenticated && !appState.authenticated;
+    appState.authenticated = authenticated;
+    if (!authenticated) {
+      appState.authGeneration += 1;
+      appState.bootstrapAuthGeneration = 0;
+      return;
+    }
+    if (authTransition) {
+      appState.authGeneration += 1;
+      appState.bootstrapAuthGeneration = 0;
+    }
+    if (appState.bootstrapAuthGeneration !== appState.authGeneration) {
+      appState.bootstrapAuthGeneration = appState.authGeneration;
+      uiTrace('UI_BOOTSTRAP_SCHEDULED', {generation: appState.authGeneration});
+      const refresh = getGlobal('__komystRefreshBootstrap');
+      if (typeof refresh === 'function') void refresh();
+    }
+  });
+  applyCanonicalAuthSurface(getGlobal('__komystAuthState') || 'auth_loading');
+  function eventPathCandidates(event, selector) {
+    const nodes = [];
+    const target = event.target?.closest ? event.target : event.target?.parentElement || null;
+    if (target) nodes.push(target);
+    if (typeof event.composedPath === 'function') nodes.push(...event.composedPath());
+    const candidates = [];
+    for (const node of nodes) {
+      const match = node?.matches?.(selector) ? node : node?.closest?.(selector);
+      if (match && !candidates.includes(match)) candidates.push(match);
+    }
+    return candidates;
+  }
+  function boundedHistoryActionContext(event) {
+    const histList = $('#histList');
+    if (!histList) return null;
+    const actions = eventPathCandidates(event, '[data-action]').filter(action => {
+      if (!histList.contains(action)) return false;
+      const item = action.closest('.hist-item');
+      return Boolean(item && histList.contains(item));
+    });
+    if (actions.length !== 1) return null;
+    const button = actions[0];
+    const item = button.closest('.hist-item');
+    if (!item || !histList.contains(item)) return null;
+    return {button, item, histList};
+  }
+  function boundedHistoryFolder(event) {
+    const histList = $('#histList');
+    if (!histList) return null;
+    const folders = eventPathCandidates(event, '.cf-header')
+      .filter(folder => histList.contains(folder));
+    return folders.length === 1 ? folders[0] : null;
+  }
+  function visibleHistoryRecords() {
+    const query = ($('#histSearch')?.value || '').trim().toLowerCase();
+    return appState.history.filter(record => !query || `${record.chapter_name || ''} ${record.slug || ''}`.toLowerCase().includes(query));
+  }
+  function syncHistorySelectionUi() {
+    const active = appState.historySelectionMode === true;
+    const visible = visibleHistoryRecords();
+    const count = appState.historySelectedIds.size;
+    // Single entry/exit: the "Selecionar" button only ENTERS the mode; exit is the ✕ icon in
+    // the actions bar. No more duplicated "Sair da seleção" + "Cancelar".
+    const toggle = $('#histSelectionToggle');
+    if (toggle) { toggle.hidden = active; toggle.setAttribute('aria-pressed', active ? 'true' : 'false'); }
+    const actions = $('#histSelectionActions');
+    if (actions) actions.hidden = !active;
+    const countNode = $('#histSelectionCount');
+    if (countNode) countNode.textContent = `${count} selecionado${count === 1 ? '' : 's'}`;
+    const submit = $('#histBulkDelete');
+    if (submit) submit.disabled = !count || !active;
+    const all = $('#histSelectionAll');
+    if (all) all.textContent = visible.length && visible.every(record => appState.historySelectedIds.has(String(record.id || ''))) ? 'Desmarcar visíveis' : 'Selecionar visíveis';
+  }
+  // Reflect the selection Set onto the already-mounted cards WITHOUT rebuilding the list, so a
+  // click never re-renders the library and never moves the viewport (the scroll regression).
+  function applyHistorySelectionClasses() {
+    $$('#histList .hist-item').forEach(item => {
+      const id = String(item.dataset.id || '');
+      const sel = appState.historySelectedIds.has(id);
+      item.classList.toggle('history-item-selected', sel);
+      const checkbox = item.querySelector('[data-history-select]');
+      if (checkbox) checkbox.checked = sel;
+    });
+  }
+  function toggleHistorySelectionMode(enabled = !appState.historySelectionMode) {
+    appState.historySelectionMode = Boolean(enabled);
+    if (!appState.historySelectionMode) appState.historySelectedIds.clear();
+    // Pure CSS toggle: checkboxes are always in the DOM (hidden until this class is present),
+    // so entering/leaving selection mode causes no re-render and no reflow.
+    $('#histList')?.classList.toggle('selection-active', appState.historySelectionMode);
+    applyHistorySelectionClasses();
+    syncHistorySelectionUi();
+  }
+  function toggleHistorySelection(id, checked) {
+    const key = String(id || '');
+    if (!key) return;
+    checked ? appState.historySelectedIds.add(key) : appState.historySelectedIds.delete(key);
+    const item = $(`#histList .hist-item[data-id="${(window.CSS && CSS.escape) ? CSS.escape(key) : key}"]`);
+    if (item) {
+      item.classList.toggle('history-item-selected', Boolean(checked));
+      const checkbox = item.querySelector('[data-history-select]');
+      if (checkbox) checkbox.checked = Boolean(checked);
+    }
+    syncHistorySelectionUi();
+  }
+  function openBulkDeleteModal() {
+    const selected = appState.history.filter(record => appState.historySelectedIds.has(String(record.id || '')));
+    if (!selected.length) return;
+    const overlay = $('#bulkDeleteModalOverlay');
+    if (!overlay) return;
+    $('#bulkDeleteSummary').innerHTML = `<div class="pub-meta"><small>Capítulos</small><strong>${selected.length}</strong></div>` + selected.slice(0, 8).map(record => `<div class="pub-meta"><small>Selecionado</small><strong>${escapeHtml(record.chapter_name || record.slug || 'Capítulo')}</strong></div>`).join('');
+    $('#bulkDeleteFiles').checked = false;
+    $('#bulkDeleteConfirm').value = '';
+    $('#bulkDeleteError').hidden = true;
+    $('#bulkDeleteSubmit').disabled = false;
+    $('#bulkDeleteSubmit').textContent = 'Excluir selecionados';
+    overlay.classList.add('show');
+    overlay.setAttribute('aria-hidden', 'false');
+    $('#bulkDeleteConfirm')?.focus();
+  }
+  function closeBulkDeleteModal() {
+    const overlay = $('#bulkDeleteModalOverlay');
+    if (overlay) { overlay.classList.remove('show'); overlay.setAttribute('aria-hidden', 'true'); }
+    appState.bulkDeleteBusy = false;
+  }
+  async function submitBulkDelete() {
+    if (appState.bulkDeleteBusy) return;
+    const ids = Array.from(appState.historySelectedIds);
+    const error = $('#bulkDeleteError');
+    if (!ids.length) return;
+    if (String($('#bulkDeleteConfirm')?.value || '') !== 'EXCLUIR') {
+      if (error) { error.textContent = 'Digite EXCLUIR para confirmar.'; error.hidden = false; }
+      return;
+    }
+    appState.bulkDeleteBusy = true;
+    const submit = $('#bulkDeleteSubmit');
+    if (submit) { submit.disabled = true; submit.textContent = 'Excluindo…'; }
+    try {
+      const result = await api('/api/ui/history/bulk-delete', {
+        method: 'POST',
+        body: JSON.stringify({local_artifact_ids: ids, delete_files: $('#bulkDeleteFiles')?.checked === true, confirmation: 'EXCLUIR'}),
+      });
+      closeBulkDeleteModal();
+      appState.historySelectedIds.clear();
+      appState.historySelectionMode = false;
+      const failed = Number(result.failed || 0);
+      showToast(failed ? `${Number(result.completed || 0)} removido(s); ${failed} falha(s) preservada(s).` : `${Number(result.completed || 0)} capítulo(s) removido(s).`, failed ? 'warn' : 'ok');
+      await refreshBootstrap();
+    } catch (errorValue) {
+      appState.bulkDeleteBusy = false;
+      if (submit) { submit.disabled = false; submit.textContent = 'Excluir selecionados'; }
+      if (error) { error.textContent = humanCommunityError(errorValue, 'Não foi possível excluir os capítulos selecionados.'); error.hidden = false; }
+    }
+  }
+  $('#histSelectionToggle')?.addEventListener('click', () => toggleHistorySelectionMode());
+  $('#histSelectionCancel')?.addEventListener('click', () => toggleHistorySelectionMode(false));
+  $('#histSelectionAll')?.addEventListener('click', () => {
+    const visible = visibleHistoryRecords();
+    const allSelected = visible.length && visible.every(record => appState.historySelectedIds.has(String(record.id || '')));
+    visible.forEach(record => {
+      const id = String(record.id || '');
+      allSelected ? appState.historySelectedIds.delete(id) : appState.historySelectedIds.add(id);
+    });
+    // Incremental: reflect onto mounted cards, no full re-render -> viewport preserved.
+    applyHistorySelectionClasses();
+    syncHistorySelectionUi();
+  });
+  $('#histBulkDelete')?.addEventListener('click', openBulkDeleteModal);
+  $('#bulkDeleteCancel')?.addEventListener('click', closeBulkDeleteModal);
+  $('#bulkDeleteModalClose')?.addEventListener('click', closeBulkDeleteModal);
+  $('#bulkDeleteModalOverlay')?.addEventListener('click', event => { if (event.target === $('#bulkDeleteModalOverlay')) closeBulkDeleteModal(); });
+  $('#bulkDeleteForm')?.addEventListener('submit', event => { event.preventDefault(); void submitBulkDelete(); });
+  async function handleHistoryAction(event) {
+    const selectControl = eventPathCandidates(event, '[data-history-select]')[0];
+    if (selectControl) {
+      event.preventDefault();
+      event.stopPropagation();
+      toggleHistorySelection(selectControl.dataset.historySelect, selectControl.checked);
+      return;
+    }
+    const context = boundedHistoryActionContext(event);
+    if (!context) {
+      const folder = boundedHistoryFolder(event);
+      if (!folder) return;
+      toggleHistoryFolder(folder);
+      return;
+    }
+    const {button, item} = context;
+    const rowId = String(item.dataset.id || '');
+    const reviewJobId = String(button.dataset.reviewJob || '').toLowerCase();
+    const record = appState.history.find(item =>
+      String(item.id) === rowId ||
+      (reviewJobId && String(item.job_id || '').toLowerCase() === reviewJobId));
+    if (!record) return;
+    if (button.dataset.action === 'review-generation-folder') {
+      try {
+        await api('/api/ui/quality-review/reexport/open', {method:'POST', body:JSON.stringify({
+          source_job_id: record.job_id, job_id: button.dataset.generationJobId || ''
+        })});
+      } catch (error) { showToast(error.message || 'Não foi possível abrir a saída revisada.', 'error'); }
+      return;
+    }
+    if (button.dataset.action === 'open-preview') {
+      void openPendingPreview(firstReadyPreviewForRecord(record) || pendingPreviewsForRecord(record)[0]);
+      return;
+    }
+    if (button.dataset.action === 'read') {
+      // The card carries its own job id, so run A's card can never open run B's PDF
+      // just because both share a chapter name.
+      const jobId = String(button.dataset.jobId || '');
+      if (!jobId || jobId !== String(record.job_id || '')) {
+        showToast('Este capítulo não corresponde mais a esta execução.', 'error');
+        return;
+      }
+      openChapterReader(jobId);
+      return;
+    }
+    if (button.dataset.action === 'review') { void openChapterReview(record); return; }
+    if (button.dataset.action === 'retry') {
+      const jobId = String(button.dataset.jobId || '').toLowerCase();
+      const runId = String(button.dataset.runId || '');
+      if (jobId !== String(record.job_id || '').toLowerCase() || runId !== String(record.run_id || '')) {
+        showToast('A tentativa selecionada não corresponde mais a este capítulo.', 'error');
+        return;
+      }
+      openRetryDialog({
+        jobId,
+        runId,
+        operationId: record.operation_id,
+        status: record.status,
+        reasonCode: record.reason_code || record.terminal_reason,
+        sourceView: 'history',
+      }, button);
+      return;
+    }
+    if (button.dataset.action === 'reprocess') { loadRecordIntoForm(record); return; }
+    if (button.dataset.action === 'claim') { openClaimModal(record); return; }
+    if (button.dataset.action === 'delete') { openLocalDeleteModal(record); return; }
+    if (button.dataset.action === 'open-publication') {
+      const postId = button.dataset.publicationId || '';
+      if (postId) void openAuthenticatedCommunityPdf(postId, button);
+      return;
+    }
+    if (button.dataset.action === 'publish') { openPublicationModal(record); return; }
+    if (['pdf','folder','report','compare','context'].includes(button.dataset.action || '')
+        || ['translation','psd_folder'].includes(button.dataset.action || '')) {
+      await openArtifact(record.job_id, button.dataset.action);
+    }
+  }
+  // Authentication transitions may replace an authenticated surface. Delegate
+  // history actions from the stable document so a freshly rendered #histList
+  // never loses its controls.
+  document.addEventListener('click', handleHistoryAction, {capture: true});
+  $('#histList')?.addEventListener('keydown', event => {
+    if (event.key !== 'Enter' && event.key !== ' ') return;
+    const folder = event.target.closest('.cf-header');
+    if (!folder) return;
+    event.preventDefault();
+    toggleHistoryFolder(folder);
+  });
+
+  function closeLocalDeleteModal() {
+    const overlay = $('#localDeleteModalOverlay');
+    if (overlay) { overlay.classList.remove('show'); overlay.setAttribute('aria-hidden', 'true'); }
+    appState.localDeleteRecord = null;
+    appState.localDeleteBusy = false;
+  }
+  function openLocalDeleteModal(record) {
+    const overlay = $('#localDeleteModalOverlay');
+    if (!overlay) return;
+    appState.localDeleteRecord = record;
+    appState.localDeleteBusy = false;
+    const published = String(record.publication_status || '').toLowerCase() === 'published';
+    const chapterTitle = record.chapter_name || record.series_name || record.slug || 'Capítulo';
+    $('#localDeleteSummary').innerHTML = `<div class="delete-target"><strong>${escapeHtml(chapterTitle)}</strong>`
+      + `<span>${Number(record.pages_processed || 0)} páginas · ${published ? 'publicado na Comunidade' : 'não publicado'}</span></div>`;
+    $('#localDeleteNotice').textContent = published
+      ? 'Este capítulo já possui publicação na Comunidade. A exclusão local não removerá a publicação, e os arquivos usados por ela não serão apagados por este fluxo.'
+      : 'Esta ação remove o item selecionado do histórico. Marque a opção de arquivos apenas para apagar a pasta deste capítulo.';
+    $('#localDeleteFiles').checked = false;
+    $('#localDeleteFiles').disabled = published;
+    $('#localDeleteConfirm').value = '';
+    $('#localDeleteError').hidden = true;
+    $('#localDeleteSubmit').disabled = false;
+    $('#localDeleteSubmit').textContent = 'Excluir capítulo';
+    overlay.classList.add('show');
+    overlay.setAttribute('aria-hidden', 'false');
+    $('#localDeleteConfirm')?.focus();
+  }
+  async function deleteLocalArtifact() {
+    if (appState.localDeleteBusy || !appState.localDeleteRecord) return;
+    const record = appState.localDeleteRecord;
+    const submit = $('#localDeleteSubmit');
+    const error = $('#localDeleteError');
+    if (String($('#localDeleteConfirm')?.value || '') !== 'EXCLUIR') {
+      if (error) { error.textContent = 'Digite EXCLUIR para confirmar.'; error.hidden = false; }
+      return;
+    }
+    appState.localDeleteBusy = true;
+    uiTrace('local_delete_submit', {reason_code: $('#localDeleteFiles')?.checked === true ? 'delete_files' : 'hide_only'});
+    if (submit) { submit.disabled = true; submit.textContent = 'Excluindo...'; }
+    try {
+      const result = await api('/api/ui/history/delete', {
+        method: 'POST',
+        body: JSON.stringify({
+          local_artifact_id: record.id,
+          delete_files: $('#localDeleteFiles')?.checked === true,
+          confirmation: 'EXCLUIR',
+        }),
+      });
+      uiTrace('local_delete_completed', {code: result.code});
+      closeLocalDeleteModal();
+      const fileState = String(result.files_state || '');
+      const safeError = String(result.safe_error_code || '');
+      const warning = safeError === 'PATH_OUTSIDE_OUTPUT_ROOT'
+        ? 'Histórico removido; arquivos preservados porque a pasta não é segura para exclusão.'
+        : safeError === 'FILES_IN_USE'
+          ? 'Histórico removido, mas alguns arquivos estão em uso. Feche os arquivos/programas relacionados e tente apagar a pasta novamente.'
+          : safeError === 'PERMISSION_DENIED'
+            ? 'Histórico removido, mas o Windows negou permissão para apagar a pasta.'
+            : safeError === 'READ_ONLY_FILES'
+              ? 'Histórico removido, mas há arquivos somente leitura que não puderam ser apagados.'
+        : safeError === 'FILESYSTEM_DELETE_FAILED'
+          ? 'Histórico removido; arquivos preservados porque a pasta está em uso ou sem permissão.'
+          : fileState === 'already_absent'
+            ? 'Capítulo removido do histórico; os arquivos já não estavam presentes.'
+            : '';
+      showToast(result.deleted_files ? 'Capítulo e arquivos apagados.' : warning || 'Capítulo removido do histórico.', warning ? 'warn' : 'ok');
+      await refreshBootstrap();
+    } catch (errorValue) {
+      appState.localDeleteBusy = false;
+      if (submit) { submit.disabled = false; submit.textContent = 'Excluir capítulo'; }
+      if (error) { error.textContent = humanCommunityError(errorValue, 'Não foi possível excluir este capítulo local.'); error.hidden = false; }
+    }
+  }
+  $('#localDeleteCancel')?.addEventListener('click', closeLocalDeleteModal);
+  $('#localDeleteModalClose')?.addEventListener('click', closeLocalDeleteModal);
+  $('#localDeleteModalOverlay')?.addEventListener('click', event => {
+    if (event.target === $('#localDeleteModalOverlay')) closeLocalDeleteModal();
+  });
+  $('#localDeleteForm')?.addEventListener('submit', event => {
+    event.preventDefault();
+    void deleteLocalArtifact();
+  });
+
+  /* ---------- authenticated legacy ownership ---------- */
+  function closeClaimModal() {
+    const overlay = $('#claimModalOverlay');
+    if (overlay) { overlay.classList.remove('show'); overlay.setAttribute('aria-hidden', 'true'); }
+    appState.claimRecord = null;
+    appState.claimBusy = false;
+  }
+  function openClaimModal(record) {
+    if (!claimEligibility(record).eligible) {
+      showToast('Este capítulo não está disponível para vinculação.', 'warn');
+      return;
+    }
+    const overlay = $('#claimModalOverlay');
+    if (!overlay) return;
+    appState.claimRecord = record;
+    appState.claimBusy = false;
+    const summary = $('#claimSummary');
+    if (summary) summary.innerHTML = [
+      ['Obra', record.series_name || record.chapter_name || '—'],
+      ['Capítulo', record.chapter_name || record.slug || '—'],
+      ['Páginas', Number(record.pages_processed || 0)],
+      ['SHA-256', String(record.pdf_sha256 || '').slice(0, 16) + '…'],
+    ].map(([label, value]) => `<div class="pub-meta"><small>${escapeHtml(label)}</small><strong>${escapeHtml(value)}</strong></div>`).join('');
+    $('#claimConfirm').checked = false;
+    $('#claimError').hidden = true;
+    overlay.classList.add('show');
+    overlay.setAttribute('aria-hidden', 'false');
+    $('#claimConfirm')?.focus();
+  }
+  async function claimArtifact(record) {
+    if (appState.claimBusy || !claimEligibility(record).eligible) return;
+    uiTrace('claim_started');
+    appState.claimBusy = true;
+    const submit = $('#claimSubmit');
+    if (submit) { submit.disabled = true; submit.textContent = 'Vinculando…'; }
+    try {
+      await api(`/api/community/artifacts/${encodeURIComponent(record.job_id)}/claim`, {
+        method: 'POST',
+        body: JSON.stringify({
+          expected_run_id: String(record.run_id || ''),
+          expected_pdf_sha256: String(record.pdf_sha256 || '').toLowerCase(),
+          confirm: true,
+        }),
+      });
+      record.community_ownership = 'owned';
+      uiTrace('claim_completed', {status: 200});
+      closeClaimModal();
+      showToast('Capítulo vinculado à sua conta. Agora você pode publicar.', 'ok');
+      renderHistory('history_action');
+    } catch (errorValue) {
+      uiTrace('claim_failed', {code: errorValue.code || 'claim_failed', status: errorValue.status || 0});
+      const error = $('#claimError');
+      if (error) { error.textContent = errorValue.message || 'Não foi possível vincular este capítulo.'; error.hidden = false; }
+      appState.claimBusy = false;
+      if (submit) { submit.disabled = false; submit.textContent = 'Vincular à minha conta'; }
+    }
+  }
+  $('#claimCancel')?.addEventListener('click', closeClaimModal);
+  $('#claimModalClose')?.addEventListener('click', closeClaimModal);
+  $('#claimModalOverlay')?.addEventListener('click', event => {
+    if (event.target === $('#claimModalOverlay')) closeClaimModal();
+  });
+  $('#claimForm')?.addEventListener('submit', async event => {
+    event.preventDefault();
+    if (!$('#claimConfirm')?.checked || !appState.claimRecord) return;
+    await claimArtifact(appState.claimRecord);
+  });
+
+  /* ---------- community publishing ---------- */
+  function closePublicationModal() {
+    const overlay = $('#publicationModalOverlay');
+    if (appState.publicationRecord && overlay?.classList.contains('show')) {
+      const key = String(appState.publicationRecord.id || appState.publicationRecord.slug || '');
+      if (key) appState.publicationDrafts[key] = {
+        title: String($('#publicationTitle')?.value || ''),
+        description: String($('#publicationDescription')?.value || ''),
+        tags: String($('#publicationTags')?.value || ''),
+        visibility: $('#publicationVisibility')?.value === 'private' ? 'private' : 'public',
+      };
+    }
+    if (overlay) { overlay.classList.remove('show'); overlay.setAttribute('aria-hidden', 'true'); }
+    appState.publicationRecord = null;
+    appState.publicationBusy = false;
+  }
+  function updatePublicationSubmitState() {
+    const submit = $('#publicationSubmit');
+    if (!submit) return;
+    submit.disabled = appState.publicationBusy || $('#publicationPublishConsent')?.checked !== true;
+  }
+  function openPublicationModal(record) {
+    const eligibility = publicationEligibility(record);
+    if (!eligibility.eligible) {
+      showToast(eligibility.authenticated ? 'Publicação indisponível para este resultado.' : 'Entre para publicar na comunidade.', 'warn');
+      return;
+    }
+    const overlay = $('#publicationModalOverlay');
+    const summary = $('#publicationSummary');
+    const pending = $('#publicationPending');
+    const form = $('#publicationForm');
+    if (!overlay || !summary || !form) return;
+    appState.publicationRecord = record;
+    appState.publicationBusy = false;
+    appState.publicationCorrelation = correlationId();
+    uiTrace('publication_modal_opened', {correlation_id: appState.publicationCorrelation});
+    const draftKey = String(record.id || record.slug || '');
+    const draft = appState.publicationDrafts[draftKey] || {};
+    const review = eligibility.review;
+    const pendingCount = Number(record.manual_review_count || record.rejected_count || 0);
+    summary.innerHTML = [
+      ['Obra', record.series_name || record.chapter_name || '—'],
+      ['Capítulo', record.chapter_name || record.slug || '—'],
+      ['Páginas', Number(record.pages_processed || 0)],
+      ['Qualidade', review
+        ? (eligibility.reviewCompleted
+          ? 'gate técnico reprovado · revisão humana concluída'
+          : 'gate técnico reprovado · revisão recomendada')
+        : 'gate técnico aprovado'],
+    ].map(([label, value]) => `<div class="pub-meta"><small>${escapeHtml(label)}</small><strong>${escapeHtml(value)}</strong></div>`).join('');
+    pending.hidden = !review;
+    pending.textContent = review
+      ? (eligibility.reviewCompleted
+        ? 'Este capítulo possui revisão humana concluída, mas o gate técnico automático registrou pendências. Confirme que você revisou as pendências e autoriza a publicação desta versão.'
+        : `Este capítulo tem ${pendingCount || 'pendências de'} revisão. Confirme que você conferiu o resultado antes de publicar.`)
+      : '';
+    $('#publicationTitle').value = draft.title || record.chapter_name || record.slug || '';
+    $('#publicationDescription').value = draft.description || '';
+    $('#publicationTags').value = draft.tags || (Array.isArray(record.publication_tags || record.tags)
+      ? (record.publication_tags || record.tags).join(', ')
+      : String(record.publication_tags || record.tags || ''));
+    $('#publicationVisibility').value = draft.visibility || 'public';
+    if ($('#publicationAllowComments')) $('#publicationAllowComments').checked = draft.allow_comments !== false;
+    $('#publicationConfirm').checked = false;
+    if ($('#publicationPublishConsent')) $('#publicationPublishConsent').checked = false;
+    $('#publicationSubmit').textContent = eligibility.published ? 'Atualizar publicação' : 'Publicar';
+    updatePublicationSubmitState();
+    $('#publicationError').hidden = true;
+    overlay.classList.add('show');
+    overlay.setAttribute('aria-hidden', 'false');
+    $('#publicationTitle')?.focus();
+  }
+  function publicationError(message, code = 'validation_failed') {
+    const error = $('#publicationError');
+    if (error) { error.textContent = message; error.hidden = false; }
+    uiTrace('publication_failed', {code, correlation_id: appState.publicationCorrelation});
+  }
+  function validatePublicationForm(record) {
+    const eligibility = publicationEligibility(record);
+    uiTrace('validation_started', {correlation_id: appState.publicationCorrelation});
+    if (!eligibility.authenticated) { publicationError('Sua sessão não está mais válida. Entre novamente.', 'authentication_required'); return false; }
+    if (!eligibility.ownerReady) { publicationError('Vincule este capítulo à sua conta antes de publicar.', 'artifact_has_no_owner'); return false; }
+    if (!String($('#publicationTitle')?.value || '').trim()) { publicationError('Informe um título.', 'title_required'); return false; }
+    if (!$('#publicationPublishConsent')?.checked) { publicationError('Confirme que você autoriza a publicação e redistribuição deste PDF na Comunidade.', 'publish_consent_required'); return false; }
+    if (!$('#publicationConfirm')?.checked) { publicationError('Confirme que revisou as pendências.', 'confirmation_required'); return false; }
+    uiTrace('validation_result', {valid: true, correlation_id: appState.publicationCorrelation});
+    return true;
+  }
+  async function reconcileCommunityPublication(record, postId, {attempts = 12, delayMs = 1000} = {}) {
+    const target = String(postId || '');
+    if (!target) return {status: 'failed', reason: 'missing_publication_id'};
+    for (let attempt = 1; attempt <= attempts; attempt += 1) {
+      try {
+        const data = await api('/api/community/my-posts', {timeoutMs: 5000});
+        const post = (data.posts || []).find(item => String(item.post_id || item.publication_id || '') === target);
+        const status = String(post?.status || '').toLowerCase();
+        if (post) {
+          record.publication_id = target;
+          record.publication_status = status || 'publishing';
+        }
+        if (status === 'published') return {status, post};
+        if (['failed', 'blocked', 'deleted', 'unpublished'].includes(status)) {
+          return {status, post, reason: `publication_${status}`};
+        }
+      } catch (error) {
+        if (attempt === attempts) return {status: 'publishing', reason: error?.code || 'reconciliation_timeout'};
+      }
+      if (attempt < attempts) await new Promise(resolve => window.setTimeout(resolve, delayMs));
+    }
+    return {status: 'publishing', reason: 'reconciliation_timeout'};
+  }
+  async function publishToCommunity(record) {
+    if (appState.publicationBusy) return;
+    uiTrace('publish_click_received', {correlation_id: appState.publicationCorrelation});
+    const eligibility = publicationEligibility(record);
+    if (!validatePublicationForm(record) || !eligibility.eligible) {
+      if (eligibility.eligible === false && eligibility.ownerReady && eligibility.authenticated) {
+        publicationError('Publicação indisponível para este resultado.', 'publication_ineligible');
+      }
+      return;
+    }
+    const trustedJobId = /^[0-9a-f]{32}$/.test(String(record.job_id || '')) ? String(record.job_id) : '';
+    const guess = guessFromUrl(record.url || '');
+    const payload = {
+      slug: record.slug || guess.slug,
+      series_title: record.series_name || record.chapter_name || '',
+      series_slug: record.series_slug || guess.slug,
+      episode_number: record.episode_number || '',
+      title: String($('#publicationTitle')?.value || record.chapter_name || '').trim(),
+      description: String($('#publicationDescription')?.value || '').slice(0, 2000),
+      tags: String($('#publicationTags')?.value || '').split(',').map(value => value.trim()).filter(Boolean).slice(0, 20),
+      visibility: $('#publicationVisibility')?.value === 'private' ? 'private' : 'public',
+      allow_comments: $('#publicationAllowComments')?.checked !== false,
+      publish_consent: $('#publicationPublishConsent')?.checked === true,
+    };
+    if (trustedJobId) payload.source_job_id = trustedJobId;
+    appState.publicationBusy = true;
+    const correlation = appState.publicationCorrelation || correlationId();
+    uiTrace('publication_request_started', {correlation_id: correlation});
+    const submit = $('#publicationSubmit');
+    if (submit) { submit.disabled = true; submit.textContent = 'Publicando…'; }
+    try {
+      const result = await api('/api/community/publish', {
+        method: 'POST',
+        headers: {'X-Komyst-Correlation-ID': correlation},
+        body: JSON.stringify(payload),
+      });
+      uiTrace('publication_response_received', {status: 200, correlation_id: correlation});
+      record.publication_status = 'publishing';
+      record.publication_id = result.post_id || result.publication_id || '';
+      record.publication_tags = payload.tags;
+      const key = String(record.id || record.slug || '');
+      if (key) delete appState.publicationDrafts[key];
+      closePublicationModal();
+      showToast('Publicação enviada à fila. O worker fará o upload.', 'ok');
+      renderHistory('history_action');
+      const reconciliation = await reconcileCommunityPublication(record, record.publication_id);
+      if (reconciliation.status === 'published') {
+        showToast('Publicação concluída e disponível na Comunidade.', 'ok');
+        await refreshBootstrap();
+        await loadCommunityFeed();
+        uiTrace('publication_completed', {status: 200, correlation_id: correlation});
+      } else if (['failed', 'blocked', 'deleted', 'unpublished'].includes(reconciliation.status)) {
+        showToast('A publicação não foi concluída. Abra os detalhes para tentar novamente.', 'error');
+        uiTrace('publication_failed', {code: reconciliation.reason, correlation_id: correlation});
+      } else {
+        showToast('A publicação continua em processamento. O histórico será atualizado automaticamente.', 'warn');
+        uiTrace('publication_reconciliation_pending', {correlation_id: correlation});
+      }
+      renderHistory('history_action');
+    } catch (errorValue) {
+      const error = $('#publicationError');
+      if (error) { error.textContent = errorValue.message || 'Não foi possível publicar.'; error.hidden = false; }
+      appState.publicationBusy = false;
+      if (submit) { submit.textContent = eligibility.published ? 'Atualizar publicação' : 'Publicar'; updatePublicationSubmitState(); }
+    } finally {
+      appState.publicationBusy = false;
+      if (submit) { submit.textContent = eligibility.published ? 'Atualizar publicação' : 'Publicar'; updatePublicationSubmitState(); }
+      uiTrace('loading_cleared', {correlation_id: correlation});
+    }
+  }
+  $('#publicationCancel')?.addEventListener('click', closePublicationModal);
+  $('#publicationModalClose')?.addEventListener('click', closePublicationModal);
+  $('#publicationModalOverlay')?.addEventListener('click', event => {
+    if (event.target === $('#publicationModalOverlay')) closePublicationModal();
+  });
+  $('#publicationForm')?.addEventListener('submit', async event => {
+    event.preventDefault();
+    uiTrace('publication_submit_received', {correlation_id: appState.publicationCorrelation});
+    if (!appState.publicationRecord) { publicationError('Nenhum capítulo selecionado.', 'missing_record'); return; }
+    if (!validatePublicationForm(appState.publicationRecord)) return;
+    await publishToCommunity(appState.publicationRecord);
+  });
+  $('#publicationPublishConsent')?.addEventListener('change', updatePublicationSubmitState);
+
+  function clearCommunityObjectUrls() {
+    for (const objectUrl of appState.communityObjectUrls) {
+      try { URL.revokeObjectURL(objectUrl); } catch (_) { /* best effort */ }
+    }
+    appState.communityObjectUrls.clear();
+  }
+
+  async function openAuthenticatedCommunityPdf(postId, trigger) {
+    if (!isCanonicalCommunityAuthenticated()) {
+      showToast('Sua sessão expirou. Entre novamente.', 'warn');
+      uiTrace('community_pdf_open_failed', {status: 401, code: 'authentication_required'});
+      return;
+    }
+    const viewer = window.open('', '_blank');
+    if (!viewer) {
+      showToast('O navegador bloqueou a nova aba do PDF.', 'warn');
+      return;
+    }
+    try { viewer.opener = null; } catch (_) { /* best-effort opener isolation */ }
+    const originalLabel = trigger?.textContent || 'Abrir PDF';
+    if (trigger) { trigger.disabled = true; trigger.textContent = 'Abrindo...'; }
+    const correlation = correlationId();
+    uiTrace('community_pdf_open_started', {correlation_id: correlation});
+    try {
+      const response = await api(`/api/community/posts/${encodeURIComponent(postId)}/pdf`, {
+        rawResponse: true,
+        timeoutMs: 30000,
+      });
+      const contentType = String(response.headers.get('Content-Type') || '').toLowerCase();
+      if (!contentType.includes('application/pdf')) {
+        const error = new Error('O arquivo retornado não é um PDF.');
+        error.code = 'invalid_pdf_content_type';
+        throw error;
+      }
+      const disposition = String(response.headers.get('Content-Disposition') || '').toLowerCase();
+      const cacheControl = String(response.headers.get('Cache-Control') || '').toLowerCase();
+      if (!disposition.includes('inline') || !cacheControl.includes('private') || !cacheControl.includes('no-store')) {
+        const error = new Error('Os cabeçalhos do PDF não são seguros.');
+        error.code = 'invalid_pdf_headers';
+        throw error;
+      }
+      const blob = await response.blob();
+      if (!blob.size) {
+        const error = new Error('O PDF retornado está vazio.');
+        error.code = 'empty_pdf';
+        throw error;
+      }
+      const header = new Uint8Array(await blob.slice(0, 5).arrayBuffer());
+      if (String.fromCharCode(...header) !== '%PDF-') {
+        const error = new Error('O arquivo retornado não possui assinatura PDF.');
+        error.code = 'invalid_pdf_signature';
+        throw error;
+      }
+      const objectUrl = URL.createObjectURL(blob);
+      appState.communityObjectUrls.add(objectUrl);
+      viewer.location.href = objectUrl;
+      try {
+        await api(`/api/community/posts/${encodeURIComponent(postId)}/reading-progress`, {
+          method: 'PUT',
+          body: JSON.stringify({current_page: 1, total_pages: 0, progress_percent: 1}),
+          timeoutMs: 8000,
+        });
+      } catch (_) { /* native PDF viewers do not expose a current page; opening is enough progress evidence */ }
+      // Keep the object URL alive while the viewer is open, and revoke it later.
+      window.setTimeout(() => {
+        try { URL.revokeObjectURL(objectUrl); } catch (_) { /* best effort */ }
+        appState.communityObjectUrls.delete(objectUrl);
+      }, 300000);
+      uiTrace('community_pdf_opened', {status: 200, correlation_id: correlation});
+    } catch (errorValue) {
+      try { viewer.close(); } catch (_) { /* best effort */ }
+      const status = Number(errorValue?.status || 0);
+      const message = status === 401
+        ? 'Sua sessão expirou. Entre novamente.'
+        : status === 403
+          ? 'Você não possui acesso a este arquivo.'
+          : status === 404
+            ? 'O PDF desta publicação não foi encontrado.'
+            : errorValue?.code === 'connection_error'
+              ? 'Não foi possível abrir o PDF.'
+              : 'Não foi possível abrir o PDF.';
+      showToast(message, 'warn');
+      uiTrace('community_pdf_open_failed', {status, code: errorValue?.code || 'pdf_open_failed', correlation_id: correlation});
+    } finally {
+      if (trigger) { trigger.disabled = false; trigger.textContent = originalLabel; }
+      uiTrace('community_pdf_loading_cleared', {correlation_id: correlation});
+    }
+  }
+
+  const communityPanels = {
+    explore: '#communityFeed',
+    favorites: '#communityFavorites',
+    reading: '#communityReading',
+    mine: '#communityMine',
+    notifications: '#communityNotifications',
+  };
+  function communitySkeleton(container) {
+    container.innerHTML = '<div class="skeleton-card"><div class="skeleton-line"></div><div class="skeleton-line"></div><div class="skeleton-line"></div></div><div class="skeleton-card"><div class="skeleton-line"></div><div class="skeleton-line"></div></div>';
+  }
+  function setCommunityTab(tab) {
+    appState.communityTab = communityPanels[tab] ? tab : 'explore';
+    $$('.community-tab').forEach(button => {
+      const active = button.dataset.communityTab === appState.communityTab;
+      button.classList.toggle('active', active);
+      button.setAttribute('aria-selected', active ? 'true' : 'false');
+    });
+    $$('.community-tab-panel').forEach(panel => {
+      panel.hidden = panel.dataset.communityPanel !== appState.communityTab;
+    });
+    void loadCommunityFeed();
+  }
+  function updateCommunityCounters(tab, count) {
+    const map = {
+      explore: '#communityExploreCount',
+      favorites: '#communityFavoritesCount',
+      reading: '#communityReadingCount',
+      mine: '#communityMineCount',
+    };
+    if (map[tab] && $(map[tab])) $(map[tab]).textContent = String(count);
+  }
+  async function loadCommunityFeed() {
+    const tab = appState.communityTab || 'explore';
+    const container = $(communityPanels[tab] || '#communityFeed');
+    if (!container) return;
+    communitySkeleton(container);
+    try {
+      const endpoint = {
+        explore: '/api/community/posts',
+        favorites: '/api/community/favorites',
+        reading: '/api/community/reading-progress',
+        mine: '/api/community/my-posts',
+        notifications: '/api/community/notifications',
+      }[tab];
+      const data = await api(endpoint);
+      if (!data || (!Array.isArray(data.posts) && !Array.isArray(data.notifications))) {
+        const schemaError = new Error('community_schema_invalid');
+        schemaError.code = 'community_schema_invalid';
+        throw schemaError;
+      }
+      if (tab === 'notifications') {
+        const notifications = data.notifications || [];
+        appState.communityCache.notifications = notifications;
+        $('#communityNotificationsCount').textContent = String(data.unread || notifications.length || 0);
+        container.innerHTML = notifications.length ? notifications.map(renderNotificationCard).join('') : '<div class="empty-real-state">você não possui notificações.</div>';
+        return;
+      }
+      const posts = data.posts || [];
+      appState.communityCache[tab] = posts;
+      updateCommunityCounters(tab, posts.length);
+      if (!posts.length) {
+        const empty = {
+          explore: 'nenhuma publicação na comunidade ainda',
+          favorites: 'Você ainda não adicionou nenhuma obra aos favoritos.',
+          reading: 'Nenhuma leitura em andamento.',
+          mine: 'Você ainda não publicou nenhuma obra.',
+        }[tab] || 'nada para mostrar aqui.';
+        container.innerHTML = `<div class="empty-real-state">${escapeHtml(empty)}</div>`;
+        return;
+      }
+      container.innerHTML = posts.map(post => renderCommunityCard(post, {tab})).join('');
+    } catch (error) {
+      const message = error?.code === 'community_schema_invalid'
+        ? 'A Comunidade ainda não está disponível neste ambiente.'
+        : humanCommunityError(error, 'Não foi possível carregar a Comunidade.');
+      container.innerHTML = `<div class="empty-real-state community-error-state"><span>${escapeHtml(message)}</span><button type="button" class="btn-ghost" data-action="retry-community">Tentar novamente</button></div>`;
+    }
+  }
+
+  $('#communityRefreshBtn')?.addEventListener('click', loadCommunityFeed);
+  $('.community-tabs')?.addEventListener('click', event => {
+    const button = event.target.closest('[data-community-tab]');
+    if (!button) return;
+    setCommunityTab(button.dataset.communityTab || 'explore');
+  });
+
+  function renderCommunityCard(post, options = {}) {
+    const title = post.title || post.series_title || 'Capítulo';
+    const sub = `${escapeHtml(post.series_title || '')} · ep ${escapeHtml(String(post.episode_number || ''))} · ${Number(post.views || 0)} leituras`;
+    const author = post.author || {};
+    const authorName = escapeHtml(author.display_name || 'Usuário');
+    const authorRole = author.public_role ? ` · ${escapeHtml(author.public_role)}` : '';
+    const initial = escapeHtml((author.display_name || 'U').slice(0, 1).toUpperCase());
+    const pages = Number(post.page_count || post.pages || 0);
+    const quality = post.quality || post.quality_status || post.review_status || '';
+    const postId = escapeAttr(post.publication_id || post.post_id || '');
+    const favoriteLabel = post.favorited ? 'Remover dos favoritos' : 'Favoritar';
+    const reading = post.reading || {};
+    const progress = reading.total_pages ? ` · página ${Number(reading.current_page || 0)} de ${Number(reading.total_pages || 0)} · ${Number(reading.progress_percent || 0).toFixed(0)}%` : '';
+    const tags = Array.isArray(post.tags) && post.tags.length
+      ? `<div class="community-card-tags">${post.tags.slice(0, 6).map(tag => `<span>${escapeHtml(tag)}</span>`).join('')}</div>`
+      : '';
+    const ownerActions = options.tab === 'mine'
+      ? `<button class="btn-ghost danger" type="button" data-community-delete-id="${postId}" aria-label="Excluir publicação própria" title="Excluir publicação">Excluir</button>`
+      : '';
+    return `<article class="hist-item community-publication-card" data-publication-id="${postId}" tabindex="0">
+      <div class="hist-cover community-publication-cover" style="background:#b8557a">${escapeHtml(title.slice(0,1).toUpperCase())}</div>
+      <div class="hist-meta"><div class="hm-title">${escapeHtml(title)}</div><div class="hm-sub">${sub}${pages ? ` · ${pages} páginas` : ''}${progress}</div><div class="hm-sub community-author"><span class="community-author-mark community-author-letter">${initial}</span><span>${authorName}${authorRole}</span></div>${quality ? `<div class="community-quality-chip">${escapeHtml(String(quality))}</div>` : ''}${tags}<div class="community-card-stats">${Number(post.favorite_count || 0)} favoritos · ${Number(post.comment_count || 0)} comentários</div><div class="community-comments-panel" data-comments-for="${postId}" hidden></div></div>
+      <div class="hm-actions"><button class="btn-ghost" type="button" data-community-favorite-id="${postId}" aria-pressed="${post.favorited ? 'true' : 'false'}" aria-label="${escapeAttr(favoriteLabel)}" title="${escapeAttr(favoriteLabel)}">${escapeHtml(favoriteLabel)}</button><button class="btn-ghost" type="button" data-community-comments-id="${postId}" aria-label="Abrir comentários" title="Comentários">Comentários</button><button class="btn-ghost" type="button" data-community-pdf-id="${postId}" aria-label="Abrir PDF da publicação" title="Abrir PDF">Abrir PDF</button>${ownerActions}</div></article>`;
+  }
+  function renderNotificationCard(item) {
+    const title = item.type === 'comment_created' ? 'Novo comentário' : 'Notificação';
+    const read = item.read_at ? 'lida' : 'não lida';
+    return `<article class="hist-item community-publication-card" data-notification-id="${escapeAttr(item.notification_id || '')}">
+      <div class="hist-cover community-publication-cover" style="background:#2f7a6b">N</div>
+      <div class="hist-meta"><div class="hm-title">${escapeHtml(title)}</div><div class="hm-sub">${escapeHtml(read)}</div></div>
+      <div class="hm-actions">${item.read_at ? '' : `<button class="btn-ghost" type="button" data-notification-read-id="${escapeAttr(item.notification_id || '')}">Marcar lida</button>`}</div>
+    </article>`;
+  }
+  $('#view-community')?.addEventListener('click', event => {
+    const retry = event.target.closest('[data-action="retry-community"]');
+    if (retry) { void loadCommunityFeed(); return; }
+    const favorite = event.target.closest('[data-community-favorite-id]');
+    if (favorite && !favorite.disabled) { void toggleCommunityFavorite(favorite.dataset.communityFavoriteId || '', favorite); return; }
+    const comments = event.target.closest('[data-community-comments-id]');
+    if (comments) { void toggleCommunityComments(comments.dataset.communityCommentsId || ''); return; }
+    const deleteButton = event.target.closest('[data-community-delete-id]');
+    if (deleteButton) { void deleteOwnPublication(deleteButton.dataset.communityDeleteId || '', deleteButton); return; }
+    const readButton = event.target.closest('[data-notification-read-id]');
+    if (readButton) { void markNotificationRead(readButton.dataset.notificationReadId || '', readButton); return; }
+    const button = event.target.closest('[data-community-pdf-id]');
+    if (!button || button.disabled) return;
+    void openAuthenticatedCommunityPdf(button.dataset.communityPdfId || '', button);
+  });
+  $('#view-community')?.addEventListener('submit', event => {
+    const form = event.target.closest('[data-comment-form]');
+    if (!form) return;
+    event.preventDefault();
+    void submitCommunityComment(form.dataset.commentForm || '', form);
+  });
+  async function toggleCommunityFavorite(postId, button) {
+    if (!postId) return;
+    const pressed = button.getAttribute('aria-pressed') === 'true';
+    button.disabled = true;
+    button.textContent = pressed ? 'Removendo...' : 'Favoritando...';
+    uiTrace('favorite_click_received', {publication_id: postId});
+    try {
+      await api(`/api/community/publications/${encodeURIComponent(postId)}/favorite`, {method: pressed ? 'DELETE' : 'POST'});
+      showToast(pressed ? 'Removido dos favoritos.' : 'Adicionado aos favoritos.', 'ok');
+      await loadCommunityFeed();
+    } catch (errorValue) {
+      showToast(humanCommunityError(errorValue, 'Não foi possível atualizar favorito.'), 'error');
+      button.disabled = false;
+      button.textContent = pressed ? 'Remover dos favoritos' : 'Favoritar';
+    }
+  }
+  async function toggleCommunityComments(postId) {
+    const panel = document.querySelector(`[data-comments-for="${CSS.escape(postId)}"]`);
+    if (!panel) return;
+    if (!panel.hidden) { panel.hidden = true; return; }
+    panel.hidden = false;
+    panel.innerHTML = '<div class="community-loading">carregando comentários...</div>';
+    uiTrace('comments_click_received', {publication_id: postId});
+    try {
+      const data = await api(`/api/community/publications/${encodeURIComponent(postId)}/comments`);
+      const comments = Array.isArray(data.items) ? data.items : (Array.isArray(data.comments) ? data.comments : []);
+      panel.innerHTML = `${comments.length ? comments.map(renderCommunityComment).join('') : '<div class="community-empty">Ainda não há comentários.</div>'}
+        <form class="community-comment-form" data-comment-form="${escapeAttr(postId)}"><input name="body" maxlength="1000" placeholder="Escreva um comentário..." required><button type="submit" class="btn-ghost">Comentar</button></form>`;
+    } catch (errorValue) {
+      panel.innerHTML = `<div class="community-error-state">${escapeHtml(humanCommunityError(errorValue, 'Não foi possível carregar comentários.'))}</div>`;
+    }
+  }
+  function renderCommunityComment(comment) {
+    const mine = String(comment.user_id || '') === String(getGlobal('__komystCommunityUserId') || '');
+    const body = comment.is_deleted ? 'Comentário removido.' : (comment.body || '');
+    return `<div class="community-comment" data-comment-id="${escapeAttr(comment.comment_id || '')}"><strong>${escapeHtml(comment.author?.display_name || (mine ? 'Você' : 'Usuário'))}</strong><span>${escapeHtml(body)}</span>${mine && !comment.is_deleted ? `<button type="button" class="btn-ghost danger" data-comment-delete-id="${escapeAttr(comment.comment_id || '')}">Excluir</button>` : ''}</div>`;
+  }
+  async function submitCommunityComment(postId, form) {
+    const input = $('input[name="body"]', form);
+    const body = String(input?.value || '').trim();
+    if (!body) return;
+    const button = $('button', form);
+    if (button) { button.disabled = true; button.textContent = 'Enviando...'; }
+    try {
+      await api(`/api/community/publications/${encodeURIComponent(postId)}/comments`, {method: 'POST', body: JSON.stringify({body})});
+      const panel = document.querySelector(`[data-comments-for="${CSS.escape(postId)}"]`);
+      if (panel) panel.hidden = true;
+      await toggleCommunityComments(postId);
+      await loadCommunityFeed();
+    } catch (errorValue) {
+      showToast(humanCommunityError(errorValue, 'Não foi possível comentar.'), 'error');
+    } finally {
+      if (button) { button.disabled = false; button.textContent = 'Comentar'; }
+    }
+  }
+  async function deleteCommunityComment(commentId, button) {
+    if (!commentId || !await komystConfirm('Excluir este comentário?', {title: 'Excluir comentário', confirmLabel: 'Excluir', danger: true})) return;
+    button.disabled = true;
+    try {
+      await api(`/api/community/comments/${encodeURIComponent(commentId)}`, {method: 'DELETE'});
+      showToast('Comentário removido.', 'ok');
+      await loadCommunityFeed();
+    } catch (errorValue) {
+      showToast(humanCommunityError(errorValue, 'Não foi possível excluir comentário.'), 'error');
+      button.disabled = false;
+    }
+  }
+  $('#view-community')?.addEventListener('click', event => {
+    const button = event.target.closest('[data-comment-delete-id]');
+    if (!button) return;
+    void deleteCommunityComment(button.dataset.commentDeleteId || '', button);
+  });
+  async function deleteOwnPublication(postId, button) {
+    if (!postId || !await komystConfirm('Remover esta publicação da Comunidade? O PDF local será preservado.', {title: 'Remover publicação', confirmLabel: 'Remover', danger: true})) return;
+    button.disabled = true;
+    button.textContent = 'Excluindo...';
+    try {
+      const result = await api(`/api/community/posts/${encodeURIComponent(postId)}`, {method: 'DELETE', body: JSON.stringify({reason: 'user_requested'})});
+      showToast(result.code === 'publication_deleted' ? 'Publicação removida da Comunidade.' : 'Publicação já estava removida.', 'ok');
+      await loadCommunityFeed();
+    } catch (errorValue) {
+      showToast(humanCommunityError(errorValue, 'Não foi possível excluir publicação.'), 'error');
+      button.disabled = false;
+      button.textContent = 'Excluir';
+    }
+  }
+  async function markNotificationRead(notificationId, button) {
+    button.disabled = true;
+    try {
+      await api(`/api/community/notifications/${encodeURIComponent(notificationId)}/read`, {method: 'PATCH'});
+      await loadCommunityFeed();
+    } catch (errorValue) {
+      showToast(humanCommunityError(errorValue, 'Não foi possível marcar a notificação.'), 'error');
+      button.disabled = false;
+    }
+  }
+
+  function loadRecordIntoForm(record) {
+    const local = ['local_folder', 'local_images'].includes(record.source_type);
+    setSourceType(local ? record.source_type : 'url');
+    appState.programmingFields = true;
+    // A persisted local job has only an opaque snapshot reference. Never reconstruct or
+    // display a source filesystem path when loading history back into the form.
+    $('#urlInput').value = local ? '' : (record.url || '');
+    $('#localFolderInput').value = '';
+    $('#nameInput').value = record.chapter_name || '';
+    $('#outputInput').value = record.slug || '';
+    appState.programmingFields = false;
+    appState.nameDirty = true;
+    appState.outputDirty = true;
+    // A replayed run keeps the mode it actually ran with.
+    applyProcessingMode(record.mode === 'fast' ? 'fast' : 'quality');
+    const scope = local ? 'full' : (record.max_images ? String(record.max_images) : 'full');
+    const direct = $(`.scope-card[data-scope="${scope}"]`);
+    const chosen = direct || $('.scope-card[data-scope="custom"]');
+    $$('.scope-card').forEach(card => card.classList.toggle('selected', card === chosen));
+    appState.selectedScope = direct ? scope : 'custom';
+    if (!direct && record.max_images) $('#scopeCustomInput').value = Number(record.max_images);
+    $('#scopeCustom').classList.toggle('open', appState.selectedScope === 'custom');
+    $('#cacheToggle').checked = true;
+    $('#forceToggle').checked = false;
+    syncSourceFormState();
+    invalidateSourceValidation();
+    activateTab('nova');
+    showToast('Execução carregada para revisão.', 'ok');
+  }
+
+  /* ---------- artifact actions ---------- */
+  function renderArtifactButtons(container, record) {
+    if (!container) return;
+    // The internal canonical PDF is only offered as a user artifact for a PDF job. A PNG/PSD
+    // job keeps that PDF internally, but exposing "PDF base" there confuses the format; the
+    // folder holds the real PNG/PSD output.
+    const pdfArtifact = outputFormatLabel(record) === 'PDF'
+      ? [['Abrir PDF', 'pdf', record.pdf_path]] : [];
+    container.innerHTML = [
+      ...pdfArtifact, ['Pasta', 'folder', record.output_folder],
+      ...(record.output_profile === 'professional_qc' ? [['Qualidade', 'report', record.quality_report_path]] : []),
+      ['Compare', 'compare', record.compare_sheet_path],
+      ['Contexto', 'context', record.session_context_path],
+    ].filter(([, , path]) => path).map(([label, artifact]) => `<button class="btn-ghost" data-job-id="${escapeAttr(record.job_id || '')}" data-artifact="${artifact}">${label}</button>`).join('');
+  }
+  $('#artifactActions')?.addEventListener('click', event => {
+    const button = event.target.closest('[data-artifact]');
+    if (button) openArtifact(button.dataset.jobId, button.dataset.artifact);
+  });
+  async function openArtifact(jobId, artifact) {
+    if (!jobId || !artifact) return;
+    try {
+      await api('/api/ui/open', {method: 'POST', body: JSON.stringify({job_id: jobId, artifact})});
+      if (['folder', 'psd_folder', 'qc_folder'].includes(artifact)) showToast('Pasta solicitada ao Explorador de Arquivos.', 'ok');
+    }
+    catch (error) { showToast(error.message, 'error'); }
+  }
+
+  /* ---------- in-app chapter reader ---------- */
+  // static/chapter_reader.js owns the reader itself. This side only decides which
+  // run to open and keeps the History surface intact underneath it.
+  function openChapterReader(jobId) {
+    const main = document.querySelector('main');
+    if (main) appState.historyScrollTop = main.scrollTop;
+    activateTab('leitor');
+    window.dispatchEvent(new CustomEvent('komyst-open-reader', {detail: {jobId}}));
+  }
+  window.addEventListener('komyst-goto-tab', event => {
+    const tab = String(event?.detail?.tab || '');
+    if (views[tab]) activateTab(tab);
+    else if (tab === 'profile') activateTab('inicio');
+  });
+  window.addEventListener('komyst-open-artifact', event => {
+    const detail = event?.detail || {};
+    void openArtifact(String(detail.jobId || ''), String(detail.artifact || ''));
+  });
+
+  /* ---------- queue ---------- */
+  // A queued chapter must carry the same decisions as one started from the main
+  // form: without the output plan and the control-plane translation flag the
+  // backend fails closed and the chapter ran without being translated.
+  function queuePayload(url) {
+    const guess = guessFromUrl(url);
+    const downloadOnly = appState.selectedMode === 'download_only';
+    return {
+      source_type: 'url', url, chapter_name: guess.title, slug: guess.slug,
+      mode: downloadOnly ? 'fast' : appState.selectedMode, download_only: downloadOnly,
+      output_format: 'pdf', output_profile: 'automatic', typesetting_mode: 'on',
+      ...(downloadOnly ? {} : {output_plan: appState.outputPlan === 'personalizado' ? 'traducao_pronta' : (appState.outputPlan || 'traducao_pronta')}),
+      full: true, use_cache: $('#cacheToggle').checked, force: $('#forceToggle').checked,
+      translate_sfx: $('#translateSfxToggle')?.checked === true,
+      use_context: $('#ctxToggle').checked, open_output: false,
+      translation_provider: normalizeTranslationProvider(appState.settings?.translation_provider) || 'deepl',
+      translation_enabled: appState.translationEnabled === true,
+      pipeline_intent: {requested: true, mode: downloadOnly ? 'download_only' : appState.selectedMode, scope: 'full'},
+    };
+  }
+  async function addQueueItem() {
+    const input = $('#queueUrlInput');
+    const url = input.value.trim();
+    if (!/^https?:\/\//i.test(url)) { shake(input); showToast('Cole uma URL válida.', 'error'); return; }
+    try {
+      await api('/api/ui/queue/add', {method: 'POST', body: JSON.stringify(queuePayload(url))});
+      input.value = '';
+      await pollState();
+      showToast('Capítulo adicionado à fila real.', 'ok');
+    } catch (error) { showToast(error.message, 'error'); }
+  }
+  function queueItemsForDisplay() {
+    const items = [...(appState.queue || [])];
+    const state = appState.currentPipelineState || null;
+    const status = String(state?.status || '').toLowerCase();
+    const id = String(state?.jobId || '');
+    if (id && inFlightStatuses.has(status)) {
+      const projected = {
+        id,
+        status,
+        chapter_name: state.title || '',
+        url: state.sourceUrl || '',
+      };
+      if (!items.some(item => item.id === projected.id)) items.unshift(projected);
+    }
+    return items;
+  }
+  function renderQueue() {
+    const list = $('#queueList');
+    if (!list) return;
+    const items = queueItemsForDisplay();
+    const completed = items.filter(item => terminalRunStatuses.has(item.status)).length;
+    $('#queueCount').textContent = items.length ? `${completed} de ${items.length} concluídos` : 'fila vazia';
+    $('#queueProgressFill').style.width = items.length ? `${Math.round((completed / items.length) * 100)}%` : '0%';
+    const checkIcon = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 12 4 4 8-9"/></svg>';
+    const closeIcon = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="m6 6 12 12M18 6 6 18"/></svg>';
+    const queueClass = status => status === 'finished' ? 'done' : status === 'review_required' ? 'review_required' : escapeAttr(status);
+    list.innerHTML = items.length ? items.map((item, index) => {
+      const operation = item.operation_kind === 'review_rerun'
+        ? `${item.operation_label || 'Rerun de pendências'} · ${Number(item.target_region_count || 0)} região(ões)`
+        : (item.chapter_name || item.url);
+      return `<div class="queue-item status-${queueClass(item.status)}" data-id="${escapeAttr(item.id)}"><span class="qi-num">${terminalRunStatuses.has(item.status) ? checkIcon : index + 1}</span><span class="qi-url">${escapeHtml(operation)}</span><span class="qi-status">${runStatusLabels[item.status] || item.status}</span>${['waiting','queued'].includes(item.status) ? `<button class="qi-remove" data-id="${escapeAttr(item.id)}" aria-label="Remover da fila">${closeIcon}</button>` : ''}</div>`;
+    }).join('') : '<div class="empty-real-state">fila vazia · adicione uma URL acima</div>';
+  }
+  $('#queueAddBtn')?.addEventListener('click', addQueueItem);
+  $('#queueUrlInput')?.addEventListener('keydown', event => { if (event.key === 'Enter') { event.preventDefault(); addQueueItem(); } });
+  $('#queueList')?.addEventListener('click', async event => {
+    const button = event.target.closest('.qi-remove');
+    if (!button) return;
+    await api('/api/ui/queue/remove', {method: 'POST', body: JSON.stringify({id: button.dataset.id})});
+    await pollState();
+  });
+  $('#queueClearBtn')?.addEventListener('click', async () => { await api('/api/ui/queue/clear', {method: 'POST'}); await pollState(); });
+  $('#queueStartBtn')?.addEventListener('click', async () => {
+    try { await api('/api/ui/queue/start', {method: 'POST'}); showToast('Fila real iniciada.', 'ok'); }
+    catch (error) { showToast(error.message, 'error'); }
+  });
+  $('#queueCancelBtn')?.addEventListener('click', () => cancelTranslation(true));
+
+  /* ---------- dashboard ---------- */
+  function animateCount(element, target) {
+    if (!element) return;
+    const start = performance.now();
+    const initial = Number(element.textContent || 0);
+    const tick = now => {
+      const progress = Math.min((now - start) / 500, 1);
+      element.textContent = Math.round(initial + (target - initial) * (1 - Math.pow(1 - progress, 3)));
+      if (progress < 1) requestAnimationFrame(tick);
+    };
+    requestAnimationFrame(tick);
+  }
+  function renderDashboard() {
+    renderPendingPreviewSurfaces();
+    const hour = new Date().getHours();
+    $('#dashGreeting').textContent = `${hour < 12 ? 'Bom dia' : hour < 18 ? 'Boa tarde' : 'Boa noite'}. Acompanhe seus projetos e traduções em um só lugar.`;
+    $('#dashStreak').textContent = '';
+    const series = new Map();
+    appState.history.forEach(record => {
+      const name = seriesFromRecord(record);
+      const key = String(record.series_slug || name).toLowerCase();
+      if (!series.has(key)) series.set(key, {name, records: []});
+      series.get(key).records.push(record);
+    });
+    animateCount($('#dashChapters'), appState.history.length);
+    animateCount($('#dashSeries'), series.size);
+    animateCount($('#dashPages'), appState.history.reduce((total, record) => total + Number(record.pages_processed || 0), 0));
+    animateCount($('#dashApproved'), appState.history.filter(record => boolish(record.quality_gate) === true).length);
+    const list = $('#dashSeriesList');
+    const query = appState.seriesQuery.toLowerCase();
+    const entries = Array.from(series.values()).map(group => {
+      group.records.sort((a, b) => String(b.finished_at || b.started_at || '').localeCompare(String(a.finished_at || a.started_at || '')));
+      return group;
+    }).filter(group => !query || group.name.toLowerCase().includes(query));
+    entries.sort((a, b) => appState.seriesSort === 'az'
+      ? a.name.localeCompare(b.name, 'pt-BR')
+      : appState.seriesSort === 'chapters'
+        ? b.records.length - a.records.length
+        : String(b.records[0]?.finished_at || b.records[0]?.started_at || '').localeCompare(String(a.records[0]?.finished_at || a.records[0]?.started_at || '')));
+    $('#seriesCount').textContent = `${entries.length} ${entries.length === 1 ? 'série' : 'séries'}`;
+    const arrow = '<svg class="series-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M5 12h14m-5-5 5 5-5 5"/></svg>';
+    list.className = 'series-library';
+    list.innerHTML = entries.length ? entries.map(group => {
+      const latest = group.records[0] || {};
+      const date = latest.finished_at || latest.started_at;
+      const activity = date ? new Date(date).toLocaleDateString('pt-BR', {day:'2-digit', month:'short'}) : 'atividade local';
+      return `<button class="series-card" data-series="${escapeAttr(group.name)}"><span class="series-monogram">${escapeHtml(group.name.slice(0,1).toUpperCase())}</span><span class="series-copy"><strong>${escapeHtml(group.name)}</strong><span>${group.records.length} ${group.records.length === 1 ? 'capítulo' : 'capítulos'} · ${escapeHtml(activity)}</span></span>${arrow}</button>`;
+    }).join('') : '<div class="empty-real-state">nenhuma série encontrada</div>';
+    const activity = $('#dashActivityList');
+    activity.className = 'activity-list';
+    activity.innerHTML = appState.history.length ? appState.history.slice(0, 7).map(record => {
+      const status = ['error', 'failed'].includes(record.status) ? 'falhou' : (record.review_status === 'completed' || record.review_confirmed === true) ? 'revisão concluída' : record.status === 'review_required' || boolish(record.quality_gate) === false ? 'concluído — revisão recomendada' : record.pdf_path ? 'PDF gerado' : 'tradução concluída';
+      const date = record.finished_at || record.started_at;
+      const when = date ? new Date(date).toLocaleDateString('pt-BR', {day:'2-digit', month:'short'}) : 'local';
+      return `<div class="activity-item"><span class="activity-mark"></span><span class="activity-copy"><strong>${escapeHtml(record.chapter_name || record.slug || 'Capítulo')}</strong><span>${escapeHtml(status)}</span></span><span class="activity-time">${escapeHtml(when)}</span></div>`;
+    }).join('') : '<div class="empty-real-state">suas traduções recentes aparecem aqui</div>';
+  }
+  $('#seriesSearch')?.addEventListener('input', event => { appState.seriesQuery = event.target.value.trim(); renderDashboard(); });
+  $('#seriesSort')?.addEventListener('change', event => { appState.seriesSort = event.target.value; renderDashboard(); });
+  $('#dashSeriesList')?.addEventListener('click', event => {
+    const item = event.target.closest('[data-series]');
+    if (!item) return;
+    $('#histSearch').value = item.dataset.series;
+    activateTab('hist');
+  });
+  $('#dashGotoHistory')?.addEventListener('click', () => activateTab('hist'));
+  const UPDATE_DOWNLOAD_REQUEST_TIMEOUT_MS = 75000;
+  const makeUpdateCorrelationId = () => {
+    try { if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID(); } catch (_) { /* fallback below */ }
+    return `upd-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}`;
+  };
+  $('#checkUpdatesBtn')?.addEventListener('click', async event => {
+    const button = event.currentTarget; const title = $('#updateStatusTitle'); const status = $('#updateStatus'); button.disabled = true;
+    const setState = (state, heading, copy) => { if (title) title.textContent = heading; if (status) status.textContent = copy; button.dataset.updateState = state; button.hidden = ['checking','downloading','ready_to_install','installing'].includes(state); };
+    const download = $('#downloadUpdateBtn'); if (download) { download.hidden = true; download.disabled = true; download.onclick = null; }
+    setState('checking', 'Verificando atualizações…', 'Consultando o canal beta com segurança.');
+    try {
+      const response = await fetch('/api/update/manifest', {cache:'no-store'});
+      const data = await response.json().catch(() => ({}));
+      $('#updateLastChecked').textContent = new Date().toLocaleString('pt-BR');
+      if (!response.ok || data.state === 'error') setState('error', 'Não foi possível verificar agora', 'O canal de atualização não respondeu de forma válida.');
+      else if (data.state === 'update_available' || data.state === 'mandatory_update') {
+        setState('update_available', `Versão ${data.available_version} disponível`, `Uma atualização segura está pronta para download (${Math.round(Number(data.package_size || 0) / 1024)} KB).`);
+        if (download) { download.hidden = false; download.disabled = false; download.textContent = data.mandatory ? 'Baixar e instalar' : 'Baixar e instalar';
+          download.onclick = async () => {
+            download.disabled = true; setState('downloading', 'Baixando atualização…', 'O instalador oficial será verificado antes da execução.');
+            const correlationId = makeUpdateCorrelationId();
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), UPDATE_DOWNLOAD_REQUEST_TIMEOUT_MS);
+            try {
+              const fetched = await fetch('/api/update/download', {method: 'POST', headers: {'Content-Type': 'application/json', 'X-Komyst-Correlation-Id': correlationId}, body: '{}', signal: controller.signal});
+              clearTimeout(timeoutId);
+              const result = await fetched.json().catch(() => ({}));
+              if (!fetched.ok || !result.download_token) throw new Error('download_failed');
+              download.textContent = 'Cancelar'; download.disabled = false;
+              const poll = async () => {
+                const status = await fetch(`/api/update/download/status?token=${encodeURIComponent(result.download_token)}`, {cache: 'no-store'});
+                const current = await status.json().catch(() => ({}));
+                if (current.state === 'downloading' || current.state === 'starting') {
+                  const received = Number(current.received || 0), expected = Number(current.expected || data.package_size || 0);
+                  const mb = n => (n / 1048576).toFixed(1);
+                  setState('downloading', 'Baixando atualização…', expected ? `${Math.floor(received * 100 / expected)}% · ${mb(received)} MB / ${mb(expected)} MB` : `${mb(received)} MB recebidos`);
+                  setTimeout(poll, 300); return;
+                }
+                if (current.state === 'ready_to_install') {
+                  setState('ready_to_install', 'Atualização pronta para instalar', 'O instalador foi baixado e verificado.');
+                  download.textContent = 'Instalar agora'; download.disabled = false;
+                  download.onclick = async () => {
+                    download.disabled = true; setState('installing', 'Instalando atualização…', 'O Komyst será fechado para concluir a instalação.');
+                    const installed = await fetch('/api/update/install', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({handoff_token: current.handoff_token})});
+                    const installedJson = await installed.json().catch(() => ({}));
+                    if (!installed.ok) { setState('error', 'Instalação indisponível', 'A versão atual continua utilizável.'); download.disabled = false; return; }
+                    setState('installing', 'Instalação iniciada', 'O Komyst será fechado para concluir a atualização.');
+                    if (installed.ok && installedJson?.shutdown_required) {
+                      if (window.pywebview?.api?.request_shutdown) await window.pywebview.api.request_shutdown();
+                      else setTimeout(() => window.close(), 200);
+                    }
+                  }; return;
+                }
+                if (current.state === 'cancelled') { setState('update_available', `Versão ${data.available_version} disponível`, 'Download cancelado.'); download.textContent = 'Baixar e instalar'; download.disabled = false; return; }
+                throw new Error(current.error || 'download_failed');
+              };
+              download.onclick = async () => { download.disabled = true; await fetch(`/api/update/download/cancel?token=${encodeURIComponent(result.download_token)}`, {method: 'POST'}); };
+              await poll();
+            } catch (error) {
+              clearTimeout(timeoutId);
+              const timedOut = error?.name === 'AbortError';
+              setState('error', timedOut ? 'Download demorou além do esperado' : 'Download indisponível', timedOut
+                ? `A solicitação não respondeu. ID de diagnóstico: ${correlationId}`
+                : `A versão atual continua utilizável. ID de diagnóstico: ${correlationId}`);
+              download.textContent = 'Baixar e instalar';
+              download.onclick = null;
+              download.disabled = false;
+            }
+          };
+        }
+      }
+      else if (data.state === 'not_configured') setState('error', 'Atualizações ainda não publicadas', 'O canal beta será habilitado quando a próxima versão for publicada.');
+      else setState('up_to_date', 'Você está usando a versão mais recente.', 'Nenhuma atualização está disponível neste momento.');
+    } catch (_) { setState('error', 'Não foi possível verificar agora', 'Tente novamente mais tarde.'); }
+    finally { button.disabled = false; if (button.dataset.updateState === 'error' || button.dataset.updateState === 'up_to_date' || button.dataset.updateState === 'update_available') button.hidden = false; }
+  });
+
+  /* ---------- settings ---------- */
+  function renderSettings(settings) {
+    const apiReady = Boolean(settings.nvidia_configured);
+    // Configuration is not connectivity: static/service_health.js owns the rail
+    // badge and will not claim CONNECTED without a recent successful health probe.
+    document.documentElement.dataset.komystApiConfigured = apiReady ? '1' : '0';
+    window.dispatchEvent(new CustomEvent('komyst:api-configured-changed'));
+    applyProviderDefault(settings.translation_provider);
+    const buildVersion = String(window.__komystDisplayVersion || window.__komystBuildVersion || '').trim();
+    const installedVersion = $('#installedUpdateVersion');
+    if (installedVersion) installedVersion.textContent = buildVersion || 'Versão atual';
+    applyOcrEngineStatus(settings.ocr_engine);
+    renderWorkspaceSourcePolicy(settings.workspace_source_policy || {});
+  }
+  // The read-only OCR field reports the engine the run will really use. It offers
+  // no alternatives, and it never claims RapidOCR for a differently configured run.
+  function applyOcrEngineStatus(engine) {
+    const field = $('#ocrEngineSelect');
+    const option = field?.options?.[0];
+    if (!option) return;
+    const id = String(engine || '').trim().toLowerCase();
+    option.textContent = !id || id === 'rapidocr' ? 'RapidOCR · Ativo' : `${id} · Ativo`;
+  }
+  function renderWorkspaceSourcePolicy(policy = {}) {
+    const policyPanel = $('#workspaceSourcePolicyPanel');
+    if (policyPanel) policyPanel.hidden = true;
+    const active = policy.status === 'active'
+      && policy.all_submitted_sources_authorized === true;
+    const toggle = $('#workspaceSourcePolicyToggle');
+    if (toggle) {
+      toggle.checked = active;
+      toggle.setAttribute('aria-checked', String(active));
+    }
+    const status = $('#workspaceSourcePolicyStatus');
+    if (status) {
+      const activated = policy.activated_at
+        ? new Date(Number(policy.activated_at) * 1000).toLocaleString('pt-BR') : '—';
+      status.textContent = active
+        ? `Ativada · workspace local · desde ${activated}. A autorização vale para processamento; publicação continua sujeita à revisão.`
+        : 'Desativada · Fontes externas estão bloqueadas até ativar a política.';
+    }
+    const action = $('#workspaceSourcePolicyAction');
+    if (action) {
+      action.textContent = active ? 'Desativar política' : 'Ativar política';
+      action.classList.toggle('danger', active);
+    }
+    updateTranslationStartControls();
+  }
+  let pendingWorkspacePolicyState = null;
+  function openWorkspacePolicyConfirmation(active) {
+    pendingWorkspacePolicyState = Boolean(active);
+    const dialog = $('#workspaceSourcePolicyDialog');
+    const text = $('#workspaceSourcePolicyDialogText');
+    if (!dialog || !text) return;
+    text.textContent = active
+      ? 'Confirme que este workspace processará somente conteúdo próprio, licenciado, autorizado ou de domínio público.'
+      : 'A revogação impedirá novas autorizações automáticas, sem cancelar jobs já iniciados nem apagar o histórico.';
+    dialog.hidden = false;
+    if (typeof dialog.showModal === 'function' && !dialog.open) dialog.showModal();
+    $('#workspaceSourcePolicyConfirm')?.focus();
+  }
+  function closeWorkspacePolicyConfirmation() {
+    const dialog = $('#workspaceSourcePolicyDialog');
+    if (dialog?.open) dialog.close();
+    if (dialog) dialog.hidden = true;
+    pendingWorkspacePolicyState = null;
+  }
+  $('#workspaceSourcePolicyAction')?.addEventListener('click', () => {
+    const current = appState.settings?.workspace_source_policy || {};
+    openWorkspacePolicyConfirmation(current.status !== 'active');
+  });
+  $('#workspaceSourcePolicyToggle')?.addEventListener('click', event => {
+    event.preventDefault();
+    const current = appState.settings?.workspace_source_policy || {};
+    openWorkspacePolicyConfirmation(current.status !== 'active');
+  });
+  $('#workspaceSourcePolicyCancel')?.addEventListener('click', closeWorkspacePolicyConfirmation);
+  $('#workspaceSourcePolicyConfirmForm')?.addEventListener('submit', async event => {
+    event.preventDefault();
+    if (pendingWorkspacePolicyState === null) return;
+    const desired = pendingWorkspacePolicyState;
+    const button = $('#workspaceSourcePolicyConfirm');
+    if (button) button.disabled = true;
+    try {
+      const result = await api('/api/ui/source-policy', {
+        method: 'POST', body: JSON.stringify({active: desired}),
+      });
+      appState.settings.workspace_source_policy = result.policy || {};
+      renderWorkspaceSourcePolicy(result.policy || {});
+      if (appState.sourceReady) renderSourceAnalysisReady(appState.sourceReady);
+      updateTranslationStartControls();
+      closeWorkspacePolicyConfirmation();
+      showToast(desired ? 'Política das fontes ativada.' : 'Política das fontes revogada.', 'ok');
+    } catch (error) {
+      showToast(error.message || 'Não foi possível alterar a política das fontes.', 'error');
+      renderWorkspaceSourcePolicy(appState.settings?.workspace_source_policy || {});
+    } finally {
+      if (button) button.disabled = false;
+    }
+  });
+  const settingsTabs = [$('#settingsGeneralTab'), $('#settingsThemesTab')].filter(Boolean);
+  function selectSettingsTab(tab, focus = false) {
+    settingsTabs.forEach(item => {
+      const active = item === tab;
+      item.setAttribute('aria-selected', String(active));
+      item.tabIndex = active ? 0 : -1;
+      const panel = document.getElementById(item.getAttribute('aria-controls'));
+      if (panel) panel.hidden = !active;
+    });
+    if (focus) tab?.focus();
+  }
+  settingsTabs.forEach((tab, index) => {
+    tab.addEventListener('click', () => selectSettingsTab(tab));
+    tab.addEventListener('keydown', event => {
+      if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+      event.preventDefault();
+      const next = event.key === 'Home' ? 0 : event.key === 'End' ? settingsTabs.length - 1
+        : (index + (event.key === 'ArrowRight' ? 1 : -1) + settingsTabs.length) % settingsTabs.length;
+      selectSettingsTab(settingsTabs[next], true);
+    });
+  });
+  $$('input[name="komyst-theme"]').forEach(input => input.addEventListener('change', () => {
+    if (input.checked) applyKomystTheme(input.value, true);
+  }));
+
+  function applyProductSettings(settings = {}) {
+    const form = $('#productSettingsForm');
+    if (!form) return;
+    if (typeof settings.translate_sfx === 'boolean') appState.translateSfx = settings.translate_sfx;
+    const sfxStatus = $('#translateSfxStatus');
+    if (sfxStatus) sfxStatus.textContent = `${appState.translateSfx === true ? 'Ativado' : 'Desativado'} · vale para novos jobs`;
+    Object.entries(settings).forEach(([key, value]) => {
+      if (key === 'passive_ads_enabled') return;
+      const field = form.elements.namedItem(key);
+      if (!field) return;
+      if (field.type === 'checkbox') field.checked = Boolean(value);
+      else field.value = String(value);
+    });
+    const language = $('#interfaceLanguageSelect');
+    if (language && window.KomystI18n) {
+      language.value = window.KomystI18n.selectedLanguage();
+      window.KomystI18n.apply(document);
+    }
+  }
+  $('#translateSfxToggle')?.addEventListener('change', async event => {
+    const toggle = event.currentTarget;
+    const previous = appState.translateSfx === true;
+    toggle.disabled = true;
+    try {
+      const result = await api('/api/community/settings', {
+        method: 'PUT', body: JSON.stringify({translate_sfx: toggle.checked === true}),
+      });
+      applyProductSettings(result.settings || {});
+      $('#translateSfxStatus').textContent = `${toggle.checked ? 'Ativado' : 'Desativado'} · vale para novos jobs`;
+      showToast('Preferência de SFX salva para os próximos jobs.', 'ok');
+    } catch (error) {
+      toggle.checked = previous;
+      showToast(error.message || 'Não foi possível salvar a opção de SFX.', 'error');
+    } finally { toggle.disabled = false; }
+  });
+  function renderPassiveAdsPreference(enabled) {
+    const toggle = $('#passiveAdsToggle');
+    if (toggle) toggle.checked = enabled === true;
+    const status = $('#passiveAdsStatus');
+    if (status) status.textContent = enabled === true ? 'Ativado' : 'Desativado';
+  }
+  window.addEventListener('komyst-passive-ads-preference-changed', event => {
+    renderPassiveAdsPreference(event.detail?.enabled === true);
+    const wallet = window.__komystControlPlane?.state?.wallet;
+    const balance = $('#passiveAdsBalance');
+    if (balance && wallet) balance.textContent = `YK utilizáveis agora: ${Number(wallet.usable_now ?? wallet.active_yk ?? 0)}`;
+  });
+  $('#passiveAdsToggle')?.addEventListener('change', async event => {
+    const toggle = event.currentTarget;
+    const desired = toggle.checked === true;
+    const previous = !desired;
+    toggle.disabled = true;
+    try {
+      const cp = window.__komystControlPlane;
+      if (!cp?.setPassiveAdsPreference) throw Object.assign(new Error('server_unavailable'), {code: 'server_unavailable'});
+      await cp.setPassiveAdsPreference(desired);
+      if (cp.state?.wallet) { try { cp.applyWallet(await cp.call('wallet-summary'), 'wallet-summary'); cp.render?.(); } catch (_) {} }
+      showToast(desired ? 'Anúncios passivos ativados.' : 'Anúncios passivos desativados.', 'ok');
+    } catch (errorValue) {
+      toggle.checked = previous;
+      showToast(errorValue?.message || 'Não foi possível salvar a preferência de anúncios.', 'error');
+    } finally { toggle.disabled = false; }
+  });
+  async function loadProductSettings() {
+    if (!isCanonicalCommunityAuthenticated()) return;
+    try {
+      const result = await api('/api/community/settings');
+      applyProductSettings(result.settings || {});
+    } catch (_) { /* settings stay at safe defaults */ }
+  }
+  function collectProductSettings() {
+    const form = $('#productSettingsForm');
+    const payload = {};
+    if (!form) return payload;
+    Array.from(form.elements).forEach(field => {
+      if (!field.name) return;
+      payload[field.name] = field.type === 'checkbox' ? field.checked : field.value;
+    });
+    return payload;
+  }
+  $('#productSettingsForm')?.addEventListener('submit', async event => {
+    event.preventDefault();
+    const button = $('#settingsSaveBtn');
+    const error = $('#settingsError');
+    if (button) { button.disabled = true; button.textContent = 'Salvando...'; }
+    if (error) error.hidden = true;
+    try {
+      const result = await api('/api/community/settings', {
+        method: 'PUT',
+        body: JSON.stringify(collectProductSettings()),
+      });
+      applyProductSettings(result.settings || {});
+      showToast('Configurações salvas.', 'ok');
+    } catch (errorValue) {
+      if (error) { error.textContent = humanCommunityError(errorValue, 'Não foi possível salvar configurações.'); error.hidden = false; }
+    } finally {
+      if (button) { button.disabled = false; button.textContent = 'Salvar configurações'; }
+    }
+  });
+  /* ---------- contact: source requests and feedback ---------- */
+  // Both go to the contact-request Edge Function, which stores the message and
+  // e-mails the team; the sender is the signed-in account, never a typed address.
+  const CONTACT_ERRORS = {
+    invalid_url: 'Cole um endereço completo, começando com https://.',
+    invalid_message: 'Escreva pelo menos algumas palavras.',
+    rate_limited: 'Você enviou várias mensagens na última hora. Tente de novo mais tarde.',
+    server_unavailable: 'Entre na sua conta para enviar.',
+  };
+  async function sendContact(kind, fields) {
+    const cp = window.__komystControlPlane;
+    if (!cp?.call) throw Object.assign(new Error('server_unavailable'), {code: 'server_unavailable'});
+    return cp.call('contact-request', {kind, ...fields});
+  }
+  function contactErrorText(error) {
+    return CONTACT_ERRORS[error?.code] || CONTACT_ERRORS[error?.message] || 'Não foi possível enviar agora. Tente novamente em instantes.';
+  }
+  function setSourceRequestOpen(open) {
+    const overlay = $('#sourceRequestOverlay');
+    if (!overlay) return;
+    overlay.classList.toggle('show', open);
+    overlay.setAttribute('aria-hidden', open ? 'false' : 'true');
+    if (open) {
+      $('#sourceRequestForm')?.reset();
+      $('#sourceRequestError').hidden = true;
+      $('#sourceRequestUrl')?.focus();
+    }
+  }
+  $('#sourceRequestOpen')?.addEventListener('click', () => setSourceRequestOpen(true));
+  $('#sourceRequestClose')?.addEventListener('click', () => setSourceRequestOpen(false));
+  $('#sourceRequestCancel')?.addEventListener('click', () => setSourceRequestOpen(false));
+  $('#sourceRequestOverlay')?.addEventListener('click', event => { if (event.target === event.currentTarget) setSourceRequestOpen(false); });
+  $('#sourceRequestOverlay')?.addEventListener('keydown', event => { if (event.key === 'Escape') setSourceRequestOpen(false); });
+  $('#sourceRequestForm')?.addEventListener('submit', async event => {
+    event.preventDefault();
+    const url = String($('#sourceRequestUrl')?.value || '').trim();
+    const error = $('#sourceRequestError');
+    const button = $('#sourceRequestSubmit');
+    if (!/^https?:\/\/\S+\.\S+/i.test(url)) { error.textContent = CONTACT_ERRORS.invalid_url; error.hidden = false; return; }
+    button.disabled = true; button.textContent = 'Enviando…'; error.hidden = true;
+    try {
+      await sendContact('source_request', {url, message: String($('#sourceRequestNote')?.value || '').trim()});
+      setSourceRequestOpen(false);
+      showToast('Pedido enviado. Obrigado pela sugestão!', 'ok');
+    } catch (errorValue) {
+      error.textContent = contactErrorText(errorValue); error.hidden = false;
+    } finally { button.disabled = false; button.textContent = 'Enviar pedido'; }
+  });
+  $('#feedbackSubmit')?.addEventListener('click', async () => {
+    const field = $('#feedbackMessage');
+    const error = $('#feedbackError');
+    const button = $('#feedbackSubmit');
+    const message = String(field?.value || '').trim();
+    if (message.length < 3) { error.textContent = CONTACT_ERRORS.invalid_message; error.hidden = false; field?.focus(); return; }
+    button.disabled = true; button.textContent = 'Enviando…'; error.hidden = true;
+    try {
+      await sendContact('feedback', {message});
+      field.value = '';
+      showToast('Feedback enviado. Obrigado!', 'ok');
+    } catch (errorValue) {
+      error.textContent = contactErrorText(errorValue); error.hidden = false;
+    } finally { button.disabled = false; button.textContent = 'Enviar feedback'; }
+  });
+  $('#interfaceLanguageSelect')?.addEventListener('change', event => {
+    window.KomystI18n?.setLanguage(event.target.value);
+  });
+  $('#settingsClearSession')?.addEventListener('click', async () => {
+    if (!await komystConfirm('Limpar a sessão atual neste navegador?', {title: 'Limpar sessão', confirmLabel: 'Limpar'})) return;
+    try {
+      await api('/api/community/auth/logout', {method: 'POST', body: JSON.stringify({})});
+    } catch (_) {
+      /* stale logout may already be complete */
+    }
+    setGlobal('__komystAccessToken', '');
+    setGlobal('__komystAuthState', 'unauthenticated');
+    setGlobal('__komystCommunityAuthenticated', false);
+    window.dispatchEvent(new CustomEvent('komyst-auth-changed', {
+      detail: {authenticated: false, state: 'unauthenticated'},
+    }));
+    showToast('Sessão local limpa.', 'ok');
+  });
+  $('#settingsClearLocalData')?.addEventListener('click', async () => {
+    if (!await komystConfirm('Limpar preferências locais deste navegador? Outputs e cache do projeto não serão apagados.', {title: 'Limpar dados locais', confirmLabel: 'Limpar', danger: true})) return;
+    try {
+      localStorage.removeItem('komyst.interfaceLanguage');
+      sessionStorage.clear();
+    } catch (_) { /* storage may be unavailable */ }
+    window.KomystI18n?.setLanguage('auto');
+    showToast('Dados locais da interface limpos.', 'ok');
+  });
+  $('#settingsResetBtn')?.addEventListener('click', async () => {
+    try {
+      const result = await api('/api/community/settings', {method: 'PUT', body: JSON.stringify({})});
+      applyProductSettings(result.settings || {});
+      showToast('Configurações restauradas.', 'ok');
+    } catch (errorValue) {
+      showToast(humanCommunityError(errorValue, 'Não foi possível restaurar configurações.'), 'error');
+    }
+  });
+
+  /* ---------- signed updater UI ---------- */
+  (function initUpdaterUI() {
+    const statusEl = $('#updaterStatus');
+    const installedEl = $('#updaterInstalledVersion');
+    const availableRow = $('#updaterAvailableRow');
+    const availableEl = $('#updaterAvailableVersion');
+    const releaseDateRow = $('#updaterReleaseDateRow');
+    const releaseDateEl = $('#updaterReleaseDate');
+    const notesEl = $('#updaterReleaseNotes');
+    const installBtn = $('#updaterInstallBtn');
+    const checkBtn = $('#updaterCheckBtn');
+    const cancelBtn = $('#updaterCancelBtn');
+    const errorEl = $('#updaterError');
+    const headerBadge = $('#updateAvailableBadge');
+    if (!statusEl || !checkBtn || !installBtn) return;
+
+    let downloadToken = '';
+    let handoffToken = '';
+    let pollTimer = 0;
+
+    function setUpdaterStatus(text, state = 'neutral') {
+      statusEl.textContent = text;
+      statusEl.className = `settings-status-pill updater-${state}`;
+    }
+
+    function stopPolling() {
+      if (pollTimer) window.clearTimeout(pollTimer);
+      pollTimer = 0;
+    }
+
+    function resetDownloadControls() {
+      stopPolling();
+      downloadToken = '';
+      handoffToken = '';
+      installBtn.disabled = false;
+      installBtn.textContent = 'Baixar atualização';
+      installBtn.hidden = true;
+      cancelBtn.hidden = true;
+    }
+
+    async function checkForUpdate() {
+      checkBtn.disabled = true;
+      if (errorEl) errorEl.hidden = true;
+      setUpdaterStatus('Verificando atualização assinada…');
+      try {
+        const data = await api('/api/update/manifest');
+        if (installedEl) installedEl.textContent = data.version || '—';
+        if (data.state === 'not_configured') {
+          resetDownloadControls();
+          if (availableRow) availableRow.hidden = true;
+          if (releaseDateRow) releaseDateRow.hidden = true;
+          if (notesEl) notesEl.hidden = true;
+          if (headerBadge) headerBadge.hidden = true;
+          setUpdaterStatus('Canal de atualização não configurado.');
+          return;
+        }
+        if (data.state === 'error') throw new Error('manifest_unavailable');
+        if (data.state === 'up_to_date') {
+          resetDownloadControls();
+          if (availableRow) availableRow.hidden = true;
+          if (releaseDateRow) releaseDateRow.hidden = true;
+          if (notesEl) notesEl.hidden = true;
+          if (headerBadge) headerBadge.hidden = true;
+          setUpdaterStatus('Você está na versão mais recente.', 'ok');
+          return;
+        }
+        if (!['update_available', 'mandatory'].includes(data.state)) {
+          throw new Error('manifest_state_invalid');
+        }
+        if (availableEl) availableEl.textContent = data.available_version || '—';
+        if (availableRow) availableRow.hidden = false;
+        if (data.published_at && releaseDateEl) {
+          const date = new Date(data.published_at);
+          releaseDateEl.textContent = Number.isNaN(date.getTime())
+            ? String(data.published_at) : date.toLocaleDateString('pt-BR');
+          if (releaseDateRow) releaseDateRow.hidden = false;
+        } else if (releaseDateRow) releaseDateRow.hidden = true;
+        if (notesEl) {
+          notesEl.textContent = String(data.release_notes || '');
+          notesEl.hidden = !data.release_notes;
+        }
+        const mandatory = data.state === 'mandatory' || data.mandatory === true;
+        setUpdaterStatus(mandatory
+          ? `Atualização obrigatória disponível: ${data.available_version || ''}`
+          : `Atualização disponível: ${data.available_version || ''}`,
+        mandatory ? 'warn' : 'ok');
+        installBtn.hidden = data.can_install !== true;
+        installBtn.disabled = false;
+        installBtn.textContent = 'Baixar atualização';
+        if (headerBadge) headerBadge.hidden = false;
+      } catch (_) {
+        setUpdaterStatus('Não foi possível verificar atualizações.', 'warn');
+        if (errorEl) {
+          errorEl.textContent = 'Verifique sua conexão e tente novamente.';
+          errorEl.hidden = false;
+        }
+      } finally {
+        checkBtn.disabled = false;
+      }
+    }
+
+    async function pollDownload() {
+      if (!downloadToken) return;
+      try {
+        const data = await api(`/api/update/download/status?token=${encodeURIComponent(downloadToken)}`);
+        if (data.state === 'starting' || data.state === 'downloading' || data.state === 'cancelling') {
+          const expected = Number(data.expected || 0);
+          const received = Number(data.received || 0);
+          const percent = expected > 0 ? ` ${Math.min(100, Math.floor(received * 100 / expected))}%` : '';
+          setUpdaterStatus(`Baixando atualização${percent}…`);
+          pollTimer = window.setTimeout(pollDownload, 800);
+          return;
+        }
+        if (data.state === 'ready_to_install' && typeof data.handoff_token === 'string' && data.handoff_token) {
+          handoffToken = data.handoff_token;
+          downloadToken = '';
+          if (cancelBtn) cancelBtn.hidden = true;
+          installBtn.hidden = false;
+          installBtn.disabled = false;
+          installBtn.textContent = 'Instalar e reiniciar';
+          setUpdaterStatus('Atualização verificada e pronta para instalar.', 'ok');
+          return;
+        }
+        resetDownloadControls();
+        setUpdaterStatus(data.state === 'cancelled'
+          ? 'Download cancelado.' : 'Não foi possível preparar a atualização.', 'warn');
+        if (data.state !== 'cancelled' && errorEl) {
+          errorEl.textContent = 'Tente verificar e baixar novamente.';
+          errorEl.hidden = false;
+        }
+      } catch (_) {
+        resetDownloadControls();
+        setUpdaterStatus('Não foi possível consultar o download.', 'warn');
+        if (errorEl) {
+          errorEl.textContent = 'Verifique a conexão e tente novamente.';
+          errorEl.hidden = false;
+        }
+      }
+    }
+
+    async function startDownload() {
+      installBtn.disabled = true;
+      if (errorEl) errorEl.hidden = true;
+      setUpdaterStatus('Iniciando download verificado…');
+      try {
+        const data = await api('/api/update/download', {method: 'POST', body: JSON.stringify({})});
+        if (data.state !== 'downloading' || typeof data.download_token !== 'string' || !data.download_token) {
+          throw new Error('download_not_started');
+        }
+        downloadToken = data.download_token;
+        installBtn.hidden = true;
+        installBtn.disabled = false;
+        if (cancelBtn) cancelBtn.hidden = false;
+        setUpdaterStatus('Download iniciado.');
+        pollTimer = window.setTimeout(pollDownload, 500);
+      } catch (_) {
+        resetDownloadControls();
+        setUpdaterStatus('Não foi possível iniciar o download.', 'warn');
+        if (errorEl) {
+          errorEl.textContent = 'Confira se há uma atualização instalável e tente novamente.';
+          errorEl.hidden = false;
+        }
+      }
+    }
+
+    checkBtn.addEventListener('click', checkForUpdate);
+    if (headerBadge) headerBadge.addEventListener('click', () => {
+      activateTab('updates');
+      $('#updaterPanel')?.scrollIntoView({behavior: 'smooth', block: 'start'});
+    });
+    installBtn.addEventListener('click', async () => {
+      if (!handoffToken) return startDownload();
+      installBtn.disabled = true;
+      setUpdaterStatus('Iniciando instalador verificado…');
+      try {
+        await api('/api/update/install', {
+          method: 'POST', body: JSON.stringify({handoff_token: handoffToken}),
+        });
+        setUpdaterStatus('Instalador iniciado. O aplicativo será reiniciado.', 'ok');
+      } catch (_) {
+        installBtn.disabled = false;
+        setUpdaterStatus('Não foi possível iniciar o instalador.', 'warn');
+        if (errorEl) {
+          errorEl.textContent = 'O download permanece verificado. Tente instalar novamente.';
+          errorEl.hidden = false;
+        }
+      }
+    });
+    if (cancelBtn) cancelBtn.addEventListener('click', async () => {
+      if (!downloadToken) return;
+      cancelBtn.disabled = true;
+      try {
+        await api(`/api/update/download/cancel?token=${encodeURIComponent(downloadToken)}`, {method: 'POST'});
+        setUpdaterStatus('Cancelando download…');
+      } catch (_) {
+        setUpdaterStatus('Não foi possível cancelar o download.', 'warn');
+      } finally {
+        cancelBtn.disabled = false;
+      }
+    });
+
+    window.setTimeout(checkForUpdate, 3000);
+  })();
+
+  /* ---------- copy ---------- */
+  $('#copyRepo')?.addEventListener('click', async event => {
+    try { await navigator.clipboard.writeText(event.currentTarget.dataset.copy || ''); showToast('Copiado.', 'ok'); }
+    catch (_) { showToast('Não foi possível copiar.', 'error'); }
+  });
+  document.addEventListener('keydown', event => {
+    const tag = document.activeElement?.tagName || '';
+    if (['INPUT', 'TEXTAREA', 'SELECT'].includes(tag)) return;
+    const index = Number(event.key) - 1;
+    const tabs = $$('.rail-tab');
+    if (index >= 0 && index < tabs.length) activateTab(tabs[index].dataset.tab);
+  });
+
+  /* ---------- data lifecycle ---------- */
+  function applyStandaloneSourceReady(data) {
+    if (!data?.source_ready && data?.standalone_source_ready && !data?.active
+        && !data?.source_review && !data?.pending) {
+      data.source_ready = data.standalone_source_ready;
+      data.status = 'source_analysis_ready';
+    }
+    return data;
+  }
+  // Single flight. refreshBootstrap renders on its way out and rendering can
+  // ask for a refresh, so without this any such trigger becomes a loop rather
+  // than one extra request. Callers that need the settled result await the
+  // in-flight run instead of starting a second one.
+  let bootstrapInFlight = null;
+  async function refreshBootstrap() {
+    if (bootVisualTest) return;
+    if (bootstrapInFlight) return bootstrapInFlight;
+    bootstrapInFlight = runBootstrapRefresh().finally(() => { bootstrapInFlight = null; });
+    return bootstrapInFlight;
+  }
+  setGlobal('__komystRefreshBootstrap', refreshBootstrap);
+  uiTrace('UI_BRIDGE_REGISTERED', {ui_generation: 1, bridge_type: typeof window.__komystRefreshBootstrap});
+  uiTrace('UI_CHANNEL_PING_SENT', {ui_generation: 1});
+  uiTrace('UI_BRIDGE_READY_SENT', {ui_generation: 1});
+  const pendingAuthGeneration = Number(getGlobal('__komystPendingAuthBootstrapGeneration') || 0);
+  if (pendingAuthGeneration && String(getGlobal('__komystAuthState') || '') === 'authenticated') {
+    uiTrace('UI_BRIDGE_READY_RECEIVED', {auth_generation: pendingAuthGeneration, pending: true});
+    setGlobal('__komystPendingAuthBootstrapGeneration', 0);
+    uiTrace('CONTROL_PLANE_PENDING_AUTH_REPLAY_START', {auth_generation: pendingAuthGeneration});
+    void refreshBootstrap().finally(() => {
+      uiTrace('CONTROL_PLANE_PENDING_AUTH_REPLAY_RESULT', {auth_generation: pendingAuthGeneration, success: true});
+    });
+  }
+  async function runBootstrapRefresh() {
+    const bootstrapGeneration = appState.authGeneration;
+    try {
+      setBootStage(1);
+      const data = await api(`/api/ui/bootstrap?cursor=${appState.cursor}`);
+      setBootStage(2);
+      appState.bootstrap = data;
+      appState.history = Array.isArray(data.history) ? data.history : [];
+      const authState = syncCanonicalAuthFromBootstrap(data);
+      setBootStage(3);
+      const authenticated = authState === 'authenticated';
+      if (bootstrapGeneration !== appState.authGeneration) return;
+      setBootStage(4);
+      setGlobal('__komystDisplayName', '');
+      appState.settings = data.settings || {};
+      applyStandaloneSourceReady(data);
+      setBootStage(5);
+      // A reported 0 is a revision, not an absence: `||` discarded it and kept
+      // the stale value, so the comparison downstream never converged.
+      if (isReportedRevision(data.history_revision)) {
+        appState.historyRevision = data.history_revision;
+      }
+      renderSettings(appState.settings);
+      applyCanonicalAuthSurface(authState);
+      if (authenticated) {
+        void loadProductSettings();
+        await loadPendingHumanPreviews();
+      } else {
+        clearPendingHumanPreviews();
+      }
+      renderHistory('bootstrap_refresh');
+      renderDashboard();
+      if (!appState.reviewRestoreAttempted) {
+        appState.reviewRestoreAttempted = true;
+        restoreReviewModeFromUrl();
+      }
+      setBootStage(6);
+      renderRuntime(data);
+      uiTrace('READINESS_RECOMPUTE', {sequence: bootstrapGeneration, readiness_account_required: false, readiness_ready: Boolean(updateTranslationStartControls()?.canStart), reason: 'account_ready'});
+      rememberRuntimeTerminalState(data);
+      setBootStage(7);
+      window.clearTimeout(bootTimer);
+      window.setTimeout(closeBoot, 250);
+    } catch (error) {
+      window.clearTimeout(bootTimer);
+      if (!bootHasClosed) {
+        setBootFailed('Não foi possível carregar a interface.');
+      } else {
+        // A refresh timeout is not a failed first boot. The boot overlay is
+        // already hidden; changing shellState to boot_failed here hid both
+        // the authenticated panel and login, leaving only a dark background.
+        const status = $('#appStatus');
+        if (status) { status.textContent = 'reconectando'; status.dataset.state = 'warning'; }
+      }
+      showToast(`Interface local: ${error.message}`, 'error');
+    }
+  }
+  async function pollState() {
+    if (appState.polling || document.hidden) return;
+    // /api/ui/state describes the authenticated panel and answers 401 without a
+    // session, so polling it on the login screen only produced errors at the
+    // interval's cadence. The session is announced by komyst-auth-changed;
+    // this never has to poll to discover that it may start polling.
+    if (!isCanonicalCommunityAuthenticated()) return;
+    appState.polling = true;
+    try {
+      const data = await api(`/api/ui/state?cursor=${appState.cursor}`);
+      applyStandaloneSourceReady(data);
+      renderRuntime(data);
+      handleTerminalRuntimeTransition(data);
+      stopPollingForTerminal(data);
+      appState.cursor = Math.max(appState.cursor, Number(data.log_cursor || 0));
+      document.documentElement.dataset.uiPollCount = String(Number(document.documentElement.dataset.uiPollCount || 0) + 1);
+      uiTrace('EVENT_CURSOR_ADVANCED', {status: appState.status});
+    } catch (error) {
+      $('#appStatus').textContent = 'sem conexão';
+      $('#appStatus').dataset.state = 'error';
+    } finally { appState.polling = false; }
+  }
+  function terminalRuntimeStatus(runtime) {
+    const record = runtime?.active || runtime?.source_review || runtime?.source_ready
+      || runtime?.latest || runtime?.latest_result || null;
+    return String(record?.status || runtime?.status || '').toLowerCase();
+  }
+  function stopPollingForTerminal(runtime) {
+    const status = terminalRuntimeStatus(runtime);
+    if (!terminalRunStatuses.has(status)) return false;
+    const timer = getGlobal('__komystUiPollingTimer');
+    if (timer) {
+      window.clearInterval(timer);
+      setGlobal('__komystUiPollingTimer', 0);
+      uiTrace('POLLING_STOPPED', {status, reason: 'terminal_runtime'});
+    }
+    return true;
+  }
+  function ensurePolling() {
+    if (getGlobal('__komystUiPollingTimer')) {
+      uiTrace('POLLING_DUPLICATE_BLOCKED', {status: appState.status});
+      return getGlobal('__komystUiPollingTimer');
+    }
+    const timer = window.setInterval(pollState, 850);
+    setGlobal('__komystUiPollingTimer', timer);
+    uiTrace('POLLING_STARTED', {status: appState.status});
+    return timer;
+  }
+  refreshBootstrap();
+  ensurePolling();
+  document.documentElement.dataset.komystUiReady = '1';
+  window.addEventListener('beforeunload', () => {
+    window.clearInterval(getGlobal('__komystUiPollingTimer'));
+    setGlobal('__komystUiPollingTimer', 0);
+    uiTrace('POLLING_STOPPED', {status: appState.status});
+    cancelAnimationFrame(animationFrame);
+  }, {once: true});
+  window.addEventListener('unhandledrejection', event => {
+    const reason = event.reason || {};
+    showToast(reason.message || 'Uma operação não foi concluída.', 'error');
+  });
+})();

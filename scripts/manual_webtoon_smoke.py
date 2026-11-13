@@ -24,13 +24,13 @@ def _load_pipeline_dependencies():
     from PIL import Image as pillow_image
     from PIL import ImageStat as pillow_image_stat
 
-    import yomu.config.settings as runtime_config
-    from yomu.download.down import download_images as runtime_download_images
-    from yomu.core.json_utils import dump_json as runtime_dump_json
-    from yomu.core.json_utils import dumps_json as runtime_dumps_json
-    from yomu.ocr.ocr_balloon import process_image_file as runtime_process_image_file
-    from yomu.export.pdf import generate_pdf as runtime_generate_pdf
-    from yomu.translation.providers.translator_nllb import get_translator as runtime_get_translator
+    import komyst.config.settings as runtime_config
+    from komyst.download.down import download_images as runtime_download_images
+    from komyst.core.json_utils import dump_json as runtime_dump_json
+    from komyst.core.json_utils import dumps_json as runtime_dumps_json
+    from komyst.ocr.ocr_balloon import process_image_file as runtime_process_image_file
+    from komyst.export.pdf import generate_pdf as runtime_generate_pdf
+    from komyst.translation.providers.translator_nllb import get_translator as runtime_get_translator
 
     Image = pillow_image
     ImageStat = pillow_image_stat
@@ -146,7 +146,7 @@ def run_smoke(args, output_folder: Path) -> int:
         return 0
 
     if args.benchmark:
-        from yomu.pipeline.benchmark_pipeline import run_benchmark
+        from komyst.pipeline.benchmark_pipeline import run_benchmark
 
         run_benchmark(args)
         return 0

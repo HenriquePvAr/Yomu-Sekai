@@ -2,12 +2,12 @@ from types import SimpleNamespace
 
 import numpy as np
 
-from yomu.clean.inpainting.flux_edit import manga_reconstruction_prompt
+from komyst.clean.inpainting.flux_edit import manga_reconstruction_prompt
 
 
 def test_reference_edit_uses_aligned_reference_without_native_mask(tmp_path, monkeypatch):
     import cv2
-    from yomu.clean.inpainting import flux_edit as fe
+    from komyst.clean.inpainting import flux_edit as fe
 
     image = np.full((35, 67, 3), 47, np.uint8)
     metrics = {}
@@ -33,7 +33,7 @@ def test_reference_edit_uses_aligned_reference_without_native_mask(tmp_path, mon
 
 def test_reference_edit_refuses_changed_geometry(tmp_path, monkeypatch):
     import cv2
-    from yomu.clean.inpainting import flux_edit as fe
+    from komyst.clean.inpainting import flux_edit as fe
 
     def run(command, **kwargs):
         cv2.imwrite(command[command.index("-o")+1], np.zeros((32, 32, 3), np.uint8))
@@ -47,7 +47,7 @@ def test_reference_edit_refuses_changed_geometry(tmp_path, monkeypatch):
 
 
 def test_general_adapter_preserves_every_pixel_outside_mask(monkeypatch):
-    from yomu.clean.inpainting import flux_edit as fe
+    from komyst.clean.inpainting import flux_edit as fe
     image = np.full((300, 300, 3), 28, np.uint8)
     mask = np.zeros((300, 300), np.uint8)
     mask[100:120, 130:155] = 255
@@ -65,7 +65,7 @@ def test_general_adapter_preserves_every_pixel_outside_mask(monkeypatch):
 
 
 def test_caption_enable_does_not_enable_general_sfx_reconstruction(tmp_path, monkeypatch):
-    from yomu.clean.inpainting import flux_edit as fe
+    from komyst.clean.inpainting import flux_edit as fe
     for name in ("sd-cli.exe", "flux-2-klein-4b-Q4_0.gguf", "flux2-vae.safetensors", "qwen3-4b-q4_k_m.gguf"):
         (tmp_path/name).touch()
     monkeypatch.setattr(fe, "_model_dir", lambda: tmp_path)
@@ -76,8 +76,8 @@ def test_caption_enable_does_not_enable_general_sfx_reconstruction(tmp_path, mon
 
 
 def test_native_edit_uses_shared_ocr_lama_gpu_lock_and_returns_owned_cache(tmp_path, monkeypatch):
-    from yomu.clean.inpainting import flux_edit as fe
-    from yomu.core.gpu import DIRECTML_LOCK
+    from komyst.clean.inpainting import flux_edit as fe
+    from komyst.core.gpu import DIRECTML_LOCK
     for name in ("sd-cli.exe", "flux-2-klein-4b-Q4_0.gguf", "flux2-vae.safetensors", "qwen3-4b-q4_k_m.gguf"):
         (tmp_path/name).touch()
     monkeypatch.setattr(fe, "_model_dir", lambda: tmp_path)
@@ -125,8 +125,8 @@ def test_flux_prompt_falls_back_to_surrounding_manga_art():
 
 
 def test_generative_second_chance_uses_protected_mask_and_context_prompt(monkeypatch):
-    import yomu.ocr.ocr_balloon as ob
-    from yomu.clean.inpainting import flux_edit
+    import komyst.ocr.ocr_balloon as ob
+    from komyst.clean.inpainting import flux_edit
 
     image = np.zeros((12, 12, 3), dtype=np.uint8)
     cleanup = np.zeros((12, 12), dtype=np.uint8)

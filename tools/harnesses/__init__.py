@@ -1,1 +1,1 @@
-"""Yomu package."""
+"""Komyst package."""

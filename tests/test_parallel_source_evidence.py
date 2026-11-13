@@ -2,10 +2,10 @@
 import test_support._test_bootstrap as _bootstrap  # noqa: F401
 import threading
 import numpy as np
-from yomu.ocr import ocr_line_provenance as provenance, source_completeness
-from yomu.ocr.ocr_engine import OCRLine
-from yomu.ocr.ocr_balloon import TextGroup
-from yomu.pipeline import benchmark_pipeline as pipeline
+from komyst.ocr import ocr_line_provenance as provenance, source_completeness
+from komyst.ocr.ocr_engine import OCRLine
+from komyst.ocr.ocr_balloon import TextGroup
+from komyst.pipeline import benchmark_pipeline as pipeline
 
 
 def test_parallel_preflight_keeps_page_owned_ocr_evidence(monkeypatch):

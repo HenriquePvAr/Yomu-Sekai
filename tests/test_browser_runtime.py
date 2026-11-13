@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from yomu.download.browser_runtime import BrowserRuntimeResolver
+from komyst.download.browser_runtime import BrowserRuntimeResolver
 
 
 class BrowserRuntimeResolverTests(unittest.TestCase):

@@ -2,7 +2,7 @@ import json
 
 import pytest
 
-from yomu.clean.gemini_fallback.quality import (
+from komyst.clean.gemini_fallback.quality import (
     QUALITY_METADATA_VERSION,
     build_quality_metadata,
     evaluate_training_candidate,

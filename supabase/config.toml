@@ -1,6 +1,6 @@
-# Local Supabase CLI configuration for Tradutor.Ia.
+# Local Supabase CLI configuration for Komyst.
 # project_id is a LOCAL name only — never the remote project ref (which stays out of Git).
-project_id = "tradutor-ia"
+project_id = "komyst"
 
 [db]
 # Port used by the local `supabase start` Postgres (requires Docker; not run in this env).

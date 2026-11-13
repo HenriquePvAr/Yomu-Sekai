@@ -13,19 +13,19 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from yomu.community.community_auth import (
+from komyst.community.community_auth import (
     CSRF_COOKIE_NAME,
     CSRF_HEADER_NAME,
     LocalSessionAuthProvider,
     SESSION_COOKIE_NAME,
 )
-from yomu.community.community_http import (
+from komyst.community.community_http import (
     CommunityNetworkBoundaryMiddleware,
     create_admin_community_router,
     create_community_router,
 )
-from yomu.community.community_api import CommunityApi
-from yomu.runtime.job_store import JobStatus, JobStore
+from komyst.community.community_api import CommunityApi
+from komyst.runtime.job_store import JobStatus, JobStore
 
 
 JOB_ID = "a" * 32

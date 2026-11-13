@@ -10,14 +10,14 @@ import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-JS = ROOT / "static" / "tradutor_ui.js"
+JS = ROOT / "static" / "komyst_ui.js"
 SHELL = ROOT / "ui" / "ui_shell.html"
 
 # The production sources that must carry no chapter-specific data.
 PRODUCTION_FILES = [
-    "yomu/review/region_taxonomy.py", "yomu/review/audit_registry.py",
-    "yomu/review/audit_decisions.py", "yomu/translation/linguistic_audit.py",
-    "static/tradutor_ui.js", "ui/ui_shell.html",
+    "komyst/review/region_taxonomy.py", "komyst/review/audit_registry.py",
+    "komyst/review/audit_decisions.py", "komyst/translation/linguistic_audit.py",
+    "static/komyst_ui.js", "ui/ui_shell.html",
 ]
 
 
@@ -181,9 +181,9 @@ class AuditUiContracts(unittest.TestCase):
 
     def test_diagnostics_probes_a_method_the_store_really_has(self):
         """A hasattr guard on a name that does not exist always reports offline."""
-        from yomu.runtime.job_store import JobStore
+        from komyst.runtime.job_store import JobStore
 
-        app = (ROOT / "yomu/ui/app.py").read_text(encoding="utf-8")
+        app = (ROOT / "komyst/ui/app.py").read_text(encoding="utf-8")
         probe = re.search(r"BRIDGE\.store\.(\w+)\(\)\s*$", app, re.M)
         block = app[app.index("def api_diagnostics"):app.index("_AUDIT_ERROR_MESSAGES")]
         called = set(re.findall(r"BRIDGE\.store\.(\w+)\(", block))
@@ -193,7 +193,7 @@ class AuditUiContracts(unittest.TestCase):
                             f"diagnostics calls store.{name}(), which does not exist")
 
     def test_diagnostics_reports_the_triage_schema_versions(self):
-        app = (ROOT / "yomu/ui/app.py").read_text(encoding="utf-8")
+        app = (ROOT / "komyst/ui/app.py").read_text(encoding="utf-8")
         for key in ("gate_version", "ocr_plausibility_version", "worker_pid"):
             self.assertIn(f'"{key}"', app, key)
         for key in ("gate_version", "ocr_plausibility_version", "worker_pid"):
@@ -206,7 +206,7 @@ class AuditUiContracts(unittest.TestCase):
         for a surface colour that was never declared, so they rendered fully
         transparent over the page behind them.
         """
-        css = (ROOT / "static" / "tradutor_ui.css").read_text(encoding="utf-8")
+        css = (ROOT / "static" / "komyst_ui.css").read_text(encoding="utf-8")
         defined = set(re.findall(r"(--[a-z0-9-]+)\s*:", css))
         used = set(re.findall(r"var\(\s*(--[a-z0-9-]+)\s*[,)]", css))
         # A var() with a fallback is fine; only bare ones must resolve.
@@ -215,7 +215,7 @@ class AuditUiContracts(unittest.TestCase):
         self.assertEqual(missing, [], f"CSS variables used but never defined: {missing}")
 
     def test_dialogs_declare_an_opaque_surface(self):
-        css = (ROOT / "static" / "tradutor_ui.css").read_text(encoding="utf-8")
+        css = (ROOT / "static" / "komyst_ui.css").read_text(encoding="utf-8")
         for selector in (".linguistic-audit{", ".audit-confirm{", ".page-revision{",
                          ".visual-comparison{"):
             block = css[css.index(selector):css.index("}", css.index(selector))]
@@ -254,8 +254,8 @@ class AuditUiContracts(unittest.TestCase):
 
     def test_pending_human_previews_are_discoverable_without_static_ids(self):
         production = "\n".join((ROOT / rel).read_text(encoding="utf-8")
-                               for rel in ("static/tradutor_ui.js", "yomu/ui/ui_bridge.py",
-                                           "yomu/ui/app.py", "ui/ui_shell.html"))
+                               for rel in ("static/komyst_ui.js", "komyst/ui/ui_bridge.py",
+                                           "komyst/ui/app.py", "ui/ui_shell.html"))
         for marker in ("homePendingPreviews", "historyPendingPreviews",
                        "reviewPreviewAccess", "loadPendingHumanPreviews",
                        "openPendingPreview", "data-open-pending-preview",
@@ -270,7 +270,7 @@ class AuditUiContracts(unittest.TestCase):
         start = self.js.index("function renderHumanPreviews")
         body = self.js[start:self.js.index("const previewCropUrls", start)]
         self.assertIn("BLOQUEADA", body)
-        self.assertIn("requires_art_reconstruction", (ROOT / "yomu/ui/ui_bridge.py").read_text(encoding="utf-8"))
+        self.assertIn("requires_art_reconstruction", (ROOT / "komyst/ui/ui_bridge.py").read_text(encoding="utf-8"))
         blocked_branch = body[body.index("const actionButtons = blocked"):
                               body.index(": `<button", body.index("const actionButtons = blocked"))]
         self.assertNotIn("data-preview-action=\"render\"", blocked_branch)
@@ -301,8 +301,8 @@ class AuditUiContracts(unittest.TestCase):
 
     def test_taxonomy_categories_are_not_page_conditioned(self):
         # No production module keys a decision on a literal page/region number.
-        for rel in ("yomu/review/region_taxonomy.py", "yomu/translation/linguistic_audit.py",
-                    "yomu/review/audit_registry.py", "yomu/review/audit_decisions.py"):
+        for rel in ("komyst/review/region_taxonomy.py", "komyst/translation/linguistic_audit.py",
+                    "komyst/review/audit_registry.py", "komyst/review/audit_decisions.py"):
             text = (ROOT / rel).read_text(encoding="utf-8")
             self.assertIsNone(re.search(r"page_number\s*==\s*\d", text), rel)
             self.assertIsNone(re.search(r"region_id\s*==\s*['\"]p\d", text), rel)

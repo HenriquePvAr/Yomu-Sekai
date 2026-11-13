@@ -9,12 +9,12 @@ from unittest import mock
 
 import numpy as np
 
-import yomu.config.settings as config
-import yomu.translation.semantic_fidelity as semantic_fidelity
-import yomu.translation.providers.translator_nllb as translator_nllb
-from yomu.translation.natural_ptbr_refinement import RuntimePtBrNaturalizer
-from yomu.ocr.ocr_balloon import OCRLine, TextGroup, apply_group_translations, validate_and_retry_translations
-from yomu.translation.providers.translator_nvidia import TranslationResult, TranslatorNvidiaBatch
+import komyst.config.settings as config
+import komyst.translation.semantic_fidelity as semantic_fidelity
+import komyst.translation.providers.translator_nllb as translator_nllb
+from komyst.translation.natural_ptbr_refinement import RuntimePtBrNaturalizer
+from komyst.ocr.ocr_balloon import OCRLine, TextGroup, apply_group_translations, validate_and_retry_translations
+from komyst.translation.providers.translator_nvidia import TranslationResult, TranslatorNvidiaBatch
 
 
 def _line(text):

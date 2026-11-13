@@ -1,8 +1,8 @@
 import json
 from pathlib import Path
 
-from yomu.runtime.job_completion import build_job_completion_summary
-from yomu.ui.ui_bridge import UiBridge
+from komyst.runtime.job_completion import build_job_completion_summary
+from komyst.ui.ui_bridge import UiBridge
 
 
 def test_bulk_delete_is_partial_and_delegates_to_single_item_primitive():
@@ -76,7 +76,7 @@ def test_artifact_summary_prefers_manifest_and_falls_back_to_real_files(tmp_path
 
 
 def test_frontend_contract_has_selection_and_artifact_gating():
-    js = Path("static/tradutor_ui.js").read_text(encoding="utf-8")
+    js = Path("static/komyst_ui.js").read_text(encoding="utf-8")
     html = Path("ui/ui_shell.html").read_text(encoding="utf-8")
     assert "histSelectionToggle" in html
     assert "bulkDeleteModalOverlay" in html

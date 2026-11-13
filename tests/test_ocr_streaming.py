@@ -3,7 +3,7 @@ import time
 import unittest
 from unittest.mock import patch
 
-import yomu.ocr.ocr_streaming as ocr_streaming
+import komyst.ocr.ocr_streaming as ocr_streaming
 
 
 class _FakeEngine:

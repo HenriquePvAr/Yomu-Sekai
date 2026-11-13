@@ -1,10 +1,10 @@
 import numpy as np
 
-from yomu.clean.orchestrator import (
+from komyst.clean.orchestrator import (
     CleanRequest, INVALID_SOURCE, LOCAL_MASK_UNCERTAIN, LOCAL_RECONSTRUCTION_HARD,
     LOCAL_SAFE, SFX, SYSTEM_ERROR, run_clean_strategy,
 )
-from yomu.runtime.output_plan import normalize_output_plan
+from komyst.runtime.output_plan import normalize_output_plan
 
 
 def _request():

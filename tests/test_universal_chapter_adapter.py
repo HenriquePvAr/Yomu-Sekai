@@ -10,8 +10,8 @@ from unittest import mock
 
 from PIL import Image
 
-import yomu.download.sources.chapter_source as chapter_source
-from yomu.download.sources.chapter_source import (
+import komyst.download.sources.chapter_source as chapter_source
+from komyst.download.sources.chapter_source import (
     AUTHENTICATION_REQUIRED,
     CHALLENGE_REQUIRED,
     INCOMPLETE_DOWNLOAD,
@@ -25,7 +25,7 @@ from yomu.download.sources.chapter_source import (
     UniversalChapterAdapter,
     WEBTOONS,
 )
-from yomu.download.sources.universal_chapter_adapter import (
+from komyst.download.sources.universal_chapter_adapter import (
     HIGH_CONFIDENCE,
     MAX_AUTOMATIC_PAGES,
     MAX_CANDIDATES,
