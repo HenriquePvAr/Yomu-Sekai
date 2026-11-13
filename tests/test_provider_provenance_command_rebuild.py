@@ -16,13 +16,13 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
-import yomu.pipeline.benchmark_pipeline as benchmark_pipeline
-import yomu.runtime.job_runner as job_runner
-import yomu.review.source_analysis_phase as source_analysis_phase
-import yomu.ui.ui_bridge as ui_bridge
-from yomu.download.sources.chapter_source import REVIEW_REQUIRED_MEDIUM_CONFIDENCE, SUPPORTED_SPECIFIC_ADAPTER
-from yomu.runtime.job_store import JobStatus, JobStore
-from yomu.ui.ui_helpers import (
+import komyst.pipeline.benchmark_pipeline as benchmark_pipeline
+import komyst.runtime.job_runner as job_runner
+import komyst.review.source_analysis_phase as source_analysis_phase
+import komyst.ui.ui_bridge as ui_bridge
+from komyst.download.sources.chapter_source import REVIEW_REQUIRED_MEDIUM_CONFIDENCE, SUPPORTED_SPECIFIC_ADAPTER
+from komyst.runtime.job_store import JobStatus, JobStore
+from komyst.ui.ui_helpers import (
     assert_command_provider,
     command_translation_provider,
     requested_translation_provider,

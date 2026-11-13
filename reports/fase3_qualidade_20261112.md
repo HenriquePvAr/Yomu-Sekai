@@ -6,7 +6,7 @@ Branch: `fase-3-qualidade`, base `dev`/`origin/dev` `631afac`. OpenCV 5.0.0 foi 
 
 ### Patch validado pelo dono — validação física concluída
 
-- Guardei as duas tentativas anteriores com `git stash push -m "f3.0-tentativas-contorno" -- tests/test_pipeline_candidate_page_fixes.py yomu/ocr/ocr_balloon.py`; o stash foi preservado. Apliquei `reports/f3_0_patch_validado.diff` e removi o diff depois de aplicar.
+- Guardei as duas tentativas anteriores com `git stash push -m "f3.0-tentativas-contorno" -- tests/test_pipeline_candidate_page_fixes.py komyst/ocr/ocr_balloon.py`; o stash foi preservado. Apliquei `reports/f3_0_patch_validado.diff` e removi o diff depois de aplicar.
 - O patch implementa `_long_stroke_halo_barrier`, reutilizando `_balloon_border_mask`: impede que o halo novo passe por traços longos de mesma polaridade e nunca reduz pixels da máscara base. O teste de área passou: `tests/test_pipeline_candidate_page_fixes.py` — 39 passed. Ambiente confirmado: OpenCV 5.0.0 em `python` e `python -s`; ONNX Runtime oferece DirectML.
 - O dono confirmou pelo painel que o REF-A Apenas Clean saudável (job `39a41cbb…` e anteriores, GPU livre, OpenCV 5.0.0) certifica p23 com FLUX; somente p10 e p22 ficam em revisão. São 65/65 páginas produzidas. A execução saudável do medidor mais recente registra 329,43 s, com Paddle funcional.
 - O REF-B Completo físico `c7ee941a073945db82a225d48a435c48` terminou em `review_required` em 480,62 s: 169/177 traduzidas, 70/85 certificadas e 7 resíduos, sem queda contra a base `278c2486`.
@@ -16,7 +16,7 @@ Branch: `fase-3-qualidade`, base `dev`/`origin/dev` `631afac`. OpenCV 5.0.0 foi 
 
 ### Bisect corrigido
 
-O bisect anterior era inválido: `git -C` aplicou o cwd apenas ao comando Git, e o pytest importava `yomu` de `C:\Projetos\Yomu-Sekai` em todos os pontos. Um runner novo imprimiu `yomu.__file__` em cada revisão e forçou o caminho da worktree `C:\Users\henri\AppData\Local\Temp\komyst-f3-bisect-20261112\yomu`. Com esse isolamento, `d819f0e` passa, `cda3f90` passa e o bisect válido entre `d819f0e` e `631afac` aponta `80f0620` como primeiro commit ruim. Portanto `_refine_lettering_mask` em `cda3f90` não explica o caso speech; ele retorna sem alterar não-SFX e o commit passa no teste isolado quando importado corretamente. A causa foi delimitada: `80f0620` generalizou `_refine_lettering_mask` de SFX para todo grupo, e sua dilatação cega de 2 px invadiu o arco.
+O bisect anterior era inválido: `git -C` aplicou o cwd apenas ao comando Git, e o pytest importava `Komyst` de `C:\Projetos\Komyst` em todos os pontos. Um runner novo imprimiu `Komyst.__file__` em cada revisão e forçou o caminho da worktree `C:\Users\henri\AppData\Local\Temp\komyst-f3-bisect-20261112\Komyst`. Com esse isolamento, `d819f0e` passa, `cda3f90` passa e o bisect válido entre `d819f0e` e `631afac` aponta `80f0620` como primeiro commit ruim. Portanto `_refine_lettering_mask` em `cda3f90` não explica o caso speech; ele retorna sem alterar não-SFX e o commit passa no teste isolado quando importado corretamente. A causa foi delimitada: `80f0620` generalizou `_refine_lettering_mask` de SFX para todo grupo, e sua dilatação cega de 2 px invadiu o arco.
 
 ### Contrato escolhido e tentativas
 

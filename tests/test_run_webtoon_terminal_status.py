@@ -2,7 +2,7 @@ from test_support.offline_test_guard import install_offline_network_guard
 
 install_offline_network_guard()
 
-from yomu.commands.run_webtoon import _pipeline_main_status
+from komyst.commands.run_webtoon import _pipeline_main_status
 
 
 def test_structural_page_failure_is_logged_as_failed_even_when_pdf_exists():

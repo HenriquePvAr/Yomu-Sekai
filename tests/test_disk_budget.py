@@ -5,9 +5,9 @@ import sys
 from unittest import mock
 from pathlib import Path
 
-from yomu.runtime import disk_budget
-from yomu.runtime.job_store import JobStatus, JobStore
-from yomu.runtime.job_runner import run_job
+from komyst.runtime import disk_budget
+from komyst.runtime.job_store import JobStatus, JobStore
+from komyst.runtime.job_runner import run_job
 
 
 def test_required_space_uses_plan_reserve_and_page_estimate():
@@ -52,7 +52,7 @@ def test_runner_fails_before_launch_when_start_budget_is_insufficient(tmp_path):
 
     with mock.patch.object(disk_budget, "check", return_value=(False, {
             "free_mb": 10, "required_mb": 1000, "output_plan": "default"})), \
-         mock.patch("yomu.runtime.job_runner.subprocess.Popen", side_effect=AssertionError("pipeline launched")):
+         mock.patch("komyst.runtime.job_runner.subprocess.Popen", side_effect=AssertionError("pipeline launched")):
         result = run_job(job_id, str(db), "disk-test-worker", str(tmp_path / "job.log"))
 
     assert result == 2

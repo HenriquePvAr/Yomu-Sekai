@@ -3,7 +3,7 @@ import uuid
 from pathlib import Path
 
 import test_support._test_bootstrap as _test_bootstrap  # noqa: F401
-from yomu.runtime.output_retention import prune_chapter_runs
+from komyst.runtime.output_retention import prune_chapter_runs
 
 
 def _run(chapter: Path, age: int) -> Path:

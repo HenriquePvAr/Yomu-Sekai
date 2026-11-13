@@ -2,7 +2,7 @@ import inspect
 from types import SimpleNamespace
 from unittest import mock
 
-from yomu.download.readers import scrapling_reader_resolver as resolver
+from komyst.download.readers import scrapling_reader_resolver as resolver
 
 
 class _Process:
@@ -73,7 +73,7 @@ def _run_capture(monkeypatch, tmp_path, *, cookies, process=None):
     monkeypatch.setattr(
         resolver,
         "_comix_cf_cookie_path",
-        lambda: tmp_path / "YomuSekai" / "comix_cf_cookie.json",
+        lambda: tmp_path / "Komyst" / "comix_cf_cookie.json",
     )
     with mock.patch(
         "patchright.sync_api.sync_playwright",
@@ -92,7 +92,7 @@ def test_human_capture_uses_official_visible_browser_and_persistent_profile(monk
 
     assert result == 0
     assert process.terminated is True
-    cache = tmp_path / "YomuSekai" / "comix_cf_cookie.json"
+    cache = tmp_path / "Komyst" / "comix_cf_cookie.json"
     assert cache.exists()
     assert "secret-cookie" in cache.read_text(encoding="utf-8")
 

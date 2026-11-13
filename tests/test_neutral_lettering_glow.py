@@ -7,8 +7,8 @@ import numpy as np
 import pytest
 from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
-from yomu.ocr import ocr_balloon as ob
-from yomu.ocr.ocr_engine import OCRLine
+from komyst.ocr import ocr_balloon as ob
+from komyst.ocr.ocr_engine import OCRLine
 
 
 def sample(glow=True):

@@ -2,7 +2,7 @@
 
 Status: **HISTORICAL T4 INFERENCE VERIFIED; CURRENT RUNTIME NOT VERIFIED**.
 
-The connected Google Drive connector allowed read-only inspection of the saved notebook `Yomu_Big_LaMa_Colab_Benchmark_V4`. Its saved cell output records a Tesla T4 inference. This proves the historical run, not that its runtime is still alive now. The owner asked to leave the runtime connected; it has not been disconnected. No Colab runtime-control MCP exists in this session, and no browser/computer control was used.
+The connected Google Drive connector allowed read-only inspection of the saved notebook `KOMYST_Big_LaMa_Colab_Benchmark_V4`. Its saved cell output records a Tesla T4 inference. This proves the historical run, not that its runtime is still alive now. The owner asked to leave the runtime connected; it has not been disconnected. No Colab runtime-control MCP exists in this session, and no browser/computer control was used.
 
 | Field | Current evidence |
 |---|---|

@@ -7,13 +7,13 @@ import unittest
 from dataclasses import dataclass
 from uuid import uuid4
 
-from yomu.community.community_publication_metadata import (
+from komyst.community.community_publication_metadata import (
     FakePublicationMetadataRepository,
     PublicationMetadataError,
     SupabasePublicationMetadataRepository,
     build_publication_metadata_repository,
 )
-from yomu.community.supabase_social import SocialConfig
+from komyst.community.supabase_social import SocialConfig
 
 
 def _metadata(**overrides):

@@ -47,7 +47,7 @@ function el(tag, opts = {}, children = []) {
 }
 
 function toast(msg, kind = 'ok') {
-  if (typeof window.__tradutorToast === 'function') { window.__tradutorToast(msg, kind); return; }
+  if (typeof window.__komystToast === 'function') { window.__komystToast(msg, kind); return; }
   const live = document.getElementById('socialLive');
   if (live) live.textContent = msg;
 }
@@ -80,7 +80,7 @@ function statusLabel(s) {
 }
 
 function isOwner(row) {
-  const userId = String(state.session?.user?.id || window.__tradutorCommunityUserId || '');
+  const userId = String(state.session?.user?.id || window.__komystCommunityUserId || '');
   return Boolean(userId && row && row.owner_id && row.owner_id === userId);
 }
 
@@ -130,7 +130,7 @@ function openAuth(mode) {
 }
 
 function header() {
-  const displayName = String(window.__tradutorDisplayName || 'Conta').trim() || 'Conta';
+  const displayName = String(window.__komystDisplayName || 'Conta').trim() || 'Conta';
   const nav = el('nav', { class: 'sc-nav', attrs: { 'aria-label': 'Comunidade' } });
   for (const t of TABS) {
     nav.appendChild(el('button', {
@@ -405,7 +405,7 @@ function chapterRow(c, work, owner) {
 }
 
 async function confirmRestore(c) {
-  if (!await window.yomuConfirm('Restaurar este PDF retido como arquivo ativo do capítulo?', {title: 'Restaurar PDF', confirmLabel: 'Restaurar'})) return;
+  if (!await window.komystConfirm('Restaurar este PDF retido como arquivo ativo do capítulo?', {title: 'Restaurar PDF', confirmLabel: 'Restaurar'})) return;
   api.restoreAsset(c.id)
     .then(() => { toast('PDF restaurado.'); render(); })
     .catch((e) => fail(e && e.status === 409
@@ -654,7 +654,7 @@ function commentsModal(chapter) {
 }
 
 function commentRow(c, chapter, reload, depth = 0) {
-  const mine = String(c.author_id || '') === String(state.session?.user?.id || window.__tradutorCommunityUserId || '');
+  const mine = String(c.author_id || '') === String(state.session?.user?.id || window.__komystCommunityUserId || '');
   const row = el('div', { class: `sc-comment${depth ? ' sc-comment-reply' : ''}` });
   const textNode = c.is_deleted
     ? el('em', { class: 'sc-comment-removed', text: 'Comentário removido' })
@@ -817,7 +817,7 @@ function readerModal(chapter) {
 // presence cannot tell us which provider is active. The backend is the only source of
 // truth: /api/ui/bootstrap carries a sanitized `community.social` record (provider,
 // available, reason_code — never a URL, key, path or raw exception). Single-flight
-// cached, same pattern as tradutor_ui.js's own bootstrap refresh, so a retry after
+// cached, same pattern as komyst_ui.js's own bootstrap refresh, so a retry after
 // failure re-fetches but normal re-entry never re-requests.
 let communityProviderStatePromise = null;
 async function fetchCommunityProviderState() {
@@ -892,7 +892,7 @@ function invalidateSection(key) {
 
 // ---- canonical auth-ready gate ---------------------------------------------
 // The Supabase SDK session (above) and the canonical, backend-confirmed auth
-// state (window.__tradutorAuthState, driven by auth_ui.js's own independent
+// state (window.__komystAuthState, driven by auth_ui.js's own independent
 // onAuthStateChange subscription + its /api/community/auth/session round trip)
 // are two separate listeners racing the same underlying client. auth_ui.js
 // explicitly regresses to 'auth_loading' on every SDK event and only flips to
@@ -905,7 +905,7 @@ function invalidateSection(key) {
 //
 // No timers: this resolves the instant the condition is already true (covers
 // bootstrap/canonical state arriving first, e.g. after F5), or the next time
-// tradutor-auth-changed announces authenticated:true (covers the SDK session
+// komyst-auth-changed announces authenticated:true (covers the SDK session
 // arriving first, e.g. right after a fresh sign-in).
 let canonicalAuthReadyWaiters = [];
 
@@ -919,7 +919,7 @@ function getGlobal(name) {
 // 'auth_loading' before any async gap, so production always has a defined, meaningful
 // value here; only the *absence* of a value is permissive.
 function canonicalAuthReady() {
-  const raw = getGlobal('__tradutorAuthState');
+  const raw = getGlobal('__komystAuthState');
   return raw === undefined || String(raw) === 'authenticated';
 }
 
@@ -929,7 +929,7 @@ function waitForCanonicalAuthReady() {
 }
 
 if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
-  window.addEventListener('tradutor-auth-changed', (event) => {
+  window.addEventListener('komyst-auth-changed', (event) => {
     if (String(event?.detail?.state || '') !== 'authenticated' && event?.detail?.authenticated !== true) return;
     const waiters = canonicalAuthReadyWaiters;
     canonicalAuthReadyWaiters = [];

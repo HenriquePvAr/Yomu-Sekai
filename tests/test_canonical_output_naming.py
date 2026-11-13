@@ -5,7 +5,7 @@ technical name, job id, or accidental download order. This holds for local and r
 results alike because the pipeline persists by page index, not by source/worker filename.
 Collisions are impossible: two identically-named sources map to distinct page indices.
 """
-from yomu.runtime.artifact_contract import ArtifactType, artifact_relative_path
+from komyst.runtime.artifact_contract import ArtifactType, artifact_relative_path
 
 
 def test_clean_image_named_by_logical_page_index():

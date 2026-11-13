@@ -1,7 +1,7 @@
 # Publicação explícita de PDFs sociais + leitor autenticado
 
 > **Revisado em:** 2026-10-25 · **Base verificada:** `fb8875e` (diagrama de fluxo convertido para Mermaid; demais seções sobre `5f482ce1`).
-> **Estado:** backend IMPLEMENTADO (`yomu/community/social_pdf_http.py`,
+> **Estado:** backend IMPLEMENTADO (`komyst/community/social_pdf_http.py`,
 > `social_pdf_publishing.py`, `chapter_asset_repository.py`, `social_content.py`), coberto por
 > testes offline. A UI social que expõe esses controles está **desligada** no cliente
 > (`COMMUNITY_ENABLED = false` em `static/social_community.js`). Smoke real no Google Drive
@@ -36,7 +36,7 @@ criado. Uma **idempotency intent** impede que duplo clique/retry crie dois uploa
 
 O frontend **nunca** envia caminho. O identificador é o **`source_job_id`** (id de 32 hex
 de um job de tradução registrado pelo app). O backend resolve `job_id → registro → PDF em
-raiz autorizada` com o mesmo saneamento já existente (`yomu/community/community_api.py::_resolve_translation_job`:
+raiz autorizada` com o mesmo saneamento já existente (`komyst/community/community_api.py::_resolve_translation_job`:
 job finished/exit0, manifest coincidente, PDF dentro de `output/`, magic bytes). Sem
 `file://`, sem caminho absoluto/relativo, sem symlink/UNC, sem varredura de diretório.
 `GET /local-pdf-results` lista apenas jobs registrados e concluídos do owner (DTO:
@@ -62,7 +62,7 @@ retornado.
 
 ## `SocialPdfPublishingService`
 
-Orquestra a publicação transacional reutilizando `CommunityApi.publish` (`yomu/community/community_api.py`) (upload assíncrono
+Orquestra a publicação transacional reutilizando `CommunityApi.publish` (`komyst/community/community_api.py`) (upload assíncrono
 via worker). `publish-status` conclui o vínculo + status **só** quando a publicação está
 `verified`; falha mantém o chapter invisível. Prova a propriedade do chapter pela obra
 (owner via RLS do usuário) antes de qualquer coisa.

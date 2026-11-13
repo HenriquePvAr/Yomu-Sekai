@@ -1,13 +1,6 @@
 # Documentação do Komyst
 
-> **Base verificada:** `5f482ce1` (`main`) · **Revisado em:** 2026-10-24
->
-> O [Quality Freeze](QUALITY_FREEZE.md) continua nominal: a limpeza e o render de `5f482ce1`
-> mudaram o comportamento de produção e ainda não passaram pelo E2E de produto que o freeze exige.
-
-> Os documentos de [consolidação](consolidation/YOMU_CURRENT_PRODUCT_STATE.md) e o
-> [board por domínio](status/board/index.html) são registros operacionais e históricos; o estado
-> vigente está nos documentos primários abaixo e na tabela do [`CLAUDE.md`](../CLAUDE.md).
+> O estado vigente está nos documentos primários abaixo e no [board por domínio](status/board/index.html).
 
 > Estados de evidência: `IMPLEMENTED` descreve código; `INTEGRATED` descreve composição no snapshot; `TESTED_OFFLINE` e `TESTED_FROZEN` identificam o tipo exato de validação; `PHYSICALLY_VERIFIED` exige artefato/operação física correlacionada; `EXTERNAL_GATE` depende de serviço, identidade ou autorização externa; `DEFERRED` não está habilitado como produto.
 
@@ -52,7 +45,7 @@ RAM/VRAM, tempo do capítulo e limites ainda não homologados de requisitos mín
 | [Política de Documentação](DOCUMENTATION_POLICY.md) | Quando e como a documentação deve ser atualizada junto com o código. |
 | [Auditoria de Documentação](DOCUMENTATION_AUDIT.md) | O que foi verificado, o que estava desatualizado e o que continua em aberto. |
 | [README do projeto](../README.md) | Visão geral curta e início rápido. |
-| [Estado consolidado e board](consolidation/YOMU_CURRENT_PRODUCT_STATE.md) · [Board operacional](status/board/index.html) | Fonte do estado por evidência; a branch local não é publicação. |
+| [Estado do produto no board](status/board/index.html) | Estado operacional por evidência; um estado local não significa publicação. |
 
 ---
 
@@ -66,7 +59,7 @@ RAM/VRAM, tempo do capítulo e limites ainda não homologados de requisitos mín
 
 ### Arquitetura e execução
 
-- [Arquitetura](ARCHITECTURE.md) — processos, pacote `yomu/`, tradução via backend e caminhos de runtime
+- [Arquitetura](ARCHITECTURE.md) — processos, pacote `komyst/`, tradução via backend e caminhos de runtime
 - [Desenvolvimento](DEVELOPMENT.md) — setup, execução, testes, dependências externas, empacotamento e riscos conhecidos
 - [Estrutura do projeto](architecture/REPOSITORY_STRUCTURE.md) — localização do código, contratos da raiz, testes, ferramentas e pesquisa
 - [Fluxo de desenvolvimento](DEVELOPMENT_WORKFLOW.md) — comandos de validação após mudanças
@@ -144,30 +137,27 @@ em que foram escritos e **não** substituem os documentos primários:
 
 ---
 
-## Estado resumido do produto (2026-10-24, `5f482ce1`)
+## Estado resumido do produto
 
 | Área | Estado |
 | --- | --- |
-| Pipeline ponta a ponta | ✅ implementado; Clean/render reescritos em `5f482ce1` (ver [Quality Freeze](QUALITY_FREEZE.md)) |
-| OCR | ✅ RapidOCR primário; PaddleOCR só como legacy opt-in (`OCR_LEGACY_PADDLE_FALLBACK`) |
-| Tradução | ✅ todo job habilitado usa o backend Komyst (`yomu_backend`), que chama a DeepL no servidor |
-| SFX | Preservados no original por padrão (`TRANSLATE_SFX=False`); tradução por glossário local é opcional |
-| Fila persistente, worker e supervisão | ✅ implementados |
-| Retomada de job interrompido pela UI | ✅ botão **Retomar** para jobs `can_resume` |
-| Leitor PDF e Histórico | ✅ implementados |
-| Comunidade | ⚠️ parcial — backend existe; UI desligada no cliente |
-| Licença de tester | ⚠️ parcial — gate fail-closed; nenhum entitlement real validado |
-| Atualizador | ✅ código e aba **Atualizações**; manifest assinado no canal é gate externo |
-| Instalador | ⚠️ parcial — spec/script existem; nenhum `Setup.exe` validado |
-| Validação em Windows limpo | ⛔ não provada |
+| Pipeline ponta a ponta | **IMPLEMENTADO** — coleta, OCR, tradução autorizada, reconstrução, PDF e revisão de qualidade; ver [Arquitetura](ARCHITECTURE.md) e [Saídas](OUTPUT_ARTIFACTS.md) |
+| OCR | **IMPLEMENTADO** — RapidOCR é o mecanismo primário; Paddle é uma recuperação opcional quando instalado |
+| Tradução | **IMPLEMENTADO** — o cliente chama o backend autenticado; o provider DeepL executa no servidor (`supabase/functions/translation-execute`) |
+| Efeitos sonoros | Preservados no original por padrão; a opção **Traduzir SFX** habilita sua tradução |
+| Fila, worker e supervisão | **IMPLEMENTADOS** — fila local persistente, worker separado e recuperação supervisionada |
+| Retomada de job | **IMPLEMENTADA** — a interface permite retomar jobs elegíveis (`can_resume`) |
+| Leitor, PDF e histórico | **IMPLEMENTADOS** — páginas e artefatos locais podem ser consultados no aplicativo |
+| Licença Beta | **IMPLEMENTADA** — autorização fail-closed no início/retomada; **validado por beta tester, informado pelo dono** na versão `v0.9.1-beta.18`; data não informada |
+| Instalador Windows | **IMPLEMENTADO** — PyInstaller e Inno Setup geram `Komyst-<versão>-Setup-x64.exe`; instalação da `v0.9.1-beta.18` **validada por beta tester, informado pelo dono**; data não informada |
+| Instalação limpa Windows | **VALIDADA** na `v0.9.1-beta.18` por beta tester, informado pelo dono; data não informada |
+| Atualizador | **IMPLEMENTADO** no cliente, com verificação de assinatura e hash; disponibilidade do manifesto depende do canal Beta |
+| Comunidade | **EM DESENVOLVIMENTO** — a interface informa indisponibilidade nesta versão |
+| Scan Studio | **EM DESENVOLVIMENTO** — a aba exibe aviso de indisponibilidade |
 
 Detalhamento em [Documentação Técnica §2](technical/DOCUMENTACAO_TECNICA.md#2-escopo-atual-do-produto)
 e [§29 Dívida técnica](technical/DOCUMENTACAO_TECNICA.md#29-dívida-técnica-conhecida).
 
 ---
 
-## Roadmap histórico ≠ produto atual
-
-O roadmap na raiz é um snapshot de planejamento anterior às missões M1–M17, não um inventário
-atual de capacidades. Preserve-o como histórico; para comportamento atual, use os documentos
-primários acima.
+Para proveniência e limites de cada capacidade, consulte os documentos técnicos e o [board operacional](status/board/index.html). A validação Beta acima foi informada pelo dono; não é uma medição executada nesta integração.

@@ -12,7 +12,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 REQS = (ROOT / "requirements/requirements-beta.txt").read_text(encoding="utf-8")
-SPEC = (ROOT / "packaging" / "tradutor_ia.spec").read_text(encoding="utf-8")
+SPEC = (ROOT / "packaging" / "komyst.spec").read_text(encoding="utf-8")
 
 # Requirement pin (as it must appear in requirements/requirements-beta.txt) -> the import/module token
 # the PyInstaller spec must reference (hiddenimports / collect_submodules / collect_data_files)
@@ -36,12 +36,12 @@ def test_spec_bundles_every_declared_critical_dependency():
     for pin, module in CRITICAL.items():
         assert module in SPEC, (
             f"{pin!r} is declared in requirements/requirements-beta.txt but {module!r} is not "
-            f"referenced by packaging/tradutor_ia.spec — the frozen Beta would ship without it")
+            f"referenced by packaging/komyst.spec — the frozen Beta would ship without it")
 
 
 def test_spec_references_all_browser_and_ocr_runtimes():
     for module in SPEC_MUST_REFERENCE:
-        assert module in SPEC, f"packaging/tradutor_ia.spec must collect {module!r}"
+        assert module in SPEC, f"packaging/komyst.spec must collect {module!r}"
 
 
 def test_psd_tools_pin_matches_professional_psd_internal_dependency():

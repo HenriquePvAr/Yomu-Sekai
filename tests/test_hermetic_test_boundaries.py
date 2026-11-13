@@ -145,7 +145,7 @@ class HermeticTestBoundaryTests(unittest.TestCase):
         environment = dict(os.environ)
         # Prove the direct unittest bootstrap rather than relying on inheritance from this
         # already-guarded pytest process.
-        environment.pop("TRADUTOR_IA_OFFLINE_TEST_GUARD", None)
+        environment.pop("KOMYST_OFFLINE_TEST_GUARD", None)
         completed = subprocess.run(
             [sys.executable, "-m", "unittest", "tests.test_unittest_guard_probe.UnittestGuardProbe"],
             cwd=root, env=environment, capture_output=True, text=True, timeout=20,

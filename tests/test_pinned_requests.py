@@ -10,13 +10,13 @@ import urllib3.connection
 import urllib3.poolmanager
 from requests.adapters import HTTPAdapter
 
-import yomu.download.sources.chapter_source as chapter_source
-from yomu.download.download_transport import (
+import komyst.download.sources.chapter_source as chapter_source
+from komyst.download.download_transport import (
     CloudscraperTransport, DownloadLimits, RequestsTransport,
 )
-from yomu.download.pinned_requests import PinnedRequestError, pinned_request
-from yomu.download.sources.canonical_source_identity import RequestsMetadataTransport
-from yomu.download.sources.chapter_source import GenericImageChapterAdapter
+from komyst.download.pinned_requests import PinnedRequestError, pinned_request
+from komyst.download.sources.canonical_source_identity import RequestsMetadataTransport
+from komyst.download.sources.chapter_source import GenericImageChapterAdapter
 
 
 HOST = "rebinding.example"

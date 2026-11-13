@@ -1,6 +1,0 @@
-{
-  "command": "python -m pytest -q tests/test_gemini_v2_integration.py",
-  "passed": 16,
-  "failed": 0,
-  "status": "PASS"
-}

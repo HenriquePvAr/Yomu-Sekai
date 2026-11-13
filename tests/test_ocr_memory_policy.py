@@ -4,7 +4,7 @@ install_offline_network_guard()
 
 import unittest
 
-from yomu.ocr.ocr_memory_policy import MemorySnapshot, choose_workers
+from komyst.ocr.ocr_memory_policy import MemorySnapshot, choose_workers
 
 
 class OcrMemoryPolicyTests(unittest.TestCase):

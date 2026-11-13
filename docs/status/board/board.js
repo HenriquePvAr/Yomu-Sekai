@@ -5,7 +5,7 @@ window.BOARD = {
   title: 'Komyst · Quadro',
   subtitle: 'Komyst',
   updatedAt: '2026-11-13',
-  repoUrl: 'https://github.com/HenriquePvAr/Yomu-Sekai',
+  repoUrl: 'https://github.com/HenriquePvAr/Komyst',
   defaultBranch: 'main',
   columns: [
     { id: 'design', label: 'Na fila',           hint: 'Planejado, sem código. O agente pega daqui na ordem da fila.' },
@@ -130,11 +130,11 @@ window.BOARD = {
       "links": [
         {
           "label": "Relatório e limites",
-          "path": "reports/clean_parallel_20261108.md"
+          "path": "docs/architecture/clean_strategy.md"
         },
         {
           "label": "Comparação A/B",
-          "path": "reports/data/clean_parallel_20261108.json"
+          "path": "docs/CONFIGURATION.md"
         }
       ]
     },
@@ -187,7 +187,7 @@ window.BOARD = {
         "Gateway Paddle preserva reinício/protocolo e pode reabrir depois da liberação no fim da análise; heavy_ocr_release mede a duração; nenhuma máscara v4 alterada",
         "Frontend preserva painel após timeout de refresh: reconectando, sem voltar a boot_failed; teste executa a função real para boot inicial e refresh",
         "Job real 457d265b: análise/sweep ~125 s; tradução exibida ~133 s inclui preflight, enquanto chamadas provider somam 3,607 s; interrupção por No space left on device ao gravar progresso",
-        "Exclusão permanente autorizada de USERPROFILE/YomuExperimental: 452.474 arquivos / 66,29 GiB lógicos; um link não percorrido, projeto atual e Git comum em C:/Projetos/Yomu-Sekai preservados; disco ~93,1 GiB livres ao terminar",
+        "Exclusão permanente autorizada de USERPROFILE/KomystExperimental: 452.474 arquivos / 66,29 GiB lógicos; um link não percorrido, projeto atual e Git comum em C:/Projetos/Komyst preservados; disco ~93,1 GiB livres ao terminar",
         "350 + 114 testes passaram, 403 subtestes, 1 ignorado; Node timeout e diff/syntax verificados; serviço recarregado sem job ativo"
       ],
       "pending": [
@@ -197,11 +197,11 @@ window.BOARD = {
       "links": [
         {
           "label": "Job, RAM e limpeza autorizada",
-          "path": "reports/job_457d265b_runtime_20261108.md"
+          "path": "docs/technical/DOCUMENTACAO_TECNICA.md"
         },
         {
           "label": "Política de processos",
-          "path": "yomu/runtime/process_options.py"
+          "path": "komyst/runtime/process_options.py"
         },
         {
           "label": "Testes de subprocessos",
@@ -245,15 +245,15 @@ window.BOARD = {
       "links": [
         {
           "label": "Ativação e medições atuais",
-          "path": "reports/inpaint_activation_20261108.md"
+          "path": "docs/architecture/clean_strategy.md"
         },
         {
           "label": "Relatório completo",
-          "path": "reports/inpaint_followup_20261108.md"
+          "path": "docs/architecture/clean_strategy.md"
         },
         {
           "label": "Opções verificadas na p23",
-          "path": "reports/page23_options_20261108.md"
+          "path": "docs/architecture/clean_strategy.md"
         },
         {
           "label": "Contrato SFX PDF/CLEAN",
@@ -289,15 +289,15 @@ window.BOARD = {
       "links": [
         {
           "label": "ocr_balloon.py",
-          "path": "yomu/ocr/ocr_balloon.py"
+          "path": "komyst/ocr/ocr_balloon.py"
         },
         {
           "label": "benchmark_pipeline.py",
-          "path": "yomu/pipeline/benchmark_pipeline.py"
+          "path": "komyst/pipeline/benchmark_pipeline.py"
         },
         {
           "label": "ocr_engine.py",
-          "path": "yomu/ocr/ocr_engine.py"
+          "path": "komyst/ocr/ocr_engine.py"
         }
       ]
     },
@@ -320,15 +320,15 @@ window.BOARD = {
       "links": [
         {
           "label": "ocr_engine.py",
-          "path": "yomu/ocr/ocr_engine.py"
+          "path": "komyst/ocr/ocr_engine.py"
         },
         {
           "label": "ocr_balloon.py",
-          "path": "yomu/ocr/ocr_balloon.py"
+          "path": "komyst/ocr/ocr_balloon.py"
         },
         {
           "label": "sfx_glossary.py",
-          "path": "yomu/translation/sfx_glossary.py"
+          "path": "komyst/translation/sfx_glossary.py"
         }
       ]
     },
@@ -348,11 +348,11 @@ window.BOARD = {
       "links": [
         {
           "label": "worker_service.py",
-          "path": "yomu/runtime/worker_service.py"
+          "path": "komyst/runtime/worker_service.py"
         },
         {
           "label": "tradutor_ui.js",
-          "path": "static/tradutor_ui.js"
+          "path": "static/komyst_ui.js"
         },
         {
           "label": "ui_shell.html",
@@ -374,7 +374,7 @@ window.BOARD = {
       "links": [
         {
           "label": "chapter_source.py",
-          "path": "yomu/download/sources/chapter_source.py"
+          "path": "komyst/download/sources/chapter_source.py"
         }
       ]
     },
@@ -416,15 +416,15 @@ window.BOARD = {
       "links": [
         {
           "label": "ocr_models.py",
-          "path": "yomu/ocr/ocr_models.py"
+          "path": "komyst/ocr/ocr_models.py"
         },
         {
           "label": "ocr_engine.py",
-          "path": "yomu/ocr/ocr_engine.py"
+          "path": "komyst/ocr/ocr_engine.py"
         },
         {
           "label": "ocr_balloon.py",
-          "path": "yomu/ocr/ocr_balloon.py"
+          "path": "komyst/ocr/ocr_balloon.py"
         },
         {
           "label": "ui_shell.html",
@@ -432,7 +432,7 @@ window.BOARD = {
         },
         {
           "label": "benchmark_pipeline.py",
-          "path": "yomu/pipeline/benchmark_pipeline.py"
+          "path": "komyst/pipeline/benchmark_pipeline.py"
         }
       ]
     },
@@ -443,15 +443,15 @@ window.BOARD = {
       "column": "prod",
       "env": "main",
       "updated": "2026-11-03",
-      "summary": "Glossário de nomes por série integrado ao Yomu-Sekai: UI (textarea + localStorage por série), payload (ui_bridge._name_glossary), backend (YOMU_NAME_GLOSSARY via job_runner, benchmark_pipeline), e set_name_overrides/_apply_name_overrides nos dois provedores. 32 testes passando.",
+      "summary": "Glossário de nomes por série integrado ao Komyst: UI (textarea + localStorage por série), payload (ui_bridge._name_glossary), backend (KOMYST_NAME_GLOSSARY via job_runner, benchmark_pipeline), e set_name_overrides/_apply_name_overrides nos dois provedores. 32 testes passando.",
       "delivered": [
         "ui_shell.html: #nameGlossaryField + #nameGlossaryInput adicionados (a4a28dd, 02/11)",
-        "static/tradutor_ui.js: nameGlossaryPairs(), rememberNameGlossary(), loadNameGlossary(), formPayload integrado (a4a28dd, 02/11)",
-        "yomu/ui/ui_bridge.py: _name_glossary(), _source_language() integrados (a4a28dd, 02/11)",
-        "yomu/runtime/job_runner.py: YOMU_NAME_GLOSSARY propagado para subprocess (a4a28dd, 02/11)",
-        "yomu/pipeline/benchmark_pipeline.py: set_name_overrides() chamado após set_detected_names (a4a28dd, 02/11)",
-        "yomu/translation/providers/translator_deepl.py: set_name_overrides/_apply_name_overrides integrados (a4a28dd, 02/11)",
-        "yomu/translation/providers/yomu_backend_provider.py: idem (a4a28dd, 02/11)",
+        "static/komyst_ui.js: nameGlossaryPairs(), rememberNameGlossary(), loadNameGlossary(), formPayload integrado (a4a28dd, 02/11)",
+        "komyst/ui/ui_bridge.py: _name_glossary(), _source_language() integrados (a4a28dd, 02/11)",
+        "komyst/runtime/job_runner.py: KOMYST_NAME_GLOSSARY propagado para subprocess (a4a28dd, 02/11)",
+        "komyst/pipeline/benchmark_pipeline.py: set_name_overrides() chamado após set_detected_names (a4a28dd, 02/11)",
+        "komyst/translation/providers/translator_deepl.py: set_name_overrides/_apply_name_overrides integrados (a4a28dd, 02/11)",
+        "komyst/translation/providers/komyst_backend_provider.py: idem (a4a28dd, 02/11)",
         "tests/test_name_glossary.py: 32 testes hermético (a4a28dd, 02/11)",
         "Mergeado na main (1c52366, 03/11)"
       ],
@@ -462,15 +462,15 @@ window.BOARD = {
         },
         {
           "label": "ui_bridge.py",
-          "path": "yomu/ui/ui_bridge.py"
+          "path": "komyst/ui/ui_bridge.py"
         },
         {
           "label": "honorific_names.py",
-          "path": "yomu/translation/honorific_names.py"
+          "path": "komyst/translation/honorific_names.py"
         },
         {
           "label": "translator_deepl.py",
-          "path": "yomu/translation/providers/translator_deepl.py"
+          "path": "komyst/translation/providers/translator_deepl.py"
         }
       ]
     },
@@ -484,8 +484,8 @@ window.BOARD = {
       "summary": "Documentação técnica (§14, §15), CONFIGURATION.md e Guia do Usuário atualizados para cobrir multi-idioma OCR (feat/LANG-01) e glossário de nomes (feat/GLOSSARY-01). Features marcadas como PARCIAL com ref de commit. Base verificada atualizada em todos os arquivos tocados.",
       "delivered": [
         "DOCUMENTACAO_TECNICA.md §14: OCR multi-idioma — tabela idioma→motor, ocr_models.py, gates CJK/Cirílico, fluxo ponta a ponta (5460cae, 02/11)",
-        "DOCUMENTACAO_TECNICA.md §15: glossário de nomes — set_name_overrides, _apply_name_overrides, YOMU_NAME_GLOSSARY, limites (5460cae, 02/11)",
-        "CONFIGURATION.md: TRADUTOR_OCR_MODELS_DIR (OCR) e YOMU_NAME_GLOSSARY (Tradução) documentados (5460cae, 02/11)",
+        "DOCUMENTACAO_TECNICA.md §15: glossário de nomes — set_name_overrides, _apply_name_overrides, KOMYST_NAME_GLOSSARY, limites (5460cae, 02/11)",
+        "CONFIGURATION.md: KOMYST_OCR_MODELS_DIR (OCR) e KOMYST_NAME_GLOSSARY (Tradução) documentados (5460cae, 02/11)",
         "GUIA_DO_USUARIO.md §9: idioma original com opções e nota de disponibilidade; glossário de nomes com exemplos (5460cae, 02/11)",
         "Base verificada atualizada em todos os documentos tocados (5460cae, 02/11)",
         "Mergeado na main (1c52366, 03/11)"
@@ -538,15 +538,15 @@ window.BOARD = {
       "links": [
         {
           "label": "residual_sweep.py",
-          "path": "yomu/ocr/residual_sweep.py"
+          "path": "komyst/ocr/residual_sweep.py"
         },
         {
           "label": "ocr_balloon.py",
-          "path": "yomu/ocr/ocr_balloon.py"
+          "path": "komyst/ocr/ocr_balloon.py"
         },
         {
           "label": "benchmark_pipeline.py",
-          "path": "yomu/pipeline/benchmark_pipeline.py"
+          "path": "komyst/pipeline/benchmark_pipeline.py"
         },
         {
           "label": "test_residual_sweep.py",
@@ -565,7 +565,7 @@ window.BOARD = {
       "column": "prod",
       "env": "main",
       "updated": "2026-11-04",
-      "summary": "~78 regiões terminavam sem tradução: translate_strict do YomuBackendTranslationProvider não aceitava os kwargs extra que ocr_balloon.py passa nos 3 caminhos de retry (allow_proper_names, proper_names, retry_origin, retry_attempt, source_context). TypeError era capturado em silêncio e produzia candidato vazio. Assinatura alinhada com DeepLTranslator.translate_strict.",
+      "summary": "~78 regiões terminavam sem tradução: translate_strict do KomystBackendTranslationProvider não aceitava os kwargs extra que ocr_balloon.py passa nos 3 caminhos de retry (allow_proper_names, proper_names, retry_origin, retry_attempt, source_context). TypeError era capturado em silêncio e produzia candidato vazio. Assinatura alinhada com DeepLTranslator.translate_strict.",
       "delivered": [
         "Assinatura de translate_strict corrigida; 1 novo teste hermético (4cdcc8f, 03/11)",
         "Documentação §17 atualizada com descrição do bug e da correção (4cdcc8f, 03/11)",
@@ -573,12 +573,12 @@ window.BOARD = {
       ],
       "links": [
         {
-          "label": "yomu_backend_provider.py",
-          "path": "yomu/translation/providers/yomu_backend_provider.py"
+          "label": "komyst_backend_provider.py",
+          "path": "komyst/translation/providers/komyst_backend_provider.py"
         },
         {
-          "label": "test_yomu_backend_provider.py",
-          "path": "tests/test_yomu_backend_provider.py"
+          "label": "test_komyst_backend_provider.py",
+          "path": "tests/test_komyst_backend_provider.py"
         }
       ]
     },
@@ -597,7 +597,7 @@ window.BOARD = {
       "links": [
         {
           "label": "tradutor_ui.js",
-          "path": "static/tradutor_ui.js"
+          "path": "static/komyst_ui.js"
         },
         {
           "label": "test_new_translation_source_policy_state.py",
@@ -627,15 +627,15 @@ window.BOARD = {
       "links": [
         {
           "label": "benchmark_pipeline.py",
-          "path": "yomu/pipeline/benchmark_pipeline.py"
+          "path": "komyst/pipeline/benchmark_pipeline.py"
         },
         {
           "label": "ocr_balloon.py",
-          "path": "yomu/ocr/ocr_balloon.py"
+          "path": "komyst/ocr/ocr_balloon.py"
         },
         {
           "label": "down.py",
-          "path": "yomu/download/down.py"
+          "path": "komyst/download/down.py"
         }
       ]
     },
@@ -658,7 +658,7 @@ window.BOARD = {
       "links": [
         {
           "label": "remote_readiness.py",
-          "path": "yomu/runtime/remote_readiness.py"
+          "path": "komyst/runtime/remote_readiness.py"
         }
       ]
     },
@@ -681,7 +681,7 @@ window.BOARD = {
       "links": [
         {
           "label": "harmonic_fill.py",
-          "path": "yomu/clean/inpainting/harmonic_fill.py"
+          "path": "komyst/clean/inpainting/harmonic_fill.py"
         }
       ]
     },
@@ -716,7 +716,7 @@ window.BOARD = {
         },
         {
           "label": "update_manifest.py",
-          "path": "yomu/runtime/update_manifest.py"
+          "path": "komyst/runtime/update_manifest.py"
         }
       ]
     },
@@ -747,11 +747,11 @@ window.BOARD = {
       "links": [
         {
           "label": "benchmark_pipeline.py",
-          "path": "yomu/pipeline/benchmark_pipeline.py"
+          "path": "komyst/pipeline/benchmark_pipeline.py"
         },
         {
           "label": "ocr_balloon.py",
-          "path": "yomu/ocr/ocr_balloon.py"
+          "path": "komyst/ocr/ocr_balloon.py"
         }
       ]
     },
@@ -771,15 +771,15 @@ window.BOARD = {
       "links": [
         {
           "label": "flux_edit.py",
-          "path": "yomu/clean/inpainting/flux_edit.py"
+          "path": "komyst/clean/inpainting/flux_edit.py"
         },
         {
           "label": "benchmark_pipeline.py",
-          "path": "yomu/pipeline/benchmark_pipeline.py"
+          "path": "komyst/pipeline/benchmark_pipeline.py"
         },
         {
           "label": "settings.py",
-          "path": "yomu/config/settings.py"
+          "path": "komyst/config/settings.py"
         }
       ]
     },
@@ -799,11 +799,11 @@ window.BOARD = {
       "links": [
         {
           "label": "ocr_balloon.py",
-          "path": "yomu/ocr/ocr_balloon.py"
+          "path": "komyst/ocr/ocr_balloon.py"
         },
         {
           "label": "ocr_engine.py",
-          "path": "yomu/ocr/ocr_engine.py"
+          "path": "komyst/ocr/ocr_engine.py"
         }
       ]
     },
@@ -825,15 +825,15 @@ window.BOARD = {
       "links": [
         {
           "label": "benchmark_pipeline.py",
-          "path": "yomu/pipeline/benchmark_pipeline.py"
+          "path": "komyst/pipeline/benchmark_pipeline.py"
         },
         {
           "label": "sfx_glossary.py",
-          "path": "yomu/translation/sfx_glossary.py"
+          "path": "komyst/translation/sfx_glossary.py"
         },
         {
           "label": "tradutor_ui.js",
-          "path": "static/tradutor_ui.js"
+          "path": "static/komyst_ui.js"
         }
       ]
     }

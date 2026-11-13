@@ -140,7 +140,7 @@ Até lá, qualquer mudança de comportamento de produção precisa carregar seu 
 | Condição | Estado verificado em `5f482ce1` |
 | --- | --- |
 | 1 — OpenCV único | sem mudança desde #84F53R: `requirements/requirements-beta.txt` declara `opencv-python==5.0.0.93`; os perfis de requisitos ficam em `requirements/` desde `a42e18d8` |
-| 2 — instalação limpa | **não provada** — ver [E2E em máquina limpa](CLEAN_VM_E2E.md) |
+| 2 — instalação limpa | **Validada por beta tester, informado pelo dono** para `v0.9.1-beta.18`; data não informada. A evidência não foi reproduzida nesta sessão. |
 | 3 — E2E real | **não executado** para a reescrita da limpeza |
 
 Em 2026-10-23/24 (`5f482ce1`) a limpeza, a diagramação e o tratamento de SFX mudaram de

@@ -1,1 +1,0 @@
-{"status":"IMPLEMENTED","triggers":["AUTH_LOST","DOM_UNRECOVERABLE","GENERATION_STUCK_REPEATED","CONTEXT_FAILURE","MANUAL_OPERATOR"],"arbitrary_image_count_threshold":false}

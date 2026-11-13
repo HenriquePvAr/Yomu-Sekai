@@ -1,6 +1,6 @@
 (function () {
-  window.TradutorI18nCatalogs = window.TradutorI18nCatalogs || {};
-  window.TradutorI18nCatalogs['en-US'] = {
+  window.KomystI18nCatalogs = window.KomystI18nCatalogs || {};
+  window.KomystI18nCatalogs['en-US'] = {
     'language.auto': 'Automatic — system',
     'language.pt-BR': 'Brazilian Portuguese',
     'language.en-US': 'English',

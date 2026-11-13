@@ -23,6 +23,6 @@ On the same synthetic source and mask, the Komyst OpenCV Telea primitive (radius
 - Valid model ranking: **NONE / PROVISIONAL_NOT_RANKED**.
 - Comparative throughput, representative latency, and confidence intervals: **NOT_MEASURED**.
 
-The saved Colab notebook and local smoke both verified checkpoint SHA-256 `479d3afdcb7ed2fd944ed4ebcc39ca45b33491f0f2e43eb1000bd623cfb41823` (205,717,870 bytes). The hash establishes identity only; checkpoint redistribution/use-rights review remains open. The local synthetic evidence is outside Git at `%TEMP%/yomu-big-lama-cpu-62u349j6/`; the owner's private page remains excluded from the repository.
+The saved Colab notebook and local smoke both verified checkpoint SHA-256 `479d3afdcb7ed2fd944ed4ebcc39ca45b33491f0f2e43eb1000bd623cfb41823` (205,717,870 bytes). The hash establishes identity only; checkpoint redistribution/use-rights review remains open. The local synthetic evidence is outside Git at `%TEMP%/Komyst-big-lama-cpu-62u349j6/`; the owner's private page remains excluded from the repository.
 
-The new synthetic set is generated outside Git by `experiments/colab-inpainting/build_synthetic_benchmark.py`. Its deterministic archive was produced twice with the same SHA-256 `fecc96834bb46ec357219740ebc6f465c3d2d8db5147dcd64b434c30f795b8bc`; the current copy is `%TEMP%/yomu-synthetic-clean-set-o1lzhcgm.zip`. No model was run on these five cases.
+The new synthetic set is generated outside Git by `experiments/colab-inpainting/build_synthetic_benchmark.py`. Its deterministic archive was produced twice with the same SHA-256 `fecc96834bb46ec357219740ebc6f465c3d2d8db5147dcd64b434c30f795b8bc`; the current copy is `%TEMP%/Komyst-synthetic-clean-set-o1lzhcgm.zip`. No model was run on these five cases.

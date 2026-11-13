@@ -49,7 +49,7 @@ def strip_comments(source: str) -> str:
 
 def shell_entry_assets() -> list[Path]:
     """The scripts app_ui.py injects into the shell, read from app_ui.py itself."""
-    app_ui = (ROOT / "yomu/ui/app.py").read_text(encoding="utf-8")
+    app_ui = (ROOT / "komyst/ui/app.py").read_text(encoding="utf-8")
     names = set(re.findall(r"ROOT / \"static\" / \"([A-Za-z0-9_.-]+\.js)\"", app_ui))
     injected = set(re.findall(r"_asset_url\((\w+_ASSET)\)", app_ui))
     for constant in injected:
@@ -129,7 +129,7 @@ class AuthNetworkIsolationTest(unittest.TestCase):
 
 
 class PendingPreviewPollingTest(unittest.TestCase):
-    source = (STATIC / "tradutor_ui.js").read_text(encoding="utf-8")
+    source = (STATIC / "komyst_ui.js").read_text(encoding="utf-8")
 
     def test_pending_previews_are_not_requested_without_authentication(self):
         """The request must be refused inside the function that makes it.
@@ -176,7 +176,7 @@ class BootstrapRefreshLifecycleTest(unittest.TestCase):
     render asked for another bootstrap, forever.
     """
 
-    source = (STATIC / "tradutor_ui.js").read_text(encoding="utf-8")
+    source = (STATIC / "komyst_ui.js").read_text(encoding="utf-8")
 
     def test_refresh_bootstrap_is_single_flight(self):
         code = strip_comments(self.source)

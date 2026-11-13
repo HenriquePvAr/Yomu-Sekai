@@ -4,7 +4,7 @@ install_offline_network_guard()
 
 import unittest
 
-from yomu.ocr.ocr_balloon import TextGroup, group_proper_name_spans, validate_translation_text
+from komyst.ocr.ocr_balloon import TextGroup, group_proper_name_spans, validate_translation_text
 
 
 class P24EntityPipelineReproductionTests(unittest.TestCase):

@@ -1,6 +1,6 @@
 // Regression harness for the history-card publication action.
 //
-// It loads the REAL static/tradutor_ui.js into a small DOM model, lets the real
+// It loads the REAL static/komyst_ui.js into a small DOM model, lets the real
 // bootstrap/render path create history cards, then dispatches the same delegated
 // document click path used by a user action. It intentionally does not call
 // openPublicationModal() directly and never submits the publication form.
@@ -383,7 +383,7 @@ function makeRecord(id, overrides = {}) {
   };
 }
 
-async function loadTradutorUi(history, options = {}) {
+async function loadKomystUi(history, options = {}) {
   const document = new FakeDocument();
   [
     'boot', 'bootNodes', 'bootNodeLabels', 'appStatus', 'railIndicator', 'histList', 'histCount', 'histSearch',
@@ -444,7 +444,7 @@ async function loadTradutorUi(history, options = {}) {
   window.window = window;
   window.globalThis = window;
   const context = vm.createContext(window);
-  const source = fs.readFileSync(path.join(ROOT, 'static', 'tradutor_ui.js'), 'utf8')
+  const source = fs.readFileSync(path.join(ROOT, 'static', 'komyst_ui.js'), 'utf8')
     .replace('  refreshBootstrap();', '  // refreshBootstrap disabled by publication modal event-path harness')
     .replace(/\}\)\(\);\s*$/, `
   if (window.__publicationModalEventHarness) {
@@ -452,8 +452,8 @@ async function loadTradutorUi(history, options = {}) {
     window.__publicationModalEventHarness.loadHistory = (history, options = {}) => {
       appState.bootstrap = {community: {authenticated: true, user_id: 'owner'}};
       appState.history = Array.isArray(history) ? history : [];
-      setGlobal('__tradutorAuthState', 'authenticated');
-      setGlobal('__tradutorCommunityAuthenticated', true);
+      setGlobal('__komystAuthState', 'authenticated');
+      setGlobal('__komystCommunityAuthenticated', true);
       appState.expandedFolders = options.expandFolders === false
         ? new Set()
         : new Set(appState.history.map((record) => seriesFromRecord(record).toLowerCase()));
@@ -462,7 +462,7 @@ async function loadTradutorUi(history, options = {}) {
   }
 })();`);
   window.__publicationModalEventHarness = {};
-  vm.runInContext(source, context, { filename: 'static/tradutor_ui.js' });
+  vm.runInContext(source, context, { filename: 'static/komyst_ui.js' });
   window.__publicationModalEventHarness.loadHistory(history, options);
   return { window, document };
 }
@@ -525,7 +525,7 @@ await test('reconstructed history publication button opens modal through delegat
     output_verification: 'legacy_unverified',
     publication_manifest_ready: true,
   });
-  const { document } = await loadTradutorUi([child]);
+  const { document } = await loadKomystUi([child]);
   const item = document.querySelector('.hist-item');
   assert.equal(item.dataset.id, 'reconstruction-child-1');
   const button = item.querySelector('button[data-action="publish"]');
@@ -546,7 +546,7 @@ await test('retargeted browser click opens modal using composed event path', asy
     output_verification: 'legacy_unverified',
     publication_manifest_ready: true,
   });
-  const { document } = await loadTradutorUi([child]);
+  const { document } = await loadKomystUi([child]);
   const button = document.querySelector('.hist-item').querySelector('button[data-action="publish"]');
   clickRetargetedThroughComposedPath(document, button);
   assert.deepEqual(modalState(document), {
@@ -564,7 +564,7 @@ await test('malformed composed path with outside action and histList is denied',
     output_verification: 'legacy_unverified',
     publication_manifest_ready: true,
   });
-  const { document } = await loadTradutorUi([child]);
+  const { document } = await loadKomystUi([child]);
   const histList = document.getElementById('histList');
   const outsideItem = document.createElement('div');
   outsideItem.setAttribute('class', 'hist-item');
@@ -587,7 +587,7 @@ await test('action from a different container is denied even when histList appea
     output_verification: 'legacy_unverified',
     publication_manifest_ready: true,
   });
-  const { document } = await loadTradutorUi([child]);
+  const { document } = await loadKomystUi([child]);
   const histList = document.getElementById('histList');
   const otherList = document.createElement('div');
   otherList.setAttribute('id', 'otherList');
@@ -621,7 +621,7 @@ await test('conflicting composed path actions from different cards are denied', 
     publication_manifest_ready: true,
     chapter_name: 'Boundary Card B',
   });
-  const { document } = await loadTradutorUi([childA, childB]);
+  const { document } = await loadKomystUi([childA, childB]);
   const histList = document.getElementById('histList');
   const items = document.querySelectorAll('.hist-item');
   const buttonA = items[0].querySelector('button[data-action="publish"]');
@@ -641,7 +641,7 @@ await test('history search opens matching folder so publish action is physically
     chapter_name: 'reconstruction-search-open-1',
     series_name: 'Searchable Series',
   });
-  const { document, window } = await loadTradutorUi([child], { expandFolders: false });
+  const { document, window } = await loadKomystUi([child], { expandFolders: false });
   const rendered = () => window.__publicationModalEventHarness.getRenderedHistoryHtml();
   assert.match(rendered(), /community-folder\s+"/);
   const search = document.getElementById('histSearch');
@@ -658,7 +658,7 @@ await test('history search opens matching folder so publish action is physically
 });
 
 await test('normal translation publication button still opens modal', async () => {
-  const { document } = await loadTradutorUi([makeRecord('translation-job-1')]);
+  const { document } = await loadKomystUi([makeRecord('translation-job-1')]);
   document.querySelector('.hist-item').querySelector('button[data-action="publish"]').click();
   assert.equal(modalState(document).open, true);
   assert.equal(modalState(document).title, 'Synthetic Chapter');
@@ -668,9 +668,9 @@ await test('history read button opens reader using the button job id when row id
   const record = makeRecord('history-row-1', {
     job_id: 'reader-job-1',
   });
-  const { window, document } = await loadTradutorUi([record]);
+  const { window, document } = await loadKomystUi([record]);
   let openedJobId = '';
-  window.addEventListener('tradutor-open-reader', (event) => {
+  window.addEventListener('komyst-open-reader', (event) => {
     openedJobId = event.detail.jobId;
   });
   document.querySelector('.hist-item').querySelector('button[data-action="read"]').click();
@@ -683,7 +683,7 @@ await test('historical ineligible source remains denied and cannot open modal', 
     quality_gate: false,
     review_status: 'required',
   });
-  const { document } = await loadTradutorUi([source]);
+  const { document } = await loadKomystUi([source]);
   const button = document.querySelector('.hist-item').querySelector('button[data-action="publish"]');
   assert.equal(button.disabled, true);
   button.click();
@@ -705,7 +705,7 @@ await test('close and reopen preserves the selected reconstruction child target'
     output_verification: 'legacy_unverified',
     chapter_name: 'Child B',
   });
-  const { document } = await loadTradutorUi([childA, childB]);
+  const { document } = await loadKomystUi([childA, childB]);
   const items = document.querySelectorAll('.hist-item');
   items[0].querySelector('button[data-action="publish"]').click();
   assert.equal(modalState(document).title, 'Child A');

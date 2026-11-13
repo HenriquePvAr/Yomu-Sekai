@@ -12,10 +12,10 @@ import json
 from pathlib import Path
 from unittest import mock
 
-import yomu.auth.beta_license as beta_license
-import yomu.runtime.job_runner as job_runner
-import yomu.ui.ui_bridge as ui_bridge
-from yomu.auth.beta_license import (
+import komyst.auth.beta_license as beta_license
+import komyst.runtime.job_runner as job_runner
+import komyst.ui.ui_bridge as ui_bridge
+from komyst.auth.beta_license import (
     BetaAccessDecision,
     LicenseState,
     LocalDevelopmentBetaAuthorizer,
@@ -26,8 +26,8 @@ from yomu.auth.beta_license import (
     build_beta_license_authorizer,
     stable_install_fingerprint_hash,
 )
-from yomu.community.community_auth import RequestPrincipal
-from yomu.runtime.job_store import JobStatus
+from komyst.community.community_auth import RequestPrincipal
+from komyst.runtime.job_store import JobStatus
 from tests.test_translation_start import WEBTOON_URL, _Bridge
 
 
@@ -366,7 +366,7 @@ class UiBetaAuthorizerCompositionTests(unittest.TestCase):
                     "BETA_LICENSE_PROVIDER": "supabase",
                     "SUPABASE_URL": "https://example.supabase.co",
                     "SUPABASE_PUBLISHABLE_KEY": "sb_publishable_test",
-                    "TRADUTOR_INSTALL_ID": "test-install-id",
+                    "KOMYST_INSTALL_ID": "test-install-id",
                 },
                 transport=_FakeTransport(_FakeResponse(200, {})),
             )
@@ -379,7 +379,7 @@ class UiBetaAuthorizerCompositionTests(unittest.TestCase):
                     Path(folder),
                     env={
                         "BETA_LICENSE_PROVIDER": "supabase",
-                        "TRADUTOR_INSTALL_ID": "test-install-id",
+                        "KOMYST_INSTALL_ID": "test-install-id",
                     },
                 )
 
@@ -431,10 +431,10 @@ class BetaSecurityStaticScanTests(unittest.TestCase):
         needles = ("SUPABASE_SERVICE_ROLE", "service_role", "private signing key")
         allowed_files = {"test_beta_tester_licensing.py", "supabase_auth.py", "community_auth.py"}
         client_paths = [
-            root / "yomu/auth/beta_license.py",
-            root / "yomu/ui/ui_bridge.py",
-            root / "yomu/runtime/job_runner.py",
-            root / "yomu/ui/app.py",
+            root / "komyst/auth/beta_license.py",
+            root / "komyst/ui/ui_bridge.py",
+            root / "komyst/runtime/job_runner.py",
+            root / "komyst/ui/app.py",
         ]
         for path in client_paths:
             text = "\n".join(

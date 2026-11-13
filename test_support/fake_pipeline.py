@@ -42,8 +42,8 @@ def main(argv: list[str] | None = None) -> int:
     out.mkdir(parents=True, exist_ok=True)
     checkpoints = out / "checkpoints"
     checkpoints.mkdir(exist_ok=True)
-    cancel_file = Path(str(__import__("os").environ.get("TRADUTOR_CANCEL_FILE") or ""))
-    cancel_ack = Path(str(__import__("os").environ.get("TRADUTOR_CANCEL_ACK_FILE") or ""))
+    cancel_file = Path(str(__import__("os").environ.get("KOMYST_CANCEL_FILE") or ""))
+    cancel_ack = Path(str(__import__("os").environ.get("KOMYST_CANCEL_ACK_FILE") or ""))
 
     def cancelled() -> bool:
         if not str(cancel_file):

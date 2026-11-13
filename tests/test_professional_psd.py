@@ -9,7 +9,7 @@ import cv2
 import numpy as np
 from psd_tools import PSDImage
 
-from yomu.export.professional_psd import export_professional_psd, write_professional_page_psd
+from komyst.export.professional_psd import export_professional_psd, write_professional_page_psd
 
 # region bboxes (x, y, w, h)
 A = [80, 120, 320, 90]

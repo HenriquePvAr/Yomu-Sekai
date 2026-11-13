@@ -38,7 +38,7 @@ weights/
 !static/assets/reference-ui/
 !static/assets/reference-ui/*.jpg
 # Canonical source branding asset required by Windows packaging.
-!assets/branding/yomu-sekai-logo.png
+!assets/branding/komyst-logo.png
 !assets/branding/komyst-logo.png
 # Komyst wordmark is loaded directly by the UI shell.
 !static/assets/branding/komyst-wordmark.png

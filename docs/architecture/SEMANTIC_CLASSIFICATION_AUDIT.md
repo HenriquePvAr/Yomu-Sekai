@@ -2,12 +2,12 @@
 
 > **Base verificada:** `5f482ce1` (branch `main`) · **Revisado em:** 2026-10-24
 >
-> Module paths (the bare file names below refer to these): `yomu/review/region_taxonomy.py`,
-> `yomu/translation/linguistic_audit.py`, `yomu/translation/linguistic_triage.py`,
-> `yomu/review/audit_registry.py`, `yomu/review/audit_decisions.py`,
-> `yomu/translation/human_translation_decisions.py`, `yomu/review/preview_gates.py` and
-> `yomu/review/chapter_quality_revision.py` (`revise_page`). Bridge methods live in
-> `yomu/ui/ui_bridge.py`; the `/api/ui/audit/*` routes in `yomu/ui/app.py`. None of these has a
+> Module paths (the bare file names below refer to these): `komyst/review/region_taxonomy.py`,
+> `komyst/translation/linguistic_audit.py`, `komyst/translation/linguistic_triage.py`,
+> `komyst/review/audit_registry.py`, `komyst/review/audit_decisions.py`,
+> `komyst/translation/human_translation_decisions.py`, `komyst/review/preview_gates.py` and
+> `komyst/review/chapter_quality_revision.py` (`revise_page`). Bridge methods live in
+> `komyst/ui/ui_bridge.py`; the `/api/ui/audit/*` routes in `komyst/ui/app.py`. None of these has a
 > root-level shim. The blocks below are a chronological record; later blocks supersede earlier
 > scope notes (for example, BLOCO 4 wires the taxonomy into the live review that BLOCO 2 deferred).
 
@@ -79,12 +79,12 @@ dir; touches nothing else.
 Run (there is no root `linguistic_audit.py`; the module is executed in place):
 
 ```bash
-python -m yomu.translation.linguistic_audit <job_id> <run_id> [out_dir]
+python -m komyst.translation.linguistic_audit <job_id> <run_id> [out_dir]
 ```
 
 `out_dir` defaults to `.runtime/linguistic-audit`. Limitation: the CLI resolves the job through
 `resolve_output_dir`, whose default database is the relative path `.cache/runtime/jobs.sqlite3`,
-not the per-user runtime root (`%LOCALAPPDATA%\TradutorIA\runtime\jobs.sqlite3`) that the
+not the per-user runtime root (`%LOCALAPPDATA%\Komyst\runtime\jobs.sqlite3`) that the
 worker uses by default, so it finds a job only when run against a store at that relative path.
 The UI path (`/api/ui/audit/review`) resolves the job through the bridge's own store and is not
 affected.

@@ -8,8 +8,8 @@ from pathlib import Path
 
 import pytest
 
-from yomu.auth import secure_auth_context as auth_module
-from yomu.auth.secure_auth_context import AuthContextError, AuthEnvelopeStore
+from komyst.auth import secure_auth_context as auth_module
+from komyst.auth.secure_auth_context import AuthContextError, AuthEnvelopeStore
 
 
 def token(exp: int | float, *, canary: str = "") -> str:
@@ -24,7 +24,7 @@ def token(exp: int | float, *, canary: str = "") -> str:
 @pytest.mark.skipif(os.name != "nt", reason="Windows DPAPI required")
 def test_dpapi_binding_ttl_tamper_and_cleanup(tmp_path: Path):
     store = AuthEnvelopeStore(tmp_path, ttl_seconds=1800)
-    secret = "YOMU_AUTH_SECRET_MUST_NOT_LEAK_123456"
+    secret = "KOMYST_AUTH_SECRET_MUST_NOT_LEAK_123456"
     access_token = token(int(time.time()) + 3600, canary=secret)
     path = store.seal("job-a", access_token, user_id="user-a")
     assert secret.encode() not in path.read_bytes()
@@ -70,7 +70,7 @@ def test_real_process_boundary(tmp_path: Path):
     access_token = token(int(time.time()) + 3600, canary=canary)
     path = store.seal("job-process", access_token)
     code = (
-        "from yomu.auth.secure_auth_context import AuthEnvelopeStore; "
+        "from komyst.auth.secure_auth_context import AuthEnvelopeStore; "
         f"s=AuthEnvelopeStore(r'{tmp_path}'); c=s.acquire('job-process'); "
         "print(c.safe_metadata()['present'])"
     )

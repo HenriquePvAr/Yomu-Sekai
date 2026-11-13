@@ -1,7 +1,7 @@
 # Retenção, restauração, lixeira e reconciliação dos PDFs sociais
 
 > **Revisado em:** 2026-10-24 · **Base verificada:** `5f482ce1`.
-> **Estado:** IMPLEMENTADO no backend (`yomu/community/social_asset_retention.py`,
+> **Estado:** IMPLEMENTADO no backend (`komyst/community/social_asset_retention.py`,
 > `social_asset_reconcile.py`, `chapter_asset_repository.py`,
 > `scripts/social_asset_maintenance_cli.py`), coberto por `tests/test_social_asset_retention.py`.
 > A UI social que oferece "Desvincular"/restaurar está desligada no cliente
@@ -16,7 +16,7 @@ pode restaurá-lo dentro do prazo; só depois disso uma varredura manual pode mo
 
 | Regra | Onde é garantida |
 | --- | --- |
-| Nunca apagar imediatamente em replace/unlink | `yomu/community/social_pdf_publishing.py` chama `retain_superseded_asset` / `retain_unlinked_asset` |
+| Nunca apagar imediatamente em replace/unlink | `komyst/community/social_pdf_publishing.py` chama `retain_superseded_asset` / `retain_unlinked_asset` |
 | Nunca apagar permanentemente | nenhum caminho chama `delete_file`; teste `test_no_permanent_delete_anywhere_in_the_retention_code` |
 | Nunca esvaziar a lixeira | idem |
 | Nunca mover para a lixeira arquivo ainda referenciado | `evaluate_for_trash` → `still_referenced` |
@@ -46,7 +46,7 @@ barrado. Toda transição usa trava otimista (`version`) e grava no `social_asse
 
 ## Configuração
 
-As duas variáveis são lidas por `yomu/community/social_asset_retention.py`, mas **não** estão
+As duas variáveis são lidas por `komyst/community/social_asset_retention.py`, mas **não** estão
 listadas em `.env.example`.
 
 | Variável | Padrão | Efeito |
@@ -88,7 +88,7 @@ python -m scripts.social_asset_maintenance_cli reconcile --apply
 ```
 
 Execute a partir da raiz do repositório. `python scripts/social_asset_maintenance_cli.py`
-direto falha com `ModuleNotFoundError: yomu` (verificado com `--help`); o opcional `--db`
+direto falha com `ModuleNotFoundError: komyst` (verificado com `--help`); o opcional `--db`
 aponta outro banco SQLite.
 
 Sem `--apply` nada é modificado. Cada execução grava um registro em

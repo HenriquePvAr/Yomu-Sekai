@@ -14,7 +14,7 @@ from pathlib import Path
 
 from PIL import Image
 
-from yomu.export.pdf import prepare_smart_webtoon_pages
+from komyst.export.pdf import prepare_smart_webtoon_pages
 
 
 def write_page(folder: Path, name: str, *, width: int = 800, height: int = 1200,
@@ -93,7 +93,7 @@ class LogicalPagePassthroughTests(unittest.TestCase):
 
 class ManifestContractTests(unittest.TestCase):
     def test_local_manifest_marks_logical_pages(self):
-        import yomu.download.local.local_folder_input as local_folder_input
+        import komyst.download.local.local_folder_input as local_folder_input
 
         source = Path(local_folder_input.__file__).read_text(encoding="utf-8")
         self.assertIn('"logical_page": True', source)

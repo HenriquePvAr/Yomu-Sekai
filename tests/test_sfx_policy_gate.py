@@ -1,6 +1,6 @@
 import test_support._test_bootstrap as _test_bootstrap  # noqa: F401
 
-from yomu.pipeline.benchmark_pipeline import _sfx_policy_summary
+from komyst.pipeline.benchmark_pipeline import _sfx_policy_summary
 
 
 def test_unignored_sfx_not_sent_is_valid_when_translation_disabled():

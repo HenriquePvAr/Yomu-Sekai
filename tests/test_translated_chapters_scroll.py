@@ -7,8 +7,8 @@ compensate a real layout shift, and never when the user scrolled after the captu
 """
 from pathlib import Path
 
-JS = Path("static/tradutor_ui.js").read_text(encoding="utf-8")
-CSS = Path("static/tradutor_ui.css").read_text(encoding="utf-8")
+JS = Path("static/komyst_ui.js").read_text(encoding="utf-8")
+CSS = Path("static/komyst_ui.css").read_text(encoding="utf-8")
 
 
 def test_user_scroll_is_tracked():

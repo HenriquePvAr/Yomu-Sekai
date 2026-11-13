@@ -12,8 +12,8 @@ import cv2
 import numpy as np
 import pytest
 
-from yomu.runtime.job_store import JobStatus, JobStore
-from yomu.ui.ui_bridge import UiBridge
+from komyst.runtime.job_store import JobStatus, JobStore
+from komyst.ui.ui_bridge import UiBridge
 
 
 def _fixture(tmp_path: Path, *, height: int = 180):
@@ -92,10 +92,10 @@ def _run_worker(db: Path, runtime: Path, *, fault: str = "") -> int:
         "w.run(once=True); w.close()"
     )
     env = os.environ.copy()
-    env.update({"TRADUTOR_RUNTIME_ROOT": str(runtime), "APP_ENV": "test"})
-    env.pop("YOMU_TEST_REVIEW_REEXPORT_FAIL_ONCE", None)
+    env.update({"KOMYST_RUNTIME_ROOT": str(runtime), "APP_ENV": "test"})
+    env.pop("KOMYST_TEST_REVIEW_REEXPORT_FAIL_ONCE", None)
     if fault:
-        env["YOMU_TEST_REVIEW_REEXPORT_FAIL_ONCE"] = fault
+        env["KOMYST_TEST_REVIEW_REEXPORT_FAIL_ONCE"] = fault
     proc = subprocess.run([sys.executable, "-c", code], cwd=Path(__file__).resolve().parents[1],
                           env=env, timeout=90, check=False, capture_output=True, text=True)
     assert proc.returncode == 0, proc.stderr[-1500:]
@@ -117,7 +117,7 @@ def test_bridge_queues_worker_renders_png_and_recovers_in_new_process(tmp_path: 
     db, output, store, bridge, parent_id = _fixture(tmp_path)
     runtime = tmp_path / "worker-runtime"
     monkeypatch.setenv("APP_ENV", "test")
-    monkeypatch.setenv("YOMU_TEST_REVIEW_REEXPORT_FAIL_ONCE", "export")
+    monkeypatch.setenv("KOMYST_TEST_REVIEW_REEXPORT_FAIL_ONCE", "export")
     try:
         queued = bridge.quality_review_reexport_for_owner("owner-test", parent_id, output_format="png")
         assert queued["status"] == "queued"
@@ -127,7 +127,7 @@ def test_bridge_queues_worker_renders_png_and_recovers_in_new_process(tmp_path: 
         first = _wait_job(store, queued["job_id"], {JobStatus.INTERRUPTED})
         first_pid = int(first["runner_pid"])
         assert first.get("recoverable") == 1
-        assert not __import__("yomu.runtime.process_tree", fromlist=["*"]).matches(first_pid, create_time=float(first["runner_create_time"]))
+        assert not __import__("komyst.runtime.process_tree", fromlist=["*"]).matches(first_pid, create_time=float(first["runner_create_time"]))
         generation_root = output / "review_generations" / queued["generation_id"]
         assert list((generation_root / "staging").glob("attempt-*")), "fault injection should leave only this generation's orphan stage"
 
@@ -182,7 +182,7 @@ def test_worker_validates_non_png_review_formats(tmp_path: Path, fmt: str):
         assert artifact.exists()
         if fmt == "pdf":
             assert artifact.is_file() and artifact.stat().st_size > 0
-            from yomu.export.pdf_reader import parse_document
+            from komyst.export.pdf_reader import parse_document
             assert len(parse_document(artifact).pages) == 1
         else:
             from psd_tools import PSDImage

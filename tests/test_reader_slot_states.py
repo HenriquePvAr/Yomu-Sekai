@@ -12,7 +12,7 @@ import test_support._test_bootstrap as _test_bootstrap  # noqa: F401
 
 import unittest
 
-from yomu.download.sources.chapter_source import (
+from komyst.download.sources.chapter_source import (
     SLOT_PENDING, SLOT_REJECTED, SLOT_RESOLVED, classify_reader_slots, pending_indices,
     reader_coverage_complete, select_adapter, slot_counts, slot_state,
 )
@@ -125,7 +125,7 @@ class CoverageTests(unittest.TestCase):
 
 class ManifestPurityTests(unittest.TestCase):
     def test_the_placeholder_host_is_not_authorized_as_a_page_host(self):
-        from yomu.download.sources.chapter_source import SourceError
+        from komyst.download.sources.chapter_source import SourceError
 
         with self.assertRaises(SourceError):
             WEBTOONS.authorize_related_url(f"https://{PLACEHOLDER_HOST}/x.jpg")

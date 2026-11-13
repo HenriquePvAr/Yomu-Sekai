@@ -8,7 +8,7 @@ import unittest
 from pathlib import Path
 from starlette.requests import Request
 
-import yomu.ui.app as app_ui
+import komyst.ui.app as app_ui
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -29,11 +29,11 @@ def _request(headers: list[tuple[bytes, bytes]]) -> Request:
 
 class CorrelationIdTests(unittest.TestCase):
     def test_valid_header_is_reused(self):
-        request = _request([(b"x-yomu-correlation-id", b"abc-123._x")])
+        request = _request([(b"x-komyst-correlation-id", b"abc-123._x")])
         self.assertEqual(app_ui._update_correlation_id(request), "abc-123._x")
 
     def test_invalid_header_is_replaced(self):
-        request = _request([(b"x-yomu-correlation-id", b"token=secret&password=x")])
+        request = _request([(b"x-komyst-correlation-id", b"token=secret&password=x")])
         value = app_ui._update_correlation_id(request)
         self.assertRegex(value, r"^[0-9a-f]{32}$")
 
@@ -56,17 +56,17 @@ class ExceptionSanitizationTests(unittest.TestCase):
 
 class FrontendContractTests(unittest.TestCase):
     def test_frontend_has_bounded_initial_download_request_and_recovery(self):
-        source = (ROOT / "static" / "tradutor_ui.js").read_text(encoding="utf-8")
+        source = (ROOT / "static" / "komyst_ui.js").read_text(encoding="utf-8")
         self.assertIn("UPDATE_DOWNLOAD_REQUEST_TIMEOUT_MS", source)
         self.assertIn("new AbortController()", source)
-        self.assertIn("X-Yomu-Correlation-Id", source)
+        self.assertIn("X-Komyst-Correlation-Id", source)
         self.assertIn("Download demorou além do esperado", source)
         self.assertIn("download.textContent = 'Baixar e instalar'", source)
 
 
 class RouteLoggingContractTests(unittest.TestCase):
     def test_route_phase_events_are_present(self):
-        source = (ROOT / "yomu/ui/app.py").read_text(encoding="utf-8")
+        source = (ROOT / "komyst/ui/app.py").read_text(encoding="utf-8")
         for event in (
             "UPDATE_DOWNLOAD_REQUEST_RECEIVED",
             "UPDATE_DOWNLOAD_MANIFEST_FETCH_START",

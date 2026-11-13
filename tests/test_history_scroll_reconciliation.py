@@ -18,7 +18,7 @@ except ImportError:  # pragma: no cover - optional browser test dependency
 
 
 ROOT = Path(__file__).resolve().parents[1]
-UI_JS = ROOT / "static" / "tradutor_ui.js"
+UI_JS = ROOT / "static" / "komyst_ui.js"
 
 
 def _browser_executable() -> str | None:

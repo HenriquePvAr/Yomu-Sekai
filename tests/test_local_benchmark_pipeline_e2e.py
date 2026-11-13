@@ -22,12 +22,12 @@ from unittest import mock
 import cv2
 import numpy as np
 
-import yomu.pipeline.benchmark_pipeline as benchmark_pipeline
-import yomu.config.settings as config
-import yomu.download.local.local_folder_input as local_folder_input
-from yomu.download.local.local_folder_source import LocalFolderChapterAdapter, LocalFolderPolicy
-from yomu.ocr.ocr_balloon import TextCandidate, TextGroup
-from yomu.ocr.ocr_engine import OCRLine
+import komyst.pipeline.benchmark_pipeline as benchmark_pipeline
+import komyst.config.settings as config
+import komyst.download.local.local_folder_input as local_folder_input
+from komyst.download.local.local_folder_source import LocalFolderChapterAdapter, LocalFolderPolicy
+from komyst.ocr.ocr_balloon import TextCandidate, TextGroup
+from komyst.ocr.ocr_engine import OCRLine
 
 
 class _OfflineTranslator:
@@ -43,7 +43,7 @@ class _OfflineTranslator:
             "api_requests": 0,
             "cache_hits": 0,
             "failed_batches": 0,
-            "provider_name": "yomu_backend",
+            "provider_name": "komyst_backend",
         }
 
     def translate_many(self, texts, force=False):
@@ -142,7 +142,7 @@ class LocalBenchmarkPipelineE2ETests(unittest.TestCase):
         self.chapter.mkdir(parents=True)
         self.snapshots = self.root / "runtime" / "local_sources"
         self.snapshots.mkdir(parents=True)
-        runtime_output_root = Path(__import__("yomu.runtime.runtime_paths", fromlist=["*"]).output_root()).resolve()
+        runtime_output_root = Path(__import__("komyst.runtime.runtime_paths", fromlist=["*"]).output_root()).resolve()
         self.output = runtime_output_root / "synthetic_chapter"
         self.original = self.chapter / "private-source-page.png"
         self._write_source_page(self.original)
@@ -250,7 +250,7 @@ class LocalBenchmarkPipelineE2ETests(unittest.TestCase):
 
     @contextlib.contextmanager
     def _pipeline_mocks(self, translator, extra_env=None):
-        env = {"TRANSLATION_ENABLED": "true", "YOMU_ENV": "test", "YOMU_TEST_BACKEND": "mock"}
+        env = {"TRANSLATION_ENABLED": "true", "KOMYST_ENV": "test", "KOMYST_TEST_BACKEND": "mock"}
         if extra_env:
             env.update(extra_env)
         with (
@@ -367,7 +367,7 @@ class LocalBenchmarkPipelineE2ETests(unittest.TestCase):
         )
 
         # AUTOMATIC (default) persists the canonical translated artifact + a v2 manifest.
-        import yomu.runtime.artifact_contract as ac
+        import komyst.runtime.artifact_contract as ac
         canonical_translated = self.output / "images" / "translated" / "001.png"
         self.assertTrue(canonical_translated.is_file())
         # same buffer as the PDF page, not a re-render
@@ -385,12 +385,12 @@ class LocalBenchmarkPipelineE2ETests(unittest.TestCase):
     def test_professional_qc_persists_clean_and_translated_and_manifest(self):
         """A real PROFESSIONAL_QC run persists CLEAN and TRANSLATED per logical page from the
         renderer's own buffers, and the v2 manifest reports complete coverage."""
-        import yomu.runtime.artifact_contract as ac
+        import komyst.runtime.artifact_contract as ac
         translator = _OfflineTranslator()
         reference = local_folder_input.local_source_reference(
             self.snapshot.analysis.source_fingerprint,
         )
-        with self._pipeline_mocks(translator, extra_env={"YOMU_OUTPUT_PROFILE": "professional_qc"}):
+        with self._pipeline_mocks(translator, extra_env={"KOMYST_OUTPUT_PROFILE": "professional_qc"}):
             report = benchmark_pipeline.run_benchmark(self._args(reference))
         self.assertEqual(report["status"], "finished")
 

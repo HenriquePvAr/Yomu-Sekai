@@ -20,9 +20,9 @@ from unittest import mock
 
 import numpy as np
 
-import yomu.config.settings as config
-import yomu.ocr.ocr_balloon as ocr_balloon
-from yomu.ocr.ocr_balloon import OCRLine, TextGroup, validate_and_retry_translations
+import komyst.config.settings as config
+import komyst.ocr.ocr_balloon as ocr_balloon
+from komyst.ocr.ocr_balloon import OCRLine, TextGroup, validate_and_retry_translations
 
 
 ENGLISH = "ON THE CONTRARY, SEE HOW FAR YOU'VE REACHED ALREADY."

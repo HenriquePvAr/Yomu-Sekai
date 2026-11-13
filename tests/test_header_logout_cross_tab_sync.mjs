@@ -11,7 +11,7 @@
 // Root cause (static/auth_ui.js, renderSession()): a guard added in commit 7fd0588
 // ("fix: preserve verified auth across late SDK signout") deferred ANY explicit
 // SIGNED_OUT event that arrived while a bearer token was cached in memory
-// (window.__tradutorAccessToken), re-validating against the backend with that same
+// (window.__komystAccessToken), re-validating against the backend with that same
 // (now stale) token instead of clearing the header immediately. That guard was meant
 // for one narrow case: a late SDK event surfacing while THIS tab's own signIn() call
 // was still settling (its setSession() persistence can race). It had no way to tell
@@ -281,26 +281,26 @@ await test('cross-tab logout marks the shell unauthenticated (drives sidebar/pri
   assert.notEqual(win.document.documentElement.dataset.shellState, 'authenticated');
 });
 
-await test('cross-tab logout dispatches the canonical tradutor-auth-changed event with authenticated:false', async () => {
+await test('cross-tab logout dispatches the canonical komyst-auth-changed event with authenticated:false', async () => {
   const seen = [];
   const { win } = await loadAuthUi({
     authUiSource: CURRENT, nativeEvents: CROSS_TAB_LOGOUT_EVENTS, sessionForGetSession: SESSION,
     sessionEndpointAuthenticated: false,
-    onWindowReady: (w) => w.addEventListener('tradutor-auth-changed', (e) => seen.push(e.detail)),
+    onWindowReady: (w) => w.addEventListener('komyst-auth-changed', (e) => seen.push(e.detail)),
   });
-  assert.ok(seen.length > 0, 'tradutor-auth-changed must fire at least once');
+  assert.ok(seen.length > 0, 'komyst-auth-changed must fire at least once');
   const last = seen[seen.length - 1];
   assert.equal(last.authenticated, false, `last event should report authenticated:false, got ${JSON.stringify(last)}`);
-  assert.equal(win.__tradutorAuthState === 'authenticated', false, 'auth state must not still read authenticated');
+  assert.equal(win.__komystAuthState === 'authenticated', false, 'auth state must not still read authenticated');
 });
 
-await test('the old event name tradutor:auth-changed is never required (only tradutor-auth-changed is used)', async () => {
-  assert.ok(!CURRENT.includes("'tradutor:auth-changed'"), 'auth_ui.js must not use the incorrect legacy event name');
+await test('the old event name komyst:auth-changed is never required (only komyst-auth-changed is used)', async () => {
+  assert.ok(!CURRENT.includes("'komyst:auth-changed'"), 'auth_ui.js must not use the incorrect legacy event name');
 });
 
-await test('window.__tradutorAccessToken is cleared after cross-tab logout (no stale bearer survives)', async () => {
+await test('window.__komystAccessToken is cleared after cross-tab logout (no stale bearer survives)', async () => {
   const { win } = await loadAuthUi({ authUiSource: CURRENT, nativeEvents: CROSS_TAB_LOGOUT_EVENTS, sessionForGetSession: SESSION });
-  assert.equal(win.__tradutorAccessToken, '');
+  assert.equal(win.__komystAccessToken, '');
 });
 
 // ---------------------------------------------------------------------------
@@ -361,7 +361,7 @@ await test('a late SIGNED_OUT during this tab\'s own in-flight login attempt is 
 // self-contained and byte-accurate to the real regression, and fails loudly (instead
 // of silently) if static/auth_ui.js's guard is ever refactored out from under it. ---
 const POST_FIX_GUARD = "if (!session && authEvent === 'SIGNED_OUT' && ownLoginAttemptId) {";
-const PRE_FIX_GUARD = "if (!session && authEvent === 'SIGNED_OUT' && window.__tradutorAccessToken) {";
+const PRE_FIX_GUARD = "if (!session && authEvent === 'SIGNED_OUT' && window.__komystAccessToken) {";
 assert.ok(CURRENT.includes(POST_FIX_GUARD),
   'auth_ui.js renderSession() guard text changed - update POST_FIX_GUARD/PRE_FIX_GUARD to match before trusting the negative control');
 const PREVIOUS = CURRENT.replace(POST_FIX_GUARD, PRE_FIX_GUARD);

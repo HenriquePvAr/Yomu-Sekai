@@ -19,8 +19,8 @@ function harness() {
   const message = {textContent: 'Concluindo autenticação…', dataset: {}, children: [], appendChild(node) { this.children.push(node); }};
   const historyCalls = [];
   const window = {
-    __yomuAuthCallbackStarted: false,
-    __yomuAuthCallbackBootFailed: false,
+    __komystAuthCallbackStarted: false,
+    __komystAuthCallbackBootFailed: false,
     setTimeout(callback, delay) {
       const id = nextTimer++;
       callbacks.set(id, {callback, delay});
@@ -53,7 +53,7 @@ function harness() {
       }
     },
     startModule() {
-      const handshake = /window\.__yomuAuthCallbackStarted\s*=\s*true;\s*window\.clearTimeout\(window\.__yomuAuthCallbackBootTimer\);/.exec(moduleSource);
+      const handshake = /window\.__komystAuthCallbackStarted\s*=\s*true;\s*window\.clearTimeout\(window\.__komystAuthCallbackBootTimer\);/.exec(moduleSource);
       assert.ok(handshake, 'module performs the watchdog handshake before callback work');
       vm.runInNewContext(handshake[0], context, {timeout: 1000});
     },
@@ -64,7 +64,7 @@ test('module starts normally and disarms only the boot watchdog', () => {
   const h = harness();
   assert.equal(h.callbacks.get(1)?.delay, 12000);
   h.startModule();
-  assert.equal(h.window.__yomuAuthCallbackStarted, true);
+  assert.equal(h.window.__komystAuthCallbackStarted, true);
   assert.equal(h.callbacks.size, 0);
   assert.equal(h.message.textContent, 'Concluindo autenticação…');
 });
@@ -75,7 +75,7 @@ test('module never starts: bounded watchdog shows terminal retry guidance and sc
   assert.equal(h.spinner.hidden, true);
   assert.match(h.message.textContent, /Tente abrir o link novamente/);
   assert.equal(h.message.dataset.state, 'error');
-  assert.equal(h.window.__yomuAuthCallbackBootFailed, true);
+  assert.equal(h.window.__komystAuthCallbackBootFailed, true);
   assert.deepEqual(h.historyCalls, [[null, '', '/auth/callback']]);
   assert.equal(h.callbacks.size, 0);
 });
@@ -128,7 +128,7 @@ async function runInnerCallback(exchange, {search = '?code=synthetic-auth-code',
 
 test('callback exchange rejection reaches the inner terminal error state', async () => {
   const h = await runInnerCallback(() => Promise.reject(Object.assign(new Error('synthetic exchange failure'), {code: 'synthetic_failure'})));
-  assert.equal(h.window.__yomuAuthCallbackStarted, true);
+  assert.equal(h.window.__komystAuthCallbackStarted, true);
   assert.equal(h.spinner.hidden, true);
   assert.match(h.message.textContent, /Não foi possível concluir a autenticação/);
   assert.equal(h.message.dataset.state, 'error');
@@ -141,7 +141,7 @@ test('callback exchange timeout reaches the inner terminal error state, not the 
   assert.ok(exchangeTimer, 'code-exchange timeout was armed');
   exchangeTimer[1].callback();
   for (let i = 0; i < 20; i++) await Promise.resolve();
-  assert.equal(h.window.__yomuAuthCallbackStarted, true);
+  assert.equal(h.window.__komystAuthCallbackStarted, true);
   assert.equal(h.spinner.hidden, true);
   assert.match(h.message.textContent, /Não foi possível concluir a autenticação/);
   assert.equal(h.message.dataset.state, 'error');
@@ -178,7 +178,7 @@ test('PKCE code with verifier performs exactly one exchange', async () => {
     return {data: {session: {user: {id: 'synthetic'}}}, error: null};
   });
   assert.equal(exchanges, 1);
-  assert.equal(h.window.__yomuAuthCallbackStarted, true);
+  assert.equal(h.window.__komystAuthCallbackStarted, true);
 });
 
 test('PKCE code without verifier fails locally without an exchange request', async () => {

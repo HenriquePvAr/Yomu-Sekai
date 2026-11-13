@@ -4,12 +4,12 @@ from unittest import mock
 
 import numpy as np
 
-from yomu.config import settings as config
-from yomu.ocr.residual_sweep import sweep_page_residuals, synthetic_sfx_lines
-from yomu.ocr.ocr_balloon import TextGroup, get_translatable_groups
-from yomu.ocr.ocr_engine import OCRLine
-from yomu.core.page_processing_contracts import PreTranslationPageResult
-import yomu.pipeline.benchmark_pipeline as pipeline
+from komyst.config import settings as config
+from komyst.ocr.residual_sweep import sweep_page_residuals, synthetic_sfx_lines
+from komyst.ocr.ocr_balloon import TextGroup, get_translatable_groups
+from komyst.ocr.ocr_engine import OCRLine
+from komyst.core.page_processing_contracts import PreTranslationPageResult
+import komyst.pipeline.benchmark_pipeline as pipeline
 
 
 def _fake_gateway(detections):
@@ -27,7 +27,7 @@ def test_sweep_reports_only_undetected_regions():
         {"box": [20, 70, 40, 20], "text": "SUS", "confidence": 0.2},     # conf baixa
     ]
     known = [(100, 84, 36, 12)]  # GRIP em escala cheia
-    with mock.patch("yomu.ocr.subprocess_ocr._ensure_gateway", return_value=_fake_gateway(detections)):
+    with mock.patch("komyst.ocr.subprocess_ocr._ensure_gateway", return_value=_fake_gateway(detections)):
         residuals = sweep_page_residuals(page, known, page_index=4)
     texts = [r["text"] for r in residuals]
     assert "CLINK" in texts
@@ -37,7 +37,7 @@ def test_sweep_reports_only_undetected_regions():
 
 
 def test_sweep_quiet_when_engine_unavailable():
-    with mock.patch("yomu.ocr.subprocess_ocr._ensure_gateway", return_value=None):
+    with mock.patch("komyst.ocr.subprocess_ocr._ensure_gateway", return_value=None):
         assert sweep_page_residuals(np.zeros((50, 50, 3), np.uint8), [], page_index=1) == []
 
 
@@ -145,7 +145,7 @@ def test_auto_fix_injects_only_groups_accepted_by_visual_classifier():
     assert updated.translation_items[0].source_engine == "paddle_residual_sweep"
 
 def test_mask_known_boxes_fills_detected_region_with_border_median():
-    from yomu.ocr.residual_sweep import _mask_known_boxes
+    from komyst.ocr.residual_sweep import _mask_known_boxes
     img = np.full((100, 120, 3), 240, dtype=np.uint8)
     # Dark text inside known box (20, 20, 40, 30)
     img[25:45, 25:55] = 0
@@ -193,7 +193,7 @@ def test_rejected_ocr_clone_cannot_remask_the_same_physical_line():
 
 def test_repeated_sound_requires_both_independent_read_and_measured_glyphs():
     import copy
-    from yomu.ocr import ocr_balloon as ob
+    from komyst.ocr import ocr_balloon as ob
     image = np.full((600,800,3),220,np.uint8)
     for x in (40,180,320,460,600):image[250:370,x:x+50]=0
     lines = synthetic_sfx_lines([{"bbox":[0,100,800,450],"text":"PSHHH","confidence":.97}],

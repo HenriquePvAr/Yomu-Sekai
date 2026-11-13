@@ -13,10 +13,10 @@ import uuid
 from pathlib import Path
 from unittest import mock
 
-import yomu.review.region_taxonomy as tax
-from yomu.review.audit_decisions import AuditDecisionStore
-from yomu.runtime.job_store import JobStore
-from yomu.ui.ui_bridge import UiBridge
+import komyst.review.region_taxonomy as tax
+from komyst.review.audit_decisions import AuditDecisionStore
+from komyst.runtime.job_store import JobStore
+from komyst.ui.ui_bridge import UiBridge
 
 
 class _Bridge(UiBridge):

@@ -11,7 +11,7 @@ from types import SimpleNamespace
 import cv2
 import numpy as np
 
-import yomu.pipeline.benchmark_pipeline as bp
+import komyst.pipeline.benchmark_pipeline as bp
 
 
 def _state(folder, groups):
@@ -50,8 +50,8 @@ class CleanCertificateTargetsTests(unittest.TestCase):
         self.assertEqual(certificate["status"], "PASS")
 
     def test_non_review_ignored_decorative_and_untranslated_sfx_preserve_cleanly(self):
-        from yomu.clean.disposition import RegionDisposition, classify_group_disposition
-        import yomu.ocr.ocr_balloon as ob
+        from komyst.clean.disposition import RegionDisposition, classify_group_disposition
+        import komyst.ocr.ocr_balloon as ob
         dec = SimpleNamespace(
             classification="decorative", ignored=True, ignore_reason="decorative_text",
             preserve_as_name=False, ocr_quality_blocked=False, text="BLAZE",

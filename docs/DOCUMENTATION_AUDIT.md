@@ -2,9 +2,9 @@
 
 > **Registro histórico (2026-08-19, com adendos até 2026-08-26).** Classificações como
 > "Planejados" (§4: updater, licenciamento) e "Atual" descrevem aquela data: desde então o
-> núcleo do updater (`yomu/runtime/update_manifest.py`, `update_transport.py`,
-> `update_installer.py`, `update_bootstrap.py`) e a licença Beta (`yomu/auth/beta_license.py`)
-> existem no código. Estado atual: [snapshot de consolidação](consolidation/YOMU_CURRENT_PRODUCT_STATE.md)
+> núcleo do updater (`komyst/runtime/update_manifest.py`, `update_transport.py`,
+> `update_installer.py`, `update_bootstrap.py`) e a licença Beta (`komyst/auth/beta_license.py`)
+> existem no código. Estado atual: [resumo do produto](README.md#estado-resumido-do-produto)
 > e [Documentação Técnica §30](technical/DOCUMENTACAO_TECNICA.md#30-empacotamento-updater-e-prontidão-para-beta).
 > Política vigente: [Política de Documentação](DOCUMENTATION_POLICY.md). **Revisado em:** 2026-10-24 · **Base verificada:** `5f482ce1`
 
@@ -72,7 +72,7 @@ rotulados como histórico no índice, em vez de removidos.
 | 4 | "`ui_bridge.py` mantém uma fila local e executa um item por vez / inicia o subprocesso" | `docs/ARCHITECTURE.md` | A UI **não executa o pipeline**; ela cria jobs no SQLite e o worker independente executa | `worker_service.py`, `job_runner.py`, `docs/WORKER_QUEUE.md` |
 | 5 | "Com o default `TRANSLATION_MODE=nvidia`, `translator_nvidia.py` usa..." | `docs/ARCHITECTURE.md` | `TRANSLATION_MODE` é eixo ortogonal; o provider efetivo padrão é DeepL | `translator_nllb.py:88-112`, `config.py:114` |
 | 6 | "`local` — sessão de operador em loopback (padrão)" | `docs/SUPABASE_AUTH.md` | O padrão é **`supabase`**; há 4 provedores, não 2 | `community_auth.py:519-542` |
-| 7 | Estado terminal listado como `error` | `README.md` | O estado real é `failed`; "erro" é o rótulo da UI | `job_store.py:36`, `static/tradutor_ui.js:94` |
+| 7 | Estado terminal listado como `error` | `README.md` | O estado real é `failed`; "erro" é o rótulo da UI | `job_store.py:36`, `static/komyst_ui.js:94` |
 | 8 | "Um job `interrupted`/`resumable` pode ser retomado pela UI" / "use 'Retomar' na UI" | `docs/WORKER_QUEUE.md` | O endpoint existe, mas **nenhum arquivo de `static/` ou `ui/` o chama** | Ausência de `ui/resume` em `static/`, `ui/`; `app_ui.py:1792` |
 | 9 | Supervisão do worker ausente da documentação | `docs/WORKER_QUEUE.md` | Implementada em TDD #53 | `worker_supervisor.py` |
 | 10 | Taxonomia de estados incompleta (faltavam `staging` e `source_analysis_ready`) | `docs/WORKER_QUEUE.md` | 14 estados em `JobStatus.ALL` | `job_store.py:26-51` |
@@ -153,7 +153,7 @@ Esta missão é somente de documentação. Nenhum bug foi corrigido; todos foram
 
 | ID | Severidade | Achado | Evidência | TDD futuro recomendado |
 | --- | --- | --- | --- | --- |
-| `UI-COPY-NAMES-NVIDIA` | Baixa | A mensagem `environment_not_configured` do frontend diz "Configure o arquivo .env e a `NVIDIA_API_KEY`", mas o provider padrão é DeepL. Copy desatualizada visível ao usuário. | `static/tradutor_ui.js`, mapa `reasonMessages` | Mensagem neutra de provider |
+| `UI-COPY-NAMES-NVIDIA` | Baixa | A mensagem `environment_not_configured` do frontend diz "Configure o arquivo .env e a `NVIDIA_API_KEY`", mas o provider padrão é DeepL. Copy desatualizada visível ao usuário. | `static/komyst_ui.js`, mapa `reasonMessages` | Mensagem neutra de provider |
 | `PROVIDER-HTTP-TELEMETRY-GAP` | Baixa | Não há telemetria HTTP unificada entre providers; cada um mantém suas próprias `stats`. | `translator_deepl.py`, `translator_nvidia.py` | Se a Beta exigir observabilidade de provider |
 
 > **Fechado no TDD #56:** `UI-RESUME-NOT-EXPOSED`. O frontend agora chama
@@ -555,7 +555,7 @@ RLS/grants e negação autenticada antes de qualquer grant real.
 | `docs/user/GUIA_DO_USUARIO.md` | **Não requer mudança** | Ainda não há UX final de licença para tester externo. |
 | Capturas de tela | **Não requer** | Evidência canônica está nos metadados remotos e testes locais. |
 
-**Resultado #78:** no projeto Supabase `<projeto-supabase-legado>` (`Tradutor IA Community`) foram
+**Resultado #78:** no projeto Supabase `<projeto-supabase-legado>` (`Komyst Community`) foram
 aplicadas apenas migrations de licensing:
 
 - `20260824192515 beta_tester_licensing_foundation`
@@ -845,7 +845,7 @@ o motor de OCR de produção.
 
 #### Fase D (2ª tentativa, após #84R) — E2E real concluído, classificação D
 
-Com `TRADUTOR_OCR_ENGINE_OVERRIDE` corrigido em `.env` por #84R e o modo **fast**
+Com `KOMYST_OCR_ENGINE_OVERRIDE` corrigido em `.env` por #84R e o modo **fast**
 (RapidOCR puro, sem qualquer caminho Paddle), um segundo job real — orçamento explícito
 de 1 — rodou até o fim: `job_id 8b1d02f9ecc644599c4540ef45289e65`, `run_id
 7d64890b-e303-497b-863f-74e2cd8d5645`, 35 imagens → **72 páginas lógicas**, 97 grupos,

@@ -8,7 +8,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-SOURCE = (ROOT / "static" / "tradutor_ui.js").read_text(encoding="utf-8")
+SOURCE = (ROOT / "static" / "komyst_ui.js").read_text(encoding="utf-8")
 
 
 def test_start_button_uses_stable_delegated_event_chain():

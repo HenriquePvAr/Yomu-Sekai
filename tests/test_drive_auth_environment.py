@@ -15,9 +15,9 @@ from types import SimpleNamespace
 
 import pytest
 
-import yomu.community.storage.drive_auth as drive_auth
-import yomu.community.storage.google_drive_factory as google_drive_factory
-import yomu.runtime.local_environment as local_environment
+import komyst.community.storage.drive_auth as drive_auth
+import komyst.community.storage.google_drive_factory as google_drive_factory
+import komyst.runtime.local_environment as local_environment
 
 
 DRIVE_ENV_KEYS = (
@@ -161,7 +161,7 @@ def test_create_root_folder_receives_loaded_configuration_offline(tmp_path, monk
 
     class Provider:
         def ensure_folder(self, name, parent_id):
-            assert name == "TradutorIA-Comunidade"
+            assert name == "Komyst-Comunidade"
             assert parent_id == "root"
             return "offline-folder-id"
 
@@ -201,22 +201,22 @@ def test_real_status_subprocess_uses_only_temporary_env_from_other_cwd(tmp_path)
     elsewhere = tmp_path / "elsewhere"
     project.mkdir()
     elsewhere.mkdir()
-    package_root = project / "yomu"
+    package_root = project / "komyst"
     package_storage = package_root / "community" / "storage"
     package_runtime = package_root / "runtime"
     for directory in (package_root, package_root / "community", package_storage, package_runtime):
         directory.mkdir(parents=True, exist_ok=True)
         (directory / "__init__.py").write_text("", encoding="utf-8")
     for source, target in (
-        ("yomu/community/storage/drive_auth.py", package_storage / "drive_auth.py"),
-        ("yomu/community/community_storage.py", package_root / "community" / "community_storage.py"),
-        ("yomu/runtime/local_environment.py", package_runtime / "local_environment.py"),
-        ("yomu/runtime/paths.py", package_runtime / "paths.py"),
+        ("komyst/community/storage/drive_auth.py", package_storage / "drive_auth.py"),
+        ("komyst/community/community_storage.py", package_root / "community" / "community_storage.py"),
+        ("komyst/runtime/local_environment.py", package_runtime / "local_environment.py"),
+        ("komyst/runtime/paths.py", package_runtime / "paths.py"),
     ):
         shutil.copy2(local_environment.PROJECT_ROOT / source, target)
     fake_client = "subprocess-client-id.example"
     fake_secret = "subprocess-client-secret"
-    fake_token_path = r"C:\__tradutor_offline_test__\drive_token.json"
+    fake_token_path = r"C:\__komyst_offline_test__\drive_token.json"
     (project / ".env").write_text(
         "COMMUNITY_STORAGE_PROVIDER=google_drive\n"
         f"GOOGLE_OAUTH_CLIENT_ID={fake_client}\n"
@@ -227,7 +227,7 @@ def test_real_status_subprocess_uses_only_temporary_env_from_other_cwd(tmp_path)
     )
 
     result = subprocess.run(
-        [sys.executable, "-m", "yomu.community.storage.drive_auth", "status"],
+        [sys.executable, "-m", "komyst.community.storage.drive_auth", "status"],
         cwd=elsewhere,
         capture_output=True,
         text=True,

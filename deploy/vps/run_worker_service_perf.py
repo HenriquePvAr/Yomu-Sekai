@@ -14,8 +14,8 @@ from resource_sampler import ResourceSampler
 from two_slot_browser import TwoSlotGeminiProvider
 
 
-root = Path(os.environ["YOMU_WORKER_ROOT"])
-configured = int(os.environ.get("YOMU_MAX_CONCURRENCY", "1"))
+root = Path(os.environ["KOMYST_WORKER_ROOT"])
+configured = int(os.environ.get("KOMYST_MAX_CONCURRENCY", "1"))
 if configured not in (1, 2):
     raise RuntimeError("performance experiment supports only MAX_CONCURRENCY=1 or 2")
 runtime = root / ".runtime"
@@ -49,7 +49,7 @@ def loop():
             stop.wait(0.1)
 
 
-threads = [threading.Thread(target=loop, name=f"yomu-perf-slot-{i}", daemon=False) for i in range(configured)]
+threads = [threading.Thread(target=loop, name=f"komyst-perf-slot-{i}", daemon=False) for i in range(configured)]
 for thread in threads:
     thread.start()
 while not stop.is_set():

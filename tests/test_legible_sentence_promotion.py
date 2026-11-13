@@ -5,8 +5,8 @@ install_offline_network_guard()
 
 import unittest
 
-from yomu.ocr import ocr_balloon as ob
-from yomu.review import region_taxonomy
+from komyst.ocr import ocr_balloon as ob
+from komyst.review import region_taxonomy
 
 
 def _group(text, confidence=0.99, classification="decorative", container="narration"):

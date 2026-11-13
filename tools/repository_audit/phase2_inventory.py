@@ -31,7 +31,7 @@ def module_category(name: str) -> tuple[str, str]:
         ("download", {"browser_runtime", "canonical_source_identity", "chapter_source", "down", "download_transport", "dynamic_resolver_process", "http_source_discovery", "image_validation", "lazy_slot_resolver", "local_folder_input", "local_folder_job", "local_folder_source", "local_images_source", "scrapling_reader_resolver", "source_profile", "universal_chapter_adapter", "webtoons_reader_bridge"}),
         ("community", {"canonical_social_identity", "chapter_asset_repository", "community_api", "community_auth", "community_authorization", "community_http", "community_publication_metadata", "community_publish_runner", "community_service", "community_storage", "community_storage_reconcile", "community_store", "drive_auth", "google_drive_factory", "google_drive_storage", "google_drive_transport", "legacy_publication_drive_adapter", "legacy_publication_migration_executor", "legacy_publication_migrator", "legacy_publication_postgres_adapter", "legacy_storage_upload_reservation", "social_asset_reconcile", "social_asset_retention", "social_content", "social_http", "social_pdf_http", "social_pdf_publishing", "social_repository", "supabase_social", "publish_authorization"}),
         ("auth", {"beta_license", "commercial_device", "commercial_foundation", "device_control", "desktop_identity", "local_test_auth", "secure_auth_context", "supabase_auth", "jwks_network_diagnostics"}),
-        ("runtime", {"adaptive_scheduler", "app_version", "artifact_contract", "beta_control_plane", "build_profile", "installer_update", "job_completion", "job_failure_diagnostic", "job_runner", "job_store", "local_environment", "output_manifest", "page_manifest", "process_launcher", "process_options", "process_tree", "progress", "progression_service", "provider_transport", "resource_monitor", "request_observability", "runtime_contract", "runtime_paths", "runner_start_gate", "session_context", "update_bootstrap", "update_installer", "update_manifest", "update_transport", "worker_service", "worker_supervisor", "yk_reservation", "yomu_backend_provider"}),
+        ("runtime", {"adaptive_scheduler", "app_version", "artifact_contract", "beta_control_plane", "build_profile", "installer_update", "job_completion", "job_failure_diagnostic", "job_runner", "job_store", "local_environment", "output_manifest", "page_manifest", "process_launcher", "process_options", "process_tree", "progress", "progression_service", "provider_transport", "resource_monitor", "request_observability", "runtime_contract", "runtime_paths", "runner_start_gate", "session_context", "update_bootstrap", "update_installer", "update_manifest", "update_transport", "worker_service", "worker_supervisor", "yk_reservation", "komyst_backend_provider"}),
         ("review", {"audit_decisions", "audit_registry", "chapter_quality_revision", "human_typography_decisions", "preview_gates", "region_taxonomy", "review_item", "review_manifest", "review_reexport", "review_reexport_runner", "review_rerun", "review_rerun_runner", "source_analysis_phase", "source_analysis_progress", "source_readiness", "source_support_report"}),
         ("ui", {"ui_bridge", "ui_helpers", "ui_history"}),
         ("utilities", {"ad_url_policy", "ayet_rewarded", "fake_pipeline", "json_utils", "manga_translation_pipeline", "pipeline_cache", "pipeline_streaming", "pipeline_telemetry", "smart_split_incremental"}),
@@ -41,25 +41,25 @@ def module_category(name: str) -> tuple[str, str]:
         if n in members:
             if n in {"benchmark_ocr_engines", "benchmark_environment", "benchmark_pipeline", "classification_profiler", "performance_validation_harness", "quality_regression_diagnostic", "cleanup_forensic_capture", "generate_manual_review_report"}:
                 return "tool_or_research", "tools/ or research/ (verify runtime imports)"
-            return category, f"yomu/{category}/"
+            return category, f"komyst/{category}/"
     if n in {"benchmark_environment", "benchmark_ocr_engines", "classification_profiler", "cleanup_forensic_capture", "generate_manual_review_report", "local_media_preview_harness", "performance_validation_harness", "quality_regression_diagnostic"}:
         return "tool_or_research", "tools/ or research/"
     if n == "benchmark_pipeline":
-        return "pipeline", "yomu/pipeline/"
+        return "pipeline", "komyst/pipeline/"
     if n == "local_media_registry":
-        return "ui", "yomu/ui/"
+        return "ui", "komyst/ui/"
     if n == "request_observability":
-        return "runtime", "yomu/runtime/"
+        return "runtime", "komyst/runtime/"
     if n == "page_processing_contracts":
-        return "core", "yomu/core/"
+        return "core", "komyst/core/"
     if n == "social_asset_maintenance_cli":
         return "script", "scripts/"
     if n == "config":
-        return "configuration", "yomu/config/"
+        return "configuration", "komyst/config/"
     if n == "sitecustomize":
         return "test_support", "thin root bootstrap shim"
     if n.startswith(("update_", "installer_")):
-        return "runtime", "yomu/runtime/"
+        return "runtime", "komyst/runtime/"
     return "unclassified", "manual review"
 
 

@@ -9,8 +9,8 @@ import unittest
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
-from yomu.runtime.job_store import JobStatus, JobStore
-from yomu.review.source_readiness import (
+from komyst.runtime.job_store import JobStatus, JobStore
+from komyst.review.source_readiness import (
     PIPELINE_OPERATIONS, WORKSPACE_POLICY_SCOPE_INDEX, SourceReadinessStore,
     default_workspace_id, download_fixture_assets,
 )
@@ -391,8 +391,8 @@ class SourcePolicyRouteTests(unittest.TestCase):
     """The settings toggle contract, exercised over the real persistence layer."""
 
     def setUp(self):
-        import yomu.ui.app as app_ui
-        from yomu.ui.ui_bridge import UiBridge
+        import komyst.ui.app as app_ui
+        from komyst.ui.ui_bridge import UiBridge
 
         self.app_ui = app_ui
         self.tmp = tempfile.TemporaryDirectory()
@@ -400,7 +400,7 @@ class SourcePolicyRouteTests(unittest.TestCase):
         self.env = patch.dict("os.environ", {
             "APP_ENV": "test",
             "ALLOW_LOCAL_TEST_IDENTITIES": "1",
-            "TRADUTOR_TEST_RUNTIME_ROOT": str(self.root),
+            "KOMYST_TEST_RUNTIME_ROOT": str(self.root),
         })
         self.env.start()
         self.bridge = UiBridge()
@@ -484,7 +484,7 @@ class SourcePolicyRouteTests(unittest.TestCase):
 class SettingsToggleErrorHandlingContract(unittest.TestCase):
     """The settings pane must never paint an activation the backend refused."""
 
-    UI = (Path(__file__).resolve().parents[1] / "static" / "tradutor_ui.js").read_text(
+    UI = (Path(__file__).resolve().parents[1] / "static" / "komyst_ui.js").read_text(
         encoding="utf-8")
 
     def submit_handler(self) -> str:

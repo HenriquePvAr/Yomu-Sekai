@@ -9,7 +9,7 @@ import test_support._test_bootstrap as _test_bootstrap  # noqa: F401
 import pytest
 import unittest
 
-from yomu.ocr.ocr_engine import clean_ocr_text, repair_ocr_text
+from komyst.ocr.ocr_engine import clean_ocr_text, repair_ocr_text
 
 
 class P19OcrLexicalFusionRedTests(unittest.TestCase):

@@ -3,7 +3,7 @@
 Vale para a tarefa agendada que roda na nuvem e trabalha nos cards de `docs/status/board/board.js`.
 Mora na branch `dev`. O agente trabalha para HenriquePvAr.
 
-- Repositório: `HenriquePvAr/Yomu-Sekai`
+- Repositório: `HenriquePvAr/Komyst`
 - Decisões: `docs/status/decisoes.md`
 - Relatórios: `docs/status/relatorios/`
 
@@ -29,7 +29,7 @@ externo), move o card para `blocked` com `blockedBy` descrevendo exatamente o qu
 
 ## Regra de negócio
 
-Fica em `yomu/` (runtime modular canônico). Números e limites em constante com nome, num lugar só.
+Fica em `komyst/` (runtime modular canônico). Números e limites em constante com nome, num lugar só.
 Quando sair barato, configurável. Entre opções parecidas, a mais fácil de desfazer.
 
 ## Ambiente de execução (máquina remota)
@@ -61,7 +61,7 @@ Só encerra quando não sobrar nenhum card elegível.
 
 **Início da sessão (uma vez):**
 
-1. Anexar o repositório com `add_repo` (owner `HenriquePvAr`, repo `Yomu-Sekai`, access `push`).
+1. Anexar o repositório com `add_repo` (owner `HenriquePvAr`, repo `Komyst`, access `push`).
    **NÃO clonar** — o repo já está no CWD. Confirmar com `git rev-parse HEAD`.
    Configurar identidade antes de qualquer commit:
    `git config user.name "HenriquePvAr" && git config user.email "henriquepaiva128@gmail.com"`.

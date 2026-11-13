@@ -1,7 +1,7 @@
 from pathlib import Path
 
 
-UI_SOURCE = Path(__file__).resolve().parents[1] / "static" / "tradutor_ui.js"
+UI_SOURCE = Path(__file__).resolve().parents[1] / "static" / "komyst_ui.js"
 
 
 def _source() -> str:

@@ -10,10 +10,10 @@ import tempfile
 import unittest
 from pathlib import Path
 
-import yomu.review.audit_registry as reg
-import yomu.translation.linguistic_audit as la
-import yomu.translation.linguistic_triage as lt
-import yomu.review.region_taxonomy as tax
+import komyst.review.audit_registry as reg
+import komyst.translation.linguistic_audit as la
+import komyst.translation.linguistic_triage as lt
+import komyst.review.region_taxonomy as tax
 
 
 def _report(revision_id="rev1", records=None):

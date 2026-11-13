@@ -28,7 +28,7 @@ An unofficial fork advertises Codex support and OAuth/runtime controls, but it w
 ## Policy and data handling
 
 - Use a notebook as an interactive research session, not a persistent service, remote desktop, SSH proxy, or unattended distributed worker. Follow the live Colab terms for the account and plan.
-- Do not upload Komyst source pages, chapter archives, masks derived from private/customer material, local project files, secrets, cookies, or credentials. This notebook creates a synthetic comic-like fixture in memory and writes only under its runtime-local `/content/yomu_colab_inpainting` folder.
+- Do not upload Komyst source pages, chapter archives, masks derived from private/customer material, local project files, secrets, cookies, or credentials. This notebook creates a synthetic comic-like fixture in memory and writes only under its runtime-local `/content/Komyst_colab_inpainting` folder.
 - Do not mount Drive by default. Runtime files are ephemeral; export only explicitly approved experiment outputs after reviewing them.
 - Stop the runtime after a smoke. Colab may terminate/disconnect sessions and does not provide durable worker semantics.
 

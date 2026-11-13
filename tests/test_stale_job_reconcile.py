@@ -10,11 +10,11 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-import yomu.ui.ui_bridge as ui_bridge
-from yomu.runtime.job_store import JobStatus, JobStore
-from yomu.export.output_manifest import MANIFEST_FILENAME, build_run_manifest
-from yomu.ui.ui_bridge import UNAVAILABLE_DURATION, _duration, _format_seconds, _normalize_epoch
-from yomu.ui.ui_helpers import ProgressSnapshot, parse_progress_line
+import komyst.ui.ui_bridge as ui_bridge
+from komyst.runtime.job_store import JobStatus, JobStore
+from komyst.export.output_manifest import MANIFEST_FILENAME, build_run_manifest
+from komyst.ui.ui_bridge import UNAVAILABLE_DURATION, _duration, _format_seconds, _normalize_epoch
+from komyst.ui.ui_helpers import ProgressSnapshot, parse_progress_line
 
 
 class FormatTests(unittest.TestCase):
@@ -206,11 +206,11 @@ class ReconcileTests(unittest.TestCase):
 
     def test_frozen_runner_uses_executable_fingerprint(self):
         job = self.make_running(runner_pid=4242)
-        import yomu.runtime.process_tree as process_tree
+        import komyst.runtime.process_tree as process_tree
         with mock.patch.object(ui_bridge.sys, "frozen", True, create=True), \
              mock.patch.object(process_tree, "is_alive", return_value=True) as alive:
             self.assertTrue(ui_bridge._runner_still_alive(self.store.get_job(job["id"])))
-        self.assertEqual(alive.call_args.kwargs["substrings"], ["YomuSekai.exe", job["id"]])
+        self.assertEqual(alive.call_args.kwargs["substrings"], ["Komyst.exe", job["id"]])
 
     def test_dead_without_manifest_is_never_marked_finished(self):
         job = self.make_running(exit_code=0, output_dir=self.tmp / "empty")
@@ -410,7 +410,7 @@ class CancelTests(unittest.TestCase):
 
 class FrontendTimerTests(unittest.TestCase):
     def setUp(self):
-        self.src = (Path(__file__).resolve().parents[1] / "static" / "tradutor_ui.js").read_text(
+        self.src = (Path(__file__).resolve().parents[1] / "static" / "komyst_ui.js").read_text(
             encoding="utf-8")
 
     def test_single_polling_interval_with_cleanup(self):
@@ -418,10 +418,10 @@ class FrontendTimerTests(unittest.TestCase):
         end = self.src.index("refreshBootstrap();", start)
         polling = self.src[start:end]
         self.assertEqual(polling.count("window.setInterval(pollState, 850)"), 1)
-        self.assertIn("if (getGlobal('__tradutorUiPollingTimer'))", polling)
-        self.assertIn("setGlobal('__tradutorUiPollingTimer', timer)", polling)
-        self.assertIn("clearInterval(getGlobal('__tradutorUiPollingTimer'))", self.src)
-        self.assertIn("setGlobal('__tradutorUiPollingTimer'", self.src)
+        self.assertIn("if (getGlobal('__komystUiPollingTimer'))", polling)
+        self.assertIn("setGlobal('__komystUiPollingTimer', timer)", polling)
+        self.assertIn("clearInterval(getGlobal('__komystUiPollingTimer'))", self.src)
+        self.assertIn("setGlobal('__komystUiPollingTimer'", self.src)
 
     def test_elapsed_comes_from_the_server(self):
         self.assertIn("progress.elapsed_label", self.src)

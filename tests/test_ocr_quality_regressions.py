@@ -15,9 +15,9 @@ import cv2
 import numpy as np
 
 from test_support import cv_text
-import yomu.config.settings as config
+import komyst.config.settings as config
 
-from yomu.ocr.ocr_balloon import (
+from komyst.ocr.ocr_balloon import (
     TextCandidate,
     TextGroup,
     _apply_classification_policy,
@@ -75,7 +75,7 @@ from yomu.ocr.ocr_balloon import (
     validate_translation_text,
     validate_and_retry_translations,
 )
-from yomu.pipeline.benchmark_pipeline import (
+from komyst.pipeline.benchmark_pipeline import (
     _aggregate_debug_data,
     _build_quality_report,
     _grouping_fallback_reason,
@@ -86,7 +86,7 @@ from yomu.pipeline.benchmark_pipeline import (
     _retry_layout_overflow_translations,
     _translation_quality_accounting,
 )
-from yomu.ocr.ocr_engine import (
+from komyst.ocr.ocr_engine import (
     OCRLine,
     OCREngine,
     assess_ocr_repair,
@@ -94,7 +94,7 @@ from yomu.ocr.ocr_engine import (
     segment_compact_english_word,
     suggest_english_word,
 )
-from yomu.translation.providers.translator_nvidia import TranslatorNvidiaBatch
+from komyst.translation.providers.translator_nvidia import TranslatorNvidiaBatch
 
 
 def _line(text, confidence=0.92):
@@ -231,9 +231,9 @@ def _run_fake_selective_fallback(original, candidates):
         patch.object(config, "OCR_HYBRID_FALLBACK", True),
         patch.object(config, "OCR_FALLBACK_ENGINE", "paddle"),
         patch.object(config, "OCR_LEGACY_PADDLE_FALLBACK", True),
-        patch("yomu.ocr.ocr_balloon.OCREngine") as engine_cls,
+        patch("komyst.ocr.ocr_balloon.OCREngine") as engine_cls,
         patch(
-            "yomu.ocr.ocr_balloon._candidate_groups_for_fallback",
+            "komyst.ocr.ocr_balloon._candidate_groups_for_fallback",
             side_effect=[[candidate] for candidate in candidates],
         ),
     ):
@@ -489,7 +489,7 @@ class OCRQualityRegressionTests(unittest.TestCase):
         # was and the gap is reported, never silently completed.
         image, boxes = self._balloon_with_rows([("FIRST ROW", (40, 90))])
         line = self._line_at("H", (199, 200, 93, 44))
-        with patch("yomu.ocr.ocr_balloon._reocr_crop_candidates", return_value=[]):
+        with patch("komyst.ocr.ocr_balloon._reocr_crop_candidates", return_value=[]):
             lines, records = apply_speech_container_reocr(image, [line], "3", 1)
         self.assertEqual(len(lines), 1)
         self.assertEqual(lines[0].text, "H")
@@ -4223,7 +4223,7 @@ class OCRQualityRegressionTests(unittest.TestCase):
         assert np.array_equal(clean_after_group_2, clean_buffer * (second_mask == 0)[:, :, None] + accepted_candidate * (second_mask > 0)[:, :, None])
 
         from psd_tools import PSDImage
-        from yomu.export.professional_psd import write_professional_page_psd
+        from komyst.export.professional_psd import write_professional_page_psd
 
         import tempfile
         from pathlib import Path
@@ -4255,11 +4255,11 @@ class OCRQualityRegressionTests(unittest.TestCase):
         group = _scored_group("STORY BY:KKULBEOL ARTBY:BEOLKKUL")
         with (
             patch(
-                "yomu.ocr.ocr_balloon._classify_background_region",
+                "komyst.ocr.ocr_balloon._classify_background_region",
                 return_value=("textured_art", {"local_texture_mean": 8.0}),
             ),
             patch(
-                "yomu.ocr.ocr_balloon._decorative_textured_story_promotion_allowed",
+                "komyst.ocr.ocr_balloon._decorative_textured_story_promotion_allowed",
                 side_effect=(False, True),
             ) as promotion_check,
         ):
@@ -4277,7 +4277,7 @@ class OCRQualityRegressionTests(unittest.TestCase):
 
         with (
             patch.object(config, "TRANSLATE_SFX", False),
-            patch("yomu.ocr.ocr_balloon._refine_classification_with_background",
+            patch("komyst.ocr.ocr_balloon._refine_classification_with_background",
                   side_effect=reclassify_as_sfx),
         ):
             _classify_groups([group], image)
@@ -4385,7 +4385,7 @@ class OCRQualityRegressionTests(unittest.TestCase):
                 image, _, group = _white_balloon_fixture(text)
 
                 with patch(
-                    "yomu.ocr.ocr_balloon._enclosure_evidence",
+                    "komyst.ocr.ocr_balloon._enclosure_evidence",
                     return_value=(False, False),
                 ):
                     _classify_groups([group], image)
@@ -4474,7 +4474,7 @@ class OCRQualityRegressionTests(unittest.TestCase):
                 group = TextGroup(group_id="T", lines=[line], text=text)
 
                 with patch(
-                    "yomu.ocr.ocr_balloon._enclosure_evidence",
+                    "komyst.ocr.ocr_balloon._enclosure_evidence",
                     return_value=(False, False),
                 ):
                     _classify_groups([group], image)
@@ -4489,7 +4489,7 @@ class OCRQualityRegressionTests(unittest.TestCase):
                 image, _, group = _white_balloon_fixture(text)
 
                 with patch(
-                    "yomu.ocr.ocr_balloon._enclosure_evidence",
+                    "komyst.ocr.ocr_balloon._enclosure_evidence",
                     return_value=(False, False),
                 ):
                     _classify_groups([group], image)
@@ -4510,7 +4510,7 @@ class OCRQualityRegressionTests(unittest.TestCase):
         )
         effect_group = TextGroup(group_id="EFFECT", lines=[effect_line], text="RUN!!")
 
-        with patch("yomu.ocr.ocr_balloon._enclosure_evidence", return_value=(False, False)):
+        with patch("komyst.ocr.ocr_balloon._enclosure_evidence", return_value=(False, False)):
             _classify_groups([balloon_group], balloon_image)
             _classify_groups([effect_group], effect_image)
 
@@ -4529,8 +4529,8 @@ class OCRQualityRegressionTests(unittest.TestCase):
         ]
         group = TextGroup(group_id="SFX", lines=lines, text="STEP Step")
 
-        with patch("yomu.ocr.ocr_balloon._enclosure_evidence", return_value=(False, True)), \
-                patch("yomu.ocr.ocr_balloon._visual_white_container_evidence", return_value={}):
+        with patch("komyst.ocr.ocr_balloon._enclosure_evidence", return_value=(False, True)), \
+                patch("komyst.ocr.ocr_balloon._visual_white_container_evidence", return_value={}):
             _classify_groups([group], image)
 
         self.assertEqual(group.classification, "sfx")
@@ -4542,7 +4542,7 @@ class OCRQualityRegressionTests(unittest.TestCase):
         # speech, not a sound effect.
         image, _, group = _white_balloon_fixture("RUN RUN")
 
-        with patch("yomu.ocr.ocr_balloon._enclosure_evidence", return_value=(True, False)):
+        with patch("komyst.ocr.ocr_balloon._enclosure_evidence", return_value=(True, False)):
             _classify_groups([group], image)
 
         self.assertEqual(group.classification, "speech")
@@ -4579,7 +4579,7 @@ class OCRQualityRegressionTests(unittest.TestCase):
                 group = TextGroup(group_id="T", lines=[line], text=text)
 
                 with patch(
-                    "yomu.ocr.ocr_balloon._enclosure_evidence",
+                    "komyst.ocr.ocr_balloon._enclosure_evidence",
                     return_value=(True, False),
                 ):
                     _classify_groups([group], image)
@@ -4603,7 +4603,7 @@ class OCRQualityRegressionTests(unittest.TestCase):
         ]
 
         with patch(
-            "yomu.ocr.ocr_balloon._enclosure_evidence",
+            "komyst.ocr.ocr_balloon._enclosure_evidence",
             side_effect=((True, False), (False, False)),
         ):
             _classify_groups(groups, image)
@@ -4628,7 +4628,7 @@ class OCRQualityRegressionTests(unittest.TestCase):
         line = _boxed_line("DANGER KEEP OUT", (150, 175, 300, 46), confidence=0.95)
         group = TextGroup(group_id="T", lines=[line], text=line.text)
 
-        with patch("yomu.ocr.ocr_balloon._enclosure_evidence", return_value=(True, False)):
+        with patch("komyst.ocr.ocr_balloon._enclosure_evidence", return_value=(True, False)):
             _classify_groups([group], image)
 
         self.assertIn(group.classification, {"speech", "narration"})
@@ -4640,7 +4640,7 @@ class OCRQualityRegressionTests(unittest.TestCase):
         line = _boxed_line("HELP!", (165, 132, 90, 36), confidence=0.95)
         group = TextGroup(group_id="T", lines=[line], text=line.text)
 
-        with patch("yomu.ocr.ocr_balloon._enclosure_evidence", return_value=(False, False)):
+        with patch("komyst.ocr.ocr_balloon._enclosure_evidence", return_value=(False, False)):
             _classify_groups([group], image)
 
         self.assertEqual(group.classification, "unknown")
@@ -4661,7 +4661,7 @@ class OCRQualityRegressionTests(unittest.TestCase):
             text="THE NIGHT WAS VERY QUIET.",
         )
 
-        with patch("yomu.ocr.ocr_balloon._enclosure_evidence", return_value=(True, True)):
+        with patch("komyst.ocr.ocr_balloon._enclosure_evidence", return_value=(True, True)):
             _classify_groups([group], image)
 
         self.assertEqual(group.classification, "narration")
@@ -4670,7 +4670,7 @@ class OCRQualityRegressionTests(unittest.TestCase):
 
     def test_contextual_classification_evidence_is_persisted_in_debug_payload(self):
         image, line, group = _white_balloon_fixture("WAIT!")
-        with patch("yomu.ocr.ocr_balloon._enclosure_evidence", return_value=(False, False)):
+        with patch("komyst.ocr.ocr_balloon._enclosure_evidence", return_value=(False, False)):
             _classify_groups([group], image)
 
         item = _debug_payload("fixture.png", [line], [], [group])["items"][0]
@@ -4755,7 +4755,7 @@ class OCRQualityRegressionTests(unittest.TestCase):
         residual_line = _line("WHAT IS THIS")
         image = np.full((100, 240, 3), 255, dtype=np.uint8)
         with patch(
-            "yomu.ocr.ocr_balloon.OCREngine._detect_with_rapidocr",
+            "komyst.ocr.ocr_balloon.OCREngine._detect_with_rapidocr",
             return_value=[residual_line],
         ):
             result = _post_render_source_text_check(
@@ -4769,7 +4769,7 @@ class OCRQualityRegressionTests(unittest.TestCase):
         group.safe_area = (0, 0, 220, 80)
         image = np.full((100, 240, 3), 255, dtype=np.uint8)
         with patch(
-            "yomu.ocr.ocr_balloon.OCREngine._detect_with_rapidocr",
+            "komyst.ocr.ocr_balloon.OCREngine._detect_with_rapidocr",
             return_value=[_line("BEBIDA NO STARGRAM")],
         ):
             result = _post_render_source_text_check(
@@ -4783,7 +4783,7 @@ class OCRQualityRegressionTests(unittest.TestCase):
         group.safe_area = (0, 0, 220, 80)
         image = np.full((100, 240, 3), 255, dtype=np.uint8)
         with patch(
-            "yomu.ocr.ocr_balloon.OCREngine._detect_with_rapidocr",
+            "komyst.ocr.ocr_balloon.OCREngine._detect_with_rapidocr",
             return_value=[_line("SORRY FOR HIM")],
         ):
             result = _post_render_source_text_check(
@@ -4798,7 +4798,7 @@ class OCRQualityRegressionTests(unittest.TestCase):
         group.safe_area = (0, 0, 220, 80)
         image = np.full((100, 240, 3), 255, dtype=np.uint8)
         with patch(
-            "yomu.ocr.ocr_balloon.OCREngine._detect_with_rapidocr",
+            "komyst.ocr.ocr_balloon.OCREngine._detect_with_rapidocr",
             return_value=[_line("SINTO PENA DELE")],
         ):
             result = _post_render_source_text_check(
@@ -4833,7 +4833,7 @@ class OCRQualityRegressionTests(unittest.TestCase):
             "SO ENTRAR REINO NO DOS SONHOS MATAR MONSTROS ALGUNS"
         )
         with patch(
-            "yomu.ocr.ocr_balloon.OCREngine._detect_with_rapidocr",
+            "komyst.ocr.ocr_balloon.OCREngine._detect_with_rapidocr",
             return_value=[reordered_read],
         ):
             result = _post_render_source_text_check(
@@ -5308,7 +5308,7 @@ class PostRenderOcrDegradationTests(unittest.TestCase):
         image = np.full((100, 240, 3), 255, dtype=np.uint8)
         lines = [_line(observed)] if observed else []
         with patch(
-            "yomu.ocr.ocr_balloon.OCREngine._detect_with_rapidocr",
+            "komyst.ocr.ocr_balloon.OCREngine._detect_with_rapidocr",
             return_value=lines,
         ):
             return _post_render_source_text_check(
@@ -5431,7 +5431,7 @@ def _dark_dialogue_fixture(text):
 
 def _classify_in(fixture, text):
     image, group = fixture(text)
-    with patch("yomu.ocr.ocr_balloon._enclosure_evidence", return_value=(True, True)):
+    with patch("komyst.ocr.ocr_balloon._enclosure_evidence", return_value=(True, True)):
         _classify_groups([group], image)
     return group
 

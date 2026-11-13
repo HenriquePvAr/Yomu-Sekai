@@ -13,7 +13,7 @@ Kanban. Não use um checkout antigo nem mova arquivos só para reduzir contagens
 
 ```mermaid
 flowchart TD
-    R[(raiz)] --> Y[yomu/<br/>pacote do produto]
+    R[(raiz)] --> Y[komyst/<br/>pacote do produto]
     R --> T[tests/ + test_support/ + test_fixtures/]
     R --> D[docs/<br/>user, technical, architecture, operations]
     R --> Q[requirements.txt<br/>+ requirements/ perfis]
@@ -49,7 +49,7 @@ flowchart TD
 ├── tests/            testes Python, frontend, integração e contrato
 ├── tools/            auditorias, validações e ferramentas de desenvolvimento
 ├── ui/               fontes/integrações de UI mantidas fora do pacote runtime Python
-└── yomu/             implementação canônica do runtime Python
+└── komyst/             implementação canônica do runtime Python
 ```
 
 `__pycache__/`, `.pytest_cache/`, `.runtime/`, `.vscode/`, `out/` e os diretórios locais
@@ -69,7 +69,7 @@ bootstrap, instalação ou compatibilidade. A lista completa, consumidores e ris
 - `app_ui.py`, `desktop_app.py`, `down.py`, `main.py`, `run_local_folder.py`, `run_webtoon.py`,
   `start_tradutor.py` e `worker_service.py` são shims/entrypoints públicos históricos. Mantêm
   nomes, caminhos e identidade de módulo para CLI, subprocessos, testes e PyInstaller; a lógica
-  canônica correspondente vive em `yomu/`.
+  canônica correspondente vive em `komyst/`.
 - `conftest.py`, `sitecustomize.py` e `pytest.ini` instalam descoberta, isolamento de runtime e
   guard de rede offline antes de importar testes. Não mova esses hooks sem uma validação
   equivalente de inicialização precoce.
@@ -87,14 +87,14 @@ bootstrap, instalação ou compatibilidade. A lista completa, consumidores e ris
 
 | Uso | Caminho preservado | Implementação |
 |---|---|---|
-| UI web local | `python app_ui.py` | `yomu.ui.app` |
-| Desktop/PyInstaller | `desktop_app.py` | `yomu.desktop.app` |
-| CLI do capítulo | `python run_webtoon.py` | `yomu.commands.run_webtoon` |
-| Entrada por pasta local | `run_local_folder.py` | `yomu.commands.run_local_folder` |
-| Launcher/worker supervisionado | `start_tradutor.py` / `start_tradutor.bat` | `yomu.commands.start_tradutor` |
-| Worker persistente | `worker_service.py` | `yomu.runtime.worker_service` |
-| Downloader histórico | `down.py` | `yomu.download.down` |
-| GUI histórica | `main.py` | `yomu.commands.legacy_gui` |
+| UI web local | `python app_ui.py` | `komyst.ui.app` |
+| Desktop/PyInstaller | `desktop_app.py` | `komyst.desktop.app` |
+| CLI do capítulo | `python run_webtoon.py` | `komyst.commands.run_webtoon` |
+| Entrada por pasta local | `run_local_folder.py` | `komyst.commands.run_local_folder` |
+| Launcher/worker supervisionado | `start_tradutor.py` / `start_tradutor.bat` | `komyst.commands.start_tradutor` |
+| Worker persistente | `worker_service.py` | `komyst.runtime.worker_service` |
+| Downloader histórico | `down.py` | `komyst.download.down` |
+| GUI histórica | `main.py` | `komyst.commands.legacy_gui` |
 
 As razões e verificações de identidade de módulo constam na [matriz de dependências](ROOT_DEPENDENCY_MAP.md).
 
@@ -106,7 +106,7 @@ As razões e verificações de identidade de módulo constam na [matriz de depen
   `requirements/requirements-dev.txt` é somente validação; OCR/UI e opções ficam em manifests separados;
   `requirements/requirements-paddle.txt` é opcional e não deve ser instalado no mesmo ambiente do contrato
   OpenCV da Beta; `requirements/requirements-gemini-vps.txt` pertence ao worker remoto.
-- O build desktop usa `packaging/tradutor_ia.spec`, que espera `desktop_app.py` na raiz e inclui
+- O build desktop usa `packaging/komyst.spec`, que espera `desktop_app.py` na raiz e inclui
   recursos públicos/configuração especificados no spec. Não altere caminhos do spec sem smoke
   frozen offline.
 - Para comandos suportados, dependências e validações, veja [DEVELOPMENT_WORKFLOW.md](../DEVELOPMENT_WORKFLOW.md)
@@ -114,7 +114,7 @@ As razões e verificações de identidade de módulo constam na [matriz de depen
 
 ## Política para novas alterações
 
-- Implementações Python de produto vão no pacote já existente dentro de `yomu/`; serviços
+- Implementações Python de produto vão no pacote já existente dentro de `komyst/`; serviços
   adicionais seguem a arquitetura `apps/`; testes vão em `tests/` e seus helpers em
   `test_support/`.
 - Novas dependências devem ser adicionadas ao manifest do perfil que realmente as usa e a

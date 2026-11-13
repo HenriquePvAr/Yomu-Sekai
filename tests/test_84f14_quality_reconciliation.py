@@ -35,8 +35,8 @@ install_offline_network_guard()
 import unittest
 import unittest.mock
 
-import yomu.pipeline.benchmark_pipeline as benchmark_pipeline
-import yomu.translation.semantic_fidelity as semantic_fidelity
+import komyst.pipeline.benchmark_pipeline as benchmark_pipeline
+import komyst.translation.semantic_fidelity as semantic_fidelity
 
 
 def _sfx_residual(group_id, text):

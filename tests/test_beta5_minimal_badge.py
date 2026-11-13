@@ -13,5 +13,5 @@ def test_scans_and_community_share_single_coming_soon_badge():
 
 
 def test_beta5_version_is_current_build():
-    source = (ROOT / "yomu/runtime/version.py").read_text(encoding="utf-8")
+    source = (ROOT / "komyst/runtime/version.py").read_text(encoding="utf-8")
     assert 'BUILD_VERSION = "0.9.1-beta.18"' in source

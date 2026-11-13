@@ -12,7 +12,7 @@ alter table public.admin_audit_log
   add constraint admin_audit_log_actor_fkey
   foreign key (actor) references auth.users(id) on delete set null;
 
-create or replace function public.yomu_user_delete_schema_ready()
+create or replace function public.komyst_user_delete_schema_ready()
 returns boolean
 language sql
 security definer
@@ -45,6 +45,6 @@ as $$
     );
 $$;
 
-revoke all on function public.yomu_user_delete_schema_ready() from public;
-grant execute on function public.yomu_user_delete_schema_ready() to service_role;
+revoke all on function public.komyst_user_delete_schema_ready() from public;
+grant execute on function public.komyst_user_delete_schema_ready() to service_role;
 commit;

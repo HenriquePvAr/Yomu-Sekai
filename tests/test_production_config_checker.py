@@ -17,11 +17,11 @@ def test_release_checker_uses_public_publishable_key_contract():
     source = Path("tools/release/check_beta_configuration.py").read_text(encoding="utf-8")
     assert "SUPABASE_PUBLISHABLE_KEY" in source
     assert "SUPABASE_ANON_KEY" not in source
-    assert "TRADUTOR_IA_UPDATE_MANIFEST_URL" in source
+    assert "KOMYST_UPDATE_MANIFEST_URL" in source
 
 
 def test_jwks_diagnostic_uses_active_public_runtime_not_a_hardcoded_project():
-    source = Path("yomu/auth/jwks_network_diagnostics.py").read_text(encoding="utf-8")
+    source = Path("komyst/auth/jwks_network_diagnostics.py").read_text(encoding="utf-8")
     assert "public-runtime.json" in source
     assert "getaddrinfo(host" in source
     assert "mimrsxnhqbqkffsekxuw" not in source

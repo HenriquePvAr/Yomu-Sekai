@@ -9,9 +9,9 @@ import json
 from pathlib import Path
 from unittest.mock import patch
 
-import yomu.runtime.resource_monitor as resource_monitor
-from yomu.config import settings
-from yomu.runtime.resource_monitor import ResourceMonitor
+import komyst.runtime.resource_monitor as resource_monitor
+from komyst.config import settings
+from komyst.runtime.resource_monitor import ResourceMonitor
 
 
 class ResourceMonitorTests(unittest.TestCase):

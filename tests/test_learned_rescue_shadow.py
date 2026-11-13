@@ -6,7 +6,7 @@ import json
 
 import numpy as np
 
-from yomu.clean.reconstruction.learned_rescue import CANDIDATE_ID, LearnedRescueService, ShadowRequest
+from komyst.clean.reconstruction.learned_rescue import CANDIDATE_ID, LearnedRescueService, ShadowRequest
 
 
 def _request(review_required=True):

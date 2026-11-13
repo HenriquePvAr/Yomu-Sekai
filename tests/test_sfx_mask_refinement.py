@@ -3,7 +3,7 @@ from types import SimpleNamespace
 
 import numpy as np
 
-from yomu.ocr.ocr_balloon import _refine_lettering_mask, _eroded_mask_variant
+from komyst.ocr.ocr_balloon import _refine_lettering_mask, _eroded_mask_variant
 
 
 def _base_mask():

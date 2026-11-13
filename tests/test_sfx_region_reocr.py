@@ -11,8 +11,8 @@ import cv2
 import importlib.util
 import pytest
 
-from yomu.config import settings as config
-from yomu.ocr.sfx_region_reocr import _is_candidate, repair_sfx_region_reads
+from komyst.config import settings as config
+from komyst.ocr.sfx_region_reocr import _is_candidate, repair_sfx_region_reads
 
 _FIXTURES = Path(__file__).resolve().parent.parent / "test_fixtures" / "sfx_region_reocr"
 _PADDLE_AVAILABLE = importlib.util.find_spec("paddleocr") is not None
@@ -60,7 +60,7 @@ def test_rapidocr_crop_repairs_pelw():
         repairs = repair_sfx_region_reads([group], page, page_index=14)
     assert repairs, "expected a repair for PElW (crop re-reads PEW)"
     assert group.text == repairs[0]["to"]
-    from yomu.translation.sfx_glossary import translate_sfx_fuzzy
+    from komyst.translation.sfx_glossary import translate_sfx_fuzzy
     assert translate_sfx_fuzzy(group.text) is not None
 
 
@@ -72,7 +72,7 @@ def test_paddle_escalation_repairs_ulane():
         repairs = repair_sfx_region_reads([group], page, page_index=15)
     assert repairs, "expected Paddle escalation to recover CLANK from ULANE"
     assert group.sfx_reocr_repair["engine"] == "paddle"
-    from yomu.translation.sfx_glossary import translate_sfx_fuzzy
+    from komyst.translation.sfx_glossary import translate_sfx_fuzzy
     assert translate_sfx_fuzzy(group.text) is not None
 
 
@@ -80,7 +80,7 @@ def test_no_repair_when_engines_find_nothing():
     page, group = _page_with_fixture("058_HUR.png")
     with mock.patch.object(config, "TRANSLATE_SFX", True), \
             mock.patch.object(config, "OCR_SFX_PADDLE_ESCALATION", False), \
-            mock.patch("yomu.ocr.sfx_region_reocr._rapid_crop_reads", return_value=[]):
+            mock.patch("komyst.ocr.sfx_region_reocr._rapid_crop_reads", return_value=[]):
         repairs = repair_sfx_region_reads([group], page, page_index=58)
     assert repairs == []
     assert not hasattr(group, "sfx_reocr_repair")

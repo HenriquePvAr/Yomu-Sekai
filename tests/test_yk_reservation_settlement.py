@@ -9,8 +9,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
-import yomu.runtime.yk_reservation as ykr
-from yomu.translation.providers.yomu_backend_provider import (BackendTranslationError, BatchItem, BatchRequest,
+import komyst.runtime.yk_reservation as ykr
+from komyst.translation.providers.komyst_backend_provider import (BackendTranslationError, BatchItem, BatchRequest,
                                   BatchResponse, MockBackendClient, ResultStore)
 
 AUTH = "jwt.test"

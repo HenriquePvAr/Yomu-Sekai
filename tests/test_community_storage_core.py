@@ -14,15 +14,15 @@ from unittest.mock import patch
 
 import pytest
 
-import yomu.community.community_api as community_api
-import yomu.community.community_publish_runner as community_publish_runner
-from yomu.community.canonical_social_identity import FakeCanonicalSocialIdentityMaterializer
-from yomu.community.community_api import ArtifactBindingError, CommunityApi, CommunityError
-from yomu.community.community_auth import RequestPrincipal
-from yomu.community.community_publication_metadata import FakePublicationMetadataRepository, PublicationMetadataError
-from yomu.community.community_storage import FakeStorageProvider, StorageError
-from yomu.community.community_store import FileStatus, PostStatus
-from yomu.runtime.job_store import JobStatus, JobStore
+import komyst.community.community_api as community_api
+import komyst.community.community_publish_runner as community_publish_runner
+from komyst.community.canonical_social_identity import FakeCanonicalSocialIdentityMaterializer
+from komyst.community.community_api import ArtifactBindingError, CommunityApi, CommunityError
+from komyst.community.community_auth import RequestPrincipal
+from komyst.community.community_publication_metadata import FakePublicationMetadataRepository, PublicationMetadataError
+from komyst.community.community_storage import FakeStorageProvider, StorageError
+from komyst.community.community_store import FileStatus, PostStatus
+from komyst.runtime.job_store import JobStatus, JobStore
 
 
 OWNER = RequestPrincipal("owner-a", True, auth_source="test", session_id="owner")

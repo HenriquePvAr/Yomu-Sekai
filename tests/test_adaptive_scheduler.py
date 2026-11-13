@@ -4,7 +4,7 @@ install_offline_network_guard()
 
 import unittest
 
-from yomu.runtime.adaptive_scheduler import (
+from komyst.runtime.adaptive_scheduler import (
     AdaptiveResourceScheduler,
     ResourceSnapshot,
     SchedulerConfig,

@@ -5,8 +5,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-import yomu.runtime.installer_update as installer_update
-import yomu.runtime.update_manifest as update_manifest
+import komyst.runtime.installer_update as installer_update
+import komyst.runtime.update_manifest as update_manifest
 from scripts.sign_release import public_key_material, sign_manifest
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
@@ -27,7 +27,7 @@ class _Transport:
 def _manifest(package: Path, *, artifact_type: str = "windows-installer"):
     key = Ed25519PrivateKey.generate()
     payload = {
-        "schema_version": 1, "app_id": "tradutor-ia", "channel": "beta",
+        "schema_version": 1, "app_id": "komyst", "channel": "beta",
         "artifact_type": artifact_type, "version": "0.9.0-beta.35",
         "minimum_version": "0.9.0-beta.34", "published_at": "2026-09-14T12:00:00+00:00",
         "release_notes": "Atualização de teste", "package": {
@@ -45,12 +45,12 @@ class InstallerUpdaterTests(unittest.TestCase):
     def test_installer_filename_is_version_bound(self):
         self.assertEqual(
             installer_update.installer_filename("0.9.0-beta.35"),
-            "YomuSekai-0.9.0-beta.35-Setup-x64.exe",
+            "Komyst-0.9.0-beta.35-Setup-x64.exe",
         )
 
     def test_download_promotes_only_after_transport_verification(self):
         with tempfile.TemporaryDirectory() as tmp:
-            source = Path(tmp) / "YomuSekai-0.9.0-beta.35-Setup-x64.exe"
+            source = Path(tmp) / "Komyst-0.9.0-beta.35-Setup-x64.exe"
             source.write_bytes(b"verified installer")
             manifest = _manifest(source)
             transport = _Transport(source.read_bytes())
@@ -63,7 +63,7 @@ class InstallerUpdaterTests(unittest.TestCase):
 
     def test_zip_artifact_is_not_accepted_as_installer(self):
         with tempfile.TemporaryDirectory() as tmp:
-            package = Path(tmp) / "YomuSekai-0.9.0-beta.35-Setup-x64.exe"
+            package = Path(tmp) / "Komyst-0.9.0-beta.35-Setup-x64.exe"
             package.write_bytes(b"fixture")
             manifest = _manifest(package, artifact_type="zip")
             with self.assertRaises(installer_update.InstallerUpdateError):
@@ -71,9 +71,9 @@ class InstallerUpdaterTests(unittest.TestCase):
 
     def test_spawn_uses_argument_list_without_shell(self):
         with tempfile.TemporaryDirectory() as tmp:
-            path = Path(tmp) / "YomuSekai-0.9.0-beta.35-Setup-x64.exe"
+            path = Path(tmp) / "Komyst-0.9.0-beta.35-Setup-x64.exe"
             path.write_bytes(b"fixture")
-            with patch("yomu.runtime.installer_update.subprocess.Popen") as popen:
+            with patch("komyst.runtime.installer_update.subprocess.Popen") as popen:
                 installer_update.spawn_verified_installer(path)
                 args, kwargs = popen.call_args
             self.assertEqual(args[0][0], str(path))

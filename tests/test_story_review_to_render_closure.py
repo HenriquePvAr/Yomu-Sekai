@@ -13,9 +13,9 @@ import unittest
 
 import numpy as np
 
-import yomu.config.settings as config
-import yomu.ocr.source_completeness as source_completeness
-from yomu.ocr.ocr_balloon import (
+import komyst.config.settings as config
+import komyst.ocr.source_completeness as source_completeness
+from komyst.ocr.ocr_balloon import (
     TextGroup,
     enforce_rapidocr_quality_gate,
     score_group_ocr_quality,
@@ -24,7 +24,7 @@ from yomu.ocr.ocr_balloon import (
     apply_group_translations,
     validate_translation_text,
 )
-from yomu.ocr.ocr_engine import OCRLine
+from komyst.ocr.ocr_engine import OCRLine
 
 
 def _line(text="STORY TEXT", box=(10, 10, 180, 40), line_id="L0"):

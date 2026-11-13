@@ -20,7 +20,7 @@ import uuid
 from pathlib import Path
 from typing import Callable, Mapping
 
-from yomu.community.community_auth import (
+from komyst.community.community_auth import (
     AuthConfigurationError,
     AuthenticationRequired,
     AuthorizationDenied,
@@ -164,7 +164,7 @@ class LocalTestAuthProvider:
         environment = str(values.get("APP_ENV", "") or "").strip().lower()
         if environment not in _ALLOWED_ENVIRONMENTS:
             raise AuthConfigurationError("local test auth is restricted to test or development")
-        bind_host = str(values.get("TRADUTOR_UI_HOST", "127.0.0.1") or "").strip()
+        bind_host = str(values.get("KOMYST_UI_HOST", "127.0.0.1") or "").strip()
         if not bind_is_loopback(bind_host):
             raise AuthConfigurationError("local test auth requires a loopback bind")
         external_values = (

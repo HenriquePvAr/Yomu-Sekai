@@ -16,12 +16,12 @@ import time
 import unittest
 from pathlib import Path
 
-import yomu.runtime.process_tree as process_tree
-from yomu.community.community_auth import RequestPrincipal
-from yomu.community.community_service import CommunityService
-from yomu.community.community_storage import FilesystemStorageProvider
-from yomu.community.community_store import CommunityStore, FileStatus, PostStatus
-from yomu.runtime.job_store import JobStatus, JobStore
+import komyst.runtime.process_tree as process_tree
+from komyst.community.community_auth import RequestPrincipal
+from komyst.community.community_service import CommunityService
+from komyst.community.community_storage import FilesystemStorageProvider
+from komyst.community.community_store import CommunityStore, FileStatus, PostStatus
+from komyst.runtime.job_store import JobStatus, JobStore
 
 REPO = Path(__file__).resolve().parents[1]
 OWNER = RequestPrincipal("local", True, auth_source="test", session_id="test-owner")
@@ -61,7 +61,7 @@ class CommunityPublishSurvivalTests(unittest.TestCase):
 
     def tearDown(self):
         for pid, create_time, job_id in self._orphan_runners:
-            fingerprint = ["yomu.community.community_publish_runner", job_id]
+            fingerprint = ["komyst.community.community_publish_runner", job_id]
             if process_tree.is_alive(
                 pid, create_time=create_time, substrings=fingerprint
             ):
@@ -157,7 +157,7 @@ class CommunityPublishSurvivalTests(unittest.TestCase):
         worker1.kill()
         worker1.wait(timeout=8)
         self.jobs.unregister_worker(old_worker_id)
-        fingerprint = ["yomu.community.community_publish_runner", pub["job_id"]]
+        fingerprint = ["komyst.community.community_publish_runner", pub["job_id"]]
         self.assertTrue(process_tree.is_alive(
             old_pid,
             create_time=old_create_time,

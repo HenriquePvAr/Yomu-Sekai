@@ -11,11 +11,11 @@ from unittest.mock import patch
 
 import pytest
 
-import yomu.community.community_api as community_api
-from yomu.community.community_auth import RequestPrincipal, ResourceNotFound
-from yomu.community.community_api import CommunityApi
-from yomu.community.community_store import FileStatus, Moderation, PostStatus, Visibility
-from yomu.runtime.job_store import JobStatus, JobStore
+import komyst.community.community_api as community_api
+from komyst.community.community_auth import RequestPrincipal, ResourceNotFound
+from komyst.community.community_api import CommunityApi
+from komyst.community.community_store import FileStatus, Moderation, PostStatus, Visibility
+from komyst.runtime.job_store import JobStatus, JobStore
 
 
 OWNER = RequestPrincipal(
@@ -50,7 +50,7 @@ def test_local_test_auth_requires_explicit_isolated_storage(tmp_path):
         "ALLOW_LOCAL_TEST_IDENTITIES": "1",
         "STORAGE_PROVIDER": "local_test",
         "LOCAL_TEST_STORAGE_ROOT": str(tmp_path / "storage"),
-        "TRADUTOR_UI_HOST": "127.0.0.1",
+        "KOMYST_UI_HOST": "127.0.0.1",
     }
     with patch.dict(os.environ, env, clear=True):
         assert community_api.storage_provider_name() == "local_test"
@@ -102,7 +102,7 @@ class CommunityApiTests(unittest.TestCase):
                                    "series_title": "Chap", "title": "T",
                                    "publish_consent": True}, principal=OWNER)
         # Run the publish job to completion via the community runner.
-        import yomu.community.community_publish_runner as community_publish_runner
+        import komyst.community.community_publish_runner as community_publish_runner
         self.jobs.claim_next_job("w1", 1)
         self.jobs.transition(result["job_id"], JobStatus.STARTING, expected_worker="w1")
         community_publish_runner.run_job(result["job_id"], str(self.tmp / "jobs.sqlite3"))
@@ -165,7 +165,7 @@ class CommunityApiTests(unittest.TestCase):
                 output_root=self.output_root,
                 storage_root=self.storage_root,
             )
-            with patch("yomu.community.storage.google_drive_factory.build_google_drive_provider") as remote:
+            with patch("komyst.community.storage.google_drive_factory.build_google_drive_provider") as remote:
                 result = self._publish_and_run()
                 remote.assert_not_called()
         record = self.api.store.get_file(result["file_id"])
@@ -241,7 +241,7 @@ class CommunityApiTests(unittest.TestCase):
             self.api.open_pdf(result["post_id"], principal=MEMBER)
 
     def test_community_read_and_feed_require_authentication(self):
-        from yomu.community.community_auth import AuthenticationRequired
+        from komyst.community.community_auth import AuthenticationRequired
         result = self._publish_and_run()
         self.api.store.set_post_status(result["post_id"], PostStatus.PUBLISHED,
                                        moderation_status=Moderation.APPROVED)

@@ -1,6 +1,6 @@
 import unittest
 
-from yomu.export.page_manifest import manifest_snapshot, materialize_final_manifest
+from komyst.export.page_manifest import manifest_snapshot, materialize_final_manifest
 
 
 class FinalPageManifestTests(unittest.TestCase):

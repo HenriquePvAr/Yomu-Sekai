@@ -7,7 +7,7 @@ download passes, while a genuinely incomplete download still fails closed.
 """
 import unittest
 
-import yomu.download.down as down
+import komyst.download.down as down
 
 
 def _report(downloaded):

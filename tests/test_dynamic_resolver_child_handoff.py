@@ -7,7 +7,7 @@ import tempfile
 import time
 from pathlib import Path
 
-from yomu.download.readers import scrapling_reader_resolver as parent
+from komyst.download.readers import scrapling_reader_resolver as parent
 
 
 def _launch(tmp_path: Path, body: str, *, stall_timeout: float = 1.0):
@@ -17,7 +17,7 @@ def _launch(tmp_path: Path, body: str, *, stall_timeout: float = 1.0):
     script = (
         "import sys,time\n"
         "from pathlib import Path\n"
-        "from yomu.download.readers.dynamic_resolver_process import run_child_protocol\n"
+        "from komyst.download.readers.dynamic_resolver_process import run_child_protocol\n"
         "def resolver(request, progress):\n"
         + body + "\n"
         + f"sys.exit(run_child_protocol(Path({str(request)!r}),Path({str(result)!r}),"
@@ -96,7 +96,7 @@ def test_persistent_failure_evidence_survives_temp_cleanup(tmp_path, monkeypatch
 def test_source_and_frozen_launch_modes_are_explicit(tmp_path):
     paths = [tmp_path / name for name in ("request.json", "result.pkl", "status.json", "progress.json")]
     source, env = parent._build_child_launch(*paths, frozen=False)
-    assert source[1:4] == ["-u", "-m", "yomu.download.readers.dynamic_resolver_process"]
+    assert source[1:4] == ["-u", "-m", "komyst.download.readers.dynamic_resolver_process"]
     assert env and str(Path(parent.__file__).resolve().parents[3]) in env["PYTHONPATH"].split(__import__("os").pathsep)
     frozen, frozen_env = parent._build_child_launch(*paths, frozen=True)
     assert frozen[1:3] == ["--internal-child", "dynamic-resolver"]

@@ -9,7 +9,7 @@ import cv2
 import numpy as np
 import pytest
 
-from yomu.ocr.subprocess_ocr import SubprocessOcrGateway
+from komyst.ocr.subprocess_ocr import SubprocessOcrGateway
 
 STUB_WORKER = Path(__file__).resolve().parent / "_stub_ocr_worker.py"
 
@@ -75,7 +75,7 @@ def test_spawn_failure_is_unavailable(tmp_path):
 
 
 def test_worker_that_never_answers_times_out_and_restarts_within_bound(tmp_path, monkeypatch):
-    from yomu.ocr import subprocess_ocr as so
+    from komyst.ocr import subprocess_ocr as so
 
     worker = tmp_path / "never.py"
     worker.write_text(
@@ -115,7 +115,7 @@ def test_gateway_spawn_is_hidden_and_preserves_protocol_pipes(monkeypatch):
 
 
 def test_phase_release_stops_worker_and_later_read_can_reopen(stub_gateway, monkeypatch):
-    from yomu.ocr import subprocess_ocr as so
+    from komyst.ocr import subprocess_ocr as so
     image = np.zeros((40,80,3), np.uint8)
     assert stub_gateway.reads(image) == ["CLANK"]
     process = stub_gateway._process
@@ -134,7 +134,7 @@ def test_phase_release_stops_worker_and_later_read_can_reopen(stub_gateway, monk
 
 @pytest.mark.skipif(sys.platform != "win32", reason="Windows headless dependency policy")
 def test_dependency_children_are_hidden_without_losing_pipes_or_group_flags(monkeypatch):
-    from yomu.runtime.process_options import configure_headless_subprocesses
+    from komyst.runtime.process_options import configure_headless_subprocesses
     observed = {}
     class OriginalPopen:
         def __init__(self, *args, **kwargs):
@@ -157,7 +157,7 @@ def test_dependency_children_are_hidden_without_losing_pipes_or_group_flags(monk
 
 @pytest.mark.skipif(sys.platform != "win32", reason="Windows console attachment")
 def test_hidden_child_has_no_attached_console_and_keeps_stdout():
-    from yomu.runtime.process_options import hidden_console_options
+    from komyst.runtime.process_options import hidden_console_options
     result = subprocess.run([sys.executable, "-c",
         "import ctypes; print(int(bool(ctypes.windll.kernel32.GetConsoleWindow())))"],
         capture_output=True, text=True, timeout=10, **hidden_console_options())

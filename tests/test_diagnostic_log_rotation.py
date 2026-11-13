@@ -10,7 +10,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest import mock
 
-import yomu.ui.app as app_ui
+import komyst.ui.app as app_ui
 
 
 class DiagnosticLogRotationTests(unittest.TestCase):

@@ -5,7 +5,7 @@ install_offline_network_guard()
 
 import unittest
 
-from yomu.review import region_taxonomy as rt
+from komyst.review import region_taxonomy as rt
 
 
 class SeriesTitleLogoTests(unittest.TestCase):

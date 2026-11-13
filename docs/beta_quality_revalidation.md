@@ -1,11 +1,7 @@
 # Beta quality revalidation
 
 > **Registro histórico de 2026-09-05 (`beta/packaging`).** Contagens de teste, runtime e
-> "pending packaging findings" descrevem aquela data. Estado atual:
-> [snapshot de consolidação](consolidation/YOMU_CURRENT_PRODUCT_STATE.md),
-> [Testes](TESTING.md) (suíte hermética atual ~6160 passed / 0 failed / 141 skipped) e
-> [Quality Freeze](QUALITY_FREEZE.md#estado-em-2026-10-24). Os caminhos `output/...` e
-> `.cache/...` citados são locais à máquina de verificação e não estão no repositório. **Revisado em:** 2026-10-24 · **Base verificada:** `5f482ce1`
+> Este registro preserva resultados de uma validação técnica anterior. Os caminhos locais de execução não são versionados e não constituem estado atual do instalador ou da licença Beta. A validação da `v0.9.1-beta.18` por tester é registrada como **validado por beta tester, informado pelo dono**; data não informada.
 
 Branch: `beta/packaging`. Start: `292f032514201d0beb7132172c55716ae04a5702`.
 Frozen main/tag commit: `5ebd77e7f0f107f5492902353dddde7ff044d9ce`.
@@ -20,10 +16,7 @@ Runtime profile check and pip check passed. Global Python was not changed.
 
 ## Correct historical comparison
 
-Historical run: `C:/Projetos/Tradutor.Ia-main-promotion/output/shadow_slave_chapter_1_5/d11c7d3b-65be-4e86-974e-9b9ce731bf99`.
-Its manifest records `ee71cfa7c3951cdb517cfc38bb67a78bc7ad2e24`.
-Recent Beta run: `output/shadow_slave_chapter_1_5/b3c03e69-dfe6-4668-b6ed-cc06dbb8bd66`,
-manifest commit `0323031200850469ac51469ea3b18f7a6adad7a7`.
+Os dois artefatos comparados eram execuções locais não versionadas. Seus manifests registravam os commits `ee71cfa7c3951cdb517cfc38bb67a78bc7ad2e24` e `0323031200850469ac51469ea3b18f7a6adad7a7`; os arquivos de imagem originais já não estão disponíveis nesta worktree.
 Both have 35 pages. The three relevant source images are 800x5000 in both runs.
 Decoded RGB SHA256 values match exactly:
 

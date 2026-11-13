@@ -1,11 +1,12 @@
 # Testes herméticos e smokes manuais
 
-> **Base verificada:** `fb8875e` (branch `main`) · **Revisado em:** 2026-10-25
->
-> `tests/test_cleanup_fixed_mask_reconstruction_red.py` era um `KNOWN_INTENTIONAL_RED`. Desde
-> `5f482ce1` ele passa (2/2) e continua como contrato de reconstrução com máscara fixa; uma
-> falha nele agora é regressão real. No mesmo snapshot, `python -m pytest -q` termina com
-> ~6160 testes aprovados e 0 falhas em cerca de 10 minutos.
+> **Como executar:** consulte os comandos abaixo. Resultados de execuções anteriores são
+> snapshots, não uma garantia de que a suíte atual esteja verde.
+
+> **Última execução completa registrada:** 2026-11-11. Após separar contaminação ambiental,
+> permaneceram quatro falhas de asserção relacionadas a máscara e reconstrução. Veja
+> [Falhas preexistentes](../reports/falhas_preexistentes_20261111.md) para os testes e limites
+> dessa execução; não interprete a contagem histórica de 6.160 testes como resultado atual.
 
 ## Padrão: offline
 
@@ -40,7 +41,7 @@ sequenceDiagram
     participant T as Teste
     participant CH as Processo-filho Python
     PY->>CF: carrega antes dos módulos de teste
-    CF->>CF: TRADUTOR_IA_HERMETIC_TEST_ENV=1<br/>desliga LaMa, re-OCR e TRANSLATE_SFX
+    CF->>CF: KOMYST_HERMETIC_TEST_ENV=1<br/>desliga LaMa, re-OCR e TRANSLATE_SFX
     CF->>OG: install_offline_network_guard
     OG->>OG: socket.connect e getaddrinfo<br/>só aceitam loopback
     OG->>OG: marca o ambiente e põe o repo no PYTHONPATH
@@ -87,8 +88,8 @@ python -m pip install -r requirements/requirements-dev.txt
 python scripts/check_runtime_profile.py
 python -m pytest --collect-only -q
 python -m pytest -q
-node --check static/tradutor_ui.js   # a CI verifica também os demais scripts de static/ e static/i18n/
-python -m compileall -q yomu test_support
+node --check static/komyst_ui.js   # a CI verifica também os demais scripts de static/ e static/i18n/
+python -m compileall -q komyst test_support
 ```
 
 O `pytest.ini` descobre testes em `tests/` e `experiments/` (`testpaths`).

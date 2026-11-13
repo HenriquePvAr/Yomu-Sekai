@@ -17,15 +17,15 @@ import unittest
 from pathlib import Path
 from types import SimpleNamespace
 
-import yomu.ui.app as app_ui
-from yomu.community.community_auth import RequestPrincipal
+import komyst.ui.app as app_ui
+from komyst.community.community_auth import RequestPrincipal
 
 ROOT = Path(__file__).resolve().parents[1]
 
 
 def read(rel: str) -> str:
     if rel == "app_ui.py":
-        rel = "yomu/ui/app.py"
+        rel = "komyst/ui/app.py"
     return (ROOT / rel).read_text(encoding="utf-8")
 
 
@@ -64,7 +64,7 @@ class BootstrapSocialStatusTests(unittest.TestCase):
         app_ui._SOCIAL_STATUS = self._orig_status
 
     def _bootstrap(self, auth, bridge=None):
-        import yomu.ui.app as mod
+        import komyst.ui.app as mod
         orig_auth, orig_bridge = mod.AUTH, mod.BRIDGE
         orig_enrich = mod._enrich_history_publications
         mod.AUTH = auth

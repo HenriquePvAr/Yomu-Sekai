@@ -4,7 +4,7 @@ from unittest import mock
 
 import pytest
 
-from yomu.ui import source_previews as previews
+from komyst.ui import source_previews as previews
 
 
 def test_unknown_source_never_starts_browser():

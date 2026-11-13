@@ -3,8 +3,8 @@ from __future__ import annotations
 
 import numpy as np
 
-import yomu.ocr.ocr_balloon as ob
-from yomu.ocr.ocr_engine import OCRLine
+import komyst.ocr.ocr_balloon as ob
+from komyst.ocr.ocr_engine import OCRLine
 
 
 def _group(background="textured_art", box=(30, 30, 80, 24)):
@@ -111,7 +111,7 @@ def test_sfx_glyph_halo_mask_rejects_boundary_touching_art_and_keeps_glyph_halo(
 def test_clean_commit_reuses_accepted_pixels_without_another_inference(monkeypatch):
     import numpy as np
     from types import SimpleNamespace
-    from yomu.ocr import ocr_balloon as ob
+    from komyst.ocr import ocr_balloon as ob
 
     original = np.full((60, 80, 3), 100, np.uint8)
     current = original.copy()

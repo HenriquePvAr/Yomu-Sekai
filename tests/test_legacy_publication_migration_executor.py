@@ -14,12 +14,12 @@ from pathlib import Path
 
 import pytest
 
-from yomu.community.legacy.legacy_publication_migrator import (
+from komyst.community.legacy.legacy_publication_migrator import (
     canonical_plan_json,
     load_migration_input,
     plan_migration,
 )
-from yomu.community.legacy.legacy_publication_migration_executor import (
+from komyst.community.legacy.legacy_publication_migration_executor import (
     ConflictingStorageObjectError,
     FakeLegacyArtifactStorage,
     FakeLegacyProvenanceBackend,
@@ -411,7 +411,7 @@ def test_cli_remains_dry_run_only(tmp_path: Path):
     fixture = tmp_path / "fixture.json"
     fixture.write_text(json.dumps(_published_fixture(tmp_path)), encoding="utf-8")
     result = subprocess.run(
-        [sys.executable, "-m", "yomu.community.legacy.legacy_publication_migrator", "--fixture", str(fixture), "--artifact-root", str(tmp_path)],
+        [sys.executable, "-m", "komyst.community.legacy.legacy_publication_migrator", "--fixture", str(fixture), "--artifact-root", str(tmp_path)],
         cwd=Path(__file__).resolve().parents[1],
         text=True,
         capture_output=True,

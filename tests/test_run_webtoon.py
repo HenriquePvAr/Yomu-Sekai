@@ -9,16 +9,16 @@ from unittest.mock import patch
 from pathlib import Path
 from types import SimpleNamespace
 
-from yomu.commands.run_webtoon import _chapter_slug, _clean_url, _configure_mode, _resolve_output_folder, build_parser
-from yomu.pipeline.session_context import CONTEXT_VERSION, SessionContextStore
-from yomu.translation.providers.translator_nvidia import TranslatorNvidiaBatch
+from komyst.commands.run_webtoon import _chapter_slug, _clean_url, _configure_mode, _resolve_output_folder, build_parser
+from komyst.pipeline.session_context import CONTEXT_VERSION, SessionContextStore
+from komyst.translation.providers.translator_nvidia import TranslatorNvidiaBatch
 
 
 class RunWebtoonTests(unittest.TestCase):
     def test_output_resolution_uses_configured_root_not_process_cwd(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder) / "user-output"
-            with patch.dict("os.environ", {"TRADUTOR_OUTPUT_ROOT": str(root)}):
+            with patch.dict("os.environ", {"KOMYST_OUTPUT_ROOT": str(root)}):
                 for value in ("chapter/run", "output/chapter/run"):
                     self.assertEqual(
                         _resolve_output_folder(value, "https://example.test/chapter"),
@@ -30,12 +30,12 @@ class RunWebtoonTests(unittest.TestCase):
                 )
 
     def test_unsupported_engine_override_cannot_activate_paddle(self):
-        import yomu.config.settings as config
-        import yomu.ocr.ocr_engine as ocr_engine
+        import komyst.config.settings as config
+        import komyst.ocr.ocr_engine as ocr_engine
         previous = config.OCR_ENGINE
         try:
             with (
-                patch.dict("os.environ", {"TRADUTOR_OCR_ENGINE_OVERRIDE": "paddle"}, clear=False),
+                patch.dict("os.environ", {"KOMYST_OCR_ENGINE_OVERRIDE": "paddle"}, clear=False),
                 patch.object(ocr_engine.importlib.util, "find_spec", return_value=object()),
             ):
                 self.assertEqual(_configure_mode("quality"), "rapidocr")

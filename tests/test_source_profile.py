@@ -8,10 +8,10 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-import yomu.download.sources.chapter_source as chapter_source
-from yomu.download.sources.chapter_source import INCOMPLETE_DOWNLOAD, SUPPORTED_GENERIC_HIGH_CONFIDENCE, UniversalChapterAdapter
-from yomu.download.sources.source_profile import PROFILE_MAX_AGE_SECONDS, PROFILE_VERSION, SourceProfileStore, profile_from_analysis
-from yomu.download.sources.universal_chapter_adapter import (
+import komyst.download.sources.chapter_source as chapter_source
+from komyst.download.sources.chapter_source import INCOMPLETE_DOWNLOAD, SUPPORTED_GENERIC_HIGH_CONFIDENCE, UniversalChapterAdapter
+from komyst.download.sources.source_profile import PROFILE_MAX_AGE_SECONDS, PROFILE_VERSION, SourceProfileStore, profile_from_analysis
+from komyst.download.sources.universal_chapter_adapter import (
     HIGH_CONFIDENCE, REVIEW_REQUIRED_MEDIUM_CONFIDENCE, analyse_candidates, cluster_evidence_id,
 )
 

@@ -22,13 +22,13 @@ from unittest.mock import patch
 
 import numpy as np
 
-from yomu.ocr.ocr_balloon import (
+from komyst.ocr.ocr_balloon import (
     OCRLine,
     TextGroup,
     validate_and_retry_translations,
 )
-from yomu.pipeline.session_context import SessionContextStore
-from yomu.translation.providers.translator_nvidia import TranslatorNvidiaBatch
+from komyst.pipeline.session_context import SessionContextStore
+from komyst.translation.providers.translator_nvidia import TranslatorNvidiaBatch
 
 
 CHAPTER_A = "https://example.invalid/series/chapter-a"

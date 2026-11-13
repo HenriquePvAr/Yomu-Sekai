@@ -40,9 +40,9 @@ from unittest import mock
 
 import numpy as np
 
-import yomu.translation.semantic_fidelity as semantic_fidelity
-from yomu.config.settings import BETA_OCR_ENGINE, effective_ocr_engine
-from yomu.ocr.ocr_balloon import OCRLine, TextGroup, validate_and_retry_translations
+import komyst.translation.semantic_fidelity as semantic_fidelity
+from komyst.config.settings import BETA_OCR_ENGINE, effective_ocr_engine
+from komyst.ocr.ocr_balloon import OCRLine, TextGroup, validate_and_retry_translations
 
 
 # --- exact persisted #84F18 regions -----------------------------------------
@@ -349,7 +349,7 @@ class OcrEngineProvenanceTests(unittest.TestCase):
 
     def test_a_stale_paddle_process_config_cannot_lie(self):
         with mock.patch.dict(os.environ, {"OCR_ENGINE": "paddle"}, clear=False):
-            os.environ.pop("TRADUTOR_OCR_ENGINE_OVERRIDE", None)
+            os.environ.pop("KOMYST_OCR_ENGINE_OVERRIDE", None)
             self.assertEqual(effective_ocr_engine(), "rapidocr")
 
     def test_the_beta_default_engine_is_rapidocr(self):
@@ -357,13 +357,13 @@ class OcrEngineProvenanceTests(unittest.TestCase):
 
     def test_unsupported_paddle_override_is_ignored(self):
         with mock.patch.dict(
-            os.environ, {"TRADUTOR_OCR_ENGINE_OVERRIDE": "paddle"}, clear=False
+            os.environ, {"KOMYST_OCR_ENGINE_OVERRIDE": "paddle"}, clear=False
         ):
             self.assertEqual(effective_ocr_engine(), "rapidocr")
 
     def test_an_unsupported_override_falls_back_to_the_beta_engine(self):
         with mock.patch.dict(
-            os.environ, {"TRADUTOR_OCR_ENGINE_OVERRIDE": "tesseract"}, clear=False
+            os.environ, {"KOMYST_OCR_ENGINE_OVERRIDE": "tesseract"}, clear=False
         ):
             self.assertEqual(effective_ocr_engine(), "rapidocr")
 

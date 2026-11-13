@@ -6,8 +6,8 @@ Status: literature/source comparison plus one synthetic T4 smoke of Stable Diffu
 
 The existing production path already has two relevant approaches:
 
-1. `yomu/clean/inpainting/art_text_inpainting.py` and `multiscale_patch_synthesis.py`: local, OpenCV-based, mask-constrained reconstruction with contamination contracts, donor exclusion, texture checks, residual detection, and explicit outside-mask difference reporting. No generative GPU is implied by this path.
-2. `yomu/clean/inpainting/advanced_art_inpainting.py`: an optional TorchScript, mask-conditioned LaMa-family adapter. It loads an external checkpoint only after SHA-256 verification, crops to mask context, predicts, and copies prediction pixels only inside the binary mask. Its default device is CPU. The configured anime/manga checkpoint is 205,717,870 bytes and its descriptor explicitly says `NEEDS FUTURE REVIEW for public redistribution`; do not ship/re-distribute it until provenance/license review closes.
+1. `komyst/clean/inpainting/art_text_inpainting.py` and `multiscale_patch_synthesis.py`: local, OpenCV-based, mask-constrained reconstruction with contamination contracts, donor exclusion, texture checks, residual detection, and explicit outside-mask difference reporting. No generative GPU is implied by this path.
+2. `komyst/clean/inpainting/advanced_art_inpainting.py`: an optional TorchScript, mask-conditioned LaMa-family adapter. It loads an external checkpoint only after SHA-256 verification, crops to mask context, predicts, and copies prediction pixels only inside the binary mask. Its default device is CPU. The configured anime/manga checkpoint is 205,717,870 bytes and its descriptor explicitly says `NEEDS FUTURE REVIEW for public redistribution`; do not ship/re-distribute it until provenance/license review closes.
 
 At the clean strategy boundary, only a sufficiently confident `LOCAL_RECONSTRUCTION_HARD` region with an authorized mask can route remotely. The generated/donor image is not final authority: Komyst composites against the original inside the authorized mask and checks `OUTSIDE_MASK_CHANGED_PIXELS=0`; failure is review, not acceptance. These contracts remain unchanged in this research.
 
@@ -35,7 +35,7 @@ No candidate has demonstrated best quality, best speed, preservation of faces/li
 
 ## Sources
 
-- [Komyst adapter](../../../yomu/clean/inpainting/advanced_art_inpainting.py), [safe local inpainting](../../../yomu/clean/inpainting/art_text_inpainting.py), [multiscale synthesis](../../../yomu/clean/inpainting/multiscale_patch_synthesis.py), [clean strategy contract](../../architecture/clean_strategy.md).
+- [Komyst adapter](../../../komyst/clean/inpainting/advanced_art_inpainting.py), [safe local inpainting](../../../komyst/clean/inpainting/art_text_inpainting.py), [multiscale synthesis](../../../komyst/clean/inpainting/multiscale_patch_synthesis.py), [clean strategy contract](../../architecture/clean_strategy.md).
 - [BFL FLUX.2 model table](https://github.com/black-forest-labs/flux2): 4B Apache-2.0; 9B/9B KV and dev non-commercial; image-editing capability.
 - [BFL FLUX.1 Fill docs](https://github.com/black-forest-labs/flux/blob/main/docs/fill.md) and [FLUX [dev] license](https://bfl.ai/legal/non-commercial-license-terms): binary mask API and license.
 - [Qwen official repository](https://github.com/QwenLM/Qwen-Image) and [Qwen-Image-Edit-2511 card](https://huggingface.co/Qwen/Qwen-Image-Edit-2511): edit API examples and declared license.

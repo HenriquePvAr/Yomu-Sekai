@@ -42,12 +42,12 @@ Quais desses arquivos um run deve produzir depende do plano de saída (ver o dia
 [modos de saída](product/output_modes.md#do-preset-aos-artefatos)); o `artifact_manifest.json`
 é a autoridade sobre o que de fato foi produzido.
 
-O Artifact Contract V2 (`yomu/runtime/artifact_contract.py`) define os caminhos canônicos relativos à raiz do
+O Artifact Contract V2 (`komyst/runtime/artifact_contract.py`) define os caminhos canônicos relativos à raiz do
 output:
 
 | Artefato | Caminho canônico | Uso |
 | --- | --- | --- |
-| PDF traduzido | `final/<slug>_ptbr.pdf` no resolver V2 | Leitura ou publicação. O pipeline atual ainda grava o PDF efetivo na raiz do output com o nome devolvido por `yomu/export/pdf_naming.py`; use o caminho do job/run. |
+| PDF traduzido | `final/<slug>_ptbr.pdf` no resolver V2 | Leitura ou publicação. O pipeline atual ainda grava o PDF efetivo na raiz do output com o nome devolvido por `komyst/export/pdf_naming.py`; use o caminho do job/run. |
 | Imagem traduzida | `images/translated/NNN.png` | Uma página lógica com tradução. |
 | Imagem limpa | `images/clean/NNN.png` | Arte sem lettering original, antes do texto traduzido. |
 | PSD editável | `psd/NNN.psd` | ORIGINAL, CLEAN e TEXT com Type Layers nativas. |
@@ -93,8 +93,8 @@ Photoshop ou Photopea.
 
 ## PSD profissional
 
-O `yomu/export/editable_psd_writer.py` produz o `EDITABLE_PSD` atual com os grupos `ORIGINAL`, `CLEAN` e
-`TEXT`; as camadas de texto são Type Layers nativas. `yomu/export/professional_psd.py` é um caminho legado
+O `komyst/export/editable_psd_writer.py` produz o `EDITABLE_PSD` atual com os grupos `ORIGINAL`, `CLEAN` e
+`TEXT`; as camadas de texto são Type Layers nativas. `komyst/export/professional_psd.py` é um caminho legado
 separado e rasterizado, não o writer do contrato `EDITABLE_PSD`. Aviso ou substituição de fonte
 não implica rasterização. Não rasterize texto para economizar espaço.
 

@@ -1,1 +1,0 @@
-{"before":"one persisted slot manager","after":"collection of exactly two persisted slots","atomic_acquire":true,"per_slot_generation_sequence":true,"per_slot_page_id":true,"per_slot_chat_fingerprint":true}

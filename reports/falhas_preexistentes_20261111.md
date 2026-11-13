@@ -19,8 +19,8 @@ Os três casos de `download_gate` constroem caminhos sintéticos com pai `C:\tmp
 
 Os cinco testes de `download_gate` abaixo falharam antes porque os seus fixtures habilitam a varredura de PNGs no diretório pai. Foram movidos, sem apagar, para `%TEMP%\komyst-png-soltos\`:
 
-- `C:\Projetos\Yomu-Sekai\dbg_hur_2x.png`
-- `C:\Projetos\Yomu-Sekai\flux_p9_test.png`
+- `C:\Projetos\Komyst\dbg_hur_2x.png`
+- `C:\Projetos\Komyst\flux_p9_test.png`
 - `C:\tmp\selo-raw.png`
 
 Depois da movimentação, os cinco testes passaram: **5 passed in 1.11s**. Os três testes de seleção parcial listados na tabela usam `C:\tmp`; esse caminho compartilhado não está isolado pelo fixture e deve ser substituído por um diretório temporário próprio numa correção futura.
@@ -40,16 +40,16 @@ Além das sete falhas do baseline isolado, a suíte completa encontrou dois test
 
 | Teste | Mensagem observada | Arquivo externo encontrado |
 |---|---|---|
-| `tests/test_download_gate_ordering.py::DownloadGateOrderingTest::test_complete_in_order_passes` | `AssertionError: False is not true : ['unreferenced_png_included']` | `C:\Projetos\Yomu-Sekai\dbg_hur_2x.png` e `C:\Projetos\Yomu-Sekai\flux_p9_test.png` |
+| `tests/test_download_gate_ordering.py::DownloadGateOrderingTest::test_complete_in_order_passes` | `AssertionError: False is not true : ['unreferenced_png_included']` | `C:\Projetos\Komyst\dbg_hur_2x.png` e `C:\Projetos\Komyst\flux_p9_test.png` |
 | `tests/test_download_gate_ordering.py::DownloadGateOrderingTest::test_sorting_by_order_makes_complete_download_pass` | `AssertionError: False is not true : ['unreferenced_png_included']` | Os mesmos dois PNGs na raiz do repositório. |
 
 Os três testes de seleção parcial listados acima usavam `C:\tmp` e foram contaminados por `C:\tmp\selo-raw.png`; estes dois testes de ordenação usavam o diretório corrente e foram contaminados pelos PNGs da raiz. Após mover os arquivos, os cinco passaram. Nenhum falhava por páginas ausentes ou por ordenação incorreta.
 
 ## Rechecagem após a correção de F0.8 — 2026-11-11
 
-Na suíte completa executada nesta checkout (`C:\Projetos\Yomu-Sekai`, `fase-0-jobs-nao-morrem`, commit `5427455`), as quatro falhas de máscara/reconstrução continuam reproduzíveis: **6.499 passed, 4 failed, 141 skipped, 1 xfailed, 8 warnings e 787 subtests passed**, em 917,27 s. Cada um dos quatro testes também falhou quando executado isoladamente em um processo pytest separado. O Python usado foi `C:\Users\henri\AppData\Local\Programs\Python\Python311\python.exe`, importando `yomu` de `C:\Projetos\Yomu-Sekai\yomu`; OpenCV 4.10.0, NumPy 2.3.5, sem `PYTHONPATH` ou `PYTHONHOME` configurados.
+Na suíte completa executada nesta checkout (`C:\Projetos\Komyst`, `fase-0-jobs-nao-morrem`, commit `5427455`), as quatro falhas de máscara/reconstrução continuam reproduzíveis: **6.499 passed, 4 failed, 141 skipped, 1 xfailed, 8 warnings e 787 subtests passed**, em 917,27 s. Cada um dos quatro testes também falhou quando executado isoladamente em um processo pytest separado. O Python usado foi `C:\Users\henri\AppData\Local\Programs\Python\Python311\python.exe`, importando `Komyst` de `C:\Projetos\Komyst\Komyst`; OpenCV 4.10.0, NumPy 2.3.5, sem `PYTHONPATH` ou `PYTHONHOME` configurados.
 
-Esta evidência **não reproduz** o resumo externo de 6.502 aprovados/1 falho nem a alegação de que três dos quatro testes passaram isoladamente em `bc02f38`. Não é efeito da ordem: os quatro falham tanto isolados quanto na suíte completa. Não é contaminação pelos PNGs: os quatro fixtures que falham são sintéticos e não leem `dbg_hur_2x.png`, `flux_p9_test.png` ou `C:\tmp\selo-raw.png`. Também não há diferenças nos arquivos de máscara e nesses testes entre `bc02f38` e o HEAD atual (`git diff` vazio). A origem da divergência restante é compatível com ambiente/importação diferente no relatório externo, mas **não está comprovada** porque não veio acompanhado do executável Python, versões de NumPy/OpenCV e `yomu.__file__` usados naquele teste. Não registrar os três como resolvidos até repetir com esses dados.
+Esta evidência **não reproduz** o resumo externo de 6.502 aprovados/1 falho nem a alegação de que três dos quatro testes passaram isoladamente em `bc02f38`. Não é efeito da ordem: os quatro falham tanto isolados quanto na suíte completa. Não é contaminação pelos PNGs: os quatro fixtures que falham são sintéticos e não leem `dbg_hur_2x.png`, `flux_p9_test.png` ou `C:\tmp\selo-raw.png`. Também não há diferenças nos arquivos de máscara e nesses testes entre `bc02f38` e o HEAD atual (`git diff` vazio). A origem da divergência restante é compatível com ambiente/importação diferente no relatório externo, mas **não está comprovada** porque não veio acompanhado do executável Python, versões de NumPy/OpenCV e `Komyst.__file__` usados naquele teste. Não registrar os três como resolvidos até repetir com esses dados.
 
 Na F3.0, confirmar os três casos dependentes sob o runtime OpenCV 5.0.0 e bisectar a única falha real; não alterar resultados por ajuste de teste sem evidência de contrato desatualizado.
 

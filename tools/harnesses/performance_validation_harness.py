@@ -88,7 +88,7 @@ def _parser() -> argparse.ArgumentParser:
 
 def _nvidia_preflight(config_module=None) -> dict:
     """Return sanitized NVIDIA readiness without making any network call."""
-    config_module = config_module or import_module("yomu.config.settings")
+    config_module = config_module or import_module("komyst.config.settings")
     result = {
         "nvidia_lane_requested": True,
         "nvidia_provider_importable": False,
@@ -102,7 +102,7 @@ def _nvidia_preflight(config_module=None) -> dict:
         "disable_reason": "",
     }
     try:
-        provider_module = import_module("yomu.ocr.nvidia_ocr_provider")
+        provider_module = import_module("komyst.ocr.nvidia_ocr_provider")
         provider_cls = provider_module.NvidiaOCRProvider
         result["nvidia_provider_importable"] = True
     except Exception:
@@ -146,9 +146,9 @@ def _nvidia_preflight(config_module=None) -> dict:
 
 
 def _hybrid_preflight(config_module=None) -> dict:
-    config_module = config_module or import_module("yomu.config.settings")
+    config_module = config_module or import_module("komyst.config.settings")
     try:
-        import_module("yomu.ocr.ocr_hybrid_scheduler")
+        import_module("komyst.ocr.ocr_hybrid_scheduler")
         rapid_ready = bool(getattr(config_module, "RAPIDOCR_ENABLED", True))
     except Exception:
         rapid_ready = False
@@ -341,7 +341,7 @@ def run(parsed: argparse.Namespace) -> int:
     output_folder = Path(parsed.output_folder).expanduser().resolve()
     if not input_folder.is_dir() and not parsed.preflight_only:
         raise SystemExit("input_folder_not_found")
-    import yomu.config.settings as config
+    import komyst.config.settings as config
     if parsed.ocr_mode == "hybrid":
         preflight = _hybrid_preflight(config)
         output_folder = Path(parsed.output_folder).expanduser().resolve()
@@ -359,9 +359,9 @@ def run(parsed: argparse.Namespace) -> int:
     snapshot_root = output_folder / ".snapshot"
     snapshot_root.mkdir(parents=True, exist_ok=True)
 
-    import yomu.pipeline.benchmark_pipeline as benchmark_pipeline
-    import yomu.download.local.local_folder_input as local_folder_input
-    from yomu.download.local.local_folder_source import LocalFolderChapterAdapter, LocalFolderPolicy
+    import komyst.pipeline.benchmark_pipeline as benchmark_pipeline
+    import komyst.download.local.local_folder_input as local_folder_input
+    from komyst.download.local.local_folder_source import LocalFolderChapterAdapter, LocalFolderPolicy
 
     snapshot = LocalFolderChapterAdapter(LocalFolderPolicy(allowed_roots=(input_folder.parent,))).snapshot(
         input_folder, snapshot_root, snapshot_id=(parsed.run_id or "performance_validation")[:64]
@@ -374,7 +374,7 @@ def run(parsed: argparse.Namespace) -> int:
         page_indices="", output_folder=str(output_folder), ocr_engine=parsed.ocr_mode,
         use_context=False, session_context_path=str(output_folder / "session_context.json"),
         source_candidate_ids=[], local_manifest_path=str(snapshot.manifest_path),
-        translation_provider="yomu_backend", job_run_id=parsed.run_id or "performance-validation",
+        translation_provider="komyst_backend", job_run_id=parsed.run_id or "performance-validation",
     )
     old_workers = os.environ.get("PIPELINE_PAGE_WORKERS")
     old_ocr = os.environ.get("OCR_ENGINE")
@@ -382,8 +382,8 @@ def run(parsed: argparse.Namespace) -> int:
     old_execution_mode = getattr(config, "OCR_EXECUTION_MODE", "rapidocr")
     os.environ["PIPELINE_PAGE_WORKERS"] = str(parsed.page_workers)
     os.environ["TRANSLATION_ENABLED"] = "true"
-    os.environ["YOMU_ENV"] = "test"
-    os.environ["YOMU_TEST_BACKEND"] = "mock"
+    os.environ["KOMYST_ENV"] = "test"
+    os.environ["KOMYST_TEST_BACKEND"] = "mock"
     config.OCR_ENGINE = parsed.ocr_mode
     # The full-page dispatcher keys off OCR_EXECUTION_MODE; keep it aligned
     # with the explicit harness argument instead of silently using the legacy
@@ -434,7 +434,7 @@ def run(parsed: argparse.Namespace) -> int:
     # Keep a sanitized copy under the normal runtime root so the existing
     # diagnostics exporter can collect performance evidence without knowing
     # about this private CLI entry point.
-    from yomu.runtime.runtime_paths import runtime_root
+    from komyst.runtime.runtime_paths import runtime_root
     export_root = runtime_root() / "performance_validation" / (parsed.run_id or "run")
     export_root.mkdir(parents=True, exist_ok=True)
     for artifact in ("report.json", "performance_timeline.json", "performance_summary.json",

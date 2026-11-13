@@ -81,8 +81,8 @@ const BADGE_LABEL = {
 };
 
 export function renderServiceHealth(doc, state) {
-  const configured = doc.documentElement.dataset.tradutorApiConfigured === '1';
-  doc.documentElement.dataset.tradutorServiceHealth = state;
+  const configured = doc.documentElement.dataset.komystApiConfigured === '1';
+  doc.documentElement.dataset.komystServiceHealth = state;
 
   const rail = doc.querySelector('#railApiStatus');
   if (rail) {
@@ -104,7 +104,7 @@ export function renderServiceHealth(doc, state) {
     if (text) {
       const key = I18N_KEY[state];
       text.setAttribute('data-i18n', key);
-      const translate = globalThis.TradutorI18n?.t;
+      const translate = globalThis.KomystI18n?.t;
       text.textContent = translate ? translate(key) : BADGE_LABEL[state];
     }
   }
@@ -132,7 +132,7 @@ if (typeof document !== 'undefined' && typeof window !== 'undefined') {
   // thing drawn before it was suspended.
   document.addEventListener('visibilitychange', () => { if (!document.hidden) { render(); check(); } });
   const redraw = () => { last = null; render(); };
-  window.addEventListener('tradutor:language-changed', redraw);
-  window.addEventListener('tradutor:api-configured-changed', redraw);
-  window.__tradutorServiceHealth = health;
+  window.addEventListener('komyst:language-changed', redraw);
+  window.addEventListener('komyst:api-configured-changed', redraw);
+  window.__komystServiceHealth = health;
 }

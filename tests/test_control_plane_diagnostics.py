@@ -4,7 +4,7 @@ import json
 
 
 CLIENT = Path("static/control_plane_client.js").read_text(encoding="utf-8")
-APP = Path("yomu/ui/app.py").read_text(encoding="utf-8")
+APP = Path("komyst/ui/app.py").read_text(encoding="utf-8")
 
 
 def test_control_plane_trace_uses_existing_app_diagnostic_sink():
@@ -33,7 +33,7 @@ def test_identity_registration_challenge_sign_and_verify_events_are_instrumented
 def test_auth_restore_and_auth_event_are_instrumented():
     assert "AUTH_RESTORED_SESSION_DETECTED" in CLIENT
     assert "AUTH_CHANGED_EVENT_RECEIVED" in CLIENT
-    assert "tradutor-auth-changed" in CLIENT
+    assert "komyst-auth-changed" in CLIENT
 
 
 def test_heartbeat_and_error_events_are_instrumented():
@@ -62,19 +62,19 @@ def test_diagnostic_sink_is_best_effort():
 
 
 def test_control_plane_diagnostics_are_not_a_second_runtime_store():
-    assert "window.__tradutorUiTrace" in CLIENT
+    assert "window.__komystUiTrace" in CLIENT
     assert "fetch('/api/ui/control-plane-trace'" in CLIENT
 
 
 def test_ui_trace_policy_events_use_same_control_plane_sink():
-    ui = Path("static/tradutor_ui.js").read_text(encoding="utf-8")
+    ui = Path("static/komyst_ui.js").read_text(encoding="utf-8")
     assert "UI_TRACE_CHANNEL_PROBE" in ui
     assert "fetch('/api/ui/control-plane-trace'" in ui
     assert "UI_TRACE_FETCH_STATUS" in ui and "UI_TRACE_FETCH_ERROR" in ui
 
 
 def test_profile_metadata_is_not_part_of_normal_ui_bootstrap():
-    ui = Path("static/tradutor_ui.js").read_text(encoding="utf-8")
+    ui = Path("static/komyst_ui.js").read_text(encoding="utf-8")
     assert "PROFILE_BOOTSTRAP_REQUEST_STARTED" not in ui
     assert "PROFILE_STATE_COMMIT" not in ui
     assert "PROFILE_RENDER_STATE" not in ui
@@ -85,7 +85,7 @@ def test_profile_metadata_is_not_part_of_normal_ui_bootstrap():
 
 
 def test_bootstrap_does_not_load_or_sync_profile_and_is_read_only():
-    app = Path("yomu/ui/app.py").read_text(encoding="utf-8")
+    app = Path("komyst/ui/app.py").read_text(encoding="utf-8")
     start = app.find("def api_bootstrap(")
     end = app.find("\n@app.", start + 1)
     assert start >= 0 and end > start
@@ -109,7 +109,7 @@ def test_server_records_ui_trace_request_before_sanitizer():
 
 
 def test_wallet_numeric_fields_survive_final_jsonl_and_auth_diagnostics_endpoint(tmp_path, monkeypatch):
-    import yomu.ui.app as app_ui
+    import komyst.ui.app as app_ui
 
     monkeypatch.setattr(app_ui, "DIAGNOSTICS_ROOT", tmp_path)
 

@@ -33,7 +33,7 @@ Com o snapshot do código já usando intervalo padrão de 10 s: **6.497 passaram
 
 ## Controle na base `dev` — página 10
 
-Foi executado REF-A Apenas Clean em worktree isolada no commit `7879bad275bcf4151117fd3d96f982ddba2c9fd1`, importando `yomu` da própria worktree. Opções idênticas: tradução e SFX desligados, modo Quality, force, sem contexto, typesetting off, PNG, monitor no processo em 10 s.
+Foi executado REF-A Apenas Clean em worktree isolada no commit `7879bad275bcf4151117fd3d96f982ddba2c9fd1`, importando `Komyst` da própria worktree. Opções idênticas: tradução e SFX desligados, modo Quality, force, sem contexto, typesetting off, PNG, monitor no processo em 10 s.
 
 | Execução | Tempo total* | Inpainting | PNGs | Certificados | Pág. 10 |
 |---|---:|---:|---:|---|---|
@@ -83,7 +83,7 @@ O job pago REF-A `abee15719bd346bc86197faaf9307d43` tem proveniência `6c4734b`,
 
 ### Fase 0 — suíte e falhas antigas
 
-A suíte completa local anterior importou `yomu` deste repositório em Python 3.11/OpenCV 4.10.0/NumPy 2.3.5 e deu 6.499 passed, 4 failed, 141 skipped, 1 xfailed, 8 warnings e 787 subtests. O dono confirmou que, com OpenCV 5.0.0 do ambiente de referência, três falhas de máscara passam e resta uma falha real. Portanto as medições locais de suíte e os testes individuais que usaram OpenCV 4.10.0 devem ser lidos como resultados do ambiente divergente, não como quatro falhas de código. A lista e a classificação atualizadas estão em `reports/falhas_preexistentes_20261111.md`; a F3.0 mantém uma falha real para bisectar/corrigir.
+A suíte completa local anterior importou `Komyst` deste repositório em Python 3.11/OpenCV 4.10.0/NumPy 2.3.5 e deu 6.499 passed, 4 failed, 141 skipped, 1 xfailed, 8 warnings e 787 subtests. O dono confirmou que, com OpenCV 5.0.0 do ambiente de referência, três falhas de máscara passam e resta uma falha real. Portanto as medições locais de suíte e os testes individuais que usaram OpenCV 4.10.0 devem ser lidos como resultados do ambiente divergente, não como quatro falhas de código. A lista e a classificação atualizadas estão em `reports/falhas_preexistentes_20261111.md`; a F3.0 mantém uma falha real para bisectar/corrigir.
 
 ### Versão do OpenCV no runtime
 

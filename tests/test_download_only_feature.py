@@ -5,8 +5,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
-import yomu.commands.run_webtoon as run_webtoon
-import yomu.runtime.job_runner as job_runner
+import komyst.commands.run_webtoon as run_webtoon
+import komyst.runtime.job_runner as job_runner
 
 
 class DownloadOnlyFeatureTests(unittest.TestCase):
@@ -33,7 +33,7 @@ class DownloadOnlyFeatureTests(unittest.TestCase):
                 (staging / "download_report.json").write_text(json.dumps(report), encoding="utf-8")
                 return [str(input_dir / "001.webp")]
 
-            with mock.patch("yomu.download.down.download_images", side_effect=fake_download) as downloader:
+            with mock.patch("komyst.download.down.download_images", side_effect=fake_download) as downloader:
                 result = run_webtoon._run_download_only(args, output)
             self.assertTrue(output.is_dir())
             self.assertTrue((output / "input" / "001.webp").is_file())
@@ -44,7 +44,7 @@ class DownloadOnlyFeatureTests(unittest.TestCase):
                 f"result path must name the output directory: {result_path!s} != {output!s}",
             )
             self.assertTrue(downloader.call_args.kwargs["preserve_original"])
-            self.assertFalse(list(Path(tmp).glob(".*yomu-download-tmp-*")))
+            self.assertFalse(list(Path(tmp).glob(".*komyst-download-tmp-*")))
 
     def test_existing_output_is_not_overwritten_without_force(self):
         with tempfile.TemporaryDirectory() as tmp:

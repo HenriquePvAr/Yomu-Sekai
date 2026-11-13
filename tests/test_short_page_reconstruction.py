@@ -16,7 +16,7 @@ import numpy as np
 import cv2
 from unittest.mock import patch
 
-import yomu.pipeline.benchmark_pipeline as bp
+import komyst.pipeline.benchmark_pipeline as bp
 
 
 def _content(w, h):

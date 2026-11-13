@@ -12,11 +12,11 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-import yomu.clean.inpainting.art_text_inpainting as art_text_inpainting
-import yomu.clean.ownership.human_mask_decisions as hmd
-import yomu.clean.ownership.visual_review_decisions as vrd
-from yomu.review.chapter_quality_revision import ChapterQualityRevision
-from yomu.clean.ownership.visual_refinement_provider_guard import (
+import komyst.clean.inpainting.art_text_inpainting as art_text_inpainting
+import komyst.clean.ownership.human_mask_decisions as hmd
+import komyst.clean.ownership.visual_review_decisions as vrd
+from komyst.review.chapter_quality_revision import ChapterQualityRevision
+from komyst.clean.ownership.visual_refinement_provider_guard import (
     FORBIDDEN_REASON,
     NoProviderReviewer,
     ProviderCallsForbiddenInVisualRefinement,

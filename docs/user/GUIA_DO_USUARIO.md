@@ -4,8 +4,7 @@
 > **Para quem é:** Scans, tradutores, editores e testadores da Beta. Nenhum conhecimento
 > técnico é necessário.
 
-O nome exibido pelo aplicativo é **Komyst**. Algumas pastas de dados e interfaces antigas
-mantêm nomes internos para preservar a compatibilidade.
+O nome exibido pelo aplicativo é **Komyst**.
 
 ---
 
@@ -74,11 +73,11 @@ ação explicitamente.
 | Pacote Completo com imagens limpas, PSD editável, relatório e índice de revisão | ✅ Sim |
 | Tela de revisão de qualidade | ✅ Sim |
 | Efeitos sonoros (SFX) traduzidos para onomatopeias em português | Não por padrão; o lettering original é preservado (`TRANSLATE_SFX=True` habilita tradução) |
-| Comunidade (descobrir e publicar traduções) | ⚠️ Parcial — a aba mostra **EM DESENVOLVIMENTO** |
+| Comunidade (descobrir e publicar traduções) | ⏳ Em desenvolvimento — a interface informa indisponibilidade nesta versão |
 | Scan Studio (ajuste manual de cada etapa) | ⏳ Planejado — a aba **Scans** mostra **EM DESENVOLVIMENTO** |
-| Instalação para usuário final | ⚠️ Parcial — não há instalador público para baixar; use o pacote entregue por quem coordena a Beta ou a instalação pelo repositório |
-| Atualização pelo aplicativo | ⚠️ Parcial — a tela **Atualizações** existe, mas só encontra algo quando há uma versão assinada publicada no canal Beta |
-| Conta/licença de tester | ⚠️ Parcial — o programa verifica o acesso Beta ao iniciar uma tradução; a liberação de acesso depende de quem coordena a Beta |
+| Instalação para usuário final | ✅ Instalador Beta `v0.9.1-beta.18`; instalador e instalação limpa **validados por beta tester, informado pelo dono**; data não informada |
+| Atualização pelo aplicativo | ✅ A tela **Atualizações** verifica o canal e instala pacotes assinados; uma versão precisa estar publicada no canal Beta |
+| Conta/licença de tester | ✅ A autorização Beta é verificada ao iniciar ou retomar um job; `v0.9.1-beta.18` **validada por beta tester, informado pelo dono**; data não informada |
 
 ## 3. O que você precisa no computador
 
@@ -94,30 +93,16 @@ de 8 GB; isso não é um mínimo homologado nem uma promessa de tempo por capít
 - Uma **conta** para entrar no programa;
 - Uma **chave do serviço de tradução** (fornecida junto com o acesso à Beta).
 
-## 4. Como instalar hoje
+## 4. Como instalar
 
-Ainda **não existe um instalador público** (`Setup.exe`) para baixar. Há dois caminhos:
+Baixe `Komyst-0.9.1-beta.18-Setup-x64.exe` pelo canal Beta indicado pela equipe e execute o
+instalador. A instalação dessa versão em Windows limpo foi **validada por beta tester, informado
+pelo dono**; a data da rodada não foi informada. Você não precisa instalar Python nem configurar
+o ambiente de desenvolvimento.
 
-- se quem coordena a Beta te entregou um pacote/atalho do Komyst já preparado, use-o — você
-  não precisa clonar o repositório nem preparar Python;
-- caso contrário, a instalação é feita a partir do repositório, seguindo o procedimento técnico
-  em [Instalação](../INSTALLATION.md).
-
-A instalação limpa em um Windows novo ainda não foi comprovada de ponta a ponta.
-
-Se você recebeu um computador ou uma pasta já preparada, pule direto para a
-[seção 5](#5-abrindo-o-programa-pela-primeira-vez).
-
-Se você mesmo vai preparar a instalação, o passo a passo técnico está em
-[Instalação (documentação técnica)](../INSTALLATION.md) e em
-[Ambiente de desenvolvimento](../technical/DOCUMENTACAO_TECNICA.md#27-ambiente-de-desenvolvimento-e-comandos).
-Em resumo, esse caminho envolve instalar o Python, baixar o projeto, instalar as
-dependências e preencher um arquivo de configuração com a sua chave de tradução e os dados
-da sua conta.
-
-> 💡 **Você não precisa fazer isso sozinho.** Se você é testador Scan e não trabalha com
-> programação, peça a instalação preparada a quem coordena a Beta. Este guia assume que o
-> programa já está instalado.
+Depois da instalação, abra o Komyst pelo atalho e siga para [abrir o programa pela primeira vez](#5-abrindo-o-programa-pela-primeira-vez).
+Se o instalador não estiver disponível no canal informado, peça o link atualizado à equipe. As
+instruções para preparar um ambiente de desenvolvimento estão em [Instalação técnica](../INSTALLATION.md).
 
 ## 5. Abrindo o programa pela primeira vez
 
@@ -743,8 +728,8 @@ alguns segundos depois de abrir e, se houver novidade, mostra o selo **↑ Atual
 - *Não foi possível verificar atualizações.* — confira a internet e tente de novo.
 
 Só aparece uma versão quando existe uma atualização assinada publicada no canal Beta; este
-guia não garante que haja uma versão mais recente disponível. O fluxo completo de atualização
-ainda não foi comprovado em uma instalação limpa.
+guia não garante que haja uma versão mais recente disponível. A validação reportada da instalação
+limpa da `v0.9.1-beta.18` não é uma validação ponta a ponta do updater.
 
 ## 20. Mensagens de erro e o que fazer
 

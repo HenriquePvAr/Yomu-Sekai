@@ -6,7 +6,7 @@ import sys
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from yomu.core import gpu
+from komyst.core import gpu
 
 
 def _metadata_version(name: str) -> str:

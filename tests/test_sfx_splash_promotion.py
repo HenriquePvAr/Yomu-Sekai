@@ -3,8 +3,8 @@ from types import SimpleNamespace
 
 from unittest import mock
 
-from yomu.config import settings as config
-from yomu.ocr.ocr_balloon import (
+from komyst.config import settings as config
+from komyst.ocr.ocr_balloon import (
     _filter_groups,
     _should_translate_group,
     known_sound_translation_target,

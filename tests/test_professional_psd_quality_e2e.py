@@ -9,9 +9,9 @@ from unittest import mock
 
 from psd_tools import PSDImage
 
-import yomu.pipeline.benchmark_pipeline as benchmark_pipeline
-import yomu.config.settings as config
-import yomu.download.local.local_folder_input as local_folder_input
+import komyst.pipeline.benchmark_pipeline as benchmark_pipeline
+import komyst.config.settings as config
+import komyst.download.local.local_folder_input as local_folder_input
 from tests.test_local_benchmark_pipeline_e2e import (
     LocalBenchmarkPipelineE2ETests, _OfflineTranslator, _NoopResourceMonitor)
 
@@ -43,7 +43,7 @@ class QualityDirectProfessionalPsdTests(LocalBenchmarkPipelineE2ETests):
                 POST_RENDER_OCR_VALIDATION=False, VISUAL_DIFF_VALIDATION=False, TRANSLATION_VALIDATION=True,
                 TRANSLATION_RETRY_ON_MIXED_LANGUAGE=True, TRANSLATE_SFX=False,
             ),
-            mock.patch.dict("os.environ", {"TRANSLATION_ENABLED": "true", "YOMU_ENV": "test", "YOMU_TEST_BACKEND": "mock"}, clear=False),
+            mock.patch.dict("os.environ", {"TRANSLATION_ENABLED": "true", "KOMYST_ENV": "test", "KOMYST_TEST_BACKEND": "mock"}, clear=False),
         ):
             report = benchmark_pipeline.run_benchmark(args)
         return report, translator

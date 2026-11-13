@@ -7,8 +7,8 @@ import test_support._test_bootstrap as _test_bootstrap  # noqa: F401
 
 import unittest
 
-import yomu.ocr.ocr_balloon as ob
-from yomu.translation.portuguese_words import unknown_target_words
+import komyst.ocr.ocr_balloon as ob
+from komyst.translation.portuguese_words import unknown_target_words
 
 
 class UnknownTargetWordsTests(unittest.TestCase):

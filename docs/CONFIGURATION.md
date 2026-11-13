@@ -2,23 +2,23 @@
 
 Esta referência descreve as opções reais do `.env.example` e as poucas variáveis adicionais consumidas diretamente pelo código atual.
 
-> **Base verificada:** `1af9385` (branch `main`); `TRADUTOR_OCR_MODELS_DIR` e `YOMU_NAME_GLOSSARY` verificadas sobre `7e58e76` (feat/LANG-01) e `22f595d` (feat/GLOSSARY-01) — aguardam merge em `main` · **Revisado em:** 2026-11-02
+> **Atualização de status (2026-11-12):** LANG-01 e GLOSSARY-01 já estão integrados em `dev`. A nota de revisão de 2026-11-02 abaixo é anterior a essa integração; confira os defaults no `.env.example` e no código.
 >
 > [Voltar ao README](../README.md)
 
 ## Como a configuração é carregada
 
-`yomu/runtime/local_environment.py` carrega exclusivamente o `.env` localizado na raiz real
+`komyst/runtime/local_environment.py` carrega exclusivamente o `.env` localizado na raiz real
 do projeto, sem procurar arquivos em diretórios pais, e depois o `.env.local` opcional (também
 não versionado), que pode sobrescrever valores do `.env`. Variáveis já presentes no ambiente
 do processo antes do carregamento sempre têm precedência; valores ausentes ou vazios usam o
-default do código (`yomu/config/settings.py`, que chama esse helper ao ser importado). Em
-testes herméticos (`TRADUTOR_IA_HERMETIC_TEST_ENV=1`) nenhum arquivo é carregado.
+default do código (`komyst/config/settings.py`, que chama esse helper ao ser importado). Em
+testes herméticos (`KOMYST_HERMETIC_TEST_ENV=1`) nenhum arquivo é carregado.
 
 ```mermaid
 flowchart TD
-    A[import de yomu/config/settings.py] --> B[load_local_environment<br/>yomu/runtime/local_environment.py]
-    B --> H{TRADUTOR_IA_HERMETIC_TEST_ENV = 1?}
+    A[import de komyst/config/settings.py] --> B[load_local_environment<br/>komyst/runtime/local_environment.py]
+    B --> H{KOMYST_HERMETIC_TEST_ENV = 1?}
     H -->|sim| N[Nenhum arquivo carregado]
     H -->|não| P[Snapshot das variáveis<br/>já presentes no processo]
     P --> E{.env na raiz do projeto?}
@@ -60,17 +60,17 @@ Não versione o `.env` e nunca use uma chave real em exemplos, issues ou logs.
 
 ## Tradução
 
-Todo job com tradução habilitada usa o provider interno `yomu_backend`
-(`yomu/translation/providers/yomu_backend_provider.py`), autenticado pelo JWT do usuário, que
+Todo job com tradução habilitada usa o provider interno `komyst_backend`
+(`komyst/translation/providers/komyst_backend_provider.py`), autenticado pelo JWT do usuário, que
 chama o motor remoto **DeepL** no servidor (Edge Function
 `supabase/functions/translation-execute`). O cliente nunca chama a DeepL diretamente e
-`--translation-provider`/`DEFAULT_TRANSLATION_PROVIDER = "deepl"` (`yomu/ui/ui_helpers.py`)
+`--translation-provider`/`DEFAULT_TRANSLATION_PROVIDER = "deepl"` (`komyst/ui/ui_helpers.py`)
 são apenas metadado/guard: pedir `riva` ou `nemotron` num job habilitado falha fechado
-(`provider_mismatch`). A base do backend é `YOMU_BACKEND_URL` ou, sem ela, `SUPABASE_URL`
-(`YOMU_BACKEND_URL` não está no template). Com `YOMU_ENV=local`/`test` e `YOMU_TEST_BACKEND`
+(`provider_mismatch`). A base do backend é `KOMYST_BACKEND_URL` ou, sem ela, `SUPABASE_URL`
+(`KOMYST_BACKEND_URL` não está no template). Com `KOMYST_ENV=local`/`test` e `KOMYST_TEST_BACKEND`
 vazio/`mock`, um backend mock é usado.
 
-As variáveis abaixo existem no template e em `yomu/config/settings.py`, mas as de DeepL/NVIDIA
+As variáveis abaixo existem no template e em `komyst/config/settings.py`, mas as de DeepL/NVIDIA
 só são lidas por caminhos legados/experimentais do cliente; `DEEPL_API_KEY` é, na prática,
 segredo do servidor (Edge Function).
 
@@ -89,18 +89,18 @@ segredo do servidor (Edge Function).
 
 O seletor de provider da UI (`#translationProviderField`) está oculto; o único fluxo de produto é o backend autenticado com DeepL. Os modos Google/NLLB/NVIDIA permanecem como compatibilidade legada, sem o contrato de validação end-to-end auditado.
 
-**Glossário de nomes — feat/GLOSSARY-01 (aguarda merge):** a variável abaixo é definida pelo runner a partir do glossário informado pelo usuário na UI; não deve ser definida manualmente no `.env`.
+**Glossário de nomes (integrado):** a variável abaixo é definida pelo runner a partir do glossário informado pelo usuário na UI; não deve ser definida manualmente no `.env`.
 
 | Variável | Default | Finalidade |
 | --- | --- | --- |
-| `YOMU_NAME_GLOSSARY` | vazio | JSON array de pares `[["Src","Tgt"],…]` serializado pelo `job_runner.py` a partir do campo `name_glossary` do job config. O pipeline (`benchmark_pipeline.py`) lê e chama `translator.set_name_overrides()`. Máximo de 50 pares; fonte e destino não podem ser vazios. |
+| `KOMYST_NAME_GLOSSARY` | vazio | JSON array de pares `[["Src","Tgt"],…]` serializado pelo `job_runner.py` a partir do campo `name_glossary` do job config. O pipeline (`benchmark_pipeline.py`) lê e chama `translator.set_name_overrides()`. Máximo de 50 pares; fonte e destino não podem ser vazios. |
 
 ## OCR e classificação
 
 | Variável | Default | Finalidade |
 | --- | --- | --- |
-| `OCR_ENGINE` | `paddle` (código: `rapidocr`) | Valor cru do módulo; `_configure_mode` (`yomu/commands/run_webtoon.py`) o substitui por `effective_ocr_engine()` — RapidOCR nos dois modos — então definir esta variável não muda a engine de um job |
-| `TRADUTOR_OCR_ENGINE_OVERRIDE` | vazio (fora do template) | Override por ambiente lido por `effective_ocr_engine()`; no Beta só `rapidocr` é aceito (`BETA_OCR_ENGINES`), qualquer outro valor é ignorado. O guard falha fechado se o engine não estiver instalado |
+| `OCR_ENGINE` | `paddle` (código: `rapidocr`) | Valor cru do módulo; `_configure_mode` (`komyst/commands/run_webtoon.py`) o substitui por `effective_ocr_engine()` — RapidOCR nos dois modos — então definir esta variável não muda a engine de um job |
+| `KOMYST_OCR_ENGINE_OVERRIDE` | vazio (fora do template) | Override por ambiente lido por `effective_ocr_engine()`; no Beta só `rapidocr` é aceito (`BETA_OCR_ENGINES`), qualquer outro valor é ignorado. O guard falha fechado se o engine não estiver instalado |
 | `OCR_FALLBACK_ENGINE` | `paddle` (código: vazio) | Forçado para vazio pela CLI: fallback entre engines não faz parte do contrato Beta |
 | `OCR_HYBRID_FALLBACK` | `True` (código: `False`) | Forçado para `False` pela CLI |
 | `RAPIDOCR_ENABLED` | `False` (código: `True`) | Forçado para `True` pela CLI quando o engine é RapidOCR (sempre, no Beta) |
@@ -125,15 +125,16 @@ O seletor de provider da UI (`#translationProviderField`) está oculto; o único
 
 O fallback não substitui palavras por regras fixas. Ele pede novas leituras e compara candidatos. Ajustar thresholds pode aumentar custo, falsos positivos ou risco visual; mantenha os defaults até ter uma regressão reproduzível.
 
-**Modelos OCR por idioma — feat/LANG-01 (aguarda merge):** quando o suporte a múltiplos idiomas de origem for integrado, a variável abaixo passa a ser relevante:
+**Cache opcional de modelos OCR por idioma:** o catálogo e o helper de cache existem, mas o pipeline ainda não carrega um modelo de reconhecimento diferente por idioma. Definir esta variável, por si só, não altera o OCR usado:
 
 | Variável | Default | Finalidade |
 | --- | --- | --- |
-| `TRADUTOR_OCR_MODELS_DIR` | `~/.yomu/ocr_models` | Diretório de cache dos modelos PaddleOCR de reconhecimento para idiomas não-ingleses (japonês, coreano, chinês simplificado, cirílico, latino). Gerenciado por `yomu/ocr/ocr_models.py`. |
+| `KOMYST_OCR_MODELS_DIR` | `~/.komyst/ocr_models` | Diretório de cache dos modelos PaddleOCR de reconhecimento para idiomas não-ingleses (japonês, coreano, chinês simplificado, cirílico, latino). Gerenciado por `komyst/ocr/ocr_models.py`. |
 
-O modelo inglês é embutido no `rapidocr_onnxruntime` e não requer download. Modelos
-adicionais são baixados automaticamente na primeira execução com o idioma correspondente e
-verificados por SHA-256 (fail-closed em caso de hash incorreto).
+O modelo inglês é embutido no `rapidocr_onnxruntime` e não requer download. Embora exista um
+helper para modelos adicionais, o pipeline de produção ainda não o chama. Além disso, os hashes
+do catálogo não estão preenchidos; não conte com download ou validação desses modelos até que
+essa integração seja concluída.
 
 ## Downloader e Selenium
 
@@ -145,8 +146,8 @@ verificados por SHA-256 (fail-closed em caso de hash incorreto).
 `CHROMEDRIVER_PATH` é suportada pelo código, mas não aparece no template. Se estiver vazia,
 o código procura `chromedriver`/`chromedriver.exe` já presentes no `PATH` e, quando nenhum
 driver local existe, deixa o Selenium Manager oficial resolver um driver compatível de
-forma cacheada. Em testes herméticos (`TRADUTOR_IA_HERMETIC_TEST_ENV=1`) essa resolução
-permanece desligada por padrão; defina `TRADUTOR_ALLOW_DRIVER_DOWNLOAD=1` apenas quando
+forma cacheada. Em testes herméticos (`KOMYST_HERMETIC_TEST_ENV=1`) essa resolução
+permanece desligada por padrão; defina `KOMYST_ALLOW_DRIVER_DOWNLOAD=1` apenas quando
 quiser permitir explicitamente a resolução no ambiente de teste.
 
 ## Máscara, texto e reconstrução
@@ -183,8 +184,8 @@ Nesta instalação, `PIPELINE_PAGE_WORKERS=2` foi aplicado em 08/11/2026 após r
 de 65 páginas: 31,95% menos tempo em preflight/render/escrita, com as 130 imagens
 idênticas. O default distribuído continua `auto`; não foi homologado usar 4.
 Inferências DirectML mantêm o lock compartilhado e os workers recebem a
-proveniência isolada da própria página. Veja os limites de RAM e escopo no
-[relatório](../reports/clean_parallel_20261108.md).
+proveniência isolada da própria página. O replay histórico não é uma medição atual
+de capítulo completo nem define o default distribuído.
 
 `FONT_PATH` também é suportada fora do template. Quando vazia, o código usa a resolução de fonte existente; quando definida, deve apontar para um arquivo local válido.
 
@@ -247,7 +248,7 @@ proveniência isolada da própria página. Veja os limites de RAM e escopo no
 | `ENABLE_IMAGE_PROCESS_CACHE` | `True` | Reutiliza páginas renderizadas compatíveis |
 | `ENABLE_DOWNLOAD_CACHE` | `True` | Reutiliza o manifest e imagens de download válidos |
 
-O diretório padrão é `%LOCALAPPDATA%\TradutorIA\cache` (`yomu/runtime/runtime_paths.py`), configurável por `CACHE_ROOT` (presente no template, vazio por padrão). As chaves incluem hashes e versões internas. Não edite manifests nem apague todo o cache como primeira tentativa de diagnóstico; prefira `--force` quando precisar de reprocessamento controlado.
+O diretório padrão é `%LOCALAPPDATA%\Komyst\cache` (`komyst/runtime/runtime_paths.py`), configurável por `CACHE_ROOT` (presente no template, vazio por padrão). As chaves incluem hashes e versões internas. Não edite manifests nem apague todo o cache como primeira tentativa de diagnóstico; prefira `--force` quando precisar de reprocessamento controlado.
 
 ## Paralelismo e recursos
 
@@ -288,7 +289,7 @@ verificado para `anime_manga_lama_large.dml.onnx`, ao lado dele, com um `.json` 
 SHA-256 da origem e o da exportação; qualquer falha volta ao PyTorch na CPU. Os testes forçam
 `off`.
 
-`YOMU_LAMA_PREWARM` (variável de ambiente, default `1`): cria a sessão DirectML do LaMa em segundo
+`KOMYST_LAMA_PREWARM` (variável de ambiente, default `1`): cria a sessão DirectML do LaMa em segundo
 plano logo após o OCR das páginas, em vez de no meio da renderização (~7 s a menos por capítulo).
 `0` volta a criar sob demanda. Não é iniciada durante o download: lá ela atrasava o leitor do
 Comix em ~32 s.
@@ -330,10 +331,10 @@ O contexto do capítulo é controlado por flags da CLI, não por variáveis do t
 - `--delete-context-after`: remove o contexto somente depois que o PDF existe;
 - `--keep-context`: explicita o comportamento padrão.
 
-A porta da UI pode ser alterada com uma variável lida por `yomu/ui/app.py` (e pelo shell desktop `yomu/desktop/app.py`):
+A porta da UI pode ser alterada com uma variável lida por `komyst/ui/app.py` (e pelo shell desktop `komyst/desktop/app.py`):
 
 ```dotenv
-TRADUTOR_UI_PORT=8080
+KOMYST_UI_PORT=8080
 ```
 
 ## Variáveis avançadas fora do template
@@ -351,13 +352,13 @@ Estas opções existem no código, mas foram omitidas do `.env.example` para man
 | `TRANSLATION_RETRY_ON_MIXED_LANGUAGE` | `True` | Solicita retry quando há mistura detectada |
 | `TRANSLATION_MAX_RETRIES` | `2` | Máximo de retries de validação |
 | `VISUAL_DIFF_THRESHOLD` | `26` | Threshold de diferença visual |
-| `TRADUTOR_UI_PORT` | `8080` | Porta do servidor local |
+| `KOMYST_UI_PORT` | `8080` | Porta do servidor local |
 
 Evite configurar opções legadas ou avançadas sem uma razão reproduzível. Mudanças em thresholds alteram o contrato do cache e podem dificultar comparações.
 
 ## Auth, licença, raízes e navegador
 
-Seções do template não detalhadas acima (consumidores em `yomu/`):
+Seções do template não detalhadas acima (consumidores em `komyst/`):
 
 | Variável | Default do template | Finalidade |
 | --- | --- | --- |
@@ -367,11 +368,11 @@ Seções do template não detalhadas acima (consumidores em `yomu/`):
 | `SUPABASE_JWKS_URL`, `SUPABASE_EXPECTED_ISSUER`, `SUPABASE_EXPECTED_AUDIENCE` | vazio / `authenticated` | Verificação do JWT; derivadas de `SUPABASE_URL` quando vazias |
 | `SUPABASE_SITE_URL`, `SUPABASE_REDIRECT_URL` | `http://127.0.0.1:8080`, `…/auth/callback` | URLs de retorno do fluxo de e-mail |
 | `BETA_LICENSE_PROVIDER` | `local_development` | `local_development` (dev) ou `supabase` (Beta). Num runtime empacotado/desktop sem provider remoto o gate falha fechado; nunca faz downgrade silencioso |
-| `TRADUTOR_UI_HOST`, `TRADUTOR_ALLOW_EXTERNAL_BIND` | `127.0.0.1`, `0` | Servidor permanece em loopback salvo opt-in explícito |
+| `KOMYST_UI_HOST`, `KOMYST_ALLOW_EXTERNAL_BIND` | `127.0.0.1`, `0` | Servidor permanece em loopback salvo opt-in explícito |
 | `COMMUNITY_STORAGE_PROVIDER` | `filesystem` | `filesystem` ou `google_drive` para PDFs publicados |
-| `TRADUTOR_USER_DATA_ROOT`, `TRADUTOR_RUNTIME_ROOT`, `TRADUTOR_OUTPUT_ROOT` | vazio | Overrides das raízes mutáveis; vazio = `%LOCALAPPDATA%\TradutorIA\{runtime,output}` |
+| `KOMYST_USER_DATA_ROOT`, `KOMYST_RUNTIME_ROOT`, `KOMYST_OUTPUT_ROOT` | vazio | Overrides das raízes mutáveis; vazio = `%LOCALAPPDATA%\Komyst\{runtime,output}` |
 | `SOURCE_BROWSER_ENGINE`, `SOURCE_BROWSER_EXECUTABLE`, `SOURCE_BROWSER_HEADLESS`, … | vazio / `1` | Navegador isolado usado somente na análise segura da fonte |
-| `TRADUTOR_IA_UPDATE_MANIFEST_URL` | fora do template | Override da URL do manifest do updater (`yomu/runtime/update_bootstrap.py`, `yomu/ui/app.py`); ausente usa `DEFAULT_MANIFEST_URL`, definida vazia desliga a verificação (`not_configured`) |
+| `KOMYST_UPDATE_MANIFEST_URL` | fora do template | Override da URL do manifest do updater (`komyst/runtime/update_bootstrap.py`, `komyst/ui/app.py`); ausente usa `DEFAULT_MANIFEST_URL`, definida vazia desliga a verificação (`not_configured`) |
 
 ## Exemplo mínimo recomendado
 
@@ -401,7 +402,7 @@ brilho cromático e proveniência foram medidos. Não ativa o FLUX geral nem mud
 
 São necessários `sd-cli.exe`, `flux-2-klein-4b-Q4_0.gguf`,
 `flux2-vae.safetensors` e `qwen3-4b-q4_k_m.gguf` em
-`GENERATIVE_INPAINT_MODEL_DIR` (vazio: `%LOCALAPPDATA%/TradutorIA/models/flux`).
+`GENERATIVE_INPAINT_MODEL_DIR` (vazio: `%LOCALAPPDATA%/komyst/models/flux`).
 Não há download automático. Referência limitada a 1.048.576 pixels, quatro
 passos, seed 42, timeout de 240 s, inferência serializada e composição externa
 restrita à máscara. A chamada nativa não combina `-r` e `--mask`.

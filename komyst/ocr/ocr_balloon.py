@@ -1,0 +1,21670 @@
+import difflib
+import contextvars
+import contextlib
+import json
+import hashlib
+import math
+import os
+import re
+import threading
+import time
+import unicodedata
+from dataclasses import dataclass, field, replace
+from pathlib import Path
+
+import cv2
+import numpy as np
+from PIL import Image, ImageDraw, ImageFilter, ImageFont
+
+import komyst.config.settings as config
+import komyst.clean.inpainting.advanced_art_inpainting as advanced_art_inpainting
+from komyst.clean.ownership.glyph_art_boundary_review import (
+    detect_linear_boundary_conflict,
+)
+import komyst.review.region_taxonomy as region_taxonomy
+import komyst.clean.ownership.font_fidelity as font_fidelity
+import komyst.ocr.ocr_line_provenance as ocr_line_provenance
+import komyst.ocr.source_completeness as source_completeness
+import komyst.translation.semantic_fidelity as semantic_fidelity
+import komyst.translation.honorific_names as honorific_names
+import komyst.translation.portuguese_words as portuguese_words
+from komyst.translation.providers.komyst_backend_provider import SystemicTranslationFailure
+
+# One LaMa call per page worker (MAX_PIPELINE_PAGE_WORKERS): the TorchScript
+# forward is re-entrant, and 4 concurrent calls on 3 threads each finish in 0.56x
+# the time of the same 4 calls queued (measured, 12 logical cores).
+_LAMA_INFERENCE_LOCK = threading.BoundedSemaphore(4)
+from tools.research.cleanup_forensic_capture import CleanupForensicCapture
+from komyst.ocr.classification_profiler import profile_step, record_count, record_group
+from komyst.core.json_utils import dump_json
+from komyst.ocr.ocr_engine import (
+    COMMON_ENGLISH_WORDS as OCR_REPAIR_ENGLISH_WORDS,
+    OCREngine,
+    OCRLine,
+    assess_ocr_repair,
+    clean_ocr_text,
+    mark_ocr_line_recovered,
+    repair_ocr_text,
+    segment_compact_english_word,
+    suggest_english_word,
+)
+from komyst.ocr.fast_ocr_policy import run_ocr_with_timeout
+import komyst.clean.ownership.selective_review_retry as selective_review_retry
+
+try:
+    from komyst.config.settings import FONT_PATH, TEMP_FOLDER, TEMP_OUT
+except Exception:
+    FONT_PATH = None
+    TEMP_FOLDER = "capitulo_temp"
+    TEMP_OUT = TEMP_FOLDER + "_out"
+
+
+SHORT_REAL_TEXTS = {
+    "A",
+    "NO",
+    "NO!",
+    "GO",
+    "GO!",
+    "RUN",
+    "RUN!",
+    "AH",
+    "AH!",
+    "HUH",
+    "HUH?",
+    "HE",
+    "HE...",
+    "HE..",
+    "HIS",
+    "HIS?",
+    "HA",
+    "HA!",
+}
+
+_FLUX_FAILURE_CONTEXT = contextvars.ContextVar("flux_failure_context", default=None)
+
+
+@contextlib.contextmanager
+def flux_failure_diagnostic_context(errors_dir=None, page_index=None):
+    """Attach a per-page error destination to FLUX cleanup in this render."""
+    value = None
+    if errors_dir:
+        try:
+            value = (Path(errors_dir), int(page_index or 0))
+        except (TypeError, ValueError):
+            value = None
+    token = _FLUX_FAILURE_CONTEXT.set(value)
+    try:
+        yield
+    finally:
+        _FLUX_FAILURE_CONTEXT.reset(token)
+
+SFX_WORDS = {
+    "BANG",
+    "BOOM",
+    "BUMP",
+    "CLANG",
+    "CRASH",
+    "DRIP",
+    "GONG",
+    "GRR",
+    "GULP",
+    "HISS",
+    "KNOCK",
+    "MMEE",
+    "MEE",
+    "PLUNK",
+    "PLOP",
+    "SLAM",
+    "SNIFF",
+    "SNIFFLE",
+    "SOB",
+    "THUD",
+    "UGH",
+    "WHEW",
+    "WHAM",
+    "WHOOSH",
+}
+
+TRANSLATION_TERMINAL_STATES = frozenset(
+    {
+        "translated",
+        "rejected",
+        "manual_review",
+        "preserved_original",
+        "translation_failed",
+        "skipped_with_reason",
+    }
+)
+
+PROPER_NAME_ONLY_REASON = "proper_name_only"
+
+# A source the recogniser never read is still a review item, but it is not a
+# translator failure: reporting it as untranslated dialogue overstates how much
+# ordinary text the translator left behind and hides the real defect, which is the
+# read itself. It carries its own reason so the accounting can tell the two apart.
+OCR_UNINTELLIGIBLE_SOURCE_REASON = "ocr_unintelligible_source_after_retries"
+
+# Art reconstruction is a quality dimension of its own: source text can be gone
+# and the artwork still be unacceptable, and artwork can be intact while the
+# source text survives.  These are the mask/reconstruction rejections that mean
+# "the artwork could not be rebuilt safely", as opposed to translation or OCR
+# problems, and they route a region to structured review instead of letting it
+# receive a destructive fill.
+REVIEW_REQUIRED_ART_RECONSTRUCTION = "review_required_art_reconstruction"
+# The subset that literally means "source lettering is still visible". Named so the
+# physical residual ledger can tell "the artwork is imperfect" (no English left) from
+# "the English survived the cleanup" (a real residual) without matching strings.
+RESIDUAL_SOURCE_LETTERING_REASONS = frozenset({
+    "source_text_still_legible_after_cleanup",
+    "residual_source_text_after_cleanup",
+    "residual_source_lettering_after_cleanup",
+})
+ART_RECONSTRUCTION_REVIEW_REASONS = frozenset({
+    "flat_reconstruction_patch_on_textured_background",
+    "lettering_contour_ghost",
+    "visible_reconstruction_seam_at_mask_boundary",
+    "large_white_patch_on_nonwhite_background",
+    "dark_blotch_created_on_textured_art",
+    "textured_fill_level_mismatch",
+    "broad_mask_rejected_on_nonuniform_background",
+    "residual_source_text_after_cleanup",
+    "residual_source_lettering_after_cleanup",
+    "source_scoped_region_too_large_for_safe_cleanup",
+    "mask_too_large_for_detected_characters",
+})
+
+
+RENDER_CLEAN = "render_clean"
+RENDER_WITH_REVIEW = "render_with_review"
+DO_NOT_RENDER = "do_not_render"
+
+
+def art_reconstruction_verdict(visual_attempts, *, accepted):
+    """Classify the art-reconstruction outcome independently of text coverage."""
+    # Findings only speak for the reconstruction the reader actually receives.
+    # A refused attempt says nothing about the artwork that shipped, so scanning
+    # every attempt would let an abandoned experiment condemn a clean render.
+    for attempt in reversed(list(visual_attempts or [])):
+        if not attempt.get("visual_validation_passed"):
+            continue
+        if attempt.get("residual_source_lettering_detected"):
+            return "review", "residual_source_lettering_after_cleanup"
+        if attempt.get("art_fidelity_uncertain"):
+            return "review", "art_reconstruction_fidelity_uncertain"
+        break
+    if accepted:
+        return "clean", ""
+    for attempt in reversed(list(visual_attempts or [])):
+        reason = str(attempt.get("reason") or "")
+        if reason in ART_RECONSTRUCTION_REVIEW_REASONS:
+            return "review", reason
+    return "review", REVIEW_REQUIRED_ART_RECONSTRUCTION
+
+
+def render_disposition(
+    *,
+    translation,
+    source_removed,
+    art,
+    translation_reason="",
+    art_reason="",
+):
+    """Decide whether the user-visible render may ship.
+
+    Translation quality, source removal and art reconstruction are separate axes. A safe
+    art-review result may still render PT-BR, but semantic rejection or surviving source
+    lettering cannot be published as an accepted translation.
+    """
+
+    translation_state = str(translation or "").strip().casefold()
+    art_state = str(art or "").strip().casefold()
+    if translation_state == "reject":
+        return DO_NOT_RENDER, str(translation_reason or "semantic_reject")
+    if not source_removed:
+        return DO_NOT_RENDER, "source_text_not_removed"
+    if art_state == "fail":
+        return DO_NOT_RENDER, str(art_reason or "unsafe_art_reconstruction")
+    if art_state == "clean" and translation_state == "clean":
+        return RENDER_CLEAN, ""
+    reasons = [
+        str(value or "").strip()
+        for value in (translation_reason, art_reason)
+        if str(value or "").strip()
+    ]
+    return RENDER_WITH_REVIEW, ";".join(reasons) or REVIEW_REQUIRED_ART_RECONSTRUCTION
+
+# Terminal reasons that record a proven, specific conclusion about a group. A later
+# stage may still preserve the original pixels for such a group, but it must not
+# replace the proven reason with its own generic one: the accounting keys off the
+# reason, so a downgrade silently turns a settled name back into an untranslated echo
+# and holds the whole chapter in review. Kept as a set so more proven reasons can join.
+STICKY_TERMINAL_REASONS = frozenset({PROPER_NAME_ONLY_REASON})
+
+REVIEW_TERMINAL_STATES = frozenset({"rejected", "manual_review", "translation_failed"})
+
+COMMON_ENGLISH_WORDS = {
+    "ABOUT",
+    "AFTER",
+    "AGAIN",
+    "ALMOST",
+    "AND",
+    "BECAUSE",
+    "BEFORE",
+    "BETTER",
+    "BUT",
+    "COME",
+    "COULD",
+    "DID",
+    "DO",
+    "DISAPPEARED",
+    "EYES",
+    "FACED",
+    "FOR",
+    "FRIEND",
+    "GOING",
+    "HELP",
+    "HAVE",
+    "HOLY",
+    "HEAD",
+    "HE",
+    "HER",
+    "HIM",
+    "HIS",
+    "I",
+    "IT",
+    "LIKE",
+    "LATE",
+    "LUCKY",
+    "MONSTER",
+    "MET",
+    "MOM",
+    "MY",
+    "AWAY",
+    "BOSS",
+    "CRAP",
+    "FEEL",
+    "REASON",
+    "OR",
+    "OF",
+    "ON",
+    "PLANKS",
+    "REALLY",
+    "RESONATED",
+    "SHE",
+    "SO",
+    "SOON",
+    "SOMEONE",
+    "STOP",
+    "THE",
+    "THESE",
+    "THAT",
+    "THANK",
+    "TODAY",
+    "UP",
+    "VOICE",
+    "WAKE",
+    "WHAT",
+    "WHEN",
+    "WHY",
+    "WILL",
+    "WITH",
+    "YEAH",
+    "YOU",
+    "YOUR",
+}
+
+RESIDUAL_TRANSLATION_ENGLISH_WORDS = COMMON_ENGLISH_WORDS | {
+    # Generic residual English vocabulary used only to validate final
+    # speech/narration translations.  SFX/decorative preservation is decided
+    # before this stage by classification policy.
+    "ANYWAY",
+    "BLOOD",
+    "CORPSE",
+    "DOOR",
+    "EEK",
+    "FOG",
+    "HELL",
+    "HERE",
+    "HEY",
+    "IS",
+    "ONE",
+    "PERSON",
+    "RUN",
+    "SHE'S",
+    "STATION",
+    "TRAIN",
+    "WAY",
+    "WHERE",
+    "WHOA",
+}
+
+OCR_LEXICAL_REFERENCE_WORDS = {
+    re.sub(r"[^A-Z]", "", word.upper())
+    for word in (
+        COMMON_ENGLISH_WORDS
+        | RESIDUAL_TRANSLATION_ENGLISH_WORDS
+        | SFX_WORDS
+        | {word.upper() for word in OCR_REPAIR_ENGLISH_WORDS}
+    )
+}
+
+# Ordinary English *dialogue* vocabulary, used only to decide classification and
+# translation routing. Deliberately separate from
+# ``RESIDUAL_TRANSLATION_ENGLISH_WORDS``: a word like "NO" is also Portuguese, so
+# it must never count as untranslated English inside a candidate. Sound effects
+# are excluded so an onomatopoeia never reads as ordinary speech. The extra
+# entries are the high-frequency short words the compact OCR repair lexicon never
+# needed, which is why a lone "NO..." carried no lexical evidence at all.
+ORDINARY_DIALOGUE_WORDS = frozenset(
+    OCR_LEXICAL_REFERENCE_WORDS
+    - {re.sub(r"[^A-Z]", "", word.upper()) for word in SFX_WORDS}
+) | frozenset(
+    {
+        "HELP",
+        "HEY",
+        "NO",
+        "OKAY",
+        "PLEASE",
+        "RUN",
+        "SORRY",
+        "WAIT",
+        "YES",
+    }
+)
+
+ENGLISH_INFLECTION_BASE_WORDS = frozenset(
+    re.sub(r"[^A-Z]", "", word.upper())
+    for word in (
+        RESIDUAL_TRANSLATION_ENGLISH_WORDS
+        | {word.upper() for word in OCR_REPAIR_ENGLISH_WORDS}
+    )
+) | {
+    # Common inflectable dialogue roots absent from the compact OCR lexicon.
+    "BAR",
+    "CRY",
+    "DRINK",
+    "LIGHT",
+    "LOOK",
+    "MAP",
+    "MONSTER",
+    "WAIT",
+    "WALK",
+}
+
+PORTUGUESE_MARKERS = {
+    "A",
+    "ALGUM",
+    "ALGUMA",
+    "ALGUNS",
+    "ALGUMAS",
+    "AS",
+    "AO",
+    "AOS",
+    "COM",
+    "CONTRA",
+    "CUIDAR",
+    "DA",
+    "DAS",
+    "DE",
+    "DERROTAR",
+    "DO",
+    "DOS",
+    "E",
+    "ELA",
+    "ELE",
+    "EM",
+    "EU",
+    "FAZER",
+    "FOI",
+    "JEITO",
+    "LUTAR",
+    "MAE",
+    "MÃE",
+    "ME",
+    "MEU",
+    "MELHOR",
+    "MINHA",
+    "MANDOU",
+    "NA",
+    "NAS",
+    "NO",
+    "NOS",
+    "O",
+    "OS",
+    "PARA",
+    "PATETICO",
+    "PATÉTICO",
+    "POR",
+    "POSSO",
+    "QUE",
+    "ROUPAS",
+    "SE",
+    "SUA",
+    "TAMBEM",
+    "TAMBÉM",
+    "TUDO",
+    "UM",
+    "UMA",
+    "VAI",
+    "VOCE",
+    "VOCE",
+    "VOCÊ",
+    "VOU",
+}
+
+# The OCR repair lexicon is broader than the compact high-confidence residual
+# list above.  It is too permissive for rejecting a single token (many short
+# words are shared by languages), but three source-preserved lexicon words in
+# one candidate form an objective English-clause signal.  Portuguese markers
+# and allowed proper names remain excluded below.
+SOURCE_PRESERVED_ENGLISH_PHRASE_WORDS = frozenset(
+    re.sub(r"[^A-Z']", "", str(word).upper())
+    for word in OCR_REPAIR_ENGLISH_WORDS
+) - PORTUGUESE_MARKERS - {"I"}
+
+
+@dataclass
+class TextCandidate:
+    line: OCRLine
+    ignored: bool = False
+    ignore_reason: str = ""
+
+
+@dataclass(frozen=True)
+class TextStyle:
+    name: str
+    fill: tuple[int, int, int]
+    stroke_fill: tuple[int, int, int]
+    stroke_width: int
+    shadow_fill: tuple[int, int, int] | None
+    shadow_offset: tuple[int, int]
+    brightness: float
+    saturation: float
+    hue: float
+    glow_fill: tuple[int, int, int] | None = None
+    glow_radius: int = 0
+    font_class: str = "unknown_fallback"
+    visual_class: str = "generic"
+    letter_spacing: float = 0.0
+    line_height_scale: float = 1.0
+    content_width_ratio: float = 1.0
+    font_size_scale: float = 0.78
+
+
+@dataclass
+class TextGroup:
+    group_id: str
+    lines: list[OCRLine] = field(default_factory=list)
+    cleanup_lines: list[OCRLine] = field(default_factory=list)
+    text: str = ""
+    translation: str = ""
+    ignored: bool = False
+    ignore_reason: str = ""
+    sent_to_translation: bool = False
+    # Explicit human Review decision consumed only by render-time selection.
+    review_translate_override: str = "auto"
+    redrawn: bool = False
+    color_name: str = ""
+    font_size: int = 0
+    font_runtime_validation: dict = field(default_factory=dict)
+    region_brightness: float = 0.0
+    region_saturation: float = 0.0
+    region_hue: float = 0.0
+    background_type: str = "unknown"
+    background_metrics: dict = field(default_factory=dict)
+    classification: str = "unknown"
+    classification_reason: str = ""
+    classification_confidence: float = 0.0
+    classification_evidence: dict = field(default_factory=dict)
+    # Set once a weak "decorative" legacy label is promoted to real story/
+    # display content (see ``_decorative_textured_story_promotion_allowed``).
+    # ``classification`` itself is rewritten to a translatable weak label at
+    # promotion time, so this survives that rewrite and lets the promotion
+    # check recognise an already-promoted group on later calls.
+    story_display_promoted: bool = False
+    # Set by ``_restore_lost_local_texture`` when it reinjects statistically
+    # matched grain into a cleanup reconstruction that lost real texture to
+    # inpainting. That grain is synthesised, not recovered, so it must never
+    # by itself clear ``art_fidelity_uncertain`` (ART-RECON-001).
+    texture_synthesized: bool = False
+    inside_balloon_like_region: bool = False
+    inside_narration_box_like_region: bool = False
+    main_text_score: float = 0.0
+    angle_degrees: float = 0.0
+    near_image_edge: bool = False
+    alignment_score: float = 0.0
+    original_text: str = ""
+    repaired_text: str = ""
+    repair_reason: str = ""
+    # Semantic recovery only: what the *retry* was allowed to translate, and on
+    # what evidence. ``text`` above stays the raw OCR - a repair proposes a
+    # canonical reading, it never erases what the page actually said.
+    canonical_source_text: str = ""
+    source_repairs: tuple = ()
+    region_id: str = ""
+    region_type: str = "unknown"
+    parent_balloon_id: str = ""
+    source_engine: str = ""
+    # Provenance across the group's member lines (mission: hybrid OCR
+    # provenance). ``ocr_provenance_engines`` is every distinct
+    # ``initial_ocr_engine`` among the lines; ``mixed_ocr_provenance`` is
+    # explicit rather than inventing one false shared origin.
+    ocr_provenance_engines: tuple = ()
+    mixed_ocr_provenance: bool = False
+    quality_score: float = 1.0
+    quality_reasons: list[str] = field(default_factory=list)
+    fallback_used: bool = False
+    fallback_reason: str = ""
+    fallback_chain: list[dict] = field(default_factory=list)
+    translation_valid: bool = True
+    translation_retry_count: int = 0
+    translation_validation_reason: str = ""
+    rejected_translation: str = ""
+    raw_provider_candidate: str = ""
+    raw_provider_candidate_class: str = ""
+    retry_candidate: str = ""
+    retry_candidate_class: str = ""
+    translation_candidate: str = ""
+    translation_fallback_status: str = ""
+    translation_fallback_reason: str = ""
+    translation_final_state: str = ""
+    translation_final_reason: str = ""
+    translation_quality_impact: str = ""
+    preserved_original: bool = False
+    translation_unresolved: bool = False
+    translation_attempts_exhausted: bool = False
+    trusted_translation_missing: bool = False
+    source_fallback_prevented: bool = False
+    text_overflow_ratio: float = 0.0
+    draw_box: tuple | None = None
+    rendered_lines: list = field(default_factory=list)  # final wrapped lines the renderer drew
+    safe_area: tuple | None = None
+    translation_box: tuple | None = None
+    allowed_modification_box: tuple | None = None
+    visual_validation: dict = field(default_factory=dict)
+    source_completeness: dict = field(default_factory=dict)
+    visual_attempts: list[dict] = field(default_factory=list)
+    mask_metrics: dict = field(default_factory=dict)
+    manual_review_required: bool = False
+    # Rendered, but not proven clean: which semantic doubt this region carries.
+    semantic_review_reason: str = ""
+    render_disposition: str = ""
+    render_disposition_reason: str = ""
+    detected_proper_names: list[str] = field(default_factory=list)
+    preserve_as_name: bool = False
+    ocr_quality_blocked: bool = False
+    ocr_quality_block_reason: str = ""
+    quality_evidence: dict = field(default_factory=dict)
+    naturalization_eligible: bool = False
+    naturalization_attempted: bool = False
+    naturalization_accepted: bool = False
+    naturalization_status: str = ""
+    naturalization_candidate: str = ""
+    naturalization_rejected_reason: str = ""
+    naturalization_selected_version: str = ""
+    naturalization_context: dict = field(default_factory=dict)
+    # The other regions read on the same page: bounded lexical context, used to
+    # decide which sense of an ambiguous source word the page is talking about.
+    page_context_texts: tuple = ()
+    art_reconstruction_status: str = ""
+    art_reconstruction_reason: str = ""
+    clean_disposition: str = ""
+    clean_disposition_reason: str = ""
+    clean_disposition_confidence: float = 0.0
+    clean_local_attempted: bool = False
+    spatial_harmonic_gate_rejected: bool = False
+    clean_remote_attempted: bool = False
+    clean_remote_result: str = ""
+    clean_remote_text_observations: list = field(default_factory=list)
+
+    @property
+    def confidence(self):
+        if not self.lines:
+            return 0.0
+        return sum(line.confidence for line in self.lines) / len(self.lines)
+
+    @property
+    def box(self):
+        return _union_boxes([line.box for line in self.lines])
+
+
+def process_image_file(
+    image_path,
+    ocr_lang,
+    translator,
+    font_path=None,
+    save_out=True,
+    debug_folder=None,
+    page_index=None,
+    return_debug=False,
+):
+    original = cv2.imread(image_path)
+    if original is None:
+        if return_debug:
+            return None, {"error": "image_load_failed", "image_path": image_path}
+        return None
+
+    page_index = page_index or _page_index_from_path(image_path)
+    result_img, debug_data = process_image_array(
+        original,
+        ocr_lang,
+        translator,
+        font_path=font_path or FONT_PATH,
+        debug_folder=debug_folder,
+        page_index=page_index,
+        image_path=image_path,
+    )
+
+    if save_out:
+        out_path = _output_path_for(image_path)
+        os.makedirs(os.path.dirname(out_path), exist_ok=True)
+        cv2.imwrite(out_path, result_img)
+    else:
+        out_path = result_img
+
+    if return_debug:
+        return out_path, debug_data
+
+    return out_path
+
+
+def process_image_array(
+    original_bgr,
+    ocr_lang,
+    translator,
+    font_path=None,
+    debug_folder=None,
+    page_index=1,
+    image_path=None,
+):
+    original = original_bgr.copy()
+    engine = OCREngine(ocr_lang)
+    raw_lines = engine.detect_lines(original)
+    candidates, groups = analyze_image_array(original, raw_lines)
+    valid_groups = get_translatable_groups(groups)
+    translations = _translate_texts(translator, [group.text for group in valid_groups])
+    apply_group_translations(valid_groups, translations)
+    return render_analyzed_image(
+        original,
+        raw_lines,
+        candidates,
+        groups,
+        font_path=font_path,
+        debug_folder=debug_folder,
+        page_index=page_index,
+        image_path=image_path,
+    )
+
+
+def analyze_image_array(original_bgr, raw_lines, page_index=None):
+    with ocr_line_provenance.page(page_index):
+        return _analyze_image_array(original_bgr, raw_lines, page_index=page_index)
+
+
+def _analyze_image_array(original_bgr, raw_lines, page_index=None):
+    original = original_bgr
+    # Snapshot the incoming lines *before* ``_candidate_from_line`` rewrites
+    # ``OCRLine.text`` on these very objects.
+    ocr_line_provenance.record_input_lines(raw_lines, origin="analyze_input")
+    with profile_step(
+        "analyze.assign_visual_white_regions",
+        page_index=page_index,
+        items=len(raw_lines or []),
+    ):
+        _assign_visual_white_regions(original, raw_lines)
+    with profile_step(
+        "analyze.candidate_from_line",
+        page_index=page_index,
+        items=len(raw_lines or []),
+    ):
+        candidates = [_candidate_from_line(line, original.shape) for line in raw_lines]
+    usable_lines = [candidate.line for candidate in candidates if not candidate.ignored]
+    for candidate in candidates:
+        if candidate.ignored:
+            ocr_line_provenance.record_filtered(
+                candidate.line,
+                candidate.ignore_reason or "ignored",
+            )
+    record_count("lines.usable", len(usable_lines), page_index=page_index)
+    record_count("lines.ignored", len(candidates) - len(usable_lines), page_index=page_index)
+    with profile_step(
+        "analyze.group_lines",
+        page_index=page_index,
+        items=len(usable_lines),
+    ):
+        groups = _group_lines(usable_lines, page_index=page_index, image_bgr=original_bgr)
+    with profile_step(
+        "analyze.split_sentence_boundaries",
+        page_index=page_index,
+        items=len(groups),
+    ):
+        groups = _split_groups_at_sentence_boundaries(groups)
+    with profile_step(
+        "analyze.split_detached_story_outliers",
+        page_index=page_index,
+        items=len(groups),
+    ):
+        groups = _split_detached_story_outlier_lines(groups)
+    with profile_step(
+        "analyze.reclaim_short_lexical_lines",
+        page_index=page_index,
+        items=len(candidates),
+    ):
+        _reclaim_short_lexical_lines(groups, candidates, original.shape)
+    with profile_step(
+        "analyze.associate_ignored_cleanup_lines",
+        page_index=page_index,
+        items=len(candidates),
+    ):
+        _associate_ignored_cleanup_lines(groups, candidates, original.shape, page_index=page_index)
+    with profile_step(
+        "analyze.repair_group_texts",
+        page_index=page_index,
+        items=len(groups),
+    ):
+        _repair_group_texts(groups)
+    with profile_step(
+        "analyze.filter_groups",
+        page_index=page_index,
+        items=len(groups),
+    ):
+        _filter_groups(groups, original.shape)
+    with profile_step(
+        "analyze.classify_groups",
+        page_index=page_index,
+        items=len(groups),
+    ):
+        # Classify the text the provider will get: glued words ("...AREONEUGLY") read
+        # as one sound-effect word and the sentence was kept as an English "sound".
+        raw_texts = [group.text for group in groups]
+        for group in groups:
+            group.text = split_glued_source_words(group.text, protected=group.detected_proper_names)
+        try:
+            _classify_groups(groups, original, page_index=page_index)
+        finally:
+            for group, raw_text in zip(groups, raw_texts):
+                if not getattr(group, "story_display_promoted", False):
+                    group.text = raw_text
+        _promote_glossary_sounds(groups)
+    with profile_step(
+        "analyze.score_group_quality",
+        page_index=page_index,
+        items=len(groups),
+    ):
+        _score_group_quality(groups)
+    with profile_step(
+        "analyze.assign_region_metadata",
+        page_index=page_index,
+        items=len(groups),
+    ):
+        _assign_region_metadata(groups)
+    with profile_step(
+        "analyze.sfx_region_reocr",
+        page_index=page_index,
+        items=len(groups),
+    ):
+        from komyst.ocr.sfx_region_reocr import repair_sfx_region_reads
+
+        repairs = repair_sfx_region_reads(groups, original_bgr, page_index=page_index)
+        if repairs:
+            record_count("sfx_region_reocr.repairs", len(repairs), page_index=page_index)
+    for group in groups:
+        ocr_line_provenance.record_group(group)
+    return candidates, groups
+
+
+def get_translatable_groups(groups):
+    return [group for group in groups if _should_translate_group(group)]
+
+
+def get_cleanable_translatable_groups(groups):
+    """Return owned story/SFX regions for CLEAN, independently of typesetting.
+
+    Translation validity is intentionally absent from this predicate.  It is a
+    gate for drawing target glyphs, not a reason for a professional CLEAN layer
+    to retain ordinary source dialogue.  Classification and OCR safety remain
+    authoritative. SFX require traceable lines and sufficient detection confidence;
+    their source reading need not be a dictionary word. Names/decorative art and
+    unowned or unreliable detections remain protected.
+    """
+
+    eligible = []
+    for group in groups:
+        # Classification marks disabled SFX ignored for translation. That flag
+        # must not veto independently requested CLEAN source removal.
+        translation_only_skip = (group.classification == "sfx"
+                                 and (getattr(group, "ignore_reason", "") == "sfx_translation_disabled"
+                                      or (getattr(group, "ignore_reason", "") == "weak_unknown_text"
+                                          and group.classification_reason == "glossary_sound_outside_balloon")))
+        if (group.ignored and not translation_only_skip) or group.preserve_as_name:
+            from komyst.clean.disposition import classify_group_disposition
+            group.clean_disposition, group.clean_disposition_reason = map(
+                str, classify_group_disposition(group)
+            )
+            continue
+        if (group.ocr_quality_blocked
+                or (group.classification != "sfx" and _ocr_unintelligible_source_text(group.text))
+                or (group.classification == "sfx" and group.confidence < max(
+                    .55, float(getattr(config, "RAPIDOCR_MIN_CONFIDENCE", .55))))):
+            from komyst.clean.disposition import RegionDisposition
+            group.clean_disposition = RegionDisposition.REVIEW_OCR.value
+            group.clean_disposition_reason = "ocr_not_reliable"
+            group.manual_review_required = True
+            continue
+        if group.classification == "sfx":
+            # Erasing detected source sounds in CLEAN is independent of typesetting.
+            lines = _cleanup_lines_for_group(group)
+            if not lines or any(not (getattr(line, "metadata", None) or {}).get("ocr_line_id")
+                                for line in lines):
+                group.clean_disposition = "REVIEW_OCR"
+                group.clean_disposition_reason = "sfx_cleanup_requires_line_provenance"
+                group.manual_review_required = True
+                continue
+        elif not _group_has_story_translation_authority(group):
+            from komyst.clean.disposition import RegionDisposition
+            group.clean_disposition = RegionDisposition.REVIEW_SEMANTIC.value
+            group.clean_disposition_reason = "story_ownership_not_established"
+            group.manual_review_required = True
+            continue
+        group.clean_disposition = "PENDING_LOCAL"
+        eligible.append(group)
+    return eligible
+
+
+def normalize_recurring_compact_names(groups):
+    """Recover split proper names using chapter-level OCR consensus.
+
+    Some names are also valid sequences of common English words when split.
+    We only join such a phrase when the compact form is observed in a strong
+    vocative/name position and the spaced form recurs elsewhere in the same
+    chapter. This keeps the rule dynamic and avoids a title-specific glossary.
+    """
+    groups = list(groups or [])
+    compact_evidence = {}
+    group_texts = [clean_ocr_text(group.text) for group in groups]
+    for group, text in zip(groups, group_texts):
+        for token in re.findall(r"[A-Za-z]{5,}", text):
+            compact = token.upper()
+            if compact in COMMON_ENGLISH_WORDS or compact in SFX_WORDS:
+                continue
+            segmented, confidence = segment_compact_english_word(compact)
+            words = segmented.upper().split()
+            if confidence < 0.58 or len(words) != 2:
+                continue
+            if not _compact_token_has_name_context(text, token):
+                continue
+            compact_evidence.setdefault(
+                compact,
+                {
+                    "canonical": token,
+                    "words": words,
+                    "context_groups": set(),
+                },
+            )["context_groups"].add(group.group_id)
+
+    repairs = []
+    for compact, evidence in compact_evidence.items():
+        phrase_pattern = re.compile(
+            rf"\b{re.escape(evidence['words'][0])}\s+{re.escape(evidence['words'][1])}\b",
+            flags=re.IGNORECASE,
+        )
+        matching_groups = [
+            group
+            for group in groups
+            if phrase_pattern.search(clean_ocr_text(group.text))
+        ]
+        compact_context_count = len(evidence.get("context_groups") or [])
+        if len(matching_groups) < 2 and compact_context_count < 2:
+            continue
+
+        canonical = evidence["canonical"]
+        compact_pattern = re.compile(rf"\b{re.escape(compact)}\b", re.IGNORECASE)
+        for group in groups:
+            if compact_pattern.search(clean_ocr_text(group.text)):
+                if compact not in group.detected_proper_names:
+                    group.detected_proper_names.append(compact)
+                if re.fullmatch(
+                    rf"\s*{re.escape(compact)}\s*[.!?â€¦]*\s*",
+                    clean_ocr_text(group.text),
+                    flags=re.IGNORECASE,
+                ):
+                    group.preserve_as_name = True
+        for group in matching_groups:
+            original = group.text
+            replacement = _match_compact_name_case(
+                phrase_pattern.search(original).group(0),
+                compact,
+            )
+            updated = phrase_pattern.sub(replacement, original)
+            if updated == original:
+                continue
+            group.original_text = group.original_text or original
+            group.text = updated
+            group.repaired_text = updated
+            group.repair_reason = ";".join(
+                part
+                for part in (
+                    group.repair_reason,
+                    "chapter_consensus_compact_name",
+                )
+                if part
+            )
+            if compact not in group.detected_proper_names:
+                group.detected_proper_names.append(compact)
+            if re.fullmatch(
+                rf"\s*{re.escape(compact)}\s*[.!?â€¦]*\s*",
+                clean_ocr_text(updated),
+                flags=re.IGNORECASE,
+            ):
+                group.preserve_as_name = True
+            repairs.append(
+                {
+                    "group_id": group.group_id,
+                    "original_text": original,
+                    "repaired_text": updated,
+                    "repair_reason": "chapter_consensus_compact_name",
+                    "compact_evidence": canonical,
+                    "spaced_evidence_count": len(matching_groups),
+                    "compact_context_count": compact_context_count,
+                }
+            )
+    repairs.extend(_normalize_vocative_name_variants(groups))
+    return repairs
+
+
+def propagate_chapter_declared_names(groups):
+    """Propagate names declared by the chapter text to every group that mentions them.
+
+    When a group says ``X... but people call me Y``, both X and Y are proven
+    proper names.  Other groups that contain those same tokens should know they
+    are names too - otherwise ``detect_proper_name_spans`` may miss them when
+    context clues are weak, and the translator silently converts the name into
+    the target language.
+
+    No name is invented: only tokens found via ``_declared_name_tokens`` or
+    already in ``detected_proper_names`` are propagated.  A token must also pass
+    the same ``_token_is_source_vocabulary`` guard so common English words that
+    happen to appear in a declaration pattern (e.g. ``JUST``) are never promoted.
+    """
+    # ponytail: O(groups * names) scan, fine for chapter-sized inputs
+    groups = list(groups or [])
+    chapter_names = set()
+    for group in groups:
+        text = clean_ocr_text(getattr(group, "text", "") or "")
+        # A name an honorific addresses is a name in *this* group only: the same
+        # word elsewhere ("GO") is usually the verb, so it is never propagated.
+        for raw in honorific_addressed_names(text):
+            key = _name_token_of(raw)
+            if key and key not in {_name_token_of(n) for n in group.detected_proper_names}:
+                group.detected_proper_names.append(key)
+        # Declared names ("X... but people call me Y") override the vocabulary
+        # heuristic: the sentence structure is stronger evidence than the -LESS
+        # or -FUL suffix that _token_is_source_vocabulary would flag.
+        for token in _declared_name_tokens(text):
+            key = _name_token_of(token)
+            if key and len(key) >= MIN_PROPER_NAME_LENGTH:
+                chapter_names.add(key)
+        for name in getattr(group, "detected_proper_names", ()) or ():
+            key = _name_token_of(str(name))
+            if key and len(key) >= MIN_PROPER_NAME_LENGTH and not _token_is_source_vocabulary(key):
+                chapter_names.add(key)
+    if not chapter_names:
+        return []
+    propagated = []
+    for group in groups:
+        text = clean_ocr_text(getattr(group, "text", "") or "")
+        text_upper = text.upper()
+        existing = {_name_token_of(n) for n in getattr(group, "detected_proper_names", ()) or ()}
+        for name in chapter_names:
+            if name in existing:
+                continue
+            if name in text_upper:
+                group.detected_proper_names.append(name)
+                propagated.append({"group_id": getattr(group, "group_id", ""), "name": name})
+    return propagated
+
+
+# --- protected-term boundary recovery ---------------------------------------
+# The complement of the pass above: there a name arrived *split*, here a term
+# arrives *joined* to the next word ("AWAKENEDTO").  The generic segmenter
+# cannot undo it - this pipeline deliberately carries no English dictionary
+# large enough to score an arbitrary decomposition - so the only anchor
+# available is a term the chapter itself spells on its own, repeatedly, plus
+# the function-word list the proper-name rules already use.
+#
+# Nothing is rewritten on a guess.  A join is undone only when exactly one
+# decomposition exists, its anchor is a repeated non-vocabulary term, and the
+# remaining piece is a token the source language is already known to spell.
+# Everything else - an unknown token, an untrusted remainder, two competing
+# splits - is left exactly as the OCR read it, which keeps it visible to the
+# suspicion and semantic-review paths instead of silently rewritten.
+PROTECTED_TERM_BOUNDARY_REASON = "protected_term_boundary"
+MIN_BOUNDARY_ANCHOR_LENGTH = 5
+MIN_BOUNDARY_ANCHOR_GROUPS = 2
+MIN_BOUNDARY_PIECE_LENGTH = 2
+
+
+def _boundary_anchor_terms(groups, extra_anchors=()):
+    """Terms the chapter proves it spells on its own, plus any the caller vouches for."""
+    seen_in = {}
+    for group in groups:
+        tokens = {
+            token.upper()
+            for token in re.findall(
+                rf"[A-Za-z]{{{MIN_BOUNDARY_ANCHOR_LENGTH},}}", clean_ocr_text(group.text)
+            )
+        }
+        for token in tokens:
+            seen_in[token] = seen_in.get(token, 0) + 1
+    anchors = {
+        token: count
+        for token, count in seen_in.items()
+        if count >= MIN_BOUNDARY_ANCHOR_GROUPS
+        and not _token_is_source_vocabulary(token)
+        and token not in SFX_WORDS
+    }
+    for term in extra_anchors or ():
+        token = re.sub(r"[^A-Z]", "", str(term or "").upper())
+        if len(token) >= MIN_BOUNDARY_ANCHOR_LENGTH:
+            anchors.setdefault(token, MIN_BOUNDARY_ANCHOR_GROUPS)
+    return anchors
+
+
+def _boundary_piece_is_plausible(piece):
+    return len(piece) >= MIN_BOUNDARY_PIECE_LENGTH and (
+        piece in ENGLISH_FUNCTION_TOKENS or piece in OCR_LEXICAL_REFERENCE_WORDS
+    )
+
+
+def _protected_term_boundary_split(token, anchors):
+    """``(index, anchor, piece)`` for the single safe decomposition, else ``None``."""
+    upper = token.upper()
+    if len(upper) < MIN_BOUNDARY_ANCHOR_LENGTH + MIN_BOUNDARY_PIECE_LENGTH:
+        return None
+    if upper in anchors or _token_is_source_vocabulary(upper):
+        return None
+    found = set()
+    for anchor in anchors:
+        if upper.startswith(anchor):
+            piece = upper[len(anchor):]
+            if _boundary_piece_is_plausible(piece):
+                found.add((len(anchor), anchor, piece))
+        if upper.endswith(anchor):
+            piece = upper[: len(upper) - len(anchor)]
+            if _boundary_piece_is_plausible(piece):
+                found.add((len(piece), anchor, piece))
+    # Two readings of the same token is not evidence, it is a coin toss.
+    return found.pop() if len(found) == 1 else None
+
+
+def recover_protected_term_boundaries(groups, extra_anchors=()):
+    """Undo OCR joins between a chapter's own terminology and the next word.
+
+    Rewrites ``group.text`` - the canonical source the translation request is
+    built from - while ``group.original_text`` keeps the forensic raw read.
+    Source *trust* is deliberately untouched: a repaired boundary says this one
+    token is now readable, never that the region's OCR was good.
+    """
+    groups = list(groups or [])
+    anchors = _boundary_anchor_terms(groups, extra_anchors)
+    if not anchors:
+        return []
+    repairs = []
+    for group in groups:
+        original = group.text
+        updated = original
+        applied = []
+        for match in re.finditer(r"[A-Za-z]+", original):
+            split = _protected_term_boundary_split(match.group(0), anchors)
+            if split is None:
+                continue
+            index, anchor, piece = split
+            token = match.group(0)
+            # Sliced from the original token, so its casing survives verbatim.
+            spaced = f"{token[:index]} {token[index:]}"
+            updated = updated.replace(token, spaced, 1)
+            applied.append((anchor, piece))
+        if updated == original or not applied:
+            continue
+        anchor, piece = applied[0]
+        group.original_text = group.original_text or original
+        group.text = updated
+        group.repaired_text = updated
+        group.repair_reason = ";".join(
+            part
+            for part in (group.repair_reason, PROTECTED_TERM_BOUNDARY_REASON)
+            if part
+        )
+        repairs.append(
+            {
+                "group_id": group.group_id,
+                "original_text": original,
+                "repaired_text": updated,
+                "repair_reason": PROTECTED_TERM_BOUNDARY_REASON,
+                "protected_term": anchor,
+                "joined_piece": piece,
+                "anchor_group_count": anchors[anchor],
+                # Evidence-derived, not a model score: half at the minimum
+                # number of standalone observations, full at double it.
+                "confidence": round(
+                    min(1.0, anchors[anchor] / (MIN_BOUNDARY_ANCHOR_GROUPS * 2)), 3
+                ),
+            }
+        )
+    return repairs
+
+
+def _normalize_vocative_name_variants(groups):
+    observations = []
+    for group in groups:
+        text = clean_ocr_text(group.text)
+        matches = [
+            *re.finditer(r"^\s*([A-Za-z]{4,20})\s*,", text),
+            *re.finditer(r",\s*([A-Za-z]{4,20})\s*[.!?â€¦]*\s*$", text),
+        ]
+        for match in matches:
+            token = match.group(1).upper()
+            if token in COMMON_ENGLISH_WORDS or token in SFX_WORDS:
+                continue
+            observations.append(
+                {
+                    "token": token,
+                    "group": group,
+                    "confidence": float(group.confidence),
+                }
+            )
+
+    repairs = []
+    handled = set()
+    for observation in observations:
+        token = observation["token"]
+        if token in handled:
+            continue
+        cluster = [
+            item
+            for item in observations
+            if abs(len(item["token"]) - len(token)) <= 1
+            and _token_edit_distance(item["token"], token) <= 1
+        ]
+        variants = {item["token"] for item in cluster}
+        group_ids = {id(item["group"]) for item in cluster}
+        if len(variants) < 2 or len(group_ids) < 2:
+            continue
+        handled.update(variants)
+        variant_scores = {}
+        for variant in variants:
+            matching = [item for item in cluster if item["token"] == variant]
+            variant_scores[variant] = (
+                len(matching),
+                sum(item["confidence"] for item in matching) / len(matching),
+            )
+        canonical = max(
+            variants,
+            key=lambda variant: (
+                variant_scores[variant][0],
+                variant_scores[variant][1],
+                variant,
+            ),
+        )
+        variant_pattern = re.compile(
+            r"\b(?:" + "|".join(re.escape(item) for item in variants) + r")\b",
+            flags=re.IGNORECASE,
+        )
+        for group in groups:
+            original = group.text
+            if not variant_pattern.search(original):
+                continue
+            updated = variant_pattern.sub(
+                lambda match: _match_compact_name_case(match.group(0), canonical),
+                original,
+            )
+            if canonical not in group.detected_proper_names:
+                group.detected_proper_names.append(canonical)
+            if re.fullmatch(
+                rf"\s*{re.escape(canonical)}\s*[.!?â€¦]*\s*",
+                clean_ocr_text(updated),
+                flags=re.IGNORECASE,
+            ):
+                group.preserve_as_name = True
+            if updated == original:
+                continue
+            group.original_text = group.original_text or original
+            group.text = updated
+            group.repaired_text = updated
+            group.repair_reason = ";".join(
+                part
+                for part in (
+                    group.repair_reason,
+                    "chapter_consensus_name_variant",
+                )
+                if part
+            )
+            repairs.append(
+                {
+                    "group_id": group.group_id,
+                    "original_text": original,
+                    "repaired_text": updated,
+                    "repair_reason": "chapter_consensus_name_variant",
+                    "variants": sorted(variants),
+                    "canonical": canonical,
+                }
+            )
+    return repairs
+
+
+def _token_edit_distance(left, right):
+    previous = list(range(len(right) + 1))
+    for left_index, left_char in enumerate(left, start=1):
+        current = [left_index]
+        for right_index, right_char in enumerate(right, start=1):
+            current.append(
+                min(
+                    current[-1] + 1,
+                    previous[right_index] + 1,
+                    previous[right_index - 1] + (left_char != right_char),
+                )
+            )
+        previous = current
+    return previous[-1]
+
+
+def _compact_token_has_name_context(text, token):
+    escaped = re.escape(token)
+    patterns = (
+        rf",\s*{escaped}\s*[.!?â€¦]*\s*$",
+        rf"^\s*{escaped}\s*[,!?â€¦]",
+        rf"\b(?:WITH|TO|FOR|DEAR)\s+{escaped}\s*[.!?â€¦]",
+        rf"^\s*{escaped}\s+(?:IS|WAS|HAS|WILL|CAN)\b",
+    )
+    return any(re.search(pattern, text, flags=re.IGNORECASE) for pattern in patterns)
+
+
+def _match_compact_name_case(source_phrase, compact):
+    if source_phrase.islower():
+        return compact.lower()
+    if source_phrase.istitle():
+        return compact.title()
+    return compact.upper()
+
+
+def _group_has_mixed_case_name_evidence(group):
+    if group.classification not in {"speech", "thought", "narration", "unknown"}:
+        return False
+    source_tokens = re.findall(r"[A-Z]{3,}", _ascii_fold(group.text).upper())
+    if not 2 <= len(source_tokens) <= 4:
+        return False
+    if any(
+        token in RESIDUAL_TRANSLATION_ENGLISH_WORDS
+        or _looks_like_inflected_english_token(token)
+        for token in source_tokens
+    ):
+        return False
+    raw_text = " ".join(
+        str(
+            line.original_text
+            or (line.metadata or {}).get("original_text")
+            or line.raw_text
+            or line.text
+            or ""
+        )
+        for line in group.lines
+    )
+    raw_tokens = re.findall(r"[A-Za-z]{3,}", raw_text)
+    return any(token.isalpha() and not token.isupper() for token in raw_tokens)
+
+
+ENGLISH_FUNCTION_TOKENS = frozenset(
+    {
+        # auxiliaries and modals
+        "AM", "ARE", "BE", "BEEN", "BEING", "CAN", "COULD", "DID", "DO",
+        "DOES", "DONE", "HAD", "HAS", "HAVE", "IS", "MAY", "MIGHT", "MUST",
+        "SHALL", "SHOULD", "WAS", "WERE", "WILL", "WOULD", "WONT", "CANT",
+        # pronouns and determiners
+        "HE", "HER", "HERS", "HIM", "HIS", "I", "IT", "ITS", "ME", "MINE",
+        "MY", "OUR", "OURS", "SHE", "THEIR", "THEIRS", "THEM", "THEY", "US",
+        "WE", "YOU", "YOUR", "YOURS", "THIS", "THAT", "THESE", "THOSE",
+        "THE", "AN", "SOME", "ANY", "EVERY",
+        # interrogatives and frequent function words
+        "WHAT", "WHEN", "WHERE", "WHICH", "WHO", "WHOM", "WHOSE", "WHY",
+        "HOW", "NOT", "NOR", "AND", "OR", "BUT", "IF", "SO", "THEN", "THAN",
+        "AS", "AT", "BY", "FROM", "IN", "INTO", "OF", "ON", "OUT", "OVER",
+        "TO", "UP", "WITH", "WITHOUT",
+        # interjections and discourse markers that open a clause
+        "OK", "OKAY", "YES", "YEAH", "NO", "WELL", "HEY", "PLEASE", "SORRY",
+        "THANKS", "JUST", "NOW", "HERE", "THERE", "STILL", "ALSO", "EVEN",
+    }
+)
+
+NAME_TITLE_TOKENS = frozenset(
+    {
+        "LADY", "LORD", "SIR", "MADAM", "MADAME", "MISS", "MISTER", "MR",
+        "MRS", "MS", "DR", "DOCTOR", "PROFESSOR", "CAPTAIN", "COMMANDER",
+        "GENERAL", "COUNT", "COUNTESS", "DUKE", "DUCHESS", "BARON",
+        "BARONESS", "PRINCE", "PRINCESS", "KING", "QUEEN", "EMPEROR",
+        "EMPRESS", "MASTER", "SAINT", "FATHER", "MOTHER", "UNCLE", "AUNT",
+    }
+)
+
+# Source-language determiners that mark the following title as a common noun.
+SOURCE_DETERMINERS = frozenset(
+    {"THE", "A", "AN", "THIS", "THAT", "THESE", "THOSE"}
+)
+
+# Endings that mark a token as an inflected English word rather than a name, so a
+# clause-opening adverb followed by a comma is never read as a vocative.
+NON_NAME_SUFFIXES = (
+    "LY", "ING", "TION", "SION", "NESS", "MENT", "OUS", "FUL", "LESS",
+    "ABLE", "IBLE", "EST",
+)
+
+MIN_PROPER_NAME_LENGTH = 3
+MIN_STANDALONE_NAME_LENGTH = 4
+
+
+def _name_token_of(raw):
+    return re.sub(r"[^A-Z']", "", _ascii_fold(str(raw or "")).upper()).strip("'")
+
+
+def source_repair_vocabulary(context_texts=()):
+    """The words a suspicious source token may be corrected *to*.
+
+    The pipeline's own dialogue lexicon, plus whatever the bounded surrounding
+    context spells plausibly - a scene that says "EMERGENCY CONTAINMENT VAULT"
+    somewhere else is the evidence that makes a corrupt reading of it
+    correctable, and nothing wider is ever assembled.
+
+    Sound effects are excluded by construction (``ORDINARY_DIALOGUE_WORDS``
+    already drops them), so an onomatopoeia is never a repair target; and a
+    context token that is itself improbably spelled never joins, because OCR
+    damage may not vouch for OCR damage.
+    """
+    vocabulary = set(ORDINARY_DIALOGUE_WORDS)
+    for text in context_texts or ():
+        for token in re.findall(r"[A-Za-z]+", str(text or "")):
+            token = token.upper()
+            if len(token) >= 3 and not semantic_fidelity.improbable_source_token(token):
+                vocabulary.add(token)
+    return vocabulary
+
+
+def _token_is_source_vocabulary(token):
+    """True when the source language uses this token as a word, not as a name.
+
+    Comic lettering is all-caps, so capitalisation carries no signal at all. The
+    only reliable refusal is lexical: anything the pipeline already knows as an
+    English word, an auxiliary/pronoun, an SFX, or a visibly inflected form is
+    never a name, however name-shaped its position looks.
+    """
+    if not token:
+        return True
+    if (
+        token in ENGLISH_FUNCTION_TOKENS
+        or token in COMMON_ENGLISH_WORDS
+        or token in RESIDUAL_TRANSLATION_ENGLISH_WORDS
+        or token in SFX_WORDS
+        or token in NAME_TITLE_TOKENS
+    ):
+        return True
+    if token.casefold() in OCR_REPAIR_ENGLISH_WORDS:
+        return True
+    return len(token) >= 5 and token.endswith(NON_NAME_SUFFIXES)
+
+
+def _separator_between(text, left_match, right_match):
+    return text[left_match.end() : right_match.start()]
+
+
+def _token_governs_following_pronoun(text, matches, index):
+    """True when the token reads as a verb or auxiliary of the source clause.
+
+    A modal opening a tag question ('..., <modal> you?') sits in exactly the
+    position a vocative would, so position alone cannot separate the two. What
+    separates them is that the next token is a pronoun the verb governs, with no
+    punctuation in between: an address is always punctuated off from its clause,
+    a verb phrase never is.
+    """
+    if index + 1 >= len(matches):
+        return False
+    following = _name_token_of(matches[index + 1].group(0))
+    if following not in ENGLISH_FUNCTION_TOKENS:
+        return False
+    separator = _separator_between(text, matches[index], matches[index + 1])
+    return not re.search(r"[,;:!?…]|\.\.\.", separator)
+
+
+def _has_strong_name_context(matches, index):
+    """True only in the positions that mark a name beyond doubt.
+
+    Deliberately narrow. Neither a bare vocative (a name before a comma against a verb
+    before a comma) nor a lone token (a name alone against an ordinary word alone) can
+    be resolved from the sentence alone: separating them needs to know that the other
+    word is a verb, and this pipeline has no English lexicon deep enough to know that.
+    Guessing there freezes ordinary words in the source language, so nothing is claimed
+    from position except a title binding to the name after it. Recurring names arrive
+    from chapter consensus as ``known_names``, and a lone name is settled by evidence
+    from the model instead.
+    """
+    token = _name_token_of(matches[index].group(0))
+    if len(token) < MIN_PROPER_NAME_LENGTH:
+        return False
+
+    # A title binds to the name that follows it: 'LADY <NAME>'.
+    return index > 0 and _name_token_of(matches[index - 1].group(0)) in NAME_TITLE_TOKENS
+
+
+def _declared_name_tokens(text):
+    """Names proven by the sentence itself, not by capitalization.
+
+    Webtoon dialogue often introduces an alias explicitly ("X... but people call
+    me Y") or asks about a just-heard name ("X? That's a strange name").  That
+    context is stronger than suffix heuristics such as ``-LESS`` because the
+    source is literally talking about a name.
+
+    ``ME`` is followed by a zero-or-more space match, not one-or-more: OCR
+    routinely glues the alias straight onto the pronoun with no space ("CALL
+    MESUNNY"), and losing the match there does not fall back to some safer
+    default - it silently drops *both* names the sentence declares, "SUNLESS"
+    included, since neither is capitalization-derived. The idiom itself stays
+    as narrow as the docstring above says: this only ever fires inside the
+    full "X... but people call me Y" clause, so the missing space is
+    deliberately the only slack given.
+    """
+    cleaned = clean_ocr_text(text)
+    result = []
+    for pattern in (
+        r"\b([A-Za-z][A-Za-z’-]{2,})\b\s*(?:[.…。]{2,}|,)?\s*BUT\s+PEOPLE\s+CALL\s+ME\s*([A-Za-z][A-Za-z’-]{2,})\b",
+        r"^\s*([A-Za-z][A-Za-z’-]{2,})\s*\?\s+THAT'?S\s+A\s+STRANGE\s+NAME\b",
+    ):
+        for match in re.finditer(pattern, cleaned, flags=re.I):
+            for group in match.groups():
+                token = _name_token_of(group)
+                if (
+                    len(token) >= MIN_PROPER_NAME_LENGTH
+                    and token not in ENGLISH_FUNCTION_TOKENS
+                    and group not in result
+                ):
+                    result.append(group)
+    return result
+
+
+def _misread_correction(key, chapter_words):
+    """The one word a misread token stands for ("HIPES" -> HIDES), or ``None``.
+
+    Proof first: a candidate this chapter itself writes elsewhere ("IF WE WANT THE
+    HIDES") wins when it is the only such one. Otherwise only a clearly dominant
+    common word (Zipf >= 3, one full point above any rival) is taken.
+    """
+    candidates = region_taxonomy.one_edit_words(key)
+    if not candidates:
+        return None
+    attested = [word for word in candidates if word in chapter_words]
+    if len(attested) == 1:
+        return attested[0]
+    if attested:
+        return None
+    ranked = sorted(candidates, key=region_taxonomy.word_zipf, reverse=True)
+    best = region_taxonomy.word_zipf(ranked[0])
+    rival = region_taxonomy.word_zipf(ranked[1]) if len(ranked) > 1 else 0.0
+    return ranked[0] if best >= 3.0 and best - rival >= 1.0 else None
+
+
+def _restore_shape(token, letters):
+    """``letters`` (upper case, no apostrophe) written back in ``token``'s shape."""
+    if "'" in token or "’" in token:
+        plain = re.sub(r"['’]", "", token)
+        if len(plain) != len(letters):
+            return None
+        chars, cursor = [], 0
+        for char in token:
+            if char in "'’":
+                chars.append(char)
+            else:
+                chars.append(letters[cursor])
+                cursor += 1
+        letters = "".join(chars)
+    return letters if token.isupper() or not token.isalpha() else letters.lower()
+
+
+_ENGLISH_CONTRACTION_TAILS = frozenset({"S", "T", "LL", "RE", "VE", "D", "M", "EM", "CAUSE", "N"})
+
+
+def split_glued_source_words(text, protected=(), chapter_names=(), chapter_words=frozenset()):
+    """``text`` with OCR-damaged tokens repaired before translation.
+
+    Three repairs, each only when it is clear, in this order:
+
+    * a chapter name glued to the end of a token: "GWANG-ILJEON" -> GWANG-IL JEON;
+    * glued words split by frequency: "IT'S SOLIFELIKE" -> "IT'S SO LIFE LIKE",
+      "WEPLANTO" -> WE PLAN TO (the provider read the glued forms as names);
+    * one misread letter: "HIPES" -> HIDES, "PLRCHASED" -> PURCHASED,
+      "COLLDN'T" -> COULDN'T (``_misread_correction``).
+
+    A real word, a protected name, and anything ambiguous are left as they are.
+    """
+    protected_keys = {_name_token_of(name) for name in protected or ()}
+    names = sorted({key for key in (_name_token_of(name) for name in chapter_names or ())
+                    if len(key) >= 3}, key=len, reverse=True)
+    vocabulary = frozenset(chapter_words or ())
+
+    def repair(match):
+        token = match.group(0)
+        key = re.sub(r"[^A-Z]", "", token.upper())
+        if (len(key) < 4 or key in protected_keys or key in names or region_taxonomy.is_english_word(key)
+                or region_taxonomy.word_zipf(key) >= 3.0):
+            return token
+        if token.isalpha():
+            for name in names:
+                if key.endswith(name) and len(key) - len(name) >= 2:
+                    head = token[:len(token) - len(name)]
+                    return f"{head} {token[len(head):]}"
+            pieces = region_taxonomy.segment_words(key)
+            if pieces and len(pieces) > 1:
+                joined = " ".join(pieces)
+                return joined if token.isupper() else joined.lower()
+        head, apostrophe, tail = (re.split(r"(['’])", token, maxsplit=1) + ["", ""])[:3]
+        if apostrophe and tail.upper() not in _ENGLISH_CONTRACTION_TAILS:
+            # Not a contraction ("OUTON'AWALKWITHNO"): the OCR read a space as an
+            # apostrophe. The letters are split like any glued token.
+            words = region_taxonomy.segment_words(key)
+            if words and len(words) > 1:
+                joined = " ".join(words)
+                return joined if token.upper() == token else joined.lower()
+        corrected = _misread_correction(key, vocabulary)
+        return (_restore_shape(token, corrected) or token) if corrected else token
+
+    return re.sub(r"[A-Za-z][A-Za-z'’]*[A-Za-z]|[A-Za-z]", repair, str(text or ""))
+
+
+def chapter_source_words(texts):
+    """Real words the chapter writes: the evidence a misread repair may lean on."""
+    words = set()
+    for text in texts or ():
+        for token in re.findall(r"[A-Za-z]+", str(text or "")):
+            key = token.upper()
+            if len(key) >= 3 and region_taxonomy.is_english_word(key):
+                words.add(key)
+    return frozenset(words)
+
+
+def honorific_addressed_names(text):
+    """Tokens a source-language honorific abbreviation addresses ("MS. GO")."""
+    cleaned = clean_ocr_text(text)
+    names = []
+    for start, end in honorific_names.honorific_name_spans(cleaned):
+        if cleaned[start:end] not in names:
+            names.append(cleaned[start:end])
+    return names
+
+
+def detect_proper_name_spans(text, known_names=()):
+    """Return the tokens of ``text`` that are confidently proper names.
+
+    The translator must be told which spans it may keep, never merely that names
+    may exist: told only 'keep proper names', the model elects its own candidate
+    and then adapts it into the target language, which is how a source auxiliary
+    became an invented character name. Detection is fail-closed - an ambiguous
+    token is left out and simply gets translated like any other word, because a
+    word translated in error is recoverable and a name invented in error is not.
+    """
+    cleaned = clean_ocr_text(text)
+    matches = list(re.finditer(r"[A-Za-z][A-Za-z’-]*", cleaned))
+    if not matches:
+        return []
+    declared = _declared_name_tokens(cleaned)
+    known = {
+        _name_token_of(part)
+        for name in (known_names or ())
+        for part in re.split(r"\s+", str(name or ""))
+        if _name_token_of(part)
+    }
+    spans = []
+    for raw in [*declared, *honorific_addressed_names(cleaned)]:
+        if raw not in spans:
+            spans.append(raw)
+    for index, match in enumerate(matches):
+        raw = match.group(0)
+        token = _name_token_of(raw)
+        if len(token) < MIN_PROPER_NAME_LENGTH:
+            continue
+        # The source vocabulary always wins, even over chapter consensus: a word
+        # the language uses grammatically can never be preserved as a name.
+        if _token_is_source_vocabulary(token):
+            continue
+        is_known = token in known
+        if not is_known and _token_governs_following_pronoun(cleaned, matches, index):
+            continue
+        if is_known or _has_strong_name_context(matches, index):
+            if raw not in spans:
+                spans.append(raw)
+    return spans
+
+
+def _title_used_as_common_noun_tokens(source_infos):
+    """Title tokens the source uses as a common noun, which must be translated.
+
+    A title bound to a name ('LADY <NAME>') is a form of address and is kept
+    verbatim. A title standing as a common noun - preceded by a determiner or
+    carrying a possessive ("the count's ...") - is ordinary vocabulary and has to be
+    translated like any other word, or the candidate stays half in the source
+    language. Detected structurally from determiner and possessive, so no specific
+    title or language is ever special-cased.
+    """
+    tokens = [info["token"] for info in source_infos]
+    bases = [token.split("'")[0] for token in tokens]
+    result = set()
+    for index, base in enumerate(bases):
+        if base not in NAME_TITLE_TOKENS:
+            continue
+        previous = bases[index - 1] if index > 0 else ""
+        has_possessive = "'" in tokens[index]
+        if previous in SOURCE_DETERMINERS or has_possessive:
+            result.add(base)
+    return result
+
+
+def group_proper_name_spans(group):
+    return detect_proper_name_spans(
+        group.text,
+        known_names=getattr(group, "detected_proper_names", ()) or (),
+    )
+
+
+def group_has_name_only_shape(group):
+    """True when the group could be a lone name: one out-of-vocabulary token.
+
+    Shape alone proves nothing - a lone ordinary word has the same shape as a lone
+    name - so this only says the group is worth asking about. What settles it is
+    ``group_is_untranslatable_name``, which reads the model's own answer.
+    """
+    if group.classification not in {"speech", "thought", "narration", "unknown"}:
+        return False
+    cleaned = clean_ocr_text(group.text)
+    matches = list(re.finditer(r"[A-Za-z][A-Za-z’-]*", cleaned))
+    if len(matches) != 1:
+        return False
+    token = _name_token_of(matches[0].group(0))
+    if len(token) < MIN_STANDALONE_NAME_LENGTH:
+        return False
+    if _token_is_source_vocabulary(token):
+        return False
+    return not _is_nonlexical_vocalization_token({token})
+
+
+def group_is_untranslatable_name(group, candidate):
+    """True when the model, told to translate every word, returned the source.
+
+    This pipeline has no English lexicon, so it cannot tell a lone name from a lone
+    ordinary word by inspection. The model can. Once it has been instructed that the
+    text contains no proper names and that every word must be translated, a candidate
+    still identical to the source is the model reporting there is nothing to
+    translate - which is what a name is. An ordinary word comes back translated and
+    never reaches here.
+    """
+    if not group_has_name_only_shape(group):
+        return False
+    candidate = clean_ocr_text(candidate)
+    if not candidate:
+        return False
+    return _normalized_translation_text(candidate) == _normalized_translation_text(
+        group.text
+    )
+
+
+def _source_entity_tokens(text):
+    return [
+        _name_token_of(match)
+        for match in re.findall(r"[A-Za-z][A-Za-z']*", clean_ocr_text(text))
+    ]
+
+
+def _ocr_unintelligible_source_text(text):
+    """True when the source was never read properly, so there is nothing to translate.
+
+    Only evidence the recogniser itself left behind is used. Comic lettering is
+    uppercase, so a lone token whose case alternates internally is the recogniser
+    stumbling on glyphs rather than a word or a name. A source title fused to the
+    word after it is the recogniser having lost the space, which is why the fused
+    token is neither dialogue nor an entity. Both belong in review, but neither is
+    dialogue the translator failed to translate, and reporting them as such buries
+    the read defect under a translation metric.
+    """
+    tokens = _source_entity_tokens(text)
+    if len(tokens) != 1 or len(tokens[0]) < MIN_STANDALONE_NAME_LENGTH:
+        return False
+    raw = re.findall(r"[A-Za-z][A-Za-z']*", clean_ocr_text(text))[0]
+    if not (raw.isupper() or raw.islower() or raw.istitle()):
+        # Comic lettering is all caps, so an alternating case on a token that spells a real
+        # English word (a c/C or k/K the recogniser could not tell apart) is case noise, not
+        # unread glyphs: the letters were read, and the word is worth translating.
+        return not region_taxonomy.is_english_word(raw)
+    if _looks_like_title_name_ocr_compound(tokens[0]):
+        return True
+    if raw.isupper() and len(tokens[0]) >= 5 and (
+        not re.search(r"[AEIOUY]", tokens[0])
+        or re.search(r"[BCDFGHJKLMNPQRSTVWXYZ]{5,}", tokens[0])
+    ):
+        return True
+    return False
+
+
+def _chapter_preserved_entity_tokens(groups):
+    """Tokens the chapter itself proves are entities rather than untranslated words.
+
+    A token the translator kept verbatim inside a region it otherwise turned into
+    valid target-language text is the translator reporting that this token has no
+    translation - the same evidence the session ledger records as a name preserved in
+    translation. Casing, length and spelling are never consulted: a token with no
+    such region behind it has no evidence at all and stays unproven, which is how an
+    ordinary source word that merely looks unusual keeps failing closed.
+    """
+    tokens = set()
+    for group in groups:
+        candidate = clean_ocr_text(getattr(group, "translation", "") or "")
+        if not candidate or _translation_echoes_source(group):
+            continue
+        valid, _ = validate_translation_text(
+            group.text,
+            candidate,
+            group.classification,
+            _group_validation_allowed_proper_names(group),
+            required_name_spans=group_proper_name_spans(group),
+        )
+        if not valid:
+            continue
+        source_tokens = set(_source_entity_tokens(group.text))
+        for token in _source_entity_tokens(candidate):
+            if token in source_tokens and not _token_is_source_vocabulary(token):
+                tokens.add(token)
+    return tokens
+
+
+def _group_is_proven_entity_echo(group, candidate, entity_tokens):
+    """True when every word kept from the source is a token the chapter proved.
+
+    Punctuation and formatting carry no language, so they are ignored, but a single
+    unproven word is enough to hold the group: a name beside ordinary source text is
+    still ordinary source text left untranslated.
+    """
+    if not entity_tokens:
+        return False
+    candidate = clean_ocr_text(candidate)
+    if _normalized_translation_text(candidate) != _normalized_translation_text(
+        group.text
+    ):
+        return False
+    if _ocr_unintelligible_source_text(group.text):
+        return False
+    tokens = _source_entity_tokens(group.text)
+    return bool(tokens) and all(token in entity_tokens for token in tokens)
+
+
+class _AllowedNames(list):
+    """Allowed names, plus which of them the chapter itself evidences.
+
+    The spans found from the shape of this group's own text (a title followed by a word) are
+    allowed too, so "is allowed" proves nothing about a name; ``chapter_known`` does.
+    """
+
+    chapter_known = frozenset()
+
+
+def _group_validation_allowed_proper_names(group):
+    names = _AllowedNames(group.detected_proper_names or [])
+    names.chapter_known = frozenset(_normalized_allowed_name_tokens(group.detected_proper_names or []))
+    names.extend(group_proper_name_spans(group))
+    if _group_has_mixed_case_name_evidence(group):
+        names.append(group.text)
+    return names
+
+
+def _repair_translation_candidate_before_validation(
+    source_text,
+    candidate,
+    classification="speech",
+    *,
+    required_name_spans=None,
+):
+    """Deterministic, narrow repairs before the safety validator runs.
+
+    This is not a translation authority.  It only fixes candidate shapes whose intent is
+    already explicit and locally provable: declared names must remain verbatim, one OCR
+    debris parenthesis may be removed, and the common ``o que você fazer`` bad mood is
+    converted to subjunctive when the source says ``what you do``.
+    """
+
+    text = clean_ocr_text(candidate)
+    if not text:
+        return ""
+    text = _repair_declared_name_tokens(source_text, text, required_name_spans or ())
+    text = _repair_stray_ocr_fragment_candidate(source_text, text)
+    text = _repair_narrow_ptbr_verb_mood(source_text, text, classification)
+    return clean_ocr_text(text)
+
+
+def _repair_declared_name_tokens(source_text, candidate, required_name_spans):
+    repaired = str(candidate or "")
+    source = clean_ocr_text(source_text)
+    for raw_name in required_name_spans or ():
+        name = clean_ocr_text(raw_name)
+        replacement_name = _canonical_declared_name_surface(name)
+        token = _name_token_of(name)
+        if not name or token in {_name_token_of(info["raw"]) for info in _translation_token_infos(repaired)}:
+            continue
+        if re.search(rf"^\s*{re.escape(name)}\b", source, flags=re.I):
+            repaired = re.sub(
+                r"^\s*[A-Za-zÀ-ÖØ-öø-ÿ]+(?:\s+[A-Za-zÀ-ÖØ-öø-ÿ]+){0,2}",
+                replacement_name,
+                repaired,
+                count=1,
+            )
+            continue
+        if re.search(rf"\b(?:MY\s+NAME\s+IS|I\s+AM|I'M)\s+{re.escape(name)}\b", source, flags=re.I):
+            repaired = re.sub(
+                r"(\b(?:MEU\s+NOME\s+(?:É|E)|EU\s+(?:SOU|ME\s+CHAMO))\s+)"
+                r"[A-Za-zÀ-ÖØ-öø-ÿ]+(?:\s+[A-Za-zÀ-ÖØ-öø-ÿ]+){0,2}",
+                lambda match, replacement=replacement_name: match.group(1) + replacement,
+                repaired,
+                count=1,
+                flags=re.I,
+            )
+    return repaired
+
+
+def _canonical_declared_name_surface(name):
+    """Normalize OCR casing only for spans already proven by declaration syntax."""
+
+    text = clean_ocr_text(name)
+    if not text:
+        return ""
+    if text.isupper() or text.islower() or text.istitle():
+        return text
+    parts = re.split(r"([’'\-])", text)
+    repaired = []
+    for part in parts:
+        if re.fullmatch(r"[A-Za-zÀ-ÖØ-öø-ÿ]+", part):
+            repaired.append(part[:1].upper() + part[1:].lower())
+        else:
+            repaired.append(part)
+    return "".join(repaired)
+
+
+def _repair_stray_ocr_fragment_candidate(source_text, candidate):
+    folded_source = _ascii_fold(source_text).upper()
+
+    def replace(match):
+        folded_match = _ascii_fold(match.group(0)).upper()
+        return match.group(0) if folded_match in folded_source else match.group(1)
+
+    return re.sub(r"\b([A-Z])\)", replace, str(candidate or ""), flags=re.I)
+
+
+def _repair_narrow_ptbr_verb_mood(source_text, candidate, classification):
+    if classification not in {"speech", "thought", "narration", "unknown"}:
+        return candidate
+    folded_source = _ascii_fold(source_text).upper()
+    # 84F41: a RapidOCR line occasionally drops the space right after "DO"
+    # (``WHAT YOU DODURINGTHETRIALWILL...``), which hid this exact "what you
+    # do" shape behind the plain ``\b`` boundary below and left the resulting
+    # "voce fazer" bad mood unrepaired. The extra branch only recognizes the
+    # same literal "what you do" prefix glued to more letters - it never
+    # matches a genuinely different verb such as "does"/"doing"/"done".
+    has_boundary_match = re.search(r"\bWHAT\s+YOU\s+DO\b", folded_source)
+    has_fused_match = re.search(
+        r"\bWHAT\s+YOU\s+DO(?!ES\b|ING\b|NE\b|N['’]?T\b)[A-Z]",
+        folded_source,
+    )
+    if not (has_boundary_match or has_fused_match):
+        return candidate
+    return re.sub(
+        r"\b(VO[CÇ]Ê|VOCE)\s+FAZER\b",
+        lambda match: f"{match.group(1)} FIZER",
+        str(candidate or ""),
+        flags=re.I,
+    )
+
+
+def apply_group_translations(groups, translations):
+    translations = list(translations or [])
+    for index, group in enumerate(groups):
+        group.sent_to_translation = True
+        raw_translation = translations[index] if index < len(translations) else ""
+        evidence = dict(getattr(raw_translation, "quality_evidence", {}) or {})
+        if isinstance(raw_translation, dict):
+            nested = raw_translation.get("quality_evidence")
+            if isinstance(nested, dict):
+                evidence.update(nested)
+        if evidence:
+            group.quality_evidence = {**group.quality_evidence, **evidence}
+        translated = clean_ocr_text(
+            raw_translation.get("translation", "") if isinstance(raw_translation, dict)
+            else raw_translation
+        )
+        group.raw_provider_candidate = translated
+        group.raw_provider_candidate_class = _candidate_forensic_class(
+            group.text,
+            translated,
+            group.classification,
+        )
+        if not translated:
+            group.translation_candidate = ""
+            _finalize_translation_failure(
+                group,
+                "missing_translation_candidate",
+                candidate="",
+            )
+            continue
+
+        translated = _repair_translation_candidate_before_validation(
+            group.text,
+            translated,
+            group.classification,
+            required_name_spans=group_proper_name_spans(group),
+        )
+        # Lore terms are repaired after the provider and before validation, so a
+        # corrupted name ("GEENOM" for "GEHENNA") is fixed once for the initial
+        # pass and for every retry (they all converge through this funnel).
+        from komyst.translation.terms_glossary import enforce_protected_terms
+        translated, term_repairs = enforce_protected_terms(group.text, translated)
+        if term_repairs:
+            evidence = dict(getattr(group, "quality_evidence", {}) or {})
+            evidence["protected_term_repairs"] = list(term_repairs)
+            group.quality_evidence = evidence
+        group.translation_candidate = _match_source_case(group.text, translated)
+        group.translation = group.translation_candidate
+        valid, reason = validate_translation_text(
+            group.text,
+            group.translation,
+            group.classification,
+            _group_validation_allowed_proper_names(group),
+            required_name_spans=group_proper_name_spans(group),
+        )
+        group.translation_valid = valid
+        group.translation_validation_reason = reason
+        if valid:
+            _set_translation_terminal_state(group, "translated", reason)
+        else:
+            _set_translation_terminal_state(group, "rejected", reason)
+
+
+def _set_translation_terminal_state(
+    group,
+    state,
+    reason="",
+    *,
+    preserved_original=None,
+):
+    if state not in TRANSLATION_TERMINAL_STATES:
+        raise ValueError(f"estado terminal de traducao invalido: {state}")
+    new_reason = str(reason or group.translation_validation_reason or "")
+    current_reason = getattr(group, "translation_final_reason", "") or ""
+    # A proven, specific reason outranks a later generic one when the outcome stays
+    # neutral: the renderer preserves original pixels for both a proper name and a
+    # stylized echo, but only the name is quality-neutral, so the name reason must
+    # survive the render's bookkeeping. A genuine review outcome still wins.
+    if (
+        state not in REVIEW_TERMINAL_STATES
+        and current_reason in STICKY_TERMINAL_REASONS
+        and new_reason not in STICKY_TERMINAL_REASONS
+    ):
+        new_reason = current_reason
+    group.translation_final_state = state
+    group.translation_final_reason = new_reason
+    if preserved_original is not None:
+        group.preserved_original = bool(preserved_original)
+    # SEMANTIC-RUNTIME-001: the semantic verdict is part of the terminal state, not
+    # metadata beside it. A region the fidelity gate marked ``review`` still renders -
+    # the explicit policy is RENDER_WITH_REVIEW, because holding it would put the
+    # English source back on the page - but it is never published as clean: it carries
+    # a review quality impact and routes to structured review like any other review
+    # outcome. The real #84 run shipped three such regions as valid/translated/none.
+    semantic_review = bool(getattr(group, "semantic_review_reason", ""))
+    group.translation_quality_impact = (
+        "review_required"
+        if state in REVIEW_TERMINAL_STATES or semantic_review
+        else "none"
+    )
+    if semantic_review:
+        group.manual_review_required = True
+
+
+def _normalized_translation_text(text):
+    folded = _ascii_fold(clean_ocr_text(text)).casefold()
+    return re.sub(r"[^a-z0-9]+", "", folded)
+
+
+def _echo_is_name_shaped(group):
+    """True when a source==candidate echo is a legitimate silent preserve.
+
+    An echo is only "nothing to translate" when the source itself has the shape
+    of a lone name/token (branding, proper names) or a short stylized
+    vocalization ("AGH...", "HUH?"). Any wider echo - an ordinary multi-word
+    story sentence the provider handed back unchanged - is a translation that
+    never actually happened, and must not be reported as a clean, no-review
+    preserve (see the render-time caller).
+    """
+    if bool(getattr(group, "preserve_as_name", False)):
+        return True
+    if group_has_name_only_shape(group):
+        return True
+    # A sound effect the provider handed back unchanged is a sound it has no
+    # equivalent for: keeping the original lettering is the correct render.
+    if str(getattr(group, "classification", "") or "").lower() == "sfx":
+        return True
+    tokens = _source_entity_tokens(getattr(group, "text", "") or "")
+    if _is_nonlexical_vocalization_token(set(tokens)):
+        return True
+    # No common English word of 3+ letters ("A-AH...", "RYU KANG-MIN?"): an
+    # interjection or a name, legitimately identical in Portuguese.
+    # Common vocabulary, not the full lexicon (which lists "kang", "min").
+    from komyst.ocr.ocr_engine import COMMON_ENGLISH_WORDS
+    words = re.findall(r"[A-Za-z]+", str(getattr(group, "text", "") or ""))
+    # Short only (<= 3 words): an echoed sentence is a translation that failed.
+    return bool(words) and len(words) <= 3 and not any(
+        len(word) >= 3 and word.lower() in COMMON_ENGLISH_WORDS for word in words)
+
+
+def _translation_echoes_source(group):
+    """True when rendering the group would only echo its source text.
+
+    Some groups are validated as translatable while keeping the source verbatim
+    (stylized vocalizations, branding/logo tokens preserved as names). Redrawing
+    such a group erases the original art and repaints identical (often
+    OCR-corrupted) glyphs for no benefit, which is how a stylized title becomes a
+    garbled overlay. These are preserved as original pixels instead. The
+    comparison is accent-folded so a real translation such as 'No' -> 'Nao/Não'
+    is never treated as an echo.
+    """
+    translation = getattr(group, "translation", "") or ""
+    if not translation:
+        return False
+    source = getattr(group, "text", "") or ""
+    normalized_source = _normalized_translation_text(source)
+    if not normalized_source:
+        return False
+    return _normalized_translation_text(translation) == normalized_source
+
+
+def _candidate_forensic_class(source, candidate, classification=""):
+    candidate = clean_ocr_text(candidate)
+    if not candidate:
+        return "EMPTY"
+    if _normalized_translation_text(candidate) == _normalized_translation_text(source):
+        return "SOURCE_EQUAL"
+    if str(classification or "").casefold() == "sfx":
+        return "ENTITY/SFX/PRESERVED"
+    # A declared name the source spells must survive into whatever this function
+    # calls clean: without it, a candidate that quietly translated a character's
+    # name ("SUNLESS" -> "Sem sol") reads as ordinary fluent Portuguese and is
+    # waved through as ``PTBR_CLEAN`` - which is exactly what let a terminology
+    # review region (``terminology_review_render_candidate`` below) ship a
+    # mistranslated name instead of holding the region for review.
+    valid, reason = validate_translation_text(
+        source,
+        candidate,
+        classification,
+        [],
+        required_name_spans=detect_proper_name_spans(source),
+    )
+    if valid:
+        return "PTBR_CLEAN"
+    reason = str(reason or "")
+    if reason.startswith(("mixed_language", "multilingual_partial")):
+        return "PARTIAL_ENGLISH"
+    if reason.startswith(
+        (
+            "residual_english",
+            "residual_inflected_english",
+            "untranslated_english",
+            "untranslated_single_english",
+            "english_phrase",
+        )
+    ):
+        return "FULL_ENGLISH_OTHER"
+    return "OTHER"
+
+
+# A terminology conflict says the chapter ledger is unsure which *word* to use. It is
+# not proof the sentence is wrong, so withholding the whole region for it republishes
+# the English source, which is the worse defect. Semantic rejection, residual English
+# and an unreadable source are different verdicts and keep withholding.
+TERMINOLOGY_REVIEW_REASONS = ("terminology_conflict_after_retries",)
+
+
+# Validation reasons that indicate a Portuguese-language candidate with a quality
+# defect rather than a language defect. Rendering imperfect Portuguese under review
+# is always preferable to leaving English on the page, which is the alternative when
+# every retry produced the same quality issue and no cleaner candidate exists.
+# ponytail: linear scan of prefixes; switch to a set if the list grows past ~20.
+_QUALITY_ONLY_VALIDATION_PREFIXES = (
+    "unnatural_ptbr_verb_mood",
+    "stray_ocr_fragment",
+    "repeated_translation_fragment",
+    "proper_name_altered",
+)
+
+
+def _is_quality_only_validation_reason(reason):
+    """True when the validation reason is a PT-BR quality issue, not a language issue."""
+    return str(reason or "").startswith(_QUALITY_ONLY_VALIDATION_PREFIXES)
+
+
+def terminology_review_render_candidate(group):
+    """The PT-BR a terminology-review region may still ship, or ``""`` if none may."""
+
+    if str(getattr(group, "translation_final_state", "")) != "manual_review":
+        return ""
+    if str(getattr(group, "translation_final_reason", "")) not in TERMINOLOGY_REVIEW_REASONS:
+        return ""
+    if semantic_fidelity.is_fidelity_reason(
+        getattr(group, "translation_validation_reason", "")
+    ):
+        return ""
+    candidate = clean_ocr_text(getattr(group, "translation_candidate", "") or "")
+    if not candidate:
+        return ""
+    # Only a candidate the validator itself calls clean PT-BR: a mixed-language or
+    # still-English target would swap one residual for another.
+    if _candidate_forensic_class(
+        group.text, candidate, group.classification
+    ) != "PTBR_CLEAN":
+        return ""
+    return candidate
+
+
+def _quality_review_render_candidate(group):
+    """Rescue a PT-BR candidate rejected only for quality, not language.
+
+    When every retry produced a candidate with the same quality defect (verb mood,
+    OCR artifact, etc.) but the candidate IS in Portuguese, rendering it under
+    review is the lesser evil compared to leaving English story text on the page.
+    Semantic-fidelity failures and candidates with actual English residual are
+    never rescued - those are content defects, not polish defects.
+    """
+    if str(getattr(group, "translation_final_state", "")) != "manual_review":
+        return ""
+    if semantic_fidelity.is_fidelity_reason(
+        getattr(group, "translation_validation_reason", "")
+    ):
+        return ""
+    validation_reason = str(getattr(group, "translation_validation_reason", ""))
+    if not _is_quality_only_validation_reason(validation_reason):
+        return ""
+    candidate = clean_ocr_text(getattr(group, "translation_candidate", "") or "")
+    if not candidate:
+        return ""
+    forensic = _candidate_forensic_class(group.text, candidate, group.classification)
+    # PTBR_CLEAN means the name-aware validator is happy (rare here, since
+    # we entered _finalize_translation_failure). OTHER means a quality-only
+    # rejection - exactly the class we rescue. PARTIAL_ENGLISH and
+    # FULL_ENGLISH_OTHER stay blocked.
+    if forensic in ("PARTIAL_ENGLISH", "FULL_ENGLISH_OTHER", "SOURCE_EQUAL", "EMPTY"):
+        return ""
+    return candidate
+
+
+def translation_render_state(group):
+    """The translation axis handed to :func:`render_disposition`.
+
+    Kept apart from the render loop so the three verdicts -- clean, review, reject --
+    are one decision with one place to read, instead of a chain of overwrites.
+    """
+
+    final_state = str(getattr(group, "translation_final_state", ""))
+    if final_state in {"rejected", "unresolved"}:
+        return "reject", str(
+            getattr(group, "translation_final_reason", "") or "semantic_reject")
+    if getattr(group, "semantic_review_reason", ""):
+        reason = str(group.semantic_review_reason)
+        if semantic_fidelity.is_review_unusable(reason):
+            return "reject", reason
+        return "review", reason
+    if final_state in REVIEW_TERMINAL_STATES:
+        reason = str(
+            getattr(group, "translation_final_reason", "")
+            or "translation_review_required")
+        if semantic_fidelity.is_review_unusable(reason):
+            return "reject", reason
+        return "review", reason
+    return "clean", ""
+
+
+def translation_allows_physical_render(group):
+    """True when translated lettering may enter cleanup/style/render.
+
+    Semantic usability is the first physical-render gate.  A candidate that was
+    routed to review but is still readable may render with review accounting;
+    a candidate whose review reason means "unusable" must preserve the source
+    pixels instead.  Typography fidelity is deliberately downstream of this.
+    """
+
+    state, reason = translation_render_state(group)
+    if state == "reject":
+        return False, reason or "translation_not_renderable"
+    return True, reason
+
+
+def _preserve_unrenderable_translation(group, reason):
+    safe_reason = str(reason or "translation_not_renderable")
+    group.redrawn = False
+    group.manual_review_required = True
+    group.preserved_original = True
+    group.render_disposition = DO_NOT_RENDER
+    group.render_disposition_reason = safe_reason
+    group.visual_validation = {
+        "visual_validation_passed": True,
+        "reason": "translation_render_suppressed",
+        "render_disposition": DO_NOT_RENDER,
+        "render_disposition_reason": safe_reason,
+        "translated_rendered": False,
+        "source_preserved": True,
+    }
+    group.visual_attempts = [dict(group.visual_validation)]
+    _set_translation_terminal_state(
+        group,
+        "manual_review",
+        safe_reason,
+        preserved_original=True,
+    )
+
+
+# Refusals about the *art* (the mask itself was plausible): story text refused for
+# these reasons is rebuilt by the learned model instead of being left in English.
+_LAST_RESORT_ART_REASONS = frozenset({
+    "GLYPH_ART_BOUNDARY_UNCERTAIN",
+    "flat_reconstruction_patch_on_textured_background",
+    "visible_reconstruction_seam_at_mask_boundary",
+    "textured_fill_level_mismatch",
+    "dark_blotch_created_on_textured_art",
+    "large_white_patch_on_nonwhite_background",
+    "local_background_color_mismatch",
+    "spatial_gate_candidate_diagnostic_only",
+    "lettering_contour_ghost",
+})
+
+
+def _last_resort_allowed(group):
+    """Readable prose or an identified sound may use the learned last resort.
+
+    The ordinary refusals also protect art lettering that slipped into a story
+    class (a shop sign "ASSISTANCE", a scanlator credit, a "*dong*"). Removing
+    those is worse than leaving them, so prose needs sentence evidence and SFX
+    needs a recognized sound/word. Typesetting is a separate decision.
+    """
+    text = str(getattr(group, "text", "") or "")
+    classification = str(getattr(group, "classification", "") or "").lower()
+    if classification == "sfx":
+        # CLEAN can remove owned sounds without a target translation.
+        from komyst.translation.sfx_glossary import translate_sfx_fuzzy
+        words = re.findall(r"[A-Za-z]+", text)
+        return bool(words) and (translate_sfx_fuzzy(text) is not None
+                                or all(region_taxonomy.is_english_word(w) for w in words))
+    # "unknown" is the weak label of prose set on art without a balloon ("I WAS
+    # REINCARNATED AS A SWORD."); the story authority below still has to promote it.
+    if classification not in {"speech", "narration", "thought", "unknown"}:
+        return False
+    if region_taxonomy.looks_like_strong_credit(text) or region_taxonomy.looks_like_url(text):
+        return False
+    words = []
+    for token in region_taxonomy._words(text):
+        # OCR glues words ("IFIATLEAST ACCEPTHIS"); read them through the lexicon.
+        words.extend(region_taxonomy.segment_words(token) or [token])
+    real = [w for w in words if region_taxonomy.is_english_word(w)
+            or w.upper() in region_taxonomy._STORY_CLAUSE_MARKERS]
+    sentence = len(real) >= 2 and (
+        re.search(r"[.!?,…]", text)
+        or any(w.upper() in region_taxonomy._STORY_CLAUSE_MARKERS for w in words)
+        or _decorative_textured_story_promotion_allowed(group)
+        or _decorative_short_display_story_promotion_allowed(group)
+        or _legible_sentence_promotion_allowed(group)
+    )
+    return bool(_group_has_story_translation_authority(group) and sentence)
+
+
+def _line_box_mask(group, base_mask):
+    """The group's line boxes, padded for the outline (0.25 line height), plus ``base_mask``."""
+    lines = _cleanup_lines_for_group(group)
+    if not lines or base_mask is None:
+        return None
+    mask = (np.asarray(base_mask) > 0).astype(np.uint8) * 255
+    height, width = mask.shape
+    for line in lines:
+        x, y, w, h = (int(v) for v in line.box)
+        pad = max(3, int(round(0.25 * h)))
+        mask[max(0, y - pad):min(height, y + h + pad), max(0, x - pad):min(width, x + w + pad)] = 255
+    protect = getattr(group, "structure_protect_mask", None)
+    if isinstance(protect, np.ndarray) and protect.shape == mask.shape:
+        mask[protect > 0] = 0
+    return mask
+
+
+def _learned_last_resort_clean(current_bgr, original_bgr, group, cleanup_mask):
+    """Remove refused story text with the learned model rather than leave English.
+
+    Every ordinary strategy refused the region for an art reason. Leaving the
+    source on the page is the worst outcome for a reader, so the verified local
+    model rebuilds the masked art; the result is kept only when the source is
+    verifiably gone (pixel verifier, or the OCR can no longer read any source
+    word). It is marked for art review unless it clears the same reconstruction
+    gates as every other strategy.
+    """
+    attempt = {"strategy": "learned_last_resort", "art_fidelity_uncertain": True}  # until the gates clear it
+    if not (config.CLEAN_LEARNED_LAST_RESORT and config.ADVANCED_ART_INPAINTING):
+        attempt["reason"] = "learned_last_resort_disabled"
+        return {"cleaned": None, "attempt": attempt}
+    cleaned = _learned_inpaint(current_bgr, group, cleanup_mask)
+    if cleaned is None:  # unavailable model keeps the refusal
+        attempt["reason"] = "learned_last_resort_unavailable"
+        attempt["error"] = (getattr(group, "learned_texture_fill", None) or {}).get("reason")
+        return {"cleaned": None, "attempt": attempt}
+    removal = _uncovered_source_text_evidence(original_bgr, cleaned, group, cleanup_mask)
+    attempt["source_text_removal"] = removal
+    status = _source_removal_status(group, removal)
+    legibility = _legible_source_residual(cleaned, group)
+    attempt["residual_ocr_check"] = legibility
+    # Verified by pixels or not, a source word the OCR still reads keeps the refusal.
+    if legibility.get("status") == "legible" or (
+            status != SOURCE_REMOVAL_VERIFIED and legibility.get("status") != "not_legible"):
+        attempt["reason"] = "learned_last_resort_source_still_present"
+        return {"cleaned": None, "attempt": attempt}
+    # The same reconstruction gates every other strategy passes: a result that
+    # clears all of them (no patch, seam, blotch or lettering ghost, texture kept)
+    # is not flagged just for having come from the last resort.
+    gate_metrics = {}
+    failure = _reconstruction_gate_failure(
+        original_bgr, cleaned, group, cleanup_mask, getattr(group, "background_type", None),
+        "learned_last_resort", gate_metrics)
+    attempt["reconstruction_gate_failure"] = failure
+    attempt["art_fidelity_uncertain"] = bool(failure or gate_metrics.get("art_fidelity_uncertain"))
+    attempt["reason"] = ("learned_last_resort_accepted_for_review" if attempt["art_fidelity_uncertain"]
+                         else "learned_last_resort_accepted")
+    attempt["clean_validation_passed"] = True
+    return {"cleaned": cleaned, "attempt": attempt}
+
+
+def _render_on_clean_rescue(before_group, clean_before, clean_after, original_bgr, group, clean_mask, font_path):
+    """Draw the translation where the CLEAN pass removed the source: (page, allowed) or (None, None).
+
+    The cleaned pixels of this group (``clean_after`` differs from
+    ``clean_before`` inside ``clean_mask``) are moved onto the translated page,
+    the translation is drawn, and the result must pass the ordinary visual bounds
+    and leave no legible source word; otherwise the English page is kept.
+    """
+    mask = np.asarray(clean_mask) > 0
+    canvas = before_group.copy()
+    if clean_before is not None and clean_before.shape == before_group.shape:
+        prior_rendered = np.any(before_group != clean_before, axis=2)
+        transfer_mask = mask & ~prior_rendered
+    else:
+        transfer_mask = mask
+    canvas[transfer_mask] = clean_after[transfer_mask]
+    candidate = str(group.translation_candidate or group.translation or "")
+    previous_translation, previous_valid = group.translation, group.translation_valid
+    group.translation = candidate
+    group.translation_valid = True
+    rendered = _draw_group_translation(canvas, group, font_path, strategy="primary", source_bgr=original_bgr)
+    if group.translation_valid is False:
+        group.translation, group.translation_valid = previous_translation, previous_valid
+        return None, None
+    allowed = _draw_allowed_group_mask(original_bgr.shape, group, cleanup_mask=clean_mask)
+    rendered, summary = _enforce_visual_bounds(before_group, rendered, allowed, group=group,
+                                               mask_metrics={"strategy": "clean_rescue"})
+    bounded_clean = np.where(allowed[..., None] > 0, canvas, before_group)
+    legibility = _legible_source_residual(bounded_clean, group)
+    summary["residual_ocr_check"] = legibility
+    group.visual_attempts = list(getattr(group, "visual_attempts", []) or []) + [summary]
+    if not summary.get("visual_validation_passed") or legibility.get("status") == "legible":
+        group.translation, group.translation_valid = previous_translation, previous_valid
+        return None, None
+    group.visual_validation = summary
+    return rendered, allowed
+
+
+def _cleanup_strategies(group):
+    strategies = ("primary", "conservative", "glyph_overlay", "caption_overlay", "source_scoped")
+    if (getattr(config, "GENERATIVE_CAPTION_REPAIR_ENABLED", False)
+            and str(getattr(group, "classification", "")).lower() not in {"sfx", "logo", "credit"}):
+        return ("caption_effect",) + strategies
+    return strategies
+
+
+def _caption_effect_flux_edit(image, *, prompt, group):
+    from komyst.clean.inpainting import flux_edit
+
+    diagnostic_path = None
+    context = _FLUX_FAILURE_CONTEXT.get()
+    if context:
+        errors_dir, page_index = context
+        raw_region = str(getattr(group, "region_id", "") or getattr(group, "group_id", "region"))
+        safe_region = re.sub(r"[^A-Za-z0-9_.-]+", "_", raw_region).strip("._-") or "region"
+        diagnostic_path = errors_dir / f"flux_{page_index:03}_{safe_region}.log"
+
+    attempts = []
+    telemetry = {}
+    edited = flux_edit.flux_reference_edit(
+        image, prompt=prompt, purpose="caption_effect", telemetry=telemetry,
+        diagnostic_path=diagnostic_path,
+    )
+    attempts.append(dict(telemetry))
+    if (edited is None
+            and telemetry.get("process_failure_category") == "output_or_process_failure"):
+        retry_telemetry = {}
+        edited = flux_edit.flux_reference_edit(
+            image, prompt=prompt, purpose="caption_effect", telemetry=retry_telemetry,
+            diagnostic_path=diagnostic_path,
+        )
+        attempts.append(dict(retry_telemetry))
+        telemetry = retry_telemetry
+    telemetry["attempts"] = attempts
+    return edited, telemetry
+
+
+def _caption_effect_cleanup(current_bgr, original_bgr, group):
+    """Reconstruct a proven chromatic caption effect through the normal gates."""
+    from komyst.clean.inpainting import flux_edit
+    from komyst.clean.ownership import lettering_effects as effects
+
+    empty = np.zeros(original_bgr.shape[:2], np.uint8)
+    refused = {"mask_valid": False, "reason": "caption_effect_not_eligible"}
+    if (str(getattr(group, "classification", "")).lower() in {"sfx", "logo", "credit", "decorative"}
+            or getattr(group, "preserve_as_name", False) or getattr(group, "ignored", False)
+            or getattr(group, "ocr_quality_blocked", False)):
+        return current_bgr.copy(), empty, refused
+    if not flux_edit.available(purpose="caption_effect"):
+        return current_bgr.copy(), empty, {**refused, "reason": "caption_effect_model_unavailable"}
+    lines = _cleanup_lines_for_group(group)
+    if (not lines or max(line.box[3] for line in lines) < 36
+            or min(line.confidence for line in lines) < .8
+            or any(not (getattr(line, "metadata", None) or {}).get("ocr_line_id") for line in lines)):
+        return current_bgr.copy(), empty, refused
+    completeness = source_completeness.check_live_group(group, render_lines=lines)
+    group.source_completeness = completeness
+    if completeness.get("status") != source_completeness.STATUS_PASS:
+        return current_bgr.copy(), empty, {**refused, "reason": "caption_effect_source_not_complete"}
+    source_key = hashlib.sha256(original_bgr.tobytes() + repr([
+        (line.text, tuple(line.box), line.confidence, line.metadata.get("ocr_line_id"))
+        for line in lines]).encode()).hexdigest()
+    cached = getattr(group, "_caption_effect_result", None)
+    if cached and cached["source_key"] == source_key:
+        if cached["accepted"]:
+            result = current_bgr.copy()
+            result[cached["mask"] > 0] = cached["pixels"]
+            return result, cached["mask"], dict(cached["metrics"])
+        return current_bgr.copy(), empty, dict(cached["metrics"])
+
+    def reject(metrics):
+        group._caption_effect_result = {"source_key": source_key, "accepted": False, "metrics": metrics}
+        return current_bgr.copy(), empty, metrics
+
+    background, background_metrics = _classify_background_region(original_bgr, group)
+    if background not in {"textured_art", "speed_lines", "unknown"}:
+        return reject(refused)
+    group.background_type, group.background_metrics = background, background_metrics
+    glyph_profile = extract_glyph_style_profile(original_bgr, group, group.box)
+    if glyph_profile.get("confidence", 0) < .8 or glyph_profile.get("family_class") not in {"serif", "sans"}:
+        return reject(refused)
+    core = empty.copy()
+    total_letters = 0
+    for line in lines:
+        letters = re.findall(r"[A-Za-z]", str(line.text or ""))
+        if not letters:
+            return reject(refused)
+        pad = max(12, min(48, round(line.box[3] * .36)))
+        ink, _ = _glyph_ink_mask(original_bgr, line.box, padding=pad, dark_core=True)
+        if ink is None:
+            return reject(refused)
+        count, labels, stats, _ = cv2.connectedComponentsWithStats(ink, 8)
+        components = [label for label in range(1, count) if stats[label, 3] >= line.box[3]*.48]
+        if len(components) != len(letters):
+            return reject({**refused, "reason": "caption_effect_glyph_geometry_incomplete"})
+        x, y, w, h = _expanded_box(line.box, original_bgr.shape, pad)
+        core[y:y+h, x:x+w] |= np.isin(labels, components).astype(np.uint8)*255
+        total_letters += len(letters)
+    if total_letters < 8:
+        return reject(refused)
+    layers = effects.build_effect_layers(original_bgr, core, [line.box for line in lines],
+        neighbor_boxes=getattr(group, "neighbor_text_boxes", ()))
+    if layers is None:
+        return reject(refused)
+    group._caption_effect_layers = layers
+    group._caption_effect_source_hash = hashlib.sha256(original_bgr.tobytes()).hexdigest()
+    group.structure_protect_mask = layers.protected > 0
+    telemetry = {}
+    x, y, w, h = layers.crop_box
+    purple = 130 <= layers.profile["halo_hue"] <= 170
+    surface = "dark purple comic background" if purple else "comic background with its original colors"
+    glow = "purple glow" if purple else "colored glow"
+    lines_and_effects = "fine white radial lines and purple laser beams" if purple and background == "speed_lines" else "existing lines and lighting effects"
+    prompt = (f"Remove all printed typography from the image. Erase the black text and all {glow} shaped like letters. "
+              f"Fill the erased areas with the surrounding {surface} and continue the {lines_and_effects}. "
+              "Preserve the camera angle, colors and objects. The result contains no text, letters, words, symbols or caption boxes.")
+    edited, telemetry = _caption_effect_flux_edit(
+        original_bgr[y:y+h, x:x+w], prompt=prompt, group=group,
+    )
+    metrics = {"strategy": "caption_effect", "background_type": background,
+               "inpaint_method": "flux2_klein_reference", "effect_profile": layers.profile,
+               "generative_telemetry": telemetry, "glyphs_verified": total_letters}
+    if edited is None:
+        return reject({**metrics, "mask_valid": False,
+                       "reason": str(telemetry.get("reason") or "generative_edit_failed")})
+    generated = original_bgr.copy()
+    generated[y:y+h, x:x+w] = edited
+    cleaned = effects.composite_effect(original_bgr, generated, layers)
+    mask = layers.authorized
+    failure = _reconstruction_gate_failure(original_bgr, cleaned, group, mask, background, "caption_effect", metrics)
+    leak = _inpaint_change_metrics(original_bgr, cleaned, mask)
+    metrics.update(leak)
+    if failure or leak["changed_pixels_outside_mask"]:
+        return reject({**metrics, "mask_valid": False, "reason": failure or "effect_outside_mask_change"})
+    legibility = _legible_source_residual(cleaned, group, include_shared_tokens=True)
+    metrics["residual_ocr_check"] = legibility
+    if legibility.get("status") != "not_legible":
+        return reject({**metrics, "mask_valid": False, "reason": "caption_effect_source_removal_unverified"})
+    pixels = int(np.count_nonzero(mask))
+    metrics.update({"mask_valid": True, "reason": "ok", "lettering_refined_before_fill": True,
+                    "mask_pixels_before_lettering_refine": pixels, "mask_pixels": pixels,
+                    "text_component_pixels": pixels, "source_glyph_pixels": int(np.count_nonzero(core)),
+                    "mask_to_text_area_ratio": 1.0, "caption_effect_reconstructed": True})
+    group.background_metrics["cleanup_fill_source"] = "flux2_klein_reference"
+    group._caption_effect_result = {"source_key": source_key, "accepted": True, "mask": mask,
+                                    "pixels": cleaned[mask > 0].copy(), "metrics": dict(metrics)}
+    result = current_bgr.copy()
+    result[mask > 0] = cleaned[mask > 0]
+    return result, mask, metrics
+
+
+def _clean_source_for_clean_artifact(current_bgr, original_bgr, group):
+    """Remove owned source glyphs for the CLEAN artifact without drawing a target.
+
+    CLEAN is evidence of source-text removal, not proof that a provider supplied
+    a renderable translation.  The translated page remains fail-closed when its
+    target is unusable; this separate pass prevents that safety decision from
+    silently turning the professional CLEAN layer back into the original page.
+    """
+
+    attempts = []
+    last_resort_mask = None
+    group.clean_local_attempted = True
+    group.spatial_harmonic_gate_rejected = False
+    for strategy in _cleanup_strategies(group):
+        cleaned, cleanup_mask, metrics = _remove_text_for_group(
+            current_bgr,
+            original_bgr,
+            group,
+            strategy=strategy,
+        )
+        metrics = dict(metrics or {})
+        attempt = {"strategy": strategy, **metrics}
+        if (last_resort_mask is None and cleanup_mask is not None and np.any(cleanup_mask)
+                and str(metrics.get("reason") or "") in _LAST_RESORT_ART_REASONS):
+            last_resort_mask = cleanup_mask.copy()
+        if not metrics.get("mask_valid", False):
+            attempts.append(attempt)
+            continue
+        # _remove_text_for_group already filled and checked this exact mask.
+        removal = _uncovered_source_text_evidence(
+            original_bgr,
+            cleaned,
+            group,
+            cleanup_mask,
+        )
+        attempt["source_text_removal"] = removal
+        attempt["in_mask_residual"] = in_mask_residual_metrics(
+            original_bgr, cleaned, cleanup_mask,
+        )
+        source_removal_passed = not _source_removal_incomplete(group, removal)
+        if not source_removal_passed and last_resort_mask is None:
+            # Removal measured incomplete: source left on the page, the case the
+            # learned last resort's line boxes exist for.
+            last_resort_mask = cleanup_mask.copy()
+        attempt["spatial_harmonic_gate_rejected"] = bool(
+            getattr(group, "spatial_harmonic_gate_rejected", False)
+        )
+        attempt["clean_validation_passed"] = bool(
+            source_removal_passed and not attempt["spatial_harmonic_gate_rejected"]
+        )
+        if source_removal_passed and attempt["spatial_harmonic_gate_rejected"]:
+            attempt["reason"] = "spatial_gate_candidate_diagnostic_only"
+        if attempt["clean_validation_passed"]:
+            # The pixel verifier shares the mask's blind spots (red letters on blue
+            # art in grayscale, letters fused with same-colour art): an accepted
+            # result in which the OCR still reads a source word is not clean.
+            legibility = _legible_source_residual(cleaned, group)
+            attempt["acceptance_ocr_check"] = legibility
+            if legibility.get("status") == "legible":
+                attempt["clean_validation_passed"] = False
+                attempt["reason"] = "source_text_still_legible_after_cleanup"
+                if last_resort_mask is None:
+                    last_resort_mask = cleanup_mask.copy()
+        attempts.append(attempt)
+        if attempt["clean_validation_passed"]:
+            # Text is gone, but a reconstruction markedly smoother than the art
+            # around it must stay visible as a fidelity finding, not read as clean.
+            fidelity_uncertain = bool(attempt.get("art_fidelity_uncertain"))
+            group.clean_artifact_validation = {
+                "clean_validation_passed": True,
+                "strategy": strategy,
+                "source_text_removal": removal,
+                "art_fidelity_uncertain": fidelity_uncertain,
+                "attempts": attempts,
+            }
+            from komyst.clean.disposition import RegionDisposition
+            group.clean_disposition = RegionDisposition.LOCAL_SAFE.value
+            group.clean_disposition_reason = (
+                "owned_source_text_removed_art_fidelity_uncertain" if fidelity_uncertain
+                else "owned_source_text_removed_and_validated")
+            group.clean_disposition_confidence = float(getattr(group, "quality_score", 0.0) or 0.0)
+            return cleaned, cleanup_mask, strategy, True
+
+    rescued = {"cleaned": None}
+    if last_resort_mask is not None and _last_resort_allowed(group):
+        # The line boxes first - every pixel of the lettering is rebuilt, so letters
+        # fused with same-colour art (white letters touching light streaks or
+        # drips) cannot survive outside an art-respecting mask, and neither
+        # verifier nor OCR reliably sees such remains. The art-respecting mask is
+        # the fallback. Either way the result is marked for art review.
+        is_sfx_or_art = (
+            str(getattr(group, "classification", "") or "").lower() == "sfx"
+            or str(getattr(group, "background_type", "") or "").lower() in {"sfx_area", "textured_art", "speed_lines"}
+        )
+        candidate_masks = (last_resort_mask,) if is_sfx_or_art else (last_resort_mask, _line_box_mask(group, last_resort_mask))
+        for candidate_mask in candidate_masks:
+            if candidate_mask is None:
+                continue
+            rescued = _learned_last_resort_clean(current_bgr, original_bgr, group, candidate_mask)
+            rescued["attempt"]["mask_kind"] = "art_respecting" if candidate_mask is last_resort_mask else "line_boxes"
+            attempts.append(rescued["attempt"])
+            if rescued["cleaned"] is not None:
+                last_resort_mask = candidate_mask
+                break
+        if rescued["cleaned"] is not None:
+            uncertain = bool(rescued["attempt"].get("art_fidelity_uncertain", True))
+            group.clean_artifact_validation = {
+                "clean_validation_passed": True,
+                "strategy": "learned_last_resort",
+                "source_text_removal": rescued["attempt"].get("source_text_removal"),
+                "art_fidelity_uncertain": uncertain,
+                "attempts": attempts,
+            }
+            from komyst.clean.disposition import RegionDisposition
+            group.clean_disposition = RegionDisposition.LOCAL_SAFE.value
+            group.clean_disposition_reason = ("owned_source_text_removed_learned_last_resort" if uncertain
+                                              else "owned_source_text_removed_and_validated")
+            group.clean_disposition_confidence = float(getattr(group, "quality_score", 0.0) or 0.0)
+            return rescued["cleaned"], last_resort_mask, "learned_last_resort", True
+    group.clean_artifact_validation = {
+        "clean_validation_passed": False,
+        "reason": "clean_source_removal_unresolved",
+        "attempts": attempts,
+    }
+    from komyst.clean.disposition import RegionDisposition
+    hard_signals = {
+        "flat_reconstruction_patch_on_textured_background",
+        "art_fidelity_uncertain",
+        "seam_suspected",
+        "textured_fill_level_mismatch",
+        "flat_patch_rejected",
+        "visible_reconstruction_seam_at_mask_boundary",
+    }
+    owned_story = _group_has_story_translation_authority(group)
+    attempts_have_hard_signal = any(
+        any(attempt.get(key) is True for key in ("art_fidelity_uncertain", "seam_suspected", "flat_patch_rejected"))
+        or str(attempt.get("reason") or "") in hard_signals
+        for attempt in attempts
+    )
+    if owned_story and attempts_have_hard_signal:
+        group.clean_disposition = RegionDisposition.LOCAL_HARD.value
+        group.clean_disposition_reason = "owned_text_local_reconstruction_rejected"
+        group.clean_disposition_confidence = float(getattr(group, "quality_score", 0.0) or 0.0)
+    elif owned_story:
+        group.clean_disposition = RegionDisposition.LOCAL_HARD.value
+        group.clean_disposition_reason = "owned_text_local_reconstruction_unresolved"
+        group.clean_disposition_confidence = float(getattr(group, "quality_score", 0.0) or 0.0)
+    else:
+        group.clean_disposition = RegionDisposition.REVIEW_SEMANTIC.value
+        group.clean_disposition_reason = "local_clean_failed_without_proven_story_ownership"
+        group.manual_review_required = True
+    group.manual_review_required = True
+    return current_bgr, None, "", False
+
+
+def _terminal_translation_failure_reason(group, validation_reason, candidate):
+    candidate_text = clean_ocr_text(candidate)
+    if not candidate_text:
+        return "missing_translation_candidate"
+    if _normalized_translation_text(candidate_text) == _normalized_translation_text(
+        group.text
+    ):
+        if _ocr_unintelligible_source_text(group.text):
+            return OCR_UNINTELLIGIBLE_SOURCE_REASON
+        return "untranslated_source_after_retries"
+    if str(validation_reason or "").startswith(
+        (
+            "mixed_language",
+            "english_phrase",
+            "residual_english",
+            "residual_inflected_english",
+            "residual_source_language",
+            "residual_spanish",
+            "multilingual_partial",
+            "untranslated_english",
+            "untranslated_single_english",
+        )
+    ):
+        return "residual_source_language_after_retries"
+    if semantic_fidelity.is_fidelity_reason(validation_reason):
+        return "semantic_fidelity_failed_after_retries"
+    if str(validation_reason or "").startswith("strict_retry_error"):
+        return "translation_failed_after_retries"
+    return "invalid_translation_after_retries"
+
+
+def _finalize_proper_name_only(group, candidate, *, proven=False):
+    """Close a name-only group as correctly preserved instead of untranslated.
+
+    A balloon holding just a character's name has no sentence to translate: keeping
+    the name verbatim is the right output, not a missing translation. Routed through
+    the failure path it produced a candidate equal to the source, a retry storm and a
+    manual review, so a whole chapter was held back by a name that was already right.
+
+    ``proven`` means the caller already established every kept word is an entity from
+    chapter evidence, which is a stronger answer than the lone-token shape this asks
+    for; without it the shape still has to hold.
+    """
+    if not proven and not group_is_untranslatable_name(group, candidate):
+        return False
+    group.translation = group.text
+    group.translation_candidate = group.text
+    group.translation_valid = True
+    group.translation_validation_reason = PROPER_NAME_ONLY_REASON
+    group.rejected_translation = ""
+    group.manual_review_required = False
+    _set_translation_terminal_state(
+        group,
+        "preserved_original",
+        PROPER_NAME_ONLY_REASON,
+        preserved_original=True,
+    )
+    return True
+
+
+def _is_sound_lettering(group):
+    """A sound effect, or a lone sound/action label lettered as art ("GRIN")."""
+    if group.classification == "sfx":
+        return True
+    from komyst.translation.sfx_glossary import translate_sfx_fuzzy
+
+    words = re.findall(r"[A-Za-z]+", str(group.text or ""))
+    return 0 < len(words) <= 2 and translate_sfx_fuzzy(group.text) is not None
+
+
+def _finalize_translation_failure(
+    group,
+    reason,
+    *,
+    candidate="",
+    rejected_candidate=None,
+    validator_reason="",
+):
+    if reason == "translation_not_rendered_after_validation" and _is_sound_lettering(group):
+        # A sound effect whose translation could not be drawn safely keeps its
+        # own lettering - part of the art, nothing a reader loses - instead of
+        # becoming a review item.
+        group.manual_review_required = False
+        _set_translation_terminal_state(
+            group, "preserved_original", "sfx_original_lettering_kept", preserved_original=True,
+        )
+        return
+    candidate = clean_ocr_text(candidate)
+    rejected_candidate = clean_ocr_text(
+        candidate if rejected_candidate is None else rejected_candidate
+    )
+    if candidate:
+        group.translation_candidate = _match_source_case(group.text, candidate)
+    if rejected_candidate:
+        group.rejected_translation = _match_source_case(
+            group.text,
+            rejected_candidate,
+        )
+    group.translation = ""
+    group.translation_valid = False
+    group.translation_validation_reason = str(
+        validator_reason or group.translation_validation_reason or reason
+    )
+    group.translation_unresolved = True
+    group.trusted_translation_missing = True
+    group.source_fallback_prevented = True
+    group.translation_attempts_exhausted = bool(
+        str(reason).endswith("_after_retries")
+        or str(reason)
+        in {
+            "untranslated_source_after_retries",
+            "missing_translation_candidate",
+            "translation_not_rendered_after_validation",
+        }
+    )
+    group.manual_review_required = True
+    state = (
+        "translation_failed"
+        if str(reason).startswith("translation_failed")
+        else "manual_review"
+    )
+    _set_translation_terminal_state(
+        group,
+        state,
+        reason,
+        preserved_original=True,
+    )
+    # Single place the failure path can hand a usable PT-BR candidate back to the
+    # renderer. The region stays review-required and carries its real reason; only
+    # the choice between "ship PT-BR under review" and "leave English on the page"
+    # changes.  First: the strict terminology path (candidate must be PTBR_CLEAN).
+    # Second: the quality-only path (candidate is Portuguese but has a grammar or
+    # OCR-artifact defect - still better than shipping English).
+    renderable = terminology_review_render_candidate(group)
+    if not renderable:
+        renderable = _quality_review_render_candidate(group)
+    if renderable:
+        group.translation = renderable
+        group.preserved_original = False
+
+
+def _ensure_translation_terminal_state(group):
+    if group.translation_final_state in TRANSLATION_TERMINAL_STATES:
+        return
+    if group.ignored or group.preserve_as_name:
+        if group.manual_review_required:
+            _set_translation_terminal_state(
+                group,
+                "manual_review",
+                group.ignore_reason or "translation_review_required",
+                preserved_original=True,
+            )
+            return
+        _set_translation_terminal_state(
+            group,
+            "skipped_with_reason",
+            group.ignore_reason or "translation_not_required",
+            preserved_original=True,
+        )
+        return
+    if not group.sent_to_translation:
+        _set_translation_terminal_state(
+            group,
+            "skipped_with_reason",
+            "translation_not_selected",
+            preserved_original=True,
+        )
+        return
+    if not group.translation_valid:
+        _finalize_translation_failure(
+            group,
+            _terminal_translation_failure_reason(
+                group,
+                group.translation_validation_reason,
+                group.translation_candidate or group.translation,
+            ),
+            candidate=group.translation_candidate,
+            validator_reason=group.translation_validation_reason,
+        )
+        return
+    if group.visual_attempts and not group.redrawn:
+        _finalize_translation_failure(
+            group,
+            "translation_not_rendered_after_validation",
+            candidate=group.translation_candidate or group.translation,
+        )
+        return
+    _set_translation_terminal_state(
+        group,
+        "translated",
+        group.translation_validation_reason or "ok",
+        preserved_original=False,
+    )
+
+
+def render_analyzed_image(
+    original_bgr,
+    raw_lines,
+    candidates,
+    groups,
+    font_path=None,
+    debug_folder=None,
+    page_index=1,
+    image_path=None,
+    stage_timings=None,
+    forensic_capture_root=None,
+    capture=None,
+    typeset=True,
+    flux_error_dir=None,
+):
+    with flux_failure_diagnostic_context(flux_error_dir, page_index), ocr_line_provenance.page(page_index):
+        return _render_analyzed_image(
+            original_bgr,
+            raw_lines,
+            candidates,
+            groups,
+            font_path=font_path,
+            debug_folder=debug_folder,
+            page_index=page_index,
+            image_path=image_path,
+            stage_timings=stage_timings,
+            forensic_capture_root=forensic_capture_root,
+            capture=capture,
+            typeset=typeset,
+        )
+
+
+def _render_analyzed_image(
+    original_bgr,
+    raw_lines,
+    candidates,
+    groups,
+    font_path=None,
+    debug_folder=None,
+    page_index=1,
+    image_path=None,
+    stage_timings=None,
+    forensic_capture_root=None,
+    capture=None,
+    typeset=True,
+):
+    def timed_substage(name, fn, *args, **kwargs):
+        started = time.perf_counter()
+        value = fn(*args, **kwargs)
+        elapsed = time.perf_counter() - started
+        if stage_timings is not None:
+            bucket = stage_timings.setdefault("cleanup_substages", {})
+            entry = bucket.setdefault(name, {"call_count": 0, "total_ms": 0.0, "max_single_call_ms": 0.0})
+            ms = elapsed * 1000.0
+            entry["call_count"] += 1
+            entry["total_ms"] += ms
+            entry["max_single_call_ms"] = max(entry["max_single_call_ms"], ms)
+        return value
+
+    forensic_capture = (
+        CleanupForensicCapture(forensic_capture_root)
+        if forensic_capture_root
+        else None
+    )
+    original = original_bgr.copy()
+    if typeset:
+        valid_groups = get_translatable_groups(groups)
+        render_group_ids = {id(group) for group in valid_groups}
+        clean_only_groups = [
+            group
+            for group in get_cleanable_translatable_groups(groups)
+            if id(group) not in render_group_ids
+        ]
+    else:
+        # CLEAN-only render: erase the owned source text and draw NO translated glyphs.
+        # Every cleanable group goes through the existing clean-only path (below), so the
+        # clean artwork is produced without duplicating any cleanup logic. final is set to
+        # the cleaned buffer after the loop.
+        valid_groups = []
+        clean_only_groups = list(get_cleanable_translatable_groups(groups))
+    final = original.copy()
+    inpainted = original.copy()
+    text_mask = np.zeros(original.shape[:2], dtype=np.uint8)
+    allowed_mask = np.zeros(original.shape[:2], dtype=np.uint8)
+    inpaint_seconds = 0.0
+    redraw_seconds = 0.0
+    cleanup_seconds = 0.0
+    typography_seconds = 0.0
+    quality_seconds = 0.0
+    render_started = time.perf_counter()
+
+    # Every other text on the page bounds where a translation may spread when it
+    # follows its balloon's shape (two texts can share one white region).
+    for group in groups:
+        group.neighbor_text_boxes = [tuple(int(v) for v in other.box) for other in groups
+                                     if other is not group and not getattr(other, "ignored", False)]
+    for group in valid_groups:
+        group._review_before_render = bool(getattr(group, "manual_review_required", False))
+        # Boundary immediately before inpainting/redraw consume the group: this is
+        # the exact text/geometry the renderer sees, not a later reconstruction.
+        render_lines = _cleanup_lines_for_group(group)
+        ocr_line_provenance.record_render_input(
+            group,
+            lines=render_lines,
+            reason="render_analyzed_image",
+        )
+        # Pre-render guard: source content the group owns must still be present in
+        # what the renderer was handed.  Detection only - the text is never
+        # rewritten and the provider is never called again, because the provider
+        # never received the lost token in the first place.
+        group.source_completeness = source_completeness.check_live_group(
+            group,
+            render_lines=render_lines,
+        )
+        if group.source_completeness.get("status") in {
+            source_completeness.STATUS_FAIL,
+            source_completeness.STATUS_REVIEW,
+        }:
+            group.manual_review_required = True
+        before_group = final.copy()
+        group.visual_attempts = []
+        accepted = False
+        accepted_cleaned_bgr = None
+        accepted_cleanup_mask = None
+        accepted_strategy = ""
+        accepted_allowed_mask = None
+        advanced_fallback_mask = None
+        advanced_fallback_metrics = None
+
+        render_allowed, render_block_reason = translation_allows_physical_render(group)
+        if not render_allowed:
+            clean_started = time.perf_counter()
+            inpainted, clean_mask, _clean_strategy, clean_ok = (
+                _clean_source_for_clean_artifact(inpainted, original, group)
+            )
+            clean_elapsed = time.perf_counter() - clean_started
+            cleanup_seconds += clean_elapsed
+            inpaint_seconds += clean_elapsed
+            if clean_ok and clean_mask is not None:
+                text_mask = cv2.bitwise_or(text_mask, clean_mask)
+            _preserve_unrenderable_translation(group, render_block_reason)
+            continue
+
+        if _translation_echoes_source(group):
+            group.redrawn = False
+            # An echo is only a clean, no-review preserve when the source itself
+            # has the shape of a lone name/token (branding, proper names, stylized
+            # vocalizations). Anything wider - an ordinary multi-word story
+            # sentence the provider happened to hand back unchanged - is a
+            # translation that never actually happened, and shipping it silently
+            # as "preserved_original" is how ordinary dialogue/narration stays
+            # English with no trace in the review queue. Pixels still cannot be
+            # invented (fail-closed), so the source stays on the page either way,
+            # but this case must surface for retry/review instead of passing as
+            # clean.
+            if _echo_is_name_shaped(group):
+                group.visual_validation = {
+                    "visual_validation_passed": True,
+                    "reason": "source_echo_preserved_original",
+                    "render_preserved_source_echo": True,
+                }
+                # Preserve the original pixels either way, but let a proven reason such as
+                # ``proper_name_only`` survive: the precedence policy in
+                # ``_set_translation_terminal_state`` keeps the specific reason and only
+                # takes this generic one when none was proven earlier.
+                # A clean, no-review preserve: a flag an earlier stage raised on
+                # the same lone token does not survive it.
+                group.manual_review_required = False
+                if (str(getattr(group, "clean_disposition", "") or "") == "PENDING_LOCAL"
+                        and not getattr(group, "clean_local_attempted", False)):
+                    # The pixels stay on purpose and were never cleaned: record it as the
+                    # final disposition. Left as PENDING_LOCAL it reads as "unresolved" and
+                    # fails the page's clean certificate (every preserved SFX did).
+                    from komyst.clean.disposition import RegionDisposition
+                    group.clean_disposition = (
+                        RegionDisposition.PRESERVE_SFX if group.classification == "sfx"
+                        else RegionDisposition.PRESERVE_ART
+                    ).value
+                    group.clean_disposition_reason = "source_echo_preserved_original"
+                _set_translation_terminal_state(
+                    group,
+                    "preserved_original",
+                    "source_echo_preserved_original",
+                    preserved_original=True,
+                )
+            else:
+                group.visual_validation = {
+                    "visual_validation_passed": False,
+                    "reason": "source_echo_unresolved_story_text",
+                    "render_preserved_source_echo": True,
+                }
+                group.manual_review_required = True
+                _set_translation_terminal_state(
+                    group,
+                    "manual_review",
+                    "source_echo_unresolved_story_text",
+                    preserved_original=True,
+                )
+            continue
+
+        region_fidelity_uncertain = False
+        fallback_mask_candidate = None
+        # Large SFX splash lettering over art: the four broad strategies
+        # measurably fail one after another (each costs a full cleanup+draw+
+        # validation round, multiple seconds per region) and the region then
+        # goes to the LaMA fallback anyway. Skip straight to the last-resort
+        # strategy for this risk profile; small SFX and dialogue keep the
+        # full cascade.
+        straight_to_lama = bool(
+            config.RENDER_SFX_STRAIGHT_TO_LAMA
+            and str(getattr(group, "classification", "") or "").lower() == "sfx"
+            and str(getattr(group, "background_type", "") or "")
+            in {"sfx_area", "textured_art"}
+            and int(group.box[2]) * int(group.box[3]) >= 8000
+        )
+        for strategy in _cleanup_strategies(group):
+            if straight_to_lama and strategy != "source_scoped":
+                continue
+            inpaint_started = time.perf_counter()
+            cleanup_kwargs = {"strategy": strategy}
+            if forensic_capture is not None:
+                cleanup_kwargs["forensic_capture"] = forensic_capture
+            cleaned, cleanup_mask, mask_metrics = _remove_text_for_group(
+                before_group,
+                original,
+                group,
+                **cleanup_kwargs,
+            )
+            if cleanup_mask is not None and np.any(cleanup_mask):
+                broad_mask = cleanup_mask
+                broad_mask_pixels = int(mask_metrics.get("mask_pixels_before_lettering_refine")
+                                        or np.count_nonzero(cleanup_mask))
+                if not mask_metrics.get("lettering_refined_before_fill"):
+                    cleanup_mask = _refine_lettering_mask(cleanup_mask, group, mask_metrics)
+                # The cleanup routine above already produced a fill. Rebuild it
+                # from the final (tighter) mask only when refinement actually changed
+                # the mask, avoiding a duplicate inpaint call when unchanged.
+                if (
+                    not mask_metrics.get("lettering_refined_before_fill")
+                    and mask_metrics.get("mask_valid")
+                    and cleanup_mask is not None
+                    and np.any(cleanup_mask)
+                    and not np.array_equal(cleanup_mask, broad_mask)
+                ):
+                    cleaned = _apply_cleanup_mask(
+                        before_group, original, group, cleanup_mask, strategy=strategy,
+                    )
+                page_pixels = max(1, int(original.shape[0] * original.shape[1]))
+                mask_pixels = int(np.count_nonzero(cleanup_mask)) if cleanup_mask is not None else 0
+                fill_mask = (
+                    (_grown_fill_mask(group, cleanup_mask) > 0)
+                    if cleanup_mask is not None and np.any(cleanup_mask)
+                    else np.zeros(original.shape[:2], dtype=bool)
+                )
+                fill_mask_pixels = int(np.count_nonzero(fill_mask))
+                text_pixels = max(1, int(mask_metrics.get("text_component_pixels", 0) or 0))
+                changed_base = _inpaint_change_metrics(before_group, cleaned, cleanup_mask)
+                changed_fill = _inpaint_change_metrics(before_group, cleaned, fill_mask)
+                mask_metrics.update({
+                    "mask_pixels_before_lettering_refine": broad_mask_pixels,
+                    "mask_pixels": mask_pixels,
+                    "mask_page_area_pixels": page_pixels,
+                    "mask_page_area_ratio": round(mask_pixels / page_pixels, 7),
+                    "mask_to_text_area_ratio": round(mask_pixels / text_pixels, 4),
+                    "fill_mask_pixels": fill_mask_pixels,
+                    "fill_mask_page_area_ratio": round(fill_mask_pixels / page_pixels, 7),
+                    "fill_mask_to_text_area_ratio": round(fill_mask_pixels / text_pixels, 4),
+                    "fill_mask_expansion_pixels": max(0, fill_mask_pixels - mask_pixels),
+                    "fill_mask_expansion_ratio": round(
+                        max(0, fill_mask_pixels - mask_pixels) / max(1, mask_pixels), 4,
+                    ),
+                    "mask_refine_reduction_ratio": round(
+                        1.0 - mask_pixels / max(1, broad_mask_pixels), 4,
+                    ),
+                    "mask_area_change_ratio": round(
+                        mask_pixels / max(1, broad_mask_pixels) - 1.0, 4,
+                    ),
+                    "changed_pixels_in_mask": changed_base["changed_pixels_in_mask"],
+                    "changed_pixels_outside_mask": changed_base["changed_pixels_outside_mask"],
+                    "changed_fraction_in_mask": changed_base["changed_fraction_in_mask"],
+                    "changed_pixels_inside_fill_mask": changed_fill["changed_pixels_in_mask"],
+                    "changed_pixels_outside_fill_mask": changed_fill["changed_pixels_outside_mask"],
+                    "changed_fraction_in_fill_mask": changed_fill["changed_fraction_in_mask"],
+                    "changed_pixels_in_fill_halo": int(np.count_nonzero(
+                        np.any(np.asarray(cleaned) != np.asarray(before_group), axis=2)
+                        & fill_mask & ~(np.asarray(cleanup_mask) > 0)
+                    )),
+                    "inpaint_method": str(
+                        (getattr(group, "background_metrics", {}) or {}).get("cleanup_fill_source")
+                        or strategy
+                    ),
+                })
+                complex_background = (
+                    str(mask_metrics.get("background_type") or group.background_type).lower()
+                    in {"textured_art", "speed_lines", "sfx_area", "unknown"}
+                    or str((getattr(group, "background_metrics", {}) or {}).get(
+                        "local_background_class", ""
+                    )).lower() in {"gradient", "structured_or_textured"}
+                )
+                if complex_background and mask_metrics["fill_mask_to_text_area_ratio"] > 2.0:
+                    mask_metrics["mask_valid"] = False
+                    mask_metrics["reason"] = "complex_background_mask_exceeds_text_area_limit"
+                    mask_metrics["narrow_mask_reconstruction_retry"] = True
+                if mask_metrics["changed_pixels_outside_fill_mask"] > _LAMA_COMPOSITE_LEAK_BUDGET_PX:
+                    mask_metrics["mask_valid"] = False
+                    mask_metrics["reason"] = "fill_changed_outside_effective_mask"
+                    mask_metrics["narrow_mask_reconstruction_retry"] = True
+                # Recheck the actual candidate against its final mask. This does
+                # not suppress complex-art attempts: a rejected local fill still
+                # proceeds through the existing SFX/LaMA fallback and review path.
+                if mask_pixels:
+                    refine_gate_metrics = {}
+                    refine_gate_failure = _reconstruction_gate_failure(
+                        original, cleaned, group, cleanup_mask,
+                        mask_metrics.get("background_type") or group.background_type,
+                        strategy, refine_gate_metrics,
+                    )
+                    mask_metrics.update(refine_gate_metrics)
+                    if refine_gate_failure:
+                        mask_metrics["mask_valid"] = False
+                        mask_metrics["reason"] = refine_gate_failure
+            cleanup_elapsed = time.perf_counter() - inpaint_started
+            cleanup_seconds += cleanup_elapsed
+            inpaint_seconds += cleanup_elapsed
+            group.mask_metrics = mask_metrics
+            if cleanup_mask is not None and int(np.count_nonzero(cleanup_mask)) > 0:
+                fallback_mask_candidate = cleanup_mask
+                # Complex-art detection is independent of whether this strategy's
+                # mask was usable: SFX masks over art are often mask_valid=False,
+                # and those are exactly the regions that must reach the LaMA
+                # fallback instead of the learned rescue. The finding describes
+                # the REGION, not one strategy's mask: OR it across attempts so
+                # the source_scoped fallback metrics carry it even when that
+                # last-resort mask alone is too narrow to fire.
+                fidelity = _edge_continuity_fidelity_findings(cleaned, original, cleanup_mask, group)
+                mask_metrics["edge_continuity"] = fidelity["edge_continuity"]
+                if fidelity["art_fidelity_uncertain"]:
+                    # A fill that erased line continuity under the mask must not
+                    # ship silently: flag it so this attempt cannot be accepted
+                    # and the region routes to the LaMA-large fallback (or review).
+                    mask_metrics["art_fidelity_uncertain"] = True
+                    region_fidelity_uncertain = True
+            if strategy == "source_scoped":
+                if straight_to_lama and cleanup_mask is not None and int(np.count_nonzero(cleanup_mask)) > 0:
+                    mask_metrics["mask_valid"] = False
+                    mask_metrics["reason"] = "sfx_straight_to_lama"
+                    mask_metrics["art_fidelity_uncertain"] = True
+                    region_fidelity_uncertain = True
+                advanced_fallback_mask = cleanup_mask
+                advanced_fallback_metrics = dict(mask_metrics or {})
+                if region_fidelity_uncertain:
+                    advanced_fallback_metrics["art_fidelity_uncertain"] = True
+                if (
+                    advanced_fallback_mask is None
+                    or int(np.count_nonzero(advanced_fallback_mask)) == 0
+                ) and fallback_mask_candidate is not None:
+                    # The last-resort mask can be empty where a broader strategy
+                    # had a usable one; LaMA still needs pixels to reconstruct.
+                    advanced_fallback_mask = fallback_mask_candidate
+
+            if not mask_metrics.get("mask_valid", False):
+                attempt = {
+                    "strategy": strategy,
+                    **mask_metrics,
+                    "visual_validation_passed": False,
+                    "reason": mask_metrics.get("reason", "invalid_cleanup_mask"),
+                }
+                group.visual_attempts.append(attempt)
+                continue
+
+            redraw_started = time.perf_counter()
+            if forensic_capture is not None:
+                forensic_capture.record_pre_typography(
+                    group,
+                    strategy=strategy,
+                    canvas=cleaned,
+                )
+            rendered = _draw_group_translation(
+                cleaned,
+                group,
+                font_path,
+                strategy=strategy,
+                source_bgr=original,
+            )
+            translated_occupancy = timed_substage("translated_text_occupancy", _translated_text_occupancy_metrics,
+                cleaned,
+                rendered,
+                group,
+            )
+            redraw_elapsed = time.perf_counter() - redraw_started
+            typography_seconds += redraw_elapsed
+            redraw_seconds += redraw_elapsed
+            group_allowed = _draw_allowed_group_mask(
+                original.shape,
+                group,
+                cleanup_mask=cleanup_mask,
+            )
+            quality_started = time.perf_counter()
+            rendered, visual_summary = timed_substage("enforce_visual_bounds", _enforce_visual_bounds,
+                before_group,
+                rendered,
+                group_allowed,
+                group=group,
+                mask_metrics=mask_metrics,
+            )
+            quality_seconds += time.perf_counter() - quality_started
+            # Art findings that do not withhold the render still have to travel
+            # with the attempt that ships, or the verdict cannot see them.
+            for finding in ("art_fidelity_uncertain",
+                            "residual_source_lettering_detected"):
+                if mask_metrics.get(finding):
+                    visual_summary[finding] = True
+            visual_summary.update(translated_occupancy)
+            if visual_summary.get("visual_validation_passed"):
+                # Needs no OCR: the cleanup either covered the source text this
+                # group owns or it did not.  A mask that demonstrably left
+                # source glyphs behind can never be accepted, whatever the
+                # post-render OCR stage is configured to do.
+                removal = _uncovered_source_text_evidence(
+                    original,
+                    rendered,
+                    group,
+                    cleanup_mask,
+                )
+                visual_summary["source_text_removal"] = removal
+                removal_status = _source_removal_status(group, removal)
+                visual_summary["source_removal_status"] = removal_status
+                if removal_status != SOURCE_REMOVAL_VERIFIED:
+                    visual_summary["visual_validation_passed"] = False
+                    visual_summary["reason"] = (
+                        "uncovered_source_text_evidence"
+                        if removal_status == SOURCE_REMOVAL_REJECTED
+                        else "source_removal_unverified"
+                    )
+                if config.POST_RENDER_OCR_VALIDATION:
+                    residual_started = time.perf_counter()
+                    residual_summary = timed_substage("post_render_source_text_check", _post_render_source_text_check,
+                        rendered,
+                        group,
+                        page_index,
+                        original_bgr=original,
+                        cleanup_mask=cleanup_mask,
+                        removal=removal,
+                        rendered_occupancy=translated_occupancy,
+                    )
+                    quality_seconds += time.perf_counter() - residual_started
+                    visual_summary["post_render_ocr"] = residual_summary
+                    if not residual_summary.get("passed", True):
+                        visual_summary["visual_validation_passed"] = False
+                        visual_summary["reason"] = str(
+                            residual_summary.get("reason")
+                            or "post_render_ocr_validation_failed"
+                        )
+            visual_summary["strategy"] = strategy
+            visual_summary["mask_pixels"] = int(np.count_nonzero(cleanup_mask))
+            visual_summary["mask_page_area_ratio"] = mask_metrics.get("mask_page_area_ratio")
+            visual_summary["mask_to_text_area_ratio"] = mask_metrics.get("mask_to_text_area_ratio")
+            visual_summary["fill_mask_pixels"] = mask_metrics.get("fill_mask_pixels")
+            visual_summary["fill_mask_page_area_ratio"] = mask_metrics.get("fill_mask_page_area_ratio")
+            visual_summary["changed_pixels_inside_fill_mask"] = mask_metrics.get("changed_pixels_inside_fill_mask")
+            visual_summary["changed_pixels_outside_fill_mask"] = mask_metrics.get("changed_pixels_outside_fill_mask")
+            visual_summary["inpaint_method"] = mask_metrics.get("inpaint_method") or strategy
+            for key in ("generative_telemetry", "effect_profile", "glyphs_verified",
+                        "paired_boundary_color", "caption_effect_reconstructed",
+                        "protected_effect_art_changed_pixels"):
+                if key in mask_metrics:
+                    visual_summary[key] = mask_metrics[key]
+            group.visual_attempts.append(visual_summary)
+            if (
+                visual_summary.get("visual_validation_passed")
+                and not mask_metrics.get("art_fidelity_uncertain")
+                and group.text_overflow_ratio <= config.MAX_TEXT_OVERFLOW_RATIO
+            ):
+                final = rendered
+                accepted = True
+                accepted_cleanup_mask = cleanup_mask
+                accepted_strategy = strategy
+                accepted_allowed_mask = group_allowed
+                group.visual_validation = visual_summary
+                group.redrawn = True
+                # A region that shipped only because terminology review is safe to
+                # render is still a review item: closing it as "translated" would
+                # leave a review reason next to a "none" quality impact.
+                review_reason = (
+                    group.translation_final_reason
+                    if terminology_review_render_candidate(group) else "")
+                _set_translation_terminal_state(
+                    group,
+                    "manual_review" if review_reason else "translated",
+                    review_reason or group.translation_validation_reason or "ok",
+                    preserved_original=False,
+                )
+                break
+
+        fallback_trace = None
+        if (
+            not accepted
+            and str(getattr(group, "classification", "") or "").lower() == "sfx"
+            and advanced_fallback_mask is not None
+            and int(np.count_nonzero(advanced_fallback_mask)) > 0
+        ):
+            # Decide at the decision point with direct evidence instead of
+            # relying on per-strategy plumbing: strategies can refuse before
+            # masking (leaving metrics empty), so the region evidence is
+            # computed here on the actual fallback mask against the original.
+            direct_fidelity = _edge_continuity_fidelity_findings(
+                inpainted, original, advanced_fallback_mask, group,
+            )
+            advanced_fallback_metrics = dict(advanced_fallback_metrics or {})
+            advanced_fallback_metrics["edge_continuity"] = direct_fidelity["edge_continuity"]
+            if direct_fidelity["art_fidelity_uncertain"]:
+                advanced_fallback_metrics["art_fidelity_uncertain"] = True
+            try:
+                _ys, _xs = np.where(np.asarray(advanced_fallback_mask) > 0)
+                _gray_bg = cv2.cvtColor(np.asarray(before_group), cv2.COLOR_BGR2GRAY)
+                _edges_bg = cv2.Canny(_gray_bg, 60, 160) > 0
+                _ring_bg = None
+                if len(_ys):
+                    _k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (31, 31))
+                    _ring_bg = (cv2.dilate((np.asarray(advanced_fallback_mask) > 0).astype(np.uint8), _k) > 0) & ~(np.asarray(advanced_fallback_mask) > 0)
+                    advanced_fallback_metrics["edge_continuity"]["mask_bbox"] = [int(_xs.min()), int(_ys.min()), int(_xs.max()), int(_ys.max())]
+                    advanced_fallback_metrics["edge_continuity"]["ring_density_before_group"] = round(
+                        float(np.count_nonzero(_edges_bg & _ring_bg)) / max(1, int(np.count_nonzero(_ring_bg))), 5)
+                    advanced_fallback_metrics["edge_continuity"]["page_shape"] = list(np.asarray(original).shape[:2])
+            except Exception:  # noqa: BLE001 - diagnostics must never break render
+                pass
+        if not accepted and (
+            (advanced_fallback_metrics or {}).get("art_fidelity_uncertain")
+            or str(getattr(group, "classification", "") or "").lower() == "sfx"
+        ):
+            fallback_trace = _advanced_art_fallback_eligibility_trace(group, advanced_fallback_metrics)
+            group.advanced_fallback_eligibility_trace = fallback_trace
+            would_run = (
+                _advanced_art_fallback_eligible(group, advanced_fallback_metrics)
+                and advanced_fallback_mask is not None
+                and int(np.count_nonzero(advanced_fallback_mask)) > 0
+            )
+            if not would_run:
+                trace_line = (
+                    "ADVANCED_FALLBACK_BLOCKED "
+                    + json.dumps({k: v for k, v in fallback_trace.items() if k != "flags"}, ensure_ascii=False)
+                    + f" flags={fallback_trace['flags']}"
+                    + f" mask_none={advanced_fallback_mask is None}"
+                    + (f" mask_px={int(np.count_nonzero(advanced_fallback_mask))}" if advanced_fallback_mask is not None else "")
+                )
+                print(trace_line, flush=True)
+                try:
+                    _trace_dir = str(os.environ.get("KOMYST_JOB_OUTPUT_DIR") or "").strip()
+                    if _trace_dir:
+                        with open(os.path.join(_trace_dir, "advanced_fallback_traces.jsonl"), "a", encoding="utf-8") as _handle:
+                            _handle.write(trace_line + "\n")
+                except OSError:
+                    pass
+        if (
+            not accepted
+            and _advanced_art_fallback_eligible(group, advanced_fallback_metrics)
+            and advanced_fallback_mask is not None
+            and int(np.count_nonzero(advanced_fallback_mask)) > 0
+        ):
+            inpaint_started = time.perf_counter()
+            advanced_attempt = _try_advanced_art_fallback(
+                # The translated page can contain Portuguese typography from
+                # groups already accepted in this loop.  LaMa reconstructs
+                # CLEAN pixels, so its context must come from that buffer.
+                inpainted,
+                original,
+                group,
+                advanced_fallback_mask,
+                advanced_fallback_metrics or {},
+                stage_timings,
+            )
+            inpaint_seconds += time.perf_counter() - inpaint_started
+            group.visual_attempts.append(advanced_attempt)
+            if advanced_attempt.get("advanced_fallback_status") == "success":
+                redraw_started = time.perf_counter()
+                advanced_cleaned = advanced_attempt.pop("_advanced_cleaned_bgr")
+                # The inpainter contract is "composited only inside mask".
+                # Verify it against the actual composite base: run 2054d996
+                # showed an accepted-then-far-rejected attempt whose outside
+                # changes sat ~700 px from the mask, i.e. the composite (not
+                # the typography) leaked. A leaking composite is rejected
+                # here, before any draw happens (fail-closed).
+                _leak_px = _lama_composite_leak_px(
+                    inpainted, advanced_cleaned, advanced_fallback_mask,
+                )
+                advanced_attempt["lama_composite_outside_mask_px"] = _leak_px
+                if _leak_px > _LAMA_COMPOSITE_LEAK_BUDGET_PX:
+                    advanced_attempt["advanced_fallback_status"] = "rejected"
+                    advanced_attempt["advanced_fallback_reason"] = (
+                        f"lama_composite_outside_mask:{_leak_px}"
+                    )
+                    _rendered = None
+                else:
+                    _rendered = _draw_group_translation(
+                        advanced_cleaned,
+                        group,
+                        font_path,
+                        strategy="source_scoped",
+                        source_bgr=original,
+                    )
+                if _rendered is None:
+                    rendered = None
+                else:
+                    rendered = _rendered
+                if rendered is not None:
+                    translated_occupancy = timed_substage("translated_text_occupancy", _translated_text_occupancy_metrics,
+                        advanced_cleaned,
+                        rendered,
+                        group,
+                    )
+                    redraw_elapsed = time.perf_counter() - redraw_started
+                    typography_seconds += redraw_elapsed
+                    redraw_seconds += redraw_elapsed
+                    group_allowed = _draw_allowed_group_mask(
+                        original.shape,
+                        group,
+                        cleanup_mask=advanced_fallback_mask,
+                    )
+                    # Validate the DRAW against the composite baseline (not
+                    # before_group): LaMA's own pixels are intentional, only
+                    # the typography must stay inside the allowed region.
+                    rendered, visual_summary = timed_substage("enforce_visual_bounds", _enforce_visual_bounds,
+                        advanced_cleaned,
+                        rendered,
+                        group_allowed,
+                        group=group,
+                        mask_metrics={
+                            **{
+                                key: value
+                                for key, value in advanced_attempt.items()
+                                if not key.startswith("_")
+                            },
+                            "strategy": "source_scoped",
+                            "advanced_inpaint_used": True,
+                        },
+                    )
+                    visual_summary.update(translated_occupancy)
+                    # The advanced inpaint attempt carries its own pre-render
+                    # telemetry, including the status/reason for the cleanup probe.
+                    # Once the translated target is drawn, the shipping decision
+                    # belongs to ``_enforce_visual_bounds`` plus source-removal
+                    # evidence.  Do not let stale probe verdict fields overwrite the
+                    # post-render visual verdict.
+                    visual_summary.update({
+                        key: value
+                        for key, value in advanced_attempt.items()
+                        if (
+                            not key.startswith("_")
+                            and key not in {"visual_validation_passed", "reason"}
+                        )
+                    })
+                else:
+                    visual_summary = {
+                        "strategy": "lama_large",
+                        "visual_validation_passed": False,
+                        "reason": advanced_attempt.get("advanced_fallback_reason") or "lama_composite_rejected",
+                    }
+                if visual_summary.get("visual_validation_passed"):
+                    removal = _uncovered_source_text_evidence(
+                        original,
+                        rendered,
+                        group,
+                        advanced_fallback_mask,
+                    )
+                    visual_summary["source_text_removal"] = removal
+                    removal_status = _source_removal_status(group, removal)
+                    visual_summary["source_removal_status"] = removal_status
+                    if removal_status != SOURCE_REMOVAL_VERIFIED:
+                        visual_summary["visual_validation_passed"] = False
+                        visual_summary["reason"] = (
+                            "uncovered_source_text_evidence"
+                            if removal_status == SOURCE_REMOVAL_REJECTED
+                            else "source_removal_unverified"
+                        )
+                visual_summary["strategy"] = "lama_large"
+                group.visual_attempts[-1] = visual_summary
+                if (
+                    visual_summary.get("visual_validation_passed")
+                    and group.text_overflow_ratio <= config.MAX_TEXT_OVERFLOW_RATIO
+                ):
+                    final = rendered
+                    accepted = True
+                    accepted_cleaned_bgr = advanced_cleaned
+                    accepted_cleanup_mask = advanced_fallback_mask
+                    accepted_strategy = "lama_large"
+                    accepted_allowed_mask = group_allowed
+                    group.mask_metrics = {
+                        **(advanced_fallback_metrics or {}),
+                        "advanced_inpaint_used": True,
+                        "advanced_fallback_status": "success",
+                        "inpaint_method": (
+                            visual_summary.get("generative_engine") or "lama_large"
+                        ),
+                        "mask_pixels": int(advanced_attempt.get("mask_pixels") or 0),
+                        "fill_mask_pixels": int(advanced_attempt.get("fill_mask_pixels")
+                                                 or advanced_attempt.get("mask_pixels") or 0),
+                        "mask_page_area_ratio": advanced_attempt.get("mask_page_area_ratio"),
+                        "fill_mask_page_area_ratio": advanced_attempt.get("fill_mask_page_area_ratio"
+                                                                            or advanced_attempt.get("mask_page_area_ratio")),
+                        "changed_pixels_in_mask": advanced_attempt.get("changed_pixels_in_mask"),
+                        "changed_pixels_outside_mask": advanced_attempt.get("changed_pixels_outside_mask"),
+                        "changed_fraction_in_mask": advanced_attempt.get("changed_fraction_in_mask"),
+                        "changed_pixels_inside_fill_mask": advanced_attempt.get("changed_pixels_in_mask"),
+                        "changed_pixels_outside_fill_mask": advanced_attempt.get("changed_pixels_outside_mask"),
+                        "changed_fraction_in_fill_mask": advanced_attempt.get("changed_fraction_in_mask"),
+                        "model_id": visual_summary.get("model_id"),
+                        "model_hash_verified": visual_summary.get(
+                            "model_hash_verified"
+                        ),
+                    }
+                    group.visual_validation = visual_summary
+                    group.redrawn = True
+                    _set_translation_terminal_state(
+                        group,
+                        "translated",
+                        group.translation_validation_reason or "ok",
+                        preserved_original=False,
+                    )
+
+        (
+            group.art_reconstruction_status,
+            group.art_reconstruction_reason,
+        ) = art_reconstruction_verdict(group.visual_attempts, accepted=accepted)
+        translation_state, translation_reason = translation_render_state(group)
+        source_removed = bool(
+            accepted
+            and not _source_removal_incomplete(
+                group,
+                (group.visual_validation or {}).get("source_text_removal", {}),
+            )
+        )
+        if accepted:
+            from komyst.clean.disposition import RegionDisposition
+            group.clean_local_attempted = True
+            if source_removed and group.art_reconstruction_status == "clean":
+                group.clean_disposition = RegionDisposition.LOCAL_SAFE.value
+                group.clean_disposition_reason = "owned_source_text_removed_and_validated"
+                group.clean_disposition_confidence = float(
+                    getattr(group, "quality_score", 0.0) or 0.0
+                )
+                group.clean_artifact_validation = {
+                    "clean_validation_passed": True,
+                    "strategy": accepted_strategy,
+                    "source_removal_status": SOURCE_REMOVAL_VERIFIED,
+                    "source_text_removal": (group.visual_validation or {}).get(
+                        "source_text_removal", {}
+                    ),
+                    "art_reconstruction_status": group.art_reconstruction_status,
+                }
+            elif _group_has_story_translation_authority(group):
+                group.clean_disposition = RegionDisposition.REVIEW_OCR.value
+                group.clean_disposition_reason = (
+                    "source_removal_unverified" if not source_removed
+                    else group.art_reconstruction_reason or "art_reconstruction_review_required"
+                )
+                group.clean_artifact_validation = {
+                    "clean_validation_passed": False,
+                    "reason": group.clean_disposition_reason,
+                    "source_removal_status": _source_removal_status(
+                        group,
+                        (group.visual_validation or {}).get("source_text_removal", {}),
+                    ),
+                    "art_reconstruction_status": group.art_reconstruction_status,
+                }
+                group.manual_review_required = True
+            else:
+                group.clean_disposition = RegionDisposition.REVIEW_SEMANTIC.value
+                group.clean_disposition_reason = "local_clean_quality_unverified"
+                group.clean_artifact_validation = {
+                    "clean_validation_passed": False,
+                    "reason": group.clean_disposition_reason,
+                }
+                group.manual_review_required = True
+        (
+            group.render_disposition,
+            group.render_disposition_reason,
+        ) = render_disposition(
+            translation=translation_state,
+            translation_reason=translation_reason,
+            source_removed=source_removed,
+            art=group.art_reconstruction_status or "review",
+            art_reason=group.art_reconstruction_reason,
+        )
+        # A region that shipped under review is still a review item.  Rendering
+        # it was the right call - withholding it would put the English source
+        # back on the page - but it is not clean, so it must not be counted as
+        # clean and it must reach the structured review queue like any other.
+        if group.render_disposition == RENDER_WITH_REVIEW:
+            group.translation_quality_impact = "review_required"
+            group.manual_review_required = True
+        if accepted:
+            text_mask = cv2.bitwise_or(text_mask, accepted_cleanup_mask)
+            allowed_mask = cv2.bitwise_or(allowed_mask, accepted_allowed_mask)
+            commit_started = time.perf_counter()
+            inpainted = timed_substage("commit_accepted_clean", _apply_cleanup_mask,
+                inpainted,
+                original,
+                group,
+                accepted_cleanup_mask,
+                strategy=accepted_strategy,
+                accepted_candidate=accepted_cleaned_bgr,
+            )
+            commit_elapsed = time.perf_counter() - commit_started
+            cleanup_seconds += commit_elapsed
+            inpaint_seconds += commit_elapsed
+            if group.spatial_harmonic_gate_rejected:
+                from komyst.clean.disposition import RegionDisposition
+                group.clean_disposition = RegionDisposition.REVIEW_OCR.value
+                group.clean_disposition_reason = "spatial_gate_candidate_diagnostic_only"
+                group.clean_disposition_confidence = 0.0
+                group.clean_artifact_validation = {
+                    "clean_validation_passed": False,
+                    "reason": "spatial_gate_candidate_diagnostic_only",
+                    "spatial_background_class": str(
+                        (group.background_metrics or {}).get(
+                            "local_background_spatial_class", "INSUFFICIENT_EVIDENCE"
+                        )
+                    ),
+                    "accepted_render_strategy": accepted_strategy,
+                    "render_remains_available_for_review": True,
+                }
+                group.render_disposition = RENDER_WITH_REVIEW
+                group.render_disposition_reason = "spatial_gate_candidate_diagnostic_only"
+                group.manual_review_required = True
+                group.translation_quality_impact = "review_required"
+        else:
+            # A target rejected by typography/semantic/visual gates must not
+            # reintroduce the source into the canonical CLEAN artifact.  The
+            # translated page deliberately retains its source for review; CLEAN
+            # is separately validated as source-free artwork.
+            clean_before = inpainted.copy()
+            _clean_rescue_t0 = time.perf_counter()
+            if (
+                str(getattr(group, "classification", "") or "").lower() == "sfx"
+                and accepted_cleaned_bgr is None
+                and any(a.get("strategy") == "lama_large" and a.get("advanced_fallback_status") == "success" for a in (group.visual_attempts or []))
+                and advanced_fallback_mask is not None
+            ):
+                # Avoid running a redundant 5-strategy + learned_last_resort pass when
+                # lama_large already produced a valid clean reconstruction.
+                clean_mask = advanced_fallback_mask
+                clean_ok = True
+            else:
+                inpainted, clean_mask, _clean_strategy, clean_ok = (
+                    _clean_source_for_clean_artifact(inpainted, original, group)
+                )
+            _clean_rescue_dt = time.perf_counter() - _clean_rescue_t0
+            cleanup_seconds += _clean_rescue_dt
+            inpaint_seconds += _clean_rescue_dt
+            if clean_ok and clean_mask is not None:
+                text_mask = cv2.bitwise_or(text_mask, clean_mask)
+            rescued_render, rescued_allowed = None, None
+            # Sound effects too: the learned reconstruction follows the art around
+            # the lettering (GPU LaMa), and the Portuguese sound is drawn in its
+            # place. Only when even that cannot remove the source does the
+            # translation fall back to a subtitle beside the original lettering.
+            if (clean_ok and clean_mask is not None and typeset
+                    and str(group.translation_candidate or group.translation or "").strip()):
+                # The CLEAN pass (learned last resort included) removed the source
+                # where every render strategy was refused: the translation can be
+                # set on that reconstruction, under the same visual bounds, as a
+                # review item - instead of shipping the English page.
+                _rescue_draw_t0 = time.perf_counter()
+                rescued_render, rescued_allowed = _render_on_clean_rescue(
+                    before_group, clean_before, inpainted, original, group, clean_mask, font_path)
+                _rescue_draw_dt = time.perf_counter() - _rescue_draw_t0
+                typography_seconds += _rescue_draw_dt
+                redraw_seconds += _rescue_draw_dt
+            if rescued_render is not None:
+                final = rescued_render
+                allowed_mask = cv2.bitwise_or(allowed_mask, rescued_allowed)
+                group.redrawn = True
+                group.manual_review_required = True
+                group.render_disposition = RENDER_WITH_REVIEW
+                group.render_disposition_reason = "rendered_on_learned_clean_rescue"
+                group.translation_quality_impact = "review_required"
+                _set_translation_terminal_state(
+                    group, "manual_review", "rendered_on_learned_clean_rescue", preserved_original=False)
+                continue
+            labelled = None
+            if typeset and config.TRANSLATION_LABEL_FALLBACK and _translation_label_eligible(group):
+                labelled = _render_translation_label(
+                    before_group, original, group, font_path,
+                    occupied_boxes=[other.box for other in valid_groups if other is not group])
+            if labelled is not None:
+                final, label_allowed, _label_box, label_mode = labelled
+                allowed_mask = cv2.bitwise_or(allowed_mask, label_allowed)
+                group.redrawn = True
+                group.render_mode = label_mode
+                # The caption settles what the render attempts flagged; a review
+                # raised before rendering (OCR or evidence findings) still stands.
+                group.manual_review_required = bool(getattr(group, "_review_before_render", False))
+                group.render_disposition = RENDER_WITH_REVIEW if group.manual_review_required else RENDER_CLEAN
+                group.render_disposition_reason = f"translation_label_{label_mode}"
+                group.translation_quality_impact = "review_required" if group.manual_review_required else "none"
+                _set_translation_terminal_state(
+                    group, "translated", f"translation_label_{label_mode}", preserved_original=False)
+                continue
+            final = before_group
+            group.redrawn = False
+            group.manual_review_required = True
+            group.visual_validation = (
+                group.visual_attempts[-1]
+                if group.visual_attempts
+                else {
+                    "visual_validation_passed": False,
+                    "reason": "no_safe_render_attempt",
+                }
+            )
+            _finalize_translation_failure(
+                group,
+                "translation_not_rendered_after_validation",
+                candidate=group.translation_candidate or group.translation,
+            )
+
+    # Target-invalid story regions never enter ``valid_groups`` because their
+    # translated page must fail closed.  They still belong in the CLEAN artifact
+    # when OCR/classification established that the owned source is translatable.
+    for group in clean_only_groups:
+        clean_started = time.perf_counter()
+        inpainted, clean_mask, _clean_strategy, clean_ok = (
+            _clean_source_for_clean_artifact(inpainted, original, group)
+        )
+        clean_elapsed = time.perf_counter() - clean_started
+        cleanup_seconds += clean_elapsed
+        inpaint_seconds += clean_elapsed
+        if clean_ok and clean_mask is not None:
+            text_mask = cv2.bitwise_or(text_mask, clean_mask)
+
+    if not typeset:
+        # No glyphs were drawn: the cleaned buffer IS the page the caller receives.
+        final = inpainted
+
+    if stage_timings is not None:
+        stage_timings["inpainting"] = stage_timings.get("inpainting", 0.0) + inpaint_seconds
+        stage_timings["redraw"] = stage_timings.get("redraw", 0.0) + redraw_seconds
+        stage_timings["cleanup"] = stage_timings.get("cleanup", 0.0) + cleanup_seconds
+        stage_timings["typography"] = stage_timings.get("typography", 0.0) + typography_seconds
+        stage_timings["quality"] = stage_timings.get("quality", 0.0) + quality_seconds
+        stage_timings["render"] = stage_timings.get("render", 0.0) + (time.perf_counter() - render_started)
+
+    page_visual_summary = {}
+    # Visual-diff compares drawn glyphs against their allowed bounds; with no typeset there
+    # is nothing to validate and an empty allowed_mask would wrongly roll back the clean.
+    if typeset and config.VISUAL_DIFF_VALIDATION:
+        validated, page_visual_summary = timed_substage("enforce_visual_bounds", _enforce_visual_bounds,
+            original,
+            final,
+            allowed_mask,
+        )
+        if not page_visual_summary.get("visual_validation_passed", True):
+            final = original.copy()
+            for group in valid_groups:
+                if group.redrawn:
+                    group.redrawn = False
+                    group.visual_validation = {
+                        **group.visual_validation,
+                        "visual_validation_passed": False,
+                        "reason": "page_level_visual_guard_rollback",
+                    }
+                    _finalize_translation_failure(
+                        group,
+                        "translation_not_rendered_after_validation",
+                        candidate=group.translation_candidate or group.translation,
+                    )
+        else:
+            final = validated
+
+    debug_data = _debug_payload(image_path, raw_lines, candidates, groups)
+    debug_data["visual_validation"] = page_visual_summary
+
+    if capture is not None:
+        # Canonical "Cleaned" buffer: the page after text removal/inpaint, BEFORE any
+        # translated glyphs. Consumed by the professional PSD exporter (P1). A copy so a
+        # later caller mutating it cannot corrupt the renderer's internal state.
+        capture["cleaned_bgr"] = inpainted.copy()
+        authorized = text_mask.copy()
+        for group in groups:
+            extension = getattr(group, "authorized_fill_extension", None)
+            if isinstance(extension, np.ndarray) and extension.shape == authorized.shape[:2]:
+                authorized[extension] = 255 if authorized.dtype == np.uint8 else 1
+        capture["authorized_cleanup_mask"] = authorized
+
+    if debug_folder:
+        _write_debug_images(
+            debug_folder,
+            page_index,
+            original,
+            final,
+            raw_lines,
+            candidates,
+            groups,
+            text_mask,
+            inpainted,
+            debug_data,
+            allowed_mask=allowed_mask,
+        )
+
+    return final, debug_data
+
+
+def get_font(font_path, size, role="regular", *, prefer_role=False, text=""):
+    font, runtime = font_fidelity.resolve_font(
+        role,
+        size,
+        configured_font_path=font_path,
+        prefer_role=prefer_role,
+        text=text,
+    )
+    try:
+        setattr(font, "komyst_font_runtime", runtime)
+    except Exception:
+        pass
+    return font
+
+
+def _candidate_from_line(line, image_shape):
+    repaired, reason = repair_ocr_text(line.text)
+    assessment = assess_ocr_repair(
+        line.text,
+        repaired,
+        reason,
+        confidence=line.confidence,
+        source_engine=line.engine,
+    )
+    if repaired != line.text:
+        line.metadata = {
+            **(line.metadata or {}),
+            "repair_candidate": {
+                "original_text": line.text,
+                "repaired_text": repaired,
+                "repair_reason": reason,
+                **assessment,
+            },
+            "repair_accepted": bool(assessment["accepted"]),
+        }
+    if repaired != line.text and assessment["accepted"]:
+        # ``line.text`` is about to be rewritten on the shared object; record the
+        # historical value before it is gone.
+        ocr_line_provenance.record_normalization(line, line.text, repaired, reason=reason)
+        line.original_text = line.original_text or line.raw_text or line.text
+        line.repaired_text = repaired
+        line.repair_reason = ";".join(
+            part for part in (line.repair_reason, reason) if part
+        )
+        line.text = repaired
+        line.metadata = {
+            **(line.metadata or {}),
+            "original_text": line.original_text,
+            "repaired_text": repaired,
+            "repair_reason": line.repair_reason,
+        }
+    reason = _line_ignore_reason(line, image_shape)
+    return TextCandidate(line=line, ignored=bool(reason), ignore_reason=reason)
+
+
+def _verified_sweep_display_read(line):
+    """A repeated sound may look like noise, but needs independent pixel proof."""
+    metadata = getattr(line, "metadata", None) or {}
+    return bool(
+        getattr(line, "engine", "") == "paddle_residual_sweep"
+        and float(getattr(line, "confidence", 0)) >= .90
+        and metadata.get("residual_sweep_recovered") is True
+        and metadata.get("residual_sweep_glyphs_verified") is True
+        and re.fullmatch(r"[A-Z]{3,12}", str(getattr(line, "text", "") or ""))
+    )
+
+
+def _line_ignore_reason(line, image_shape):
+    text = clean_ocr_text(line.text)
+    if not text:
+        return "empty_text"
+
+    upper = text.upper()
+    useful_chars = _letters(text)
+    h_img, w_img = image_shape[:2]
+    x, y, w, h = line.box
+
+    if upper not in SHORT_REAL_TEXTS:
+        if len(useful_chars) < 2:
+            return "too_few_useful_chars"
+        if re.fullmatch(r"[\W\d_]+", text):
+            return "number_or_symbols_only"
+
+    if line.confidence < 0.42:
+        return "low_confidence"
+
+    if w < 12 or h < 8 or w * h < 80:
+        return "box_too_small"
+
+    if w > w_img * 0.96 and h > h_img * 0.35:
+        return "box_too_large"
+
+    semantic_span = re.sub(r"^[^A-Za-z0-9]+|[^A-Za-z0-9]+$", "", text)
+    alpha_ratio = len(useful_chars) / max(
+        1,
+        len(re.sub(r"\s+", "", semantic_span)),
+    )
+    if upper not in SHORT_REAL_TEXTS and alpha_ratio < 0.45 and not _holds_real_word(text):
+        return "low_alpha_ratio"
+
+    if _looks_like_noise(text) and not _verified_sweep_display_read(line):
+        return "noise_like_text"
+
+    return ""
+
+
+def _holds_real_word(text):
+    """A dictionary word of >= 3 letters among digits ("56,984 Won", "Account No. 111-...").
+
+    Mostly-digit lines are dropped as numbers, but in-art UI text (a phone screen,
+    a sign with a price) carries words a reader expects translated.
+    """
+    for token in re.findall(r"[A-Za-z]{3,}", str(text or "")):
+        pieces = region_taxonomy.segment_words(token) or [token]
+        if any(len(piece) >= 3 and region_taxonomy.is_english_word(piece) for piece in pieces):
+            return True
+        # Glued to a short word the segmentation refuses ("AccountNo"): a
+        # dictionary word of >= 4 letters opening or closing the token counts.
+        if any(region_taxonomy.is_english_word(token[:k]) or region_taxonomy.is_english_word(token[-k:])
+               for k in range(len(token), 3, -1)):
+            return True
+    return False
+
+
+def _looks_like_noise(text):
+    compact = re.sub(r"\s+", "", text)
+    if not compact:
+        return True
+
+    if len(compact) <= 2 and compact.upper() not in SHORT_REAL_TEXTS:
+        return True
+
+    # Censorship masks (a letter followed by * or #, e.g. "D***", "H#**") are
+    # legitimate placeholders inside real speech, not noise. Neutralize them so
+    # they do not inflate the odd-character ratio and drop translatable dialogue.
+    sanitized = re.sub(
+        r"(?<=[A-Za-z])[*#]+",
+        lambda match: "." * len(match.group()),
+        text,
+    )
+    odd = sum(
+        1
+        for char in sanitized
+        if not (char.isalnum() or char in "'!?.,:; -")
+    )
+    if odd / max(1, len(sanitized)) > 0.28:
+        return True
+
+    letters = _letters(text)
+    normalized = unicodedata.normalize("NFKD", text)
+    vowels = sum(char in "AEIOUaeiou" for char in normalized)
+    if len(letters) >= 5 and vowels == 0:
+        return True
+
+    return False
+
+
+def _text_columns(lines):
+    """Side-by-side text columns of one balloon, in reading order, or ``None``.
+
+    Manga balloons stack two phrases as columns ("UME-/KUN?!" upper right, "WHAT A/
+    COINCI-/DENCE.." lower left); sorting all lines by height interleaved them into
+    "UME- WHAT KUN?! A COINCI- DENCE..". Columns barely overlap horizontally (under
+    20 % of the narrower one) and each holds at least two lines - a single row split
+    in two stays a row. The column that starts higher is read first.
+    """
+    lines = list(lines or [])
+    if len(lines) < 4:
+        return None
+    columns = []
+    for line in sorted(lines, key=lambda item: item.box[0]):
+        x1, x2 = line.box[0], line.box[0] + max(1, line.box[2])
+        if columns:
+            cx1, cx2, members = columns[-1]
+            overlap = min(cx2, x2) - max(cx1, x1)
+            if overlap > 0.2 * min(cx2 - cx1, x2 - x1):
+                columns[-1] = [min(cx1, x1), max(cx2, x2), members + [line]]
+                continue
+        columns.append([x1, x2, [line]])
+    if len(columns) < 2 or any(len(members) < 2 for _, _, members in columns):
+        return None
+    ordered = sorted((members for _, _, members in columns),
+                     key=lambda members: (min(item.box[1] for item in members), min(item.box[0] for item in members)))
+    return ordered
+
+
+def reading_order(lines):
+    """Lines of a text region in reading order: rows top to bottom, then left to right.
+
+    A bbox ``y`` is not by itself a reading order.  Two fragments of the same
+    printed row - a predecessor line that a region re-read came back with split
+    in two, say - differ vertically by a few pixels, and a lexicographic
+    ``(y, x)`` sort turns that jitter into a sentence carrying its suffix in
+    front of its prefix.  Rows are therefore resolved by vertical overlap
+    first, and only whole rows are ordered by ``y``; inside a row the page's
+    horizontal direction decides.
+
+    Geometry stays authoritative - a recogniser that emits its lines out of
+    order is corrected, not obeyed - and the sort is stable, so lines the
+    geometry cannot separate keep the order they arrived in.
+    """
+
+    columns = _text_columns(lines)
+    if columns:
+        return [line for column in columns for line in reading_order(column)]
+    rows = []
+    for line in sorted(lines or [], key=lambda item: (item.box[1], item.box[0])):
+        top = line.box[1]
+        bottom = top + max(1, line.box[3])
+        for row in rows:
+            overlap = min(row[1], bottom) - max(row[0], top)
+            if overlap >= 0.5 * min(bottom - top, row[1] - row[0]):
+                row[0] = min(row[0], top)
+                row[1] = max(row[1], bottom)
+                row[2].append(line)
+                break
+        else:
+            # ponytail: rows grow greedily, so a run of lines each overlapping
+            # the previous by half could chain into one row.  Printed line
+            # pitch is well clear of that; revisit if a real page chains.
+            rows.append([top, bottom, [line]])
+    return [
+        line for row in rows for line in sorted(row[2], key=lambda item: item.box[0])
+    ]
+
+
+def _balloon_border_mask(image_bgr, lines):
+    """Long dark strokes of the page (balloon and panel borders), or ``None``.
+
+    Dark components much larger than a glyph: letters are small components, a
+    balloon outline runs the length of the balloon.
+    """
+    if image_bgr is None or not getattr(image_bgr, "size", 0) or not lines:
+        return None
+    gray = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2GRAY)
+    heights = [int(line.box[3]) for line in lines if line.box[3] > 0]
+    glyph = float(np.median(heights)) if heights else 20.0
+    dark = (gray < 100).astype(np.uint8)
+    count, labels, stats, _ = cv2.connectedComponentsWithStats(dark, 8)
+    big = np.zeros(count, dtype=bool)
+    extent = np.maximum(stats[:, cv2.CC_STAT_WIDTH], stats[:, cv2.CC_STAT_HEIGHT])
+    big[1:] = extent[1:] >= 3.0 * glyph
+    return gray, big[labels]
+
+
+def _border_separates(border, line_box, group):
+    """A long dark stroke crosses the gap between ``line_box`` and the group's
+    nearest line, both lettered on a light background: two touching balloons."""
+    if border is None or not group.lines:
+        return False
+    gray, big = border
+    height, width = gray.shape
+
+    def light_around(box):
+        x, y, w, h = (int(v) for v in box)
+        ring = gray[max(0, y - 3):min(height, y + h + 3), max(0, x - 3):min(width, x + w + 3)]
+        return ring.size and float(np.percentile(ring, 70)) >= 200
+
+    lx, ly, lw, lh = (int(v) for v in line_box)
+    if not light_around(line_box):
+        return False
+    center = np.array([lx + lw / 2.0, ly + lh / 2.0])
+    nearest = min(group.lines, key=lambda item: float(np.hypot(
+        item.box[0] + item.box[2] / 2.0 - center[0], item.box[1] + item.box[3] / 2.0 - center[1])))
+    if not light_around(nearest.box):
+        return False
+    gx, gy, gw, gh = (int(v) for v in nearest.box)
+    other = np.array([gx + gw / 2.0, gy + gh / 2.0])
+    steps = int(max(abs(other - center))) + 1
+    for t in np.linspace(0.0, 1.0, max(2, steps)):
+        px, py = (center + (other - center) * t).round().astype(int)
+        inside = (lx <= px < lx + lw and ly <= py < ly + lh) or (gx <= px < gx + gw and gy <= py < gy + gh)
+        if not inside and 0 <= px < width and 0 <= py < height and big[py, px]:
+            return True
+    return False
+
+
+def _group_lines(lines, page_index=None, image_bgr=None):
+    groups = []
+    border = _balloon_border_mask(image_bgr, lines)
+
+    for line in sorted(lines, key=lambda item: (item.box[1], item.box[0])):
+        target = None
+        for group in groups:
+            record_count("group_lines.pair_checks", 1, page_index=page_index)
+            with profile_step("group_lines.line_belongs_to_group", page_index=page_index):
+                belongs = _line_belongs_to_group(line, group) and not _border_separates(border, line.box, group)
+            if belongs:
+                target = group
+                break
+
+        if target is None:
+            target = TextGroup(group_id=f"BALAO_{len(groups) + 1}")
+            groups.append(target)
+
+        target.lines.append(line)
+        target.lines = reading_order(target.lines)
+        target.text = clean_ocr_text(" ".join(item.text for item in target.lines))
+
+    # Two phrases set as side-by-side columns are two utterances (a manga double
+    # balloon: "IN FACT, ARE YOU EATING PROPERLY, SENPAI?" beside "YOU'RE MUCH
+    # LIGHTER THAN I EXPECTED."). Translated as one block, the Portuguese ran
+    # across both outlines; each column is its own group.
+    split = []
+    for group in groups:
+        columns = _text_columns(group.lines)
+        if not columns:
+            split.append(group)
+            continue
+        for column in columns:
+            part = TextGroup(group_id="", lines=reading_order(column))
+            part.text = clean_ocr_text(" ".join(item.text for item in part.lines))
+            split.append(part)
+    for index, group in enumerate(split, start=1):
+        group.group_id = f"BALAO_{index}"
+    return split
+
+
+def _repair_group_texts(groups):
+    for group in groups:
+        group.original_text = group.text
+        repaired, reason = repair_ocr_text(group.text)
+        assessment = assess_ocr_repair(
+            group.text,
+            repaired,
+            reason,
+            confidence=group.confidence,
+            source_engine=_group_engine(group),
+        )
+        if repaired != group.text:
+            for line in group.lines:
+                line.metadata = {
+                    **(line.metadata or {}),
+                    "group_repair_candidate": {
+                        "original_text": group.text,
+                        "repaired_text": repaired,
+                        "repair_reason": reason,
+                        **assessment,
+                    },
+                }
+        if assessment["accepted"]:
+            group.text = repaired
+            group.repaired_text = repaired
+            group.repair_reason = reason
+        else:
+            group.repaired_text = group.text
+            group.repair_reason = ""
+
+
+def _line_belongs_to_group(line, group):
+    gx, gy, gw, gh = group.box
+    lx, ly, lw, lh = line.box
+    group_bottom = gy + gh
+    vertical_gap = ly - group_bottom
+    existing_heights = [item.box[3] for item in group.lines if item.box[3] > 0]
+    existing_areas = [item.box[2] * item.box[3] for item in group.lines]
+    base_height = float(np.median(existing_heights)) if existing_heights else max(1, gh)
+    base_area = float(np.median(existing_areas)) if existing_areas else max(1, gw * gh)
+    line_letters = len(re.sub(r"[^A-Za-z]", "", line.text or ""))
+    line_region_id = int((line.metadata or {}).get("visual_white_region_id") or 0)
+    line_region_enclosed = bool(
+        (line.metadata or {}).get("visual_white_region_enclosed")
+    )
+    group_region_ids = {
+        int((item.metadata or {}).get("visual_white_region_id") or 0)
+        for item in group.lines
+    }
+    group_region_ids.discard(0)
+    # Only a confirmed *enclosed* container of a different id blocks the merge.
+    # Weak, non-enclosed white regions over-fragment a single balloon into one
+    # region per line, which wrongly splits stacked, aligned speech lines; those
+    # must fall through to the geometric checks below.
+    if (
+        line_region_id
+        and group_region_ids
+        and line_region_id not in group_region_ids
+        and line_region_enclosed
+    ):
+        return False
+    # Sound lettering beside dialogue is drawn at least 2.5x its height
+    # ("THUMP" 133 px against 45 px text in A Wimp's Tower ep. 33).
+    if (
+        line_letters <= 6
+        and (
+            lh > base_height * 2.5
+            or lw * lh > base_area * 6.0
+        )
+    ):
+        return False
+    # The same veto the other way round: lines arrive top to bottom, so a sound
+    # effect drawn above a balloon becomes the group first, and its height would
+    # otherwise stretch the allowed gap enough to swallow the dialogue below it.
+    # Short words only ("RUSTLE", "THUMP THUMP"): lettering 2.5x the height of
+    # the text below it never shares a balloon with that text.
+    if (
+        all(len(re.sub(r"[^A-Za-z]", "", item.text or "")) <= 12 for item in group.lines)
+        and (
+            base_height > lh * 2.5
+            or base_area > lw * lh * 6.0
+        )
+    ):
+        return False
+    avg_height = max(base_height, gh / max(1, len(group.lines)))
+
+    # Same reading row: a fragment sitting beside the group's text on the same
+    # baseline is the tail of that line (an exclamation split off the end), not a
+    # separate block. The row must genuinely coincide, the text height must be
+    # comparable and the gap only word-sized, so a larger sound effect or a
+    # neighbouring balloon is not pulled in. A different enclosed container is
+    # already vetoed above.
+    vertical_overlap = max(0, min(gy + gh, ly + lh) - max(gy, ly))
+    horizontal_gap = max(gx, lx) - min(gx + gw, lx + lw)
+    height_ratio = min(lh, base_height) / max(1.0, max(lh, base_height))
+    same_container = bool(
+        line_region_id and group_region_ids and line_region_id in group_region_ids
+    )
+    if (
+        same_container
+        and vertical_overlap >= 0.6 * min(gh, lh)
+        and height_ratio >= 0.6
+        and horizontal_gap <= 0.9 * base_height
+    ):
+        return True
+
+    if vertical_gap < -max(lh, avg_height) * 0.8:
+        return False
+
+    if vertical_gap > max(14, avg_height * 1.35):
+        return False
+
+    overlap = max(0, min(gx + gw, lx + lw) - max(gx, lx))
+    min_width = max(1, min(gw, lw))
+    center_distance = abs((gx + gw / 2) - (lx + lw / 2))
+    max_center_distance = min(max(gw, lw) * 0.48, max(72, min_width * 1.35))
+
+    if overlap / min_width >= 0.28:
+        return True
+
+    if center_distance <= max_center_distance and vertical_gap <= max(12, avg_height):
+        return True
+
+    return False
+
+
+def _filter_groups(groups, image_shape):
+    for group in groups:
+        text = clean_ocr_text(group.text)
+        group.text = text
+        x, y, w, h = group.box
+        h_img, w_img = image_shape[:2]
+
+        if not text:
+            group.ignored = True
+            group.ignore_reason = "empty_group"
+        elif group.confidence < 0.48:
+            group.ignored = True
+            group.ignore_reason = "low_group_confidence"
+        elif w * h < 130:
+            group.ignored = True
+            group.ignore_reason = "group_too_small"
+        elif w > w_img * 0.96 and h > h_img * 0.25:
+            # A full-width splash SFX ("RUMBLE" across a page) is legitimately
+            # large; only non-sounds are dropped by the size rule.
+            from komyst.translation.sfx_glossary import translate_sfx_fuzzy
+            if translate_sfx_fuzzy(text) is None:
+                group.ignored = True
+                group.ignore_reason = "group_too_large"
+        elif _looks_like_noise(text) and not (
+            group.lines and all(_verified_sweep_display_read(line) for line in group.lines)
+        ):
+            group.ignored = True
+            group.ignore_reason = "noise_like_group"
+
+
+def _visual_white_container_evidence(group):
+    """Recover compact closed containers missed by contour-based enclosure."""
+    records = []
+    for line in group.lines:
+        metadata = line.metadata or {}
+        region_id = int(metadata.get("visual_white_region_id") or 0)
+        if not region_id:
+            continue
+        records.append(
+            (
+                region_id,
+                float(metadata.get("visual_white_region_coverage") or 0.0),
+                bool(metadata.get("visual_white_region_enclosed")),
+            )
+        )
+    if not records or len({region_id for region_id, _, _ in records}) != 1:
+        return {}
+    supported = [
+        (region_id, coverage)
+        for region_id, coverage, enclosed in records
+        if coverage >= 0.5 and enclosed
+    ]
+    if not supported:
+        return {}
+    region_id, coverage = max(supported, key=lambda item: item[1])
+    return {
+        "reason": "enclosed_visual_region",
+        "confidence": round(coverage, 4),
+        "visual_white_region_id": region_id,
+        "visual_white_region_coverage": round(coverage, 4),
+    }
+
+
+def _editorial_graphic_evidence(groups, image_bgr):
+    """Find compact title/logo layouts using position, geometry, and styling."""
+    if image_bgr is None or image_bgr.size == 0:
+        return {}
+    image_height, image_width = image_bgr.shape[:2]
+    image_area = max(1, image_width * image_height)
+
+    def candidate(group):
+        if group.ignored or len(group.lines) > 2:
+            return False
+        folded = _ascii_fold(group.text).upper()
+        tokens = re.findall(r"[A-Z0-9]+", folded)
+        compact = "".join(tokens)
+        if not 1 <= len(tokens) <= 3 or not 1 <= len(compact) <= 36:
+            return False
+        if re.search(r"[!?]", group.text):
+            return False
+        if any(
+            int((line.metadata or {}).get("visual_white_region_id") or 0)
+            for line in group.lines
+        ):
+            return False
+        x, y, width, height = group.box
+        center_y = y + height / 2
+        in_editorial_band = (
+            center_y <= image_height * 0.22
+            or center_y >= image_height * 0.78
+        )
+        return bool(
+            in_editorial_band
+            and (width * height) / image_area <= 0.08
+        )
+
+    def styled_region(box):
+        x, y, width, height = box
+        roi = image_bgr[
+            max(0, y) : min(image_height, y + height),
+            max(0, x) : min(image_width, x + width),
+        ]
+        if roi.size == 0:
+            return {}
+        gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
+        saturation = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)[:, :, 1]
+        edge_density = float(np.mean(cv2.Canny(gray, 55, 155) > 0))
+        mean_saturation = float(np.mean(saturation))
+        grayscale_std = float(np.std(gray))
+        if not (
+            mean_saturation >= 45.0
+            or (
+                grayscale_std >= 22.0
+                and edge_density >= 0.08
+            )
+        ):
+            return {}
+        style_score = max(
+            min(1.0, mean_saturation / 255.0),
+            min(1.0, grayscale_std / 64.0)
+            * min(1.0, edge_density / 0.2),
+        )
+        return {
+            "mean_saturation": round(mean_saturation, 3),
+            "grayscale_std": round(grayscale_std, 3),
+            "edge_density": round(edge_density, 4),
+            "style_score": round(style_score, 4),
+        }
+
+    candidates = [group for group in groups if candidate(group)]
+    evidence_by_group = {}
+
+    def record(group, layout, span_ratio, style):
+        confidence = round(
+            min(
+                1.0,
+                float(style["style_score"]) * 0.5
+                + min(1.0, span_ratio / 0.6) * 0.5,
+            ),
+            4,
+        )
+        evidence = {
+            "reason": "editorial_graphic_layout",
+            "confidence": confidence,
+            "layout": layout,
+            "span_ratio": round(span_ratio, 4),
+            **style,
+        }
+        current = evidence_by_group.get(group.group_id, {})
+        if confidence >= float(current.get("confidence") or 0.0):
+            evidence_by_group[group.group_id] = evidence
+
+    for group in candidates:
+        folded_tokens = re.findall(r"[A-Z0-9]+", _ascii_fold(group.text).upper())
+        x, y, width, height = group.box
+        style = styled_region((x, y, width, height))
+        if (
+            len(folded_tokens) >= 2
+            and width >= image_width * 0.36
+            and style
+        ):
+            record(group, "single_wide_group", width / image_width, style)
+
+    for index, first in enumerate(candidates):
+        for second in candidates[index + 1 :]:
+            first_x, first_y, first_width, first_height = first.box
+            second_x, second_y, second_width, second_height = second.box
+            first_center_y = first_y + first_height / 2
+            second_center_y = second_y + second_height / 2
+            if abs(first_center_y - second_center_y) > max(
+                first_height,
+                second_height,
+            ) * 0.7:
+                continue
+            left, right = sorted(
+                (first, second),
+                key=lambda group: group.box[0],
+            )
+            gap = right.box[0] - (left.box[0] + left.box[2])
+            if gap > max(48, max(first_height, second_height) * 1.5):
+                continue
+            x1 = min(first_x, second_x)
+            y1 = min(first_y, second_y)
+            x2 = max(first_x + first_width, second_x + second_width)
+            y2 = max(first_y + first_height, second_y + second_height)
+            union_box = (x1, y1, x2 - x1, y2 - y1)
+            style = styled_region(union_box)
+            if union_box[2] < image_width * 0.35 or not style:
+                continue
+            span_ratio = union_box[2] / image_width
+            record(first, "aligned_group_cluster", span_ratio, style)
+            record(second, "aligned_group_cluster", span_ratio, style)
+    return evidence_by_group
+
+
+def _promote_glossary_sounds(groups):
+    """Text made only of glossary sounds, drawn outside any closed balloon, is a sound.
+
+    "HUFF HUFF" lettered over the art (Shadow Slave ch. 13) was read as speech and
+    typeset in the dialogue font. Inside a closed balloon "AH..." stays dialogue.
+    """
+    from komyst.translation.sfx_glossary import _lookup
+
+    for group in groups:
+        if group.classification not in {"speech", "narration", "unknown"}:
+            continue
+        # Inside a balloon or box it is dialogue ("HUH?"), whatever its words.
+        if (str(getattr(group, "background_type", "") or "") in {"white_balloon", "dark_balloon", "narration_box"}
+                or any((line.metadata or {}).get("visual_white_region_enclosed") for line in group.lines)):
+            continue
+        words = re.findall(r"[A-Za-z]+", str(group.text or ""))
+        if words and all(len(word) >= 2 and _lookup(word) is not None for word in words):
+            _set_group_classification(
+                group, "sfx", "glossary_sound_outside_balloon", confidence=0.8,
+                evidence={"previous_classification": group.classification, "tokens": len(words)})
+            if group.ignored and getattr(group, "ignore_reason", "") == "weak_unknown_text":
+                # Complete the promotion: a stale weak-label veto must not
+                # suppress CLEAN or an enabled target after sound ownership
+                # has been established by the classifier/glossary.
+                _apply_classification_policy(group)
+
+
+def _set_group_classification(
+    group,
+    classification,
+    reason,
+    *,
+    confidence=0.0,
+    evidence=None,
+):
+    group.classification = classification
+    group.classification_reason = reason
+    group.classification_confidence = round(float(confidence or 0.0), 4)
+    group.classification_evidence = dict(evidence or {})
+
+
+# --- conservative recovery of ordinary story text the region detectors missed --
+# A short line such as "PERFECTLY FINE." lettered over artwork (no balloon/box)
+# lands as ``classification="unknown" / weak_unknown_text`` and is dropped before
+# translation, even next to a translated dialogue balloon.  Recovering it must
+# never open the door to translating sound effects, so promotion requires several
+# independent signals AND spatial adjacency to a real story region; every listed
+# SFX (single onomatopoeic tokens, no sentence shape, isolated on art) fails it.
+_STORY_ANCHOR_EXCLUDED_CLASSES = frozenset({"sfx", "decorative", "unknown"})
+
+
+def _group_is_story_anchor(group):
+    """A region already accepted as translatable story text on this page."""
+    return (
+        not getattr(group, "ignored", False)
+        and not getattr(group, "preserve_as_name", False)
+        and str(getattr(group, "classification", "")) not in _STORY_ANCHOR_EXCLUDED_CLASSES
+    )
+
+
+def _is_sfx_shaped_token(folded):
+    """A token whose shape alone marks it as onomatopoeia, not a real word."""
+    if not folded:
+        return True
+    if folded in SFX_WORDS:
+        return True
+    if not any(ch in "AEIOUY" for ch in folded):
+        return True  # vowelless cluster (SCRRCH, FWHISH-like)
+    if re.search(r"(.)\1\1", folded):
+        return True  # a run of 3+ of the same character (BRRR, AAAH)
+    return False
+
+
+def _conservative_story_promotion_signals(group):
+    """Lexical/structural evidence that a weak-unknown region is real story text.
+
+    Deliberately strict and combined - never "English + confidence = speech":
+    high OCR confidence, a sentence-final clause, at least two real dictionary
+    words, none of them sound-effect shaped, and a horizontal reading layout.
+    A lone SFX token, a label or OCR gibberish fails at least one signal.
+    """
+    if float(getattr(group, "confidence", 0.0) or 0.0) < 0.90:
+        return False
+    text = clean_ocr_text(group.text)
+    if not re.search(r"[.!?…][\"'\)”]?\s*$", text):
+        return False
+    words = re.findall(r"[A-Za-zÀ-ÿ']+", text)
+    folded = [re.sub(r"[^A-Z']", "", _ascii_fold(word).upper()).strip("'") for word in words]
+    folded = [word for word in folded if word]
+    if len(folded) < 2:
+        return False
+    if any(_is_sfx_shaped_token(word) for word in folded):
+        return False
+    real_words = [word for word in folded if region_taxonomy._is_real_word(word)]
+    # Pronouns/function words ("I", "OF", "A") are real speech but not dictionary
+    # content words; count them toward the two-token minimum while still requiring
+    # at least one content word, so "I SEE." qualifies but "TAP TAP" cannot.
+    meaningful = [
+        word for word in folded
+        if region_taxonomy._is_real_word(word)
+        or word in region_taxonomy._STORY_CLAUSE_MARKERS
+    ]
+    if len(meaningful) < 2 or not real_words:
+        return False
+    if abs(float(getattr(group, "angle_degrees", 0.0) or 0.0)) >= 7:
+        return False
+    if float(getattr(group, "alignment_score", 0.0) or 0.0) < 0.6:
+        return False
+    return True
+
+
+def _boxes_adjacent(a, b, *, gap_factor=1.3):
+    """True when two region boxes sit close enough to share a reading flow."""
+    ax, ay, aw, ah = a
+    bx, by, bw, bh = b
+    vertical_gap = max(ay, by) - min(ay + ah, by + bh)
+    horizontal_gap = max(ax, bx) - min(ax + aw, bx + bw)
+    return (
+        vertical_gap <= gap_factor * max(ah, bh)
+        and horizontal_gap <= gap_factor * max(aw, bw)
+    )
+
+
+def _promote_unknown_story_on_adjacency(groups, page_index=None):
+    """Second pass: rescue weak-unknown story text that sits next to real story.
+
+    Runs after every region has its final class, so it can use page-level
+    adjacency the per-region policy cannot see.  Only weak_unknown_text/unknown
+    regions are eligible, and only when both the lexical signals and a nearby
+    accepted story region agree.  Telemetry is sanitized (never the text)."""
+    anchors = [group for group in groups if _group_is_story_anchor(group)]
+    for group in groups:
+        if not (
+            getattr(group, "ignored", False)
+            and getattr(group, "ignore_reason", "") == "weak_unknown_text"
+            and str(getattr(group, "classification", "")) == "unknown"
+        ):
+            continue
+
+        def _mark_rejected(reason_code):
+            evidence = dict(getattr(group, "classification_evidence", {}) or {})
+            evidence["unknown_story_promotion"] = "UNKNOWN_STORY_PROMOTION_REJECTED"
+            evidence["unknown_story_promotion_reason"] = reason_code
+            group.classification_evidence = evidence
+
+        if not _conservative_story_promotion_signals(group):
+            _mark_rejected("insufficient_signals")
+            continue
+        if not any(_boxes_adjacent(group.box, anchor.box)
+                   for anchor in anchors if anchor is not group):
+            _mark_rejected("no_adjacent_story_region")
+            continue
+        group.ignored = False
+        group.ignore_reason = ""
+        group.inside_balloon_like_region = True
+        _set_group_classification(
+            group, "speech", "unknown_story_promoted_by_adjacency",
+            confidence=float(getattr(group, "confidence", 0.0) or 0.0),
+            evidence={"unknown_story_promotion": "UNKNOWN_STORY_PROMOTION_ACCEPTED",
+                      "adjacent_story_region": True})
+
+
+def _classify_groups(groups, image_bgr, page_index=None):
+    h_img, w_img = image_bgr.shape[:2]
+    editorial_evidence_by_group = _editorial_graphic_evidence(groups, image_bgr)
+
+    for group in groups:
+        group_started = time.perf_counter()
+        if group.ignored:
+            group.classification = "unknown"
+            continue
+
+        x, y, w, h = group.box
+        words = re.findall(r"[A-Za-zÀ-ÿ]+", group.text.upper())
+        normalized = re.sub(r"[^A-Z]", "", _ascii_fold(group.text).upper())
+        one_short_word = len(words) == 1 and len(words[0]) <= 14
+        multiline = len(group.lines) >= 2
+        reading_phrase = (
+            len(words) >= 2
+            and len(group.text) >= 8
+            and abs(_group_angle_degrees(group)) < 7
+        )
+
+        with profile_step("classify.group_geometry", page_index=page_index):
+            group.angle_degrees = _group_angle_degrees(group)
+            group.alignment_score = _group_alignment_score(group)
+        group.near_image_edge = (
+            x <= w_img * 0.035
+            or y <= h_img * 0.025
+            or x + w >= w_img * 0.965
+            or y + h >= h_img * 0.975
+        )
+
+        with profile_step("classify.enclosure_evidence", page_index=page_index):
+            balloon_like, narration_like = _enclosure_evidence(
+                image_bgr,
+                group.box,
+                page_index=page_index,
+            )
+        contour_balloon_like = bool(balloon_like)
+        visual_white_evidence = _visual_white_container_evidence(group)
+        balloon_like = bool(balloon_like or visual_white_evidence)
+        group.inside_balloon_like_region = balloon_like
+        group.inside_narration_box_like_region = narration_like
+        with profile_step("classify.external_narration_evidence", page_index=page_index):
+            external_narration = _external_narration_evidence(
+                group,
+                image_bgr,
+                words,
+                reading_phrase,
+                page_index=page_index,
+            )
+
+        score = 0.0
+        score += 0.38 if narration_like else 0.0
+        score += 0.32 if balloon_like else 0.0
+        score += 0.24 if external_narration else 0.0
+        score += 0.18 if multiline else 0.0
+        score += 0.12 if multiline and group.alignment_score >= 0.68 else 0.0
+        score += 0.12 if group.confidence >= 0.8 else 0.06
+        score += 0.08 if len(words) >= 4 else 0.0
+        score += 0.24 if reading_phrase else 0.0
+        score -= 0.28 if abs(group.angle_degrees) >= 12 else 0.0
+        score -= 0.2 if group.near_image_edge else 0.0
+        score -= 0.2 if one_short_word and not (balloon_like or narration_like) else 0.0
+        score -= 0.12 if w >= w_img * 0.3 or h >= h_img * 0.18 else 0.0
+        group.main_text_score = max(0.0, min(1.0, score))
+
+        is_known_sfx = normalized in SFX_WORDS
+        elongated_vocal_sfx = bool(
+            one_short_word
+            and 3 <= len(normalized) <= 14
+            and re.search(r"(.)\1{2,}", normalized)
+            and len(set(normalized)) <= max(4, int(len(normalized) * 0.6))
+            and re.search(r"[!?]", group.text)
+            and normalized not in COMMON_ENGLISH_WORDS
+        )
+        compact_consonant_sfx = bool(
+            one_short_word
+            and 2 <= len(normalized) <= 4
+            and not re.search(r"[AEIOUY]", normalized)
+            and normalized not in COMMON_ENGLISH_WORDS
+        )
+        production_credit = bool(
+            re.match(
+                r"^(?:ART|STORY|SCRIPT|WRITTEN|CREATED|PRODUCED|ILLUSTRATED|ILLUSTRATION|COLORS?|LETTERING)\s*BY\b",
+                _ascii_fold(group.text).upper().strip(),
+            )
+        )
+        diagonal = abs(group.angle_degrees) >= 12
+        strongly_styled = diagonal or group.near_image_edge
+        region_area_ratio = (w * h) / max(1, w_img * min(h_img, w_img * 2))
+        oversized_short_graphic = (
+            len(words) <= 2
+            and len(normalized) <= 8
+            and region_area_ratio >= 0.05
+            and (w * h) / max(1, len(normalized)) >= 2500
+            and (strongly_styled or len(group.lines) == 1)
+        )
+        repeated_short_outside_region = (
+            len(words) in {2, 3}
+            and len(set(words)) == 1
+            and len(words[0]) <= 8
+            and not (balloon_like or narration_like or external_narration)
+        )
+        repeated_short_shape = (
+            len(words) in {2, 3}
+            and len(set(words)) == 1
+            and len(words[0]) <= 8
+        )
+        weak_double_repeat_shape = bool(
+            one_short_word
+            and re.search(r"(.)\1{1,}", normalized)
+            and not elongated_vocal_sfx
+            and re.search(r"[!?]", group.text)
+            and normalized not in COMMON_ENGLISH_WORDS
+        )
+        editorial_evidence = editorial_evidence_by_group.get(group.group_id)
+
+        if production_credit or editorial_evidence:
+            group.inside_balloon_like_region = False
+            group.inside_narration_box_like_region = False
+            group.classification = "decorative"
+        elif oversized_short_graphic or elongated_vocal_sfx or compact_consonant_sfx:
+            group.inside_balloon_like_region = False
+            group.inside_narration_box_like_region = False
+            group.classification = "sfx"
+        elif (
+            is_known_sfx
+            and len(words) <= 2
+            and not (balloon_like or narration_like)
+        ):
+            group.inside_balloon_like_region = False
+            group.inside_narration_box_like_region = False
+            group.classification = "sfx"
+        elif repeated_short_outside_region:
+            group.inside_balloon_like_region = False
+            group.inside_narration_box_like_region = False
+            group.classification = "sfx"
+        elif (
+            is_known_sfx
+            and strongly_styled
+            and not (balloon_like or narration_like)
+        ):
+            group.inside_balloon_like_region = False
+            group.inside_narration_box_like_region = False
+            group.classification = "sfx"
+        elif narration_like and len(group.lines) == 1 and len(words) <= 3:
+            group.classification = "speech"
+        elif narration_like:
+            group.classification = "narration"
+        elif external_narration:
+            group.inside_narration_box_like_region = True
+            group.classification = "narration"
+        elif balloon_like:
+            group.classification = "speech"
+        elif one_short_word and (
+                is_known_sfx
+                # Position near the page edge says nothing about written prose.
+                or (strongly_styled
+                    and not region_taxonomy.weak_label_semantic_promotion_allowed("unknown", group.text))):
+            group.classification = "sfx"
+        elif diagonal and len(words) <= 3:
+            group.classification = "decorative"
+        else:
+            group.classification = "unknown"
+
+        if editorial_evidence and group.classification == "decorative":
+            _set_group_classification(
+                group,
+                "decorative",
+                "editorial_graphic_layout",
+                confidence=editorial_evidence["confidence"],
+                evidence=editorial_evidence,
+            )
+        elif (
+            group.classification == "speech"
+            and visual_white_evidence
+            and not contour_balloon_like
+        ):
+            sfx_conflict = bool(
+                is_known_sfx
+                or oversized_short_graphic
+                or elongated_vocal_sfx
+                or compact_consonant_sfx
+                or repeated_short_shape
+            )
+            _set_group_classification(
+                group,
+                "speech",
+                (
+                    "enclosed_visual_region_over_sfx_shape"
+                    if sfx_conflict
+                    else "enclosed_visual_region_over_weak_text"
+                ),
+                confidence=visual_white_evidence["confidence"],
+                evidence={
+                    **visual_white_evidence,
+                    "conflict_resolved": "sfx" if sfx_conflict else "unknown_weak",
+                },
+            )
+        elif group.classification == "speech" and weak_double_repeat_shape:
+            _set_group_classification(
+                group,
+                "speech",
+                "container_over_weak_double_character_repeat",
+                confidence=(
+                    visual_white_evidence.get("confidence", group.main_text_score)
+                ),
+                evidence={
+                    **visual_white_evidence,
+                    "conflict_resolved": "weak_double_character_repeat",
+                },
+            )
+        elif group.classification == "narration" and repeated_short_shape:
+            # A "narration" whose entire content is one short token repeated
+            # (e.g. footsteps "STEP STEP") is a sound effect lettered on the art
+            # that a stylized bright region (or floor edges read as a box) was
+            # mistaken for a caption box. Real narration is prose, never a lone
+            # repeated word; a genuine repeated exclamation in a real balloon is
+            # classified speech, not narration, so it is unaffected. Keep it a
+            # sound effect instead of translating and redrawing over the art.
+            group.inside_balloon_like_region = False
+            group.inside_narration_box_like_region = False
+            _set_group_classification(
+                group,
+                "sfx",
+                "repeated_onomatopoeia_over_false_enclosure",
+                confidence=group.main_text_score,
+                evidence={"conflict_resolved": "repeated_onomatopoeia"},
+            )
+
+        with profile_step("classify.apply_policy", page_index=page_index):
+            _apply_classification_policy(group)
+        with profile_step(
+            "classify.background_region",
+            page_index=page_index,
+            metadata={"group_id": group.group_id, "classification": group.classification},
+        ):
+            group.background_type, group.background_metrics = _classify_background_region(
+                image_bgr,
+                group,
+                page_index=page_index,
+            )
+        with profile_step("classify.refine_background", page_index=page_index):
+            _refine_classification_with_background(group)
+        # Background refinement can reveal an SFX after the initial policy pass.
+        # Apply only the SFX opt-out here: rerunning the full weak-label policy
+        # can promote production credits from decorative to unknown.
+        with profile_step("classify.final_sfx_policy", page_index=page_index):
+            _apply_disabled_sfx_policy(group)
+        record_group(
+            page_index=page_index,
+            group_id=group.group_id,
+            elapsed_seconds=time.perf_counter() - group_started,
+            line_count=len(group.lines),
+            classification=group.classification,
+            fallback_used=bool(group.fallback_used),
+            dominant_step="classification",
+        )
+
+    # Page-level second pass: recover ordinary story text the per-region policy
+    # dropped as weak_unknown_text when it sits adjacent to a real story region.
+    with profile_step("classify.unknown_story_adjacency", page_index=page_index):
+        _promote_unknown_story_on_adjacency(groups, page_index=page_index)
+
+
+def _lettering_is_saturated_effect_art(metrics):
+    """True when the glyph region is saturated colour art, not lettering in a balloon.
+
+    Dialogue is lettered in ink on a fill: whatever the balloon's colour, the glyph
+    region always carries light pixels and almost no saturation. Effect lettering is
+    drawn as coloured art - the whole region is one intense hue with no light fill at
+    all. That difference is what separates a sound effect drawn over a dark panel from
+    a line of speech inside a dark balloon, which the container evidence alone cannot.
+    """
+    return (
+        float(metrics.get("saturation_mean") or 0.0) >= 90.0
+        and float(metrics.get("white_pixel_ratio") or 0.0) <= 0.02
+    )
+
+
+def _refine_classification_with_background(group):
+    metrics = group.background_metrics or {}
+    folded = _ascii_fold(group.text).upper()
+    words = re.findall(r"[A-Z0-9']+", folded)
+    compact = re.sub(r"[^A-Z0-9]", "", folded)
+    group_area_ratio = (group.box[2] * group.box[3]) / max(
+        1,
+        int(metrics.get("image_width") or group.box[2])
+        * int(metrics.get("image_height") or group.box[3]),
+    )
+    if (
+        group.classification == "speech"
+        and group.classification_reason == "container_over_weak_double_character_repeat"
+        and _lettering_is_saturated_effect_art(metrics)
+        and not group_has_name_only_shape(group)
+    ):
+        # A short doubled-letter token ("KREE!", "HISS!") is only weak evidence of a
+        # sound effect on its own - ordinary words share the shape ("WELL!", "FREE!") -
+        # so container evidence rightly kept it speech. But when the lettering itself is
+        # saturated colour art rather than glyphs on a balloon fill, the shape is no
+        # longer the only signal, and the two together outweigh the enclosure that a
+        # glowing effect drawn on a dark panel produces. Settling it here, before
+        # candidate selection, is what keeps an untranslatable effect out of the
+        # translation request instead of catching it as an echo after the fact.
+        group.inside_balloon_like_region = False
+        group.inside_narration_box_like_region = False
+        group.parent_balloon_id = ""
+        group.region_type = "sfx"
+        group.background_type = "sfx_area"
+        group.background_metrics = {
+            **metrics,
+            "background_type": "sfx_area",
+            "reason": "saturated_effect_lettering",
+        }
+        _set_group_classification(
+            group,
+            "sfx",
+            "saturated_effect_lettering_over_container",
+            confidence=group.classification_confidence,
+            evidence={
+                **(group.classification_evidence or {}),
+                "conflict_resolved": "saturated_effect_lettering",
+                "saturation_mean": metrics.get("saturation_mean"),
+                "white_pixel_ratio": metrics.get("white_pixel_ratio"),
+            },
+        )
+        _apply_disabled_sfx_policy(group)
+        return
+
+    false_light_enclosure_effect = bool(
+        group.classification == "speech"
+        and group.background_type in {"white_balloon", "narration_box"}
+        and len(words) == 1
+        and 5 <= len(compact) <= 12
+        and compact not in ORDINARY_DIALOGUE_WORDS
+        and compact not in COMMON_ENGLISH_WORDS
+        # Prose with sentence shape is speech, not a sound.
+        and not region_taxonomy.weak_label_semantic_promotion_allowed("unknown", group.text)
+        and not bool(getattr(group, "preserve_as_name", False))
+        and not bool(getattr(group, "detected_proper_names", []) or [])
+        and len(group.lines) == 1
+        and float(getattr(group, "main_text_score", 0.0) or 0.0) <= 0.12
+        and bool(getattr(group, "near_image_edge", False))
+        and group_area_ratio <= 0.045
+        and (
+            float(metrics.get("dark_pixel_ratio") or 0.0) >= 0.12
+            or float(metrics.get("edge_density") or 0.0) >= 0.04
+            or float(metrics.get("local_texture_mean") or 0.0) >= 6.0
+        )
+    )
+    if false_light_enclosure_effect:
+        group.inside_balloon_like_region = False
+        group.inside_narration_box_like_region = False
+        group.parent_balloon_id = ""
+        group.region_type = "sfx"
+        group.background_type = "sfx_area"
+        group.background_metrics = {
+            **metrics,
+            "background_type": "sfx_area",
+            "reason": "single_word_effect_over_false_light_enclosure",
+        }
+        _set_group_classification(
+            group,
+            "sfx",
+            "single_word_effect_over_false_light_enclosure",
+            confidence=float(getattr(group, "main_text_score", 0.0) or 0.0),
+            evidence={
+                "conflict_resolved": "single_word_effect",
+                "main_text_score": round(
+                    float(getattr(group, "main_text_score", 0.0) or 0.0),
+                    4,
+                ),
+                "group_area_ratio": round(float(group_area_ratio), 6),
+                "dark_pixel_ratio": metrics.get("dark_pixel_ratio"),
+                "edge_density": metrics.get("edge_density"),
+                "local_texture_mean": metrics.get("local_texture_mean"),
+            },
+        )
+        _apply_disabled_sfx_policy(group)
+        return
+
+    if (
+        group.background_type == "narration_box"
+        and (
+            metrics.get("open_white_narration")
+            or metrics.get("open_dark_narration")
+        )
+        and group.classification in {"speech", "narration", "unknown"}
+    ):
+        short_spoken_phrase = len(group.lines) <= 2 and len(words) <= 3
+        group.classification = "speech" if short_spoken_phrase else "narration"
+        group.region_type = group.classification
+        group.inside_balloon_like_region = short_spoken_phrase
+        group.inside_narration_box_like_region = not short_spoken_phrase
+        group.ignored = False
+        group.ignore_reason = ""
+        return
+
+    if group.classification not in {"speech", "narration", "unknown"}:
+        return
+    if group.background_type not in {"textured_art", "speed_lines", "unknown"}:
+        return
+
+    white_ratio = float(metrics.get("white_pixel_ratio", 1.0))
+    saturation = float(metrics.get("saturation_mean", 0.0))
+    edge_density = float(metrics.get("edge_density", 0.0))
+    local_texture = float(metrics.get("local_texture_mean", 0.0))
+    dialogue_markers = {
+        "I",
+        "I'M",
+        "IM",
+        "ME",
+        "MY",
+        "WE",
+        "US",
+        "OUR",
+        "YOU",
+        "YOUR",
+        "HE",
+        "HIS",
+        "SHE",
+        "HER",
+        "THEY",
+        "THEIR",
+        "WHAT",
+        "WHY",
+        "HOW",
+        "WHEN",
+        "WHERE",
+        "WHO",
+    }
+    lacks_dialogue_markers = not any(word in dialogue_markers for word in words)
+    short_embedded_label = (
+        group.background_type in {"speed_lines", "textured_art"}
+        and 4 <= len(words) <= 8
+        and len(compact) <= 36
+        and len(group.lines) <= 4
+        and group_area_ratio <= 0.05
+        and lacks_dialogue_markers
+        and not re.search(r"[!?]", group.text)
+        and not (
+            metrics.get("open_white_narration")
+            or metrics.get("open_dark_narration")
+        )
+        and (
+            abs(group.angle_degrees) >= 4
+            or edge_density >= 0.035
+            or local_texture >= 6.0
+            or white_ratio < 0.75
+            or saturation >= 18.0
+        )
+    )
+    small_embedded_interface_text = (
+        (
+            group.background_type == "speed_lines"
+            and len(words) >= 6
+            and len(group.lines) >= 3
+        )
+        or short_embedded_label
+    )
+    small_embedded_interface_text = (
+        small_embedded_interface_text
+        and group_area_ratio <= 0.05
+    )
+    if small_embedded_interface_text:
+        group.classification = "decorative"
+        group.region_type = "decorative"
+        group.parent_balloon_id = ""
+        _apply_classification_policy(group)
+        return
+    metadata_overlay_on_art = (
+        group.background_type == "textured_art"
+        and 2 <= len(words) <= 8
+        and group_area_ratio <= 0.05
+        and bool(re.search(r"\d", group.text))
+        and "(" in group.text
+        and ")" in group.text
+    )
+    if metadata_overlay_on_art:
+        group.classification = "decorative"
+        group.region_type = "decorative"
+        group.parent_balloon_id = ""
+        _apply_classification_policy(group)
+        return
+    colored_sign_or_label = (
+        1 <= len(words) <= 3
+        and 1 <= len(compact) <= 24
+        and white_ratio < 0.65
+        and saturation >= 25.0
+        # A sentence lettered over a saturated backdrop ("THE SPELL'S VOICE...?" on
+        # golden threads) is narration, not a sign - same evidence as compact_graphic.
+        and not region_taxonomy.weak_label_semantic_promotion_allowed("unknown", group.text)
+    )
+    compact_graphic = (
+        len(words) == 1
+        and 1 <= len(compact) <= 10
+        # Shape alone never proves a sound effect: a lone bold "NO..." is drawn
+        # exactly like "ACK!". Only the vocabulary separates them, so ordinary
+        # dialogue words are held back from this branch entirely.
+        and compact not in ORDINARY_DIALOGUE_WORDS
+        # ...and prose outside that list keeps its sentence evidence
+        # (region_taxonomy.weak_label_semantic_promotion_allowed).
+        and not region_taxonomy.weak_label_semantic_promotion_allowed("unknown", group.text)
+        and (
+            white_ratio < 0.25
+            or group.background_type == "speed_lines"
+            or edge_density >= 0.05
+        )
+        and (edge_density >= 0.05 or local_texture >= 6.0)
+    )
+    embedded_in_art = colored_sign_or_label or compact_graphic
+    if not embedded_in_art:
+        _recover_lexical_dialogue_on_plain_field(group, metrics, words, saturation)
+        return
+
+    letters_only = compact.isalpha()
+    known_sfx = compact in SFX_WORDS
+    visually_styled = compact_graphic or (
+        abs(group.angle_degrees) >= 8
+        or group.background_type == "speed_lines"
+    )
+    group.classification = (
+        "sfx"
+        if len(words) == 1 and letters_only and (known_sfx or visually_styled)
+        else "decorative"
+    )
+    group.region_type = group.classification
+    group.inside_balloon_like_region = False
+    group.inside_narration_box_like_region = False
+    group.parent_balloon_id = ""
+    if group.classification == "sfx":
+        group.background_type = "sfx_area"
+        group.background_metrics = {
+            **metrics,
+            "background_type": "sfx_area",
+            "reason": "short_stylized_text_embedded_in_art",
+        }
+    if group.classification == "sfx":
+        _apply_disabled_sfx_policy(group)
+    else:
+        _apply_classification_policy(group)
+
+
+def _recover_lexical_dialogue_on_plain_field(group, metrics, words, saturation):
+    """Keep a short, ordinary English line that sits on a plain bright field.
+
+    ``weak_unknown_text`` exists to drop text the region evidence cannot place,
+    and it stays that way for anything whose vocabulary is not ordinary English.
+    But shortness and upper case are not evidence of a sound effect: a lone
+    "NO..." lettered on a blank white panel is speech, and the background here
+    proves it is not art. Two independent signals are required - every word is
+    known dialogue vocabulary, and the surrounding field is plain, unsaturated
+    white - so a stylised effect drawn over a panel is never caught by this.
+    """
+    if not (group.ignored and group.ignore_reason == "weak_unknown_text"):
+        return
+    if group.classification != "unknown" or len(group.lines) > 2:
+        return
+    if group.confidence < 0.78 or saturation >= 25.0:
+        return
+    if float(metrics.get("context_white_pixel_ratio") or 0.0) < 0.9:
+        return
+    if not words or not all(
+        re.sub(r"[^A-Z]", "", _ascii_fold(word).upper()) in ORDINARY_DIALOGUE_WORDS
+        for word in words
+    ):
+        return
+    group.ignored = False
+    group.ignore_reason = ""
+    group.classification = "speech"
+    group.region_type = "speech"
+    group.inside_balloon_like_region = True
+
+
+def _lines_sit_on_white(group):
+    """Every line is lettered on open white, whatever the coarse box caught.
+
+    The background bucket comes from the draw box, which can take in the spikes
+    of the balloon above; the lines' own white-region coverage says the text is
+    on the page's white, not on art.
+    """
+    lines = getattr(group, "lines", None) or []
+    return bool(lines) and all(
+        float((getattr(line, "metadata", None) or {}).get("visual_white_region_coverage") or 0.0) >= 0.95
+        for line in lines
+    )
+
+
+def _group_has_story_text_container(group):
+    """Require semantic ownership and local background agreement for promotion.
+
+    A containment flag can be inherited from a nearby region, and a visually
+    enclosed shape can be a sign or prop. Require both ownership metadata and a
+    local balloon/narration background classification before treating weak OCR
+    as story text.
+    """
+    semantic_membership = bool(
+        getattr(group, "inside_balloon_like_region", False)
+        or getattr(group, "inside_narration_box_like_region", False)
+        or str(getattr(group, "parent_balloon_id", "") or "").strip()
+    )
+    # The containment flag alone can be inherited from a nearby region. Require
+    # the local background classifier to agree that the text sits in a container.
+    return bool(
+        semantic_membership
+        and str(getattr(group, "background_type", "") or "").strip().lower()
+        in {"white_balloon", "dark_balloon", "narration_box"}
+    )
+
+
+def _legible_sentence_promotion_allowed(group):
+    """Promote only clearly readable English sentences from weak visual labels.
+
+    This structural fallback excludes preserve cases, credits, URLs, series
+    branding, and SFX-shaped text. OCR-glued words are segmented before the
+    dictionary check. Weak text must also belong to a confirmed balloon or
+    narration box; sentence shape alone never promotes lettering on open art.
+    """
+    classification = str(getattr(group, "classification", "") or "").strip().lower()
+    if classification not in {"decorative", "unknown"} and not bool(
+        getattr(group, "story_display_promoted", False)
+    ):
+        return False
+    if not _group_has_story_text_container(group):
+        return False
+    if bool(getattr(group, "preserve_as_name", False)) or bool(
+        getattr(group, "ocr_quality_blocked", False)
+    ):
+        return False
+    body = str(getattr(group, "text", "") or "").strip()
+    if not body:
+        return False
+    if (
+        region_taxonomy.looks_like_strong_credit(body)
+        or region_taxonomy.looks_like_url(body)
+        or region_taxonomy.looks_like_series_title(body)
+        or region_taxonomy.looks_like_sfx(body)
+    ):
+        return False
+    body = split_glued_source_words(
+        body,
+        protected=getattr(group, "detected_proper_names", None),
+    )
+    words = re.findall(r"[A-Za-zÀ-ÿ]+(?:['’][A-Za-zÀ-ÿ]+)?", body)
+    if len(words) < 2:
+        return False
+    if not all(
+        region_taxonomy.is_english_word(word)
+        for word in words
+        if len(re.sub(r"[^A-Za-z]", "", word)) >= 3
+    ):
+        return False
+    try:
+        confidence = float(getattr(group, "confidence", 0.0) or 0.0)
+    except (TypeError, ValueError):
+        return False
+    if confidence < 0.90:
+        return False
+    return bool(re.search(r"[.,!?]", body) or len(words) >= 3)
+
+
+def _decorative_textured_story_promotion_allowed(group):
+    """Allow strong ordinary prose mislabelled as decorative art to translate.
+
+    The textured-art veto protects real SFX/environmental lettering.  It must
+    not, however, retain a full sentence such as page-6's ordinary story line
+    simply because the coarse background bucket is ``textured_art``.  Require a
+    high-confidence, punctuated multi-word clause with clean OCR so short labels,
+    credits, SFX and damaged garbage remain fail-closed.
+    """
+    if group.classification != "decorative" and not bool(
+        getattr(group, "story_display_promoted", False)
+    ):
+        return False
+    if getattr(group, "background_type", "") not in {"textured_art", "speed_lines"}:
+        return False
+    if bool(getattr(group, "preserve_as_name", False)):
+        return False
+    if _decorative_short_display_story_promotion_allowed(group):
+        return True
+    if bool(getattr(group, "quality_reasons", []) or []):
+        return False
+    try:
+        confidence = float(getattr(group, "confidence", 0.0) or 0.0)
+    except (TypeError, ValueError):
+        confidence = 0.0
+    if confidence < 0.84:
+        return False
+    try:
+        main_score = float(getattr(group, "main_text_score", 0.0) or 0.0)
+    except (TypeError, ValueError):
+        main_score = 0.0
+    if main_score < 0.55:
+        return False
+    body = str(getattr(group, "text", "") or "")
+    if not re.search(r"[.!?…]", body):
+        return False
+    folded_words = [
+        re.sub(r"[^A-Z']", "", _ascii_fold(word).upper())
+        for word in re.findall(r"[A-Za-zÀ-ÿ']+", body)
+    ]
+    semantic_words = [
+        word
+        for word in folded_words
+        if len(word.strip("'")) >= 2 and any(ch in "AEIOUY" for ch in word)
+    ]
+    if len(semantic_words) < 4:
+        return False
+    dialogue_markers = {
+        "I",
+        "ME",
+        "MY",
+        "WE",
+        "US",
+        "YOU",
+        "YOUR",
+        "HE",
+        "SHE",
+        "IT",
+        "THEY",
+        "THE",
+        "A",
+        "AN",
+        "TO",
+        "OF",
+        "IN",
+        "ON",
+        "FOR",
+        "WITH",
+        "FROM",
+        "IS",
+        "ARE",
+        "WAS",
+        "WERE",
+        "BE",
+        "BEEN",
+        "AM",
+        "DO",
+        "DID",
+        "DONE",
+        "HAVE",
+        "HAS",
+        "HAD",
+        "WILL",
+        "WOULD",
+        "CAN",
+        "COULD",
+        "SHOULD",
+        "DON'T",
+        "DONT",
+        "DIDN'T",
+        "DIDNT",
+        "CAN'T",
+        "CANT",
+    }
+    return any(word in dialogue_markers for word in folded_words)
+
+
+def _decorative_short_display_story_promotion_allowed(group):
+    """Allow quoted short story captions without promoting scan branding.
+
+    Some webtoon story beats are not sentences: they are short, quoted, highly
+    stylised display captions placed directly on artwork.  The legacy visual
+    classifier calls them ``decorative`` and the generic weak-label rule rejects
+    them because they lack punctuation or four prose words.  This promotion is
+    still narrow: it requires a dark/saturated display context, high OCR
+    confidence, quoted/caption shape, and the canonical taxonomy must not see a
+    URL, watermark, logo, SFX or preserved entity.
+    """
+
+    body = str(getattr(group, "text", "") or "")
+    if not body.strip():
+        return False
+    body = split_glued_source_words(
+        body,
+        protected=getattr(group, "detected_proper_names", None),
+    )
+    policy = region_taxonomy.resolve_region_policy(
+        original_classification=getattr(group, "classification", ""),
+        source_text=body,
+        preserve_as_name=bool(getattr(group, "preserve_as_name", False)),
+        evidence={"confidence": getattr(group, "confidence", 0.0)},
+    )
+    if region_taxonomy.is_preservable(policy["normalized_classification"]):
+        return False
+    if not region_taxonomy.is_translatable(policy["normalized_classification"]):
+        return False
+    reasons = set(getattr(group, "quality_reasons", []) or [])
+    benign_reasons = {
+        "dictionary_near_miss",
+        "generic_ocr_repair_available",
+    }
+    if reasons - benign_reasons:
+        return False
+    try:
+        confidence = float(getattr(group, "confidence", 0.0) or 0.0)
+    except (TypeError, ValueError):
+        confidence = 0.0
+    if confidence < 0.82:
+        return False
+    try:
+        main_score = float(getattr(group, "main_text_score", 0.0) or 0.0)
+    except (TypeError, ValueError):
+        main_score = 0.0
+    if main_score < (0.20 if confidence >= 0.95 else 0.35):
+        return False
+    folded_words = [
+        re.sub(r"[^A-Z']", "", _ascii_fold(word).upper())
+        for word in re.findall(r"[A-Za-zÀ-ÿ']+", body)
+    ]
+    semantic_words = [
+        word
+        for word in folded_words
+        if len(word.strip("'")) >= 2 and any(ch in "AEIOUY" for ch in word)
+    ]
+    if not (2 <= len(semantic_words) <= 5):
+        return False
+    compact = re.sub(r"[^A-Z0-9]", "", _ascii_fold(body).upper())
+    if len(compact) < 8:
+        return False
+    if any(token in compact for token in ("HTTP", "WWW", "COM", "ORG", "SCAN")):
+        return False
+    letters = [char for char in body if char.isalpha()]
+    uppercase_ratio = (
+        sum(char.upper() == char for char in letters) / max(1, len(letters))
+    )
+    if uppercase_ratio < 0.80:
+        return False
+    quoted = bool(re.search(r"[\"“”'‘’].+[\"“”'‘’]", body.strip()))
+    # A punctuated clause ("THAT'S RIGHT.") is a story line on a colored burst too.
+    clause = region_taxonomy.weak_label_semantic_promotion_allowed("decorative", body)
+    caption_like = (quoted or clause or len(semantic_words) >= 3
+                    or (confidence >= 0.95 and len(set(semantic_words)) == len(semantic_words)))
+    if not caption_like:
+        return False
+    def _metric(name, default=0.0):
+        try:
+            return float(metrics.get(name, default))
+        except (TypeError, ValueError):
+            return float(default)
+
+    metrics = getattr(group, "background_metrics", {}) or {}
+    dark_context = bool(
+        _metric("context_dark_pixel_ratio") >= 0.78
+        and _metric("context_white_pixel_ratio", 1.0) <= 0.05
+    )
+    saturated_context = bool(
+        _metric("context_saturation_mean") >= 55.0
+        or _metric("saturation_mean") >= 55.0
+    )
+    # A named move or title ("DAEMON LASERBLAST") set in typeset capitals over bright art is
+    # not dark, but it is read with near-certainty, is made of several distinct words and
+    # includes real vocabulary: that is a caption to translate, not a one-word effect or a
+    # repeated "BOOM BOOM" burst, which stay preserved.
+    distinct = len(set(semantic_words)) == len(semantic_words)
+    real_words = sum(1 for word in semantic_words if region_taxonomy.is_english_word(word))
+    typeset_caption = bool(confidence >= 0.95 and distinct and real_words >= 1
+                           and len(semantic_words) >= 2)
+    return (dark_context or clause or typeset_caption) and saturated_context
+
+
+def _apply_disabled_sfx_policy(group):
+    """Apply only the disabled-SFX translation flag after background refinement."""
+    if group.classification == "sfx" and not config.TRANSLATE_SFX:
+        group.ignored = True
+        group.ignore_reason = "sfx_translation_disabled"
+
+
+def _apply_classification_policy(group):
+    _apply_disabled_sfx_policy(group)
+    if group.classification == "sfx" and not config.TRANSLATE_SFX:
+        return
+    # A sound the glossary knows keeps its region alive even when the visual
+    # evidence is weak ("unknown"/"decorative" with a plain or ambiguous
+    # background): the fuzzy glossary hit is the strongest signal of what the
+    # lettering says. Without this, a real effect ("BLAZE" over a washed panel)
+    # was dropped as weak_unknown_text and stayed English without a trace.
+    known_sound = False
+    if config.TRANSLATE_SFX:
+        from komyst.translation.sfx_glossary import translate_sfx_fuzzy
+        _rendered = translate_sfx_fuzzy(group.text)
+        known_sound = bool(_rendered) and _rendered.strip().casefold() != str(
+            group.text or ""
+        ).strip().casefold()
+    policy = region_taxonomy.resolve_region_policy(
+        original_classification=group.classification,
+        source_text=group.text,
+        preserve_as_name=bool(group.preserve_as_name),
+        evidence={"confidence": group.confidence},
+    )
+    weak_promotion_allowed = region_taxonomy.weak_label_semantic_promotion_allowed(
+        group.classification,
+        group.text,
+    )
+    if _legible_sentence_promotion_allowed(group):
+        weak_promotion_allowed = True
+        if group.classification == "decorative":
+            group.classification = "unknown"
+        group.story_display_promoted = True
+    if _decorative_textured_story_promotion_allowed(group):
+        weak_promotion_allowed = True
+        # Promotion must be complete, not just an ``ignored`` flip: downstream
+        # consumers (isolated-retry eligibility, proper-name context, render
+        # gating) key off ``group.classification`` itself, using the existing
+        # weak-label vocabulary. Leaving the stale "decorative" legacy label in
+        # place after promotion is what let a promoted region still fail
+        # strong retry and never reach translation/render.
+        if group.classification == "decorative":
+            group.classification = "unknown"
+        group.story_display_promoted = True
+    if (
+        group.classification == "decorative"
+        and getattr(group, "background_type", "") in {
+            "textured_art",
+            "speed_lines",
+            "sfx_area",
+        }
+        and not _decorative_textured_story_promotion_allowed(group)
+        and not _legible_sentence_promotion_allowed(group)
+        and not (
+            (group.background_metrics or {}).get("open_white_narration")
+            or (group.background_metrics or {}).get("open_dark_narration")
+        )
+        and not _lines_sit_on_white(group)
+    ):
+        weak_promotion_allowed = False
+
+    if region_taxonomy.is_preservable(policy["normalized_classification"]):
+        if known_sound:
+            group.ignored = False
+            group.ignore_reason = ""
+        else:
+            group.ignored = True
+            group.ignore_reason = policy["semantic_role"]
+    elif region_taxonomy.is_translatable(policy["normalized_classification"]):
+        if weak_promotion_allowed or known_sound:
+            group.ignored = False
+            group.ignore_reason = ""
+        elif group.classification == "decorative":
+            group.ignored = True
+            group.ignore_reason = "decorative_text"
+        elif group.classification == "unknown":
+            group.ignored = True
+            group.ignore_reason = "weak_unknown_text"
+        else:
+            group.ignored = False
+            group.ignore_reason = ""
+    elif group.classification == "decorative":
+        group.ignored = True
+        group.ignore_reason = "decorative_text"
+    elif group.classification == "unknown":
+        words = re.findall(r"[A-Za-zÀ-ÿ]+", group.text)
+        reading_phrase = (
+            len(words) >= 2
+            and len(group.text) >= 8
+            and abs(group.angle_degrees) < 7
+        )
+        if config.PRIORITIZE_ENCLOSED_TEXT:
+            strong_unknown = (
+                group.confidence >= 0.78
+                and group.alignment_score >= 0.62
+                and (
+                    (
+                        group.main_text_score >= 0.58
+                        and len(group.lines) >= 2
+                    )
+                    or (
+                        group.main_text_score >= 0.15
+                        and reading_phrase
+                    )
+                )
+            )
+        else:
+            strong_unknown = group.confidence >= 0.65 and abs(group.angle_degrees) < 12
+        if not strong_unknown and not known_sound:
+            group.ignored = True
+            group.ignore_reason = "weak_unknown_text"
+
+
+def known_sound_translation_target(group):
+    """pt-BR rendering when a region carries a known sound on an SFX background.
+
+    Splash lettering is often classified "decorative" and filtered out for its
+    size, but a sound the glossary knows is story content. ``None`` when the
+    group is not a known sound (or SFX translation is off, or the rendering
+    would equal the source).
+    """
+
+    if not config.TRANSLATE_SFX:
+        return None
+    if getattr(group, "background_type", "") not in {
+        "textured_art",
+        "speed_lines",
+        "sfx_area",
+    }:
+        return None
+    from komyst.translation.sfx_glossary import translate_sfx_fuzzy
+
+    rendered = translate_sfx_fuzzy(group.text)
+    if not rendered or rendered.strip().casefold() == str(group.text or "").strip().casefold():
+        return None
+    return rendered
+
+
+def _should_translate_group(group):
+    # R4 human review is an explicit render-time decision, not a classifier input.
+    # The persisted source item remains untouched; this flag exists only on the
+    # reconstructed group assembled from an immutable Review snapshot.
+    review_override = str(getattr(group, "review_translate_override", "auto") or "auto")
+    if review_override == "ignore":
+        return False
+    if review_override == "translate":
+        return bool(str(getattr(group, "translation", "") or "").strip())
+    if group.ignored:
+        return False
+    if group.preserve_as_name:
+        return False
+    if group.classification == "sfx" and not config.TRANSLATE_SFX:
+        return False
+    # A sound the glossary knows (exact or OCR-tolerant) on an SFX-typical
+    # background is story content even when the visual classifier called the
+    # region "decorative" and even when OCR heuristics flag the garbled token
+    # as unintelligible: a fuzzy glossary hit is stronger evidence of what the
+    # lettering says than the recogniser's confidence in reading it. The
+    # glossary guards (real-word refusal, length tiers) keep this from
+    # promoting ordinary words.
+    if known_sound_translation_target(group) is not None:
+        return True
+    # A high-confidence, short display token supplied by the isolated residual
+    # sweep has already passed the ordinary visual SFX classifier. Allow that
+    # narrow population to reach the provider; if it echoes or fails validation,
+    # the untouched source lettering remains in place.
+    if (
+        group.classification == "sfx"
+        and bool((getattr(group, "classification_evidence", None) or {}).get(
+            "residual_sweep_recovered"
+        ))
+        and any(
+            bool((getattr(line, "metadata", None) or {}).get("residual_sweep_recovered"))
+            for line in (getattr(group, "lines", []) or [])
+        )
+    ):
+        return True
+    # OCR corruption is an OCR problem. A region the recogniser could not read
+    # twice is held back for review instead of being handed to the translator,
+    # which has no way to recover the characters that were never read.
+    if group.ocr_quality_blocked or _ocr_unintelligible_source_text(group.text):
+        return False
+    # Translation validation runs after the initial target list is built. If a
+    # retry still fails, keep the untouched source region instead of erasing it
+    # and drawing broken/mixed text back onto the page.
+    if group.sent_to_translation and not group.translation_valid:
+        # ...unless the only objection is terminology: that region has a usable PT-BR
+        # target and refusing it would put the English source back in front of the
+        # reader. It renders under review, never as clean. Not fitting the region is
+        # not a defect of the translation either: the renderer's caption fallback can
+        # place it (TRANSLATION_LABEL_FALLBACK).
+        if (config.TRANSLATION_LABEL_FALLBACK
+                and str(group.translation_validation_reason or "") == "text_does_not_fit_region"
+                and str(group.translation or "").strip()):
+            return True
+        return bool(terminology_review_render_candidate(group))
+    if not _group_has_story_translation_authority(group):
+        return False
+    if (
+        group.classification == "decorative"
+        and getattr(group, "background_type", "") in {
+            "textured_art",
+            "speed_lines",
+            "sfx_area",
+        }
+        and not _decorative_textured_story_promotion_allowed(group)
+        and not _legible_sentence_promotion_allowed(group)
+        and not (
+            (group.background_metrics or {}).get("open_white_narration")
+            or (group.background_metrics or {}).get("open_dark_narration")
+        )
+        and not _lines_sit_on_white(group)
+    ):
+        return False
+    return True
+
+
+def _group_has_story_translation_authority(group):
+    """Single local authority for story text that may enter translation/render.
+
+    Region taxonomy decides preserve/translate.  Legacy weak labels still require
+    sentence-level semantic evidence, so increasing story recall does not send SFX,
+    credits, promos, logos or URL/watermark text to the provider.
+    """
+
+    policy = region_taxonomy.resolve_region_policy(
+        original_classification=getattr(group, "classification", ""),
+        source_text=getattr(group, "text", ""),
+        preserve_as_name=bool(getattr(group, "preserve_as_name", False)),
+        evidence={"confidence": getattr(group, "confidence", 0.0)},
+    )
+    category = policy["normalized_classification"]
+    if region_taxonomy.is_preservable(category):
+        return False
+    if not region_taxonomy.is_translatable(category):
+        return False
+    if _legible_sentence_promotion_allowed(group):
+        return True
+    if _decorative_textured_story_promotion_allowed(group):
+        return True
+    return region_taxonomy.weak_label_semantic_promotion_allowed(
+        getattr(group, "classification", ""),
+        getattr(group, "text", ""),
+    )
+
+
+FREQUENT_WORD_MIN_ZIPF = 4.0
+
+
+def _score_group_quality(groups):
+    for group in groups:
+        # Glued words ("SHEWASACTUALLY OUTON'AWALK") read as garbage to the quality
+        # heuristics and the region was dropped before the repair that sends it
+        # split to the provider: judge the text the provider will actually get.
+        raw_text = group.text
+        repaired = split_glued_source_words(raw_text, protected=group.detected_proper_names)
+        if repaired != raw_text:
+            group.text = repaired
+        group.ocr_glue_repaired = repaired != raw_text
+        try:
+            score, reasons = score_group_ocr_quality(group)
+        finally:
+            group.text = raw_text
+        if _ignored_decorative_requires_review(group, reasons):
+            reasons.append("ignored_decorative_linguistic_content")
+            group.manual_review_required = True
+        group.quality_score = score
+        group.quality_reasons = reasons
+
+
+def _ignored_decorative_requires_review(group, reasons):
+    """Keep unclassified linguistic decorative/unknown text visible to quality review.
+
+    Decorative and weak-``unknown`` labels are both conservative drops: the
+    classifier withheld the region from translation for lack of confidence, not
+    because policy proved it is preservable art/SFX/branding. A long, punctuated
+    or compact-word candidate dropped this way can be missed dialogue, so it must
+    not disappear from the audit merely because the classifier was conservative.
+    This does not alter SFX routing or render the region - it only makes sure the
+    region stays visible to the quality gate instead of shipping silently.
+    """
+    if not (
+        group.ignored
+        and group.ignore_reason in {"decorative_text", "weak_unknown_text"}
+        and group.classification in {"decorative", "unknown"}
+    ):
+        return False
+    text = clean_ocr_text(group.text)
+    compact = re.sub(r"[^A-Za-z0-9]", "", text)
+    if len(compact) < 10:
+        return False
+    has_sentence_punctuation = bool(re.search(r"[,!?…]", text))
+    has_compact_segmentation = "compact_word_segmentation_candidate" in reasons
+    return has_sentence_punctuation or (
+        len(_translation_token_infos(text)) >= 2 and has_compact_segmentation
+    )
+
+
+def _group_ocr_provenance_engines(group):
+    """Every distinct ``initial_ocr_engine`` among a group's lines.
+
+    Falls back to the line's current ``engine`` for a line OCRed before
+    provenance stamping existed (e.g. a legacy/replayed artifact).
+    """
+    engines = []
+    for line in group.lines:
+        metadata = getattr(line, "metadata", None) or {}
+        initial = metadata.get("initial_ocr_engine") or line.engine or None
+        if initial and initial not in engines:
+            engines.append(initial)
+    return tuple(sorted(engines))
+
+
+def _assign_region_metadata(groups):
+    for index, group in enumerate(groups, start=1):
+        group.region_id = f"REGION_{index:03}"
+        group.region_type = group.classification
+        group.parent_balloon_id = group.region_id if group.classification == "speech" else ""
+        group.source_engine = _group_engine(group)
+        group.ocr_provenance_engines = _group_ocr_provenance_engines(group)
+        group.mixed_ocr_provenance = len(group.ocr_provenance_engines) > 1
+
+
+_NON_LATIN_SCRIPT = re.compile("[\\u3040-\\u30ff\\u3400-\\u9fff\\uac00-\\ud7af\\u0400-\\u04ff\\u0600-\\u06ff]")
+
+
+def score_group_ocr_quality(group):
+    text = clean_ocr_text(group.text)
+    reasons = []
+    score = 1.0
+    if not text:
+        return 0.0, ["empty_text"]
+
+    # The heuristics below are English-only; on CJK/Hangul/Cyrillic/Arabic every letter
+    # would read as an OCR artifact and the region would be retried, then blocked.
+    letters = [char for char in text if char.isalpha()]
+    if (letters and _NON_LATIN_SCRIPT.search(text)
+            and sum(not ("A" <= char.upper() <= "Z") for char in letters) * 2 >= len(letters)):
+        return (0.8 if group.cleanup_lines else 0.9), ["non_latin_script"]
+
+    if group.cleanup_lines:
+        reasons.append("ignored_line_inside_text_region")
+        score -= min(0.45, 0.22 + len(group.cleanup_lines) * 0.1)
+
+    non_ascii_letters = [
+        char
+        for char in text
+        if char.isalpha() and not ("A" <= char.upper() <= "Z")
+    ]
+    if non_ascii_letters:
+        reasons.append("non_ascii_ocr_artifact")
+        score -= min(0.42, 0.18 + len(non_ascii_letters) * 0.06)
+
+    raw_case_tokens = re.findall(r"[A-Za-z]{5,}", text)
+    if any(_case_transition_count(token) >= 3 for token in raw_case_tokens):
+        reasons.append("mixed_case_ocr_artifact")
+        score -= 0.2
+    short_case_tokens = re.findall(r"[A-Za-z]{3,5}", text)
+    if any(
+        re.fullmatch(r"[a-z]{2,}[A-Z]{2,}", token)
+        for token in short_case_tokens
+    ):
+        reasons.append("short_malformed_case_ocr_artifact")
+        score -= 0.24
+
+    folded = _ascii_fold(text).upper()
+    compact = re.sub(r"[^A-Z0-9]", "", folded)
+    tokens = re.findall(r"[A-Za-z0-9']+", folded)
+    token_letters = [re.sub(r"[^A-Z]", "", token) for token in tokens]
+
+    if _has_cross_line_lexical_confidence_disagreement(group):
+        reasons.append("cross_line_lexical_confidence_disagreement")
+        score -= 0.42
+
+    apostrophe_tokens = re.findall(r"'?[A-Z]+(?:'[A-Z]+)+'?", folded)
+    valid_contraction = re.compile(
+        r"^[A-Z]+(?:'S|'T|'RE|'VE|'LL|'D|'M)$"
+    )
+    if any(
+        token.count("'") > 1 or not valid_contraction.fullmatch(token.strip("'"))
+        for token in apostrophe_tokens
+    ):
+        reasons.append("improbable_apostrophe_pattern")
+        score -= 0.45
+
+    # Frequent dictionary words ("LET'S RACE", "ALRIGHT", "HOLDING FOX") are read
+    # correctly; near-miss and glued-word guesses about them only cost a good line
+    # its translation. Zipf 4.0 keeps rare spellings ("LEFTS", "FO") suspicious. A line
+    # that had to be un-glued first is still OCR damage and keeps its flags.
+    trust_lexicon = not getattr(group, "ocr_glue_repaired", False)
+
+    def _frequent_word(token):
+        return token in COMMON_ENGLISH_WORDS or (
+            trust_lexicon and region_taxonomy.word_zipf(token) >= FREQUENT_WORD_MIN_ZIPF)
+
+    all_frequent = bool(token_letters) and all(
+        _frequent_word(token) for token in token_letters if len(token) >= 2)
+    repair_candidate, repair_reason = repair_ocr_text(text)
+    if repair_reason and not all_frequent:
+        if "segment_compact_english_word" in repair_reason:
+            reasons.append("compact_word_segmentation_candidate")
+            score -= 0.28
+        if "dictionary_edit_distance_repair" in repair_reason:
+            reasons.append("dictionary_near_miss")
+            score -= 0.24
+        if "adjacent_common_word_ocr_typo" in repair_reason:
+            reasons.append("adjacent_repeated_word_near_miss")
+            score -= 0.2
+        if repair_candidate and repair_candidate != text:
+            reasons.append("generic_ocr_repair_available")
+            score -= 0.08
+
+    for token in token_letters:
+        if len(token) < 2 or _frequent_word(token) or token in SFX_WORDS:
+            continue
+        suggestion, suggestion_score = suggest_english_word(token)
+        if suggestion and suggestion_score >= 0.62:
+            reasons.append("dictionary_near_miss")
+            score -= 0.18
+        segmented, segment_score = segment_compact_english_word(token)
+        if segmented and segment_score >= 0.58:
+            reasons.append("compact_word_segmentation_candidate")
+            score -= 0.2
+        has_no_vowel = not re.search(r"[AEIOUY]", token)
+        has_consonant_run = bool(re.search(r"[BCDFGHJKLMNPQRSTVWXYZ]{3,}", token))
+        if len(token) <= 4 and (has_no_vowel or has_consonant_run):
+            reasons.append("short_improbable_caps_token")
+            score -= 0.18
+        elif (
+            len(token) in {2, 3}
+            and len(token_letters) >= 2
+            and group.inside_balloon_like_region
+        ):
+            reasons.append("unknown_short_token_in_phrase")
+            score -= 0.26
+
+    if re.search(r"[A-Z]+[0-9]+[A-Z]*|[0-9]+[A-Z]+", folded):
+        reasons.append("alphanumeric_ocr_artifact")
+        score -= 0.16
+
+    short_context_tokens = {"HE", "SHE", "HIS", "HER", "THEIR", "THEM"}
+    if (
+        1 <= len(token_letters) <= 2
+        and any(token in short_context_tokens for token in token_letters)
+        and len(compact) <= 8
+        and group.inside_balloon_like_region
+    ):
+        reasons.append("short_context_word_needs_region_check")
+        score -= 0.42
+
+    terminal_punctuation = bool(re.search(r"[.?!…]\s*$", text))
+    source_engine = group.source_engine or _group_engine(group)
+    if (
+        source_engine == "rapidocr"
+        and group.inside_balloon_like_region
+        and group.classification in {"speech", "unknown", "narration"}
+        and 2 <= len(token_letters) <= 4
+        and len(compact) >= 8
+        and not terminal_punctuation
+    ):
+        reasons.append("short_balloon_text_needs_region_context")
+        score -= 0.34
+
+    if len(compact) >= 14 and not re.search(r"\s", text):
+        reasons.append("long_token_without_spaces")
+        score -= 0.24
+
+    consonant_runs = re.findall(r"[BCDFGHJKLMNPQRSTVWXYZ]{5,}", folded)
+    if consonant_runs:
+        reasons.append("long_consonant_run")
+        score -= 0.2
+
+    odd = sum(
+        1
+        for char in text
+        if not (char.isalnum() or char.isspace() or char in "'!?.,:;+-&/()\"“”‘’~…")
+    )
+    if odd / max(1, len(text)) > 0.14:
+        reasons.append("many_improbable_characters")
+        score -= 0.18
+
+    if re.search(r"\b\d{2,}[?!]*\b", text) and not re.search(r"\bage\s*\d+", text, re.I):
+        reasons.append("improbable_number_token")
+        score -= 0.12
+
+    if group.confidence < config.RAPIDOCR_MIN_CONFIDENCE:
+        reasons.append("low_confidence")
+        score -= 0.28
+    elif group.confidence < 0.7:
+        reasons.append("medium_low_confidence")
+        score -= 0.12
+
+    improbable_tokens = 0
+    for token in tokens:
+        normalized = re.sub(r"[^A-Z]", "", token.upper())
+        if len(normalized) >= 5:
+            vowels = sum(char in "AEIOUY" for char in normalized)
+            if vowels == 0:
+                improbable_tokens += 1
+    if improbable_tokens:
+        reasons.append("improbable_tokens")
+        score -= min(0.26, improbable_tokens * 0.09)
+
+    if _group_seems_cross_region(group):
+        reasons.append("possible_cross_region_group")
+        score -= 0.28
+
+    if group.ignored and len(tokens) >= 4 and len(compact) >= 18:
+        reasons.append("ignored_high_content_text")
+        score -= 0.34
+
+    return max(0.0, min(1.0, score)), reasons
+
+
+def _case_transition_count(token):
+    case_pattern = ["U" if char.isupper() else "L" for char in token if char.isalpha()]
+    return sum(
+        case_pattern[index] != case_pattern[index - 1]
+        for index in range(1, len(case_pattern))
+    )
+
+
+def _group_seems_cross_region(group):
+    if len(group.lines) < 2:
+        return False
+    centers = [line.box[0] + line.box[2] / 2 for line in group.lines]
+    widths = [max(1, line.box[2]) for line in group.lines]
+    heights = [max(1, line.box[3]) for line in group.lines]
+    if np.std(centers) > max(120, np.median(widths) * 1.35):
+        return True
+    sorted_lines = sorted(group.lines, key=lambda line: line.box[1])
+    gaps = [
+        sorted_lines[i + 1].box[1] - (sorted_lines[i].box[1] + sorted_lines[i].box[3])
+        for i in range(len(sorted_lines) - 1)
+    ]
+    return bool(gaps and max(gaps) > max(30, np.median(heights) * 2.2))
+
+
+def group_needs_selective_fallback(group):
+    if group.source_engine and group.source_engine not in {"rapidocr", "mixed"}:
+        return False
+    if group.fallback_used:
+        return False
+    if group.quality_score < config.OCR_GROUP_MIN_QUALITY_SCORE:
+        return True
+    return bool(
+        group.quality_reasons
+        and any(
+            reason in {
+                "dictionary_near_miss",
+                "compact_word_segmentation_candidate",
+                "adjacent_repeated_word_near_miss",
+                "generic_ocr_repair_available",
+                "long_token_without_spaces",
+                "long_consonant_run",
+                "short_improbable_caps_token",
+                "short_balloon_text_needs_region_context",
+                "alphanumeric_ocr_artifact",
+                "possible_cross_region_group",
+                "ignored_high_content_text",
+                "ignored_line_inside_text_region",
+                "unknown_short_token_in_phrase",
+                "improbable_number_token",
+                "non_ascii_ocr_artifact",
+                "mixed_case_ocr_artifact",
+                "short_malformed_case_ocr_artifact",
+                "cross_line_lexical_confidence_disagreement",
+            }
+            for reason in group.quality_reasons
+        )
+    )
+
+
+def _has_cross_line_lexical_confidence_disagreement(group):
+    """Flag a weak OCR line only when stronger neighboring text supports it.
+
+    Unknown vocabulary alone is not enough: names, acronyms and stylized text
+    are common in comics.  This signal requires a multi-token line whose words
+    are all outside the generic OCR vocabulary, a material confidence drop
+    against another line in the same group, and at least two recognized words
+    in the neighboring lines.  The result only requests multi-engine fallback;
+    it never rewrites the text itself.
+    """
+    if (
+        group.classification not in {"speech", "narration", "unknown"}
+        or len(group.lines) < 2
+    ):
+        return False
+
+    protected_names = {
+        re.sub(r"[^A-Z]", "", _ascii_fold(name).upper())
+        for name in group.detected_proper_names
+        if name
+    }
+    line_tokens = []
+    for line in group.lines:
+        tokens = [
+            re.sub(r"[^A-Z]", "", token.upper())
+            for token in re.findall(
+                r"[A-Za-z]+(?:'[A-Za-z]+)?",
+                _ascii_fold(line.text),
+            )
+        ]
+        line_tokens.append([token for token in tokens if token])
+
+    for index, (line, tokens) in enumerate(zip(group.lines, line_tokens)):
+        if len(tokens) < 2 or max(map(len, tokens)) < 5:
+            continue
+        if any(
+            token in OCR_LEXICAL_REFERENCE_WORDS or token in protected_names
+            for token in tokens
+        ):
+            continue
+
+        peers = [
+            peer
+            for peer_index, peer in enumerate(group.lines)
+            if peer_index != index
+        ]
+        confidence_gap = max(peer.confidence for peer in peers) - line.confidence
+        if confidence_gap < 0.05:
+            continue
+
+        peer_tokens = [
+            token
+            for peer_index, tokens_for_peer in enumerate(line_tokens)
+            if peer_index != index
+            for token in tokens_for_peer
+        ]
+        recognized_peer_tokens = sum(
+            token in OCR_LEXICAL_REFERENCE_WORDS or token in protected_names
+            for token in peer_tokens
+        )
+        if recognized_peer_tokens >= 2:
+            return True
+
+    return False
+
+
+def _should_skip_paddle_full_for_ignored_decorative(group):
+    return bool(
+        group.ignored
+        and group.classification == "decorative"
+        and group.ignore_reason == "decorative_text"
+    )
+
+
+def _ocr_crop_fingerprint(crop):
+    """Return a non-reversible fingerprint for regional OCR diagnostics."""
+    if crop is None or getattr(crop, "size", 0) == 0:
+        return ""
+    digest = hashlib.sha256()
+    digest.update(str(tuple(int(v) for v in crop.shape)).encode("ascii", "ignore"))
+    digest.update(crop.tobytes())
+    return digest.hexdigest()
+
+
+def _classify_paddle_full_call(call):
+    """Classify a regional Paddle full call without changing OCR decisions."""
+    if call.get("duplicate_region"):
+        return "FULL_DUPLICATE"
+    if call.get("full_accepted"):
+        mobile_exists = bool(call.get("mobile_candidate_exists"))
+        mobile_score = float(call.get("mobile_selection_score") or 0.0)
+        pre_full_score = float(call.get("pre_full_best_selection_score") or 0.0)
+        if not mobile_exists or mobile_score <= pre_full_score + 0.03:
+            return "FULL_REQUIRED"
+        return "FULL_USEFUL"
+    full_score = float(
+        call.get("full_adjusted_selection_score")
+        or call.get("full_selection_score")
+        or 0.0
+    )
+    pre_full_score = float(call.get("pre_full_best_selection_score") or 0.0)
+    if call.get("full_candidate_exists") and full_score < pre_full_score:
+        return "FULL_WORSE"
+    return "FULL_NO_CHANGE"
+
+
+# Evidence that the recogniser produced characters, not words: the shapes it
+# returned do not form text any language would write. Each of these alone is
+# enough to justify one more RapidOCR read of the same pixels.
+#
+# ``compact_word_segmentation_candidate`` belongs here too: it means the DP
+# segmenter found a plausible word split for a fused run but the runtime
+# safety gate (``assess_ocr_repair``) could not ship it alone because the
+# split also changed a letter, not just a space - exactly the case a second,
+# independent read (this same retry, on the same pixels, at the scale the
+# recogniser prefers) exists to corroborate or refute. Without this, a group
+# scoring just above ``RAPIDOCR_RECOVERY_MIN_QUALITY_SCORE`` never gets the
+# second read at all and the unresolved fused run ships untranslated.
+RAPIDOCR_CORRUPTION_REASONS = frozenset(
+    {
+        "empty_text",
+        "non_ascii_ocr_artifact",
+        "mixed_case_ocr_artifact",
+        "short_malformed_case_ocr_artifact",
+        "improbable_apostrophe_pattern",
+        "long_consonant_run",
+        "improbable_tokens",
+        "many_improbable_characters",
+        "long_token_without_spaces",
+        "cross_line_lexical_confidence_disagreement",
+        "compact_word_segmentation_candidate",
+    }
+)
+
+# Weaker signals that are individually normal in comics: a rank ("B2"), a
+# stat line, a quiet balloon. Two of them together stop looking like a
+# coincidence, one of them never does. Stat-shaped signals
+# (``short_improbable_caps_token``, ``improbable_number_token``) are excluded
+# outright: "HP 50" trips both and is perfectly good text.
+RAPIDOCR_CORROBORATING_REASONS = frozenset(
+    {
+        "alphanumeric_ocr_artifact",
+        "unknown_short_token_in_phrase",
+        "low_confidence",
+    }
+)
+
+
+# Signals that lower the local OCR quality score but are not proof that the
+# source text is unsafe to translate by themselves. Comics regularly contain
+# contractions, stutters, rare names, ranks, fantasy vocabulary and compact
+# lettering; treating these vocabulary-shaped warnings as hard OCR corruption is
+# what holds back readable speech/narration before the translator ever sees it.
+RAPIDOCR_WARNING_ONLY_REASONS = frozenset(
+    {
+        "dictionary_near_miss",
+        "generic_ocr_repair_available",
+        "short_improbable_caps_token",
+        "unknown_short_token_in_phrase",
+        "improbable_number_token",
+        "adjacent_repeated_word_near_miss",
+    }
+)
+
+
+# Warnings that describe a *damaged word shape* inside an otherwise readable
+# read: lost spaces, a mangled apostrophe, mixed case, a near-miss word, or a
+# consonant wall inside a long punctuated story sentence. They say the read is
+# ugly, not that the recogniser invented characters. Anything outside this set
+# (non-ASCII glyphs, digits inside words, improbable characters) is evidence of
+# characters that were never on the page, and keeps its hard block.
+OCR_RECOVERABLE_SUSPICION_REASONS = frozenset(
+    {
+        "improbable_apostrophe_pattern",
+        "mixed_case_ocr_artifact",
+        "short_malformed_case_ocr_artifact",
+        "long_consonant_run",
+        "long_token_without_spaces",
+        "compact_word_segmentation_candidate",
+        "cross_line_lexical_confidence_disagreement",
+        "dictionary_near_miss",
+        "adjacent_repeated_word_near_miss",
+        "generic_ocr_repair_available",
+        "ignored_line_inside_text_region",
+        "unknown_short_token_in_phrase",
+        "short_improbable_caps_token",
+        "medium_low_confidence",
+    }
+)
+
+
+def _ordinary_dialogue_words(text):
+    """Distinct known English dialogue words in ``text``.
+
+    Apostrophes are split rather than stripped so a contraction that lost its
+    space ("I'VETURNED") still yields the pronoun it starts with. A token the
+    recogniser fused with its neighbour ("YOURATTRIBUTES") never matches this
+    whole-token lookup even when every one of its parts is ordinary
+    vocabulary - the same compact-word segmenter the repair pipeline already
+    trusts elsewhere is reused here (routing only, it does not rewrite the
+    group's text) so a fused-but-recoverable run still counts as evidence.
+    """
+    words = set()
+    for token in re.findall(r"[A-Za-z']+", _ascii_fold(str(text or "")).upper()):
+        for part in token.split("'"):
+            part = re.sub(r"[^A-Z]", "", part)
+            if not part:
+                continue
+            if part in ORDINARY_DIALOGUE_WORDS:
+                words.add(part)
+                continue
+            segmented, segment_score = segment_compact_english_word(part)
+            if segmented and segment_score >= 0.58:
+                for piece in segmented.upper().split():
+                    if piece in ORDINARY_DIALOGUE_WORDS:
+                        words.add(piece)
+    return words
+
+
+def ocr_suspicious_but_translatable(group):
+    """True when a suspicious read is still worth handing to the translator.
+
+    Source quality and translation-attempt eligibility are different questions.
+    A balloon whose spaces the recogniser dropped is damaged, but it is still
+    ordinary English the translator can work with, and holding it back leaves
+    untouched source text on the page. The source stays flagged: this only
+    decides routing, never that the candidate can be trusted.
+    """
+    if group.classification not in {"speech", "narration"} and not (
+        group.classification == "unknown"
+        and _group_has_story_translation_authority(group)
+        and float(getattr(group, "main_text_score", 0.0) or 0.0) >= 0.58
+    ):
+        return False
+    reasons = set(group.quality_reasons or [])
+    if not reasons or reasons - OCR_RECOVERABLE_SUSPICION_REASONS:
+        return False
+    text = clean_ocr_text(group.text)
+    if not re.search(r"[.?!…,]", text):
+        return False
+    if _has_embedded_digit_corruption(text):
+        return False
+    if len(_ordinary_dialogue_words(text)) >= 2:
+        return True
+    if (
+        reasons == {"improbable_apostrophe_pattern"}
+        and len(text) >= 40
+        and getattr(group, "main_text_score", 0.0) >= 0.75
+        and (
+            getattr(group, "inside_balloon_like_region", False)
+            or getattr(group, "inside_narration_box_like_region", False)
+        )
+    ):
+        return True
+    if "long_consonant_run" in reasons:
+        compact_letters = re.sub(r"[^A-Za-z]", "", text)
+        return bool(
+            len(compact_letters) >= 36
+            and re.search(r"\s", text)
+            and re.search(r"[.?!…]", text)
+        )
+    return False
+
+
+# A rank, a level or a stat is written with the digits at the edge of the token
+# ("B2", "LEVEL 10", "HP 50"). Digits *inside* a run of letters is not how text
+# is written, it is how a recogniser reports glyphs it could not resolve.
+_EMBEDDED_DIGIT_TOKEN = re.compile(r"[A-Za-z]+[0-9]+[A-Za-z]+")
+
+
+def _has_embedded_digit_corruption(text):
+    return bool(_EMBEDDED_DIGIT_TOKEN.search(_ascii_fold(str(text or ""))))
+
+
+def _rapidocr_warning_only_quality(group):
+    reasons = set(group.quality_reasons or [])
+    if not reasons:
+        return False
+    if reasons - RAPIDOCR_WARNING_ONLY_REASONS:
+        return False
+    return not _has_embedded_digit_corruption(group.text)
+
+
+def rapidocr_region_decision(group):
+    """Return ``"accept"`` or ``"retry"`` for one RapidOCR region.
+
+    Deliberately narrower than :func:`group_needs_selective_fallback`, which
+    exists to justify a *cross-engine* second opinion. Vocabulary-shaped signals
+    (``dictionary_near_miss``, ``compact_word_segmentation_candidate``) are not
+    corruption: rare names, ranks and stylised text trip them constantly, and
+    re-reading the same pixels with the same engine cannot resolve them anyway.
+    """
+    if not _rapidocr_recovery_enabled():
+        return "accept"
+    if group.source_engine and group.source_engine not in {"rapidocr", "mixed"}:
+        return "accept"
+    if group.preserve_as_name:
+        return "accept"
+    reasons = set(group.quality_reasons or [])
+    if reasons & RAPIDOCR_CORRUPTION_REASONS:
+        return "retry"
+    if _has_embedded_digit_corruption(group.text):
+        return "retry"
+    if len(reasons & RAPIDOCR_CORROBORATING_REASONS) >= 2:
+        return "retry"
+    if float(group.quality_score) < config.RAPIDOCR_RECOVERY_MIN_QUALITY_SCORE:
+        if _rapidocr_warning_only_quality(group):
+            return "accept"
+        return "retry"
+    return "accept"
+
+
+def _rapidocr_recovery_enabled():
+    return bool(
+        getattr(config, "RAPIDOCR_REGION_RECOVERY", False)
+        and config.OCR_ENGINE == "rapidocr"
+    )
+
+
+def _rapidocr_attempt_record(attempt, strategy, text, score, reasons):
+    return {
+        "attempt": attempt,
+        "strategy": strategy,
+        "raw_text": text,
+        "normalized_text": _normalized_ocr_candidate_text(text),
+        "quality_score": round(float(score), 4),
+        "quality_reasons": list(reasons or []),
+    }
+
+
+RAPIDOCR_SOURCE_RECOVERY_MAX_VARIANTS = 7
+
+
+def _source_recovery_text(lines):
+    # RapidOCR's detection order is not reading order (the same instability
+    # ``reading_order`` already corrects for grouping and for the post-render
+    # check below): a multi-line balloon re-read with a different image variant
+    # (upscaled, sharpened, inverted) can emit its lines in a different
+    # sequence even though every variant sees the same geometry.  Joining in
+    # detection order then makes independently-correct reads of the same crop
+    # disagree on nothing but word order, which starves
+    # ``_source_recovery_agreement`` of the corroboration it needs.  Sorting by
+    # position first, before any attempt is compared, removes that noise at its
+    # source instead of teaching the comparison to tolerate it.
+    return clean_ocr_text(
+        " ".join(str(getattr(line, "text", "") or "") for line in reading_order(lines))
+    )
+
+
+def _source_recovery_confidence(lines):
+    values = [
+        float(getattr(line, "confidence", 0.0) or 0.0)
+        for line in lines or []
+    ]
+    if not values:
+        return 0.0
+    return float(sum(values) / len(values))
+
+
+def _source_recovery_boundaries(lines):
+    return [
+        [int(value) for value in tuple(getattr(line, "box", ()) or ())[:4]]
+        for line in lines or []
+        if len(tuple(getattr(line, "box", ()) or ())) >= 4
+    ]
+
+
+def _source_recovery_normalized(text):
+    return source_completeness.compact(clean_ocr_text(text))
+
+
+def _source_recovery_word_signature(text):
+    return "|".join(source_completeness.fold_tokens(clean_ocr_text(text)))
+
+
+def rapidocr_source_recovery_variants(crop):
+    """Small deterministic local-only image variants for source recovery."""
+
+    crop = np.asarray(crop)
+    variants = [{"name": "original_crop", "image": crop}]
+    if crop.size == 0:
+        return variants
+    variants.append({
+        "name": "upscale_2x",
+        "image": cv2.resize(crop, None, fx=2.0, fy=2.0, interpolation=cv2.INTER_CUBIC),
+    })
+    variants.append({
+        "name": "upscale_3x",
+        "image": cv2.resize(crop, None, fx=3.0, fy=3.0, interpolation=cv2.INTER_CUBIC),
+    })
+    gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
+    equalized = cv2.equalizeHist(gray)
+    variants.append({
+        "name": "grayscale_autocontrast",
+        "image": cv2.cvtColor(equalized, cv2.COLOR_GRAY2BGR),
+    })
+    _ret, thresh = cv2.threshold(
+        equalized, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    variants.append({
+        "name": "threshold_otsu",
+        "image": cv2.cvtColor(thresh, cv2.COLOR_GRAY2BGR),
+    })
+    sharpen_kernel = np.array([[0, -1, 0], [-1, 5, -1], [0, -1, 0]], dtype=np.float32)
+    variants.append({
+        "name": "light_sharpen",
+        "image": cv2.filter2D(crop, -1, sharpen_kernel),
+    })
+    variants.append({
+        "name": "inverted_if_needed",
+        "image": cv2.bitwise_not(crop),
+    })
+    return variants[:RAPIDOCR_SOURCE_RECOVERY_MAX_VARIANTS]
+
+
+def _rapidocr_detect_source_variant(engine, image, *, page_index):
+    if isinstance(engine, OCREngine):
+        lines = engine._detect_with_rapidocr(image, upscale=False)
+        for line in lines:
+            line.engine = "rapidocr"
+            line.page = page_index
+            line.metadata = {
+                **(line.metadata or {}),
+                "ocr_engine": "rapidocr",
+                "ocr_pass": "source_recovery_variant",
+            }
+    else:
+        lines = engine.detect_lines(image, page=page_index, rapidocr_upscale=False)
+    return list(lines or [])
+
+
+def _multiset_key(word_signature):
+    """The tokens of ``word_signature``, order-independent.
+
+    ``word_signature`` already is the fold-cased tokens in reading order;
+    sorting it collapses two attempts that read the same words in a different
+    sequence into one bucket while keeping a genuine content difference (a
+    dropped number, a missing negation word, a swapped name) in a different
+    one - that difference changes which tokens are present, not just their
+    order, so it survives the sort.
+    """
+    return "|".join(sorted(word_signature.split("|"))) if word_signature else ""
+
+
+def _reorder_tolerant_agreement(by_text, min_confidence):
+    """Corroboration across attempts whose tokens match as a multiset.
+
+    Only consulted when the exact, order-preserving grouping in
+    :func:`_source_recovery_agreement` found no trustworthy cluster.  After
+    ``_source_recovery_text`` already joins each attempt's lines in geometric
+    reading order, two independent reads of the same crop still disagreeing on
+    *word order* rather than content is the residual case this exists for -
+    RapidOCR splitting a wrapped line differently across image variants, for
+    instance.  It never lowers the bar on content: two multiset clusters that
+    each gather independent corroboration are a real disagreement, not order
+    noise, and are left for the caller's fail-closed verdict to stand.
+    """
+    by_multiset = {}
+    for (_normalized, word_signature), items in by_text.items():
+        key = _multiset_key(word_signature)
+        if not key:
+            continue
+        by_multiset.setdefault(key, []).extend(items)
+    if not by_multiset:
+        return None
+
+    ranked = sorted(
+        by_multiset.items(),
+        key=lambda item: (len(item[1]), sum(float(v.get("confidence") or 0.0) for v in item[1])),
+        reverse=True,
+    )
+    winners = ranked[0][1]
+    # A lone cluster with nothing to be corroborated against is the ordinary
+    # case this function exists for (every read landed the same words, just
+    # shuffled). More than one cluster is only trusted when there is a clear
+    # winner - a second cluster with its own two-attempt corroboration is a
+    # real disagreement, not order noise, and must be left ambiguous.
+    runner_up = ranked[1][1] if len(ranked) > 1 else ()
+    if len(winners) < 2 or len(runner_up) >= 2:
+        return None
+    avg_conf = sum(float(item.get("confidence") or 0.0) for item in winners) / len(winners)
+    if avg_conf < min_confidence:
+        return None
+    canonical = max(winners, key=lambda item: float(item.get("confidence") or 0.0))
+    return {
+        "trusted": True,
+        "reason": "order_independent_variant_agreement",
+        "canonical_source": str(canonical.get("text") or ""),
+        "normalized_source": str(canonical.get("normalized_text") or ""),
+        "word_signature": str(canonical.get("word_signature") or ""),
+        "agreement_count": len(winners),
+        "average_confidence": round(float(avg_conf), 4),
+        "disagreements": [],
+    }
+
+
+def _unknown_source_words(word_signature):
+    """Tokens of a read that are neither dictionary words nor short function words."""
+    unknown = 0
+    for token in str(word_signature or "").split("|"):
+        letters = re.sub(r"[^A-Z]", "", token.upper())
+        if not letters:
+            continue
+        if letters in region_taxonomy._STORY_CLAUSE_MARKERS or region_taxonomy.is_english_word(letters):
+            continue
+        unknown += 1
+    return unknown
+
+
+def _lexical_variant_winner(by_text, min_confidence):
+    """Break a tie between reads that several variants each agree on.
+
+    Two clusters with two or more votes each ("FANYWAY" vs "ANYWAY", "ITSALREADY"
+    vs "IT'S ALREADY") are the same pixels read with and without a lost boundary
+    or a stray stroke. The one with strictly fewer non-words wins; names are
+    unknown in every cluster alike, so they never decide it. ``None`` when no
+    cluster is strictly cleaner.
+    """
+    voted = [
+        (_unknown_source_words(key[1]), key, items)
+        for key, items in by_text.items()
+        if len(items) >= 2
+        and sum(float(v.get("confidence") or 0.0) for v in items) / len(items) >= min_confidence
+    ]
+    if len(voted) < 2:
+        return None
+    voted.sort(key=lambda item: item[0])
+    if voted[0][0] >= voted[1][0]:
+        return None
+    return voted[0][1], voted[0][2]
+
+
+def _source_recovery_agreement(attempts, *, min_confidence=0.55):
+    by_text = {}
+    for attempt in attempts or []:
+        normalized = str(attempt.get("normalized_text") or "")
+        word_signature = str(attempt.get("word_signature") or "")
+        if not normalized or not word_signature:
+            continue
+        by_text.setdefault((normalized, word_signature), []).append(attempt)
+    if not by_text:
+        return {
+            "trusted": False,
+            "reason": "no_ocr_text",
+            "canonical_source": "",
+            "agreement_count": 0,
+        }
+    (normalized, word_signature), winners = max(
+        by_text.items(),
+        key=lambda item: (len(item[1]), sum(float(v.get("confidence") or 0.0) for v in item[1])),
+    )
+    avg_conf = sum(float(item.get("confidence") or 0.0) for item in winners) / len(winners)
+    materially_disagreeing = [
+        "|".join(key) for key, items in by_text.items()
+        if key != (normalized, word_signature) and len(items) >= 2
+    ]
+    if len(winners) < 2:
+        reason = "insufficient_variant_agreement"
+    elif avg_conf < min_confidence:
+        reason = "low_variant_confidence"
+    elif materially_disagreeing:
+        reason = "material_variant_disagreement"
+        lexical = _lexical_variant_winner(by_text, min_confidence)
+        if lexical is not None:
+            (normalized, word_signature), winners = lexical
+            avg_conf = sum(float(item.get("confidence") or 0.0) for item in winners) / len(winners)
+            reason = "lexical_variant_agreement"
+    else:
+        reason = "variant_agreement"
+    # Order alone should never be why a correct read is left unusable: it is
+    # geometry-explainable noise, never a content signal.  Confidence is a
+    # different concern and is never rescued here.
+    if reason in ("insufficient_variant_agreement", "material_variant_disagreement"):
+        reordered = _reorder_tolerant_agreement(by_text, min_confidence)
+        if reordered is not None:
+            return reordered
+    return {
+        "trusted": reason in ("variant_agreement", "lexical_variant_agreement"),
+        "reason": reason,
+        "canonical_source": str(winners[0].get("text") or ""),
+        "normalized_source": normalized,
+        "word_signature": word_signature,
+        "agreement_count": len(winners),
+        "average_confidence": round(float(avg_conf), 4),
+        "disagreements": sorted(materially_disagreeing),
+    }
+
+
+def recover_source_with_rapidocr_variants(
+    original_bgr,
+    group,
+    ocr_lang,
+    *,
+    page_index=None,
+    engine=None,
+    max_variants=RAPIDOCR_SOURCE_RECOVERY_MAX_VARIANTS,
+):
+    """Bounded local source recovery for unusable segmented OCR.
+
+    This reads only the source pixels with RapidOCR variants.  It never looks at
+    the Portuguese candidate and never converts a fluent target into source
+    truth.  Ambiguity is a successful safety result: preserve source and review.
+    """
+
+    if original_bgr is None or getattr(original_bgr, "size", 0) == 0:
+        return {
+            "trusted": False,
+            "reason": "empty_source_image",
+            "attempts": [],
+            "max_variants": int(max_variants),
+        }
+    crop_box = _fallback_crop_box(group, original_bgr.shape)
+    x, y, width, height = crop_box
+    crop = original_bgr[y : y + height, x : x + width]
+    source_hash = hashlib.sha256(crop.tobytes()).hexdigest() if crop.size else ""
+    record = {
+        "page": page_index,
+        "group_id": getattr(group, "group_id", ""),
+        "region_id": getattr(group, "region_id", ""),
+        "crop_box": [int(value) for value in crop_box],
+        "source_image_hash": source_hash,
+        "max_variants": int(max_variants),
+        "engine": "rapidocr",
+        "target_used_as_source": False,
+        "attempts": [],
+        "trusted": False,
+        "canonical_source": "",
+    }
+    if crop.size == 0:
+        record["reason"] = "empty_source_crop"
+        return record
+    owned_engine = engine is None
+    if engine is None:
+        engine = OCREngine(ocr_lang, engine="rapidocr", fallback_engine="")
+    for variant in rapidocr_source_recovery_variants(crop)[: int(max_variants)]:
+        try:
+            lines = _rapidocr_detect_source_variant(
+                engine,
+                variant["image"],
+                page_index=page_index,
+            )
+            text = _source_recovery_text(lines)
+            confidence = _source_recovery_confidence(lines)
+            error = ""
+        except Exception as exc:  # noqa: BLE001 - recovery must fail closed.
+            lines = []
+            text = ""
+            confidence = 0.0
+            error = f"{type(exc).__name__}: {exc}"
+        record["attempts"].append({
+            "variant": variant["name"],
+            "text": text,
+            "normalized_text": _source_recovery_normalized(text),
+            "word_signature": _source_recovery_word_signature(text),
+            "confidence": round(float(confidence), 4),
+            "boundaries": _source_recovery_boundaries(lines),
+            "error": error,
+        })
+    agreement = _source_recovery_agreement(record["attempts"])
+    record.update(agreement)
+    if record.get("trusted"):
+        group.canonical_source_text = str(record.get("canonical_source") or "")
+        group.source_repairs = tuple()
+        group.source_recovery = dict(record)
+        for line in group.lines:
+            initial_engine = (line.metadata or {}).get("initial_ocr_engine") or line.engine
+            mark_ocr_line_recovered(line, "rapidocr", initial_ocr_engine=initial_engine)
+    elif owned_engine:
+        group.source_recovery = dict(record)
+    return record
+
+
+# What a region re-read is allowed to do to the lines it was derived from.
+RECOVERY_REPLACE = "replace"
+RECOVERY_RECONCILE = "reconcile"
+RECOVERY_REJECT = "reject"
+
+
+def _compact_index(text):
+    """``(compact letters, index in text of each letter)``.
+
+    Shares its notion of a letter with :func:`source_completeness.compact`, so a
+    fragment located here is the same fragment the completeness contract will
+    later hold the pipeline accountable for.
+    """
+
+    letters = []
+    positions = []
+    for index, char in enumerate(str(text or "")):
+        folded = "".join(
+            part
+            for part in unicodedata.normalize("NFKD", char)
+            if not unicodedata.combining(part)
+        ).upper()
+        if len(folded) == 1 and re.fullmatch(r"[A-Z']", folded):
+            letters.append(folded)
+            positions.append(index)
+    return "".join(letters), positions
+
+
+def _lines_over_box(box, lines):
+    """Candidate lines that re-read the same strip of the page, left to right."""
+
+    x, y, width, height = box
+    hits = []
+    for line in lines:
+        lx, ly, lwidth, lheight = line.box
+        vertical = min(y + height, ly + lheight) - max(y, ly)
+        horizontal = min(x + width, lx + lwidth) - max(x, lx)
+        if vertical >= 0.5 * min(height, lheight) and horizontal > 0:
+            hits.append(line)
+    return sorted(hits, key=lambda line: line.box[0])
+
+
+def _credible_fragment(text):
+    """True when a dropped fragment is text rather than recogniser debris."""
+
+    return bool(source_completeness.meaningful_tokens(text)) and not _looks_like_noise(
+        text
+    )
+
+
+def _union_box(left, right):
+    x0 = min(left[0], right[0])
+    y0 = min(left[1], right[1])
+    x1 = max(left[0] + left[2], right[0] + right[2])
+    y1 = max(left[1] + left[3], right[1] + right[3])
+    return (x0, y0, x1 - x0, y1 - y0)
+
+
+def _lines_union_box(lines):
+    box = None
+    for line in lines or []:
+        box = line.box if box is None else _union_box(box, line.box)
+    return box
+
+
+def _adoptable_region_groups(candidate_groups, winner, group):
+    """The other groups of a region re-read that the region genuinely owns.
+
+    Two guards decide, and both are geometric:
+
+    * containment - a group reaching outside the predecessor region is a
+      neighbour the crop padding happened to touch (another balloon, an SFX, a
+      title), and is never adopted however well it scored;
+    * one owner per source line - if a source line is covered by both the
+      winner and another group, the retry split *one* line in two rather than
+      finding a second one.  ``reconcile_recovery_lines`` already owns that
+      case and re-attaches the fragment to the line it belongs to, so adopting
+      it here as well would strand half a sentence in a group of its own.
+
+    What survives both is what Full #9 p076 needs: a whole utterance the crop
+    split off at its sentence boundary, sitting on source lines the winner
+    never covered.
+    """
+    winner_lines = _cleanup_lines_for_group(winner)
+    predecessors = _cleanup_lines_for_group(group)
+    adopted = []
+    for other in candidate_groups:
+        if other is winner or not _box_inside(other.box, group.box):
+            continue
+        if rapidocr_region_decision(other) != "accept":
+            continue
+        other_lines = _cleanup_lines_for_group(other)
+        if any(
+            _lines_over_box(predecessor.box, winner_lines)
+            and _lines_over_box(predecessor.box, other_lines)
+            for predecessor in predecessors
+        ):
+            continue
+        adopted.append(other)
+    return adopted
+
+
+def reconcile_recovery_lines(predecessor_lines, candidate_lines):
+    """Decide what a recovery read may do to its predecessor; return the lines.
+
+    Returns ``(decision, lines, reason)`` where ``decision`` is one of
+    :data:`RECOVERY_REPLACE`, :data:`RECOVERY_RECONCILE`, :data:`RECOVERY_REJECT`.
+
+    A second read is allowed to supersede the first, and usually should: it is
+    the same recogniser at the scale it prefers, and it fixes spacing the page
+    scale destroyed.  What it is not allowed to do is take credible lexical
+    content with it.  Confidence does not decide this - a truncated read is
+    confident precisely because it is reading fewer glyphs - so the comparison
+    is over letters and the geometry they came from.
+
+    The predecessor is only re-attached where the overlap is unambiguous: a
+    shared run of letters with the surviving fragment at one end.  Two reads
+    that disagree in the middle are a conflict, and a conflict keeps the older
+    evidence rather than inventing a sentence neither read produced.
+    """
+
+    predecessor_lines = list(predecessor_lines or [])
+    candidate_lines = list(candidate_lines or [])
+    if not candidate_lines:
+        return RECOVERY_REJECT, predecessor_lines, "recovery_no_candidate_lines"
+    if not predecessor_lines:
+        return RECOVERY_REPLACE, candidate_lines, "recovery_no_predecessor"
+
+    candidate_compact = source_completeness.compact(
+        " ".join(line.text for line in candidate_lines)
+    )
+    decision = RECOVERY_REPLACE
+    reasons = []
+    plans = []  # deferred: a later conflict must not leave half a merge behind.
+    noise_dropped = []
+    retained = []
+    for predecessor in predecessor_lines:
+        text = predecessor.text or predecessor.raw_text or ""
+        compact_text, positions = _compact_index(text)
+        overlapping = _lines_over_box(predecessor.box, candidate_lines)
+        if not overlapping:
+            # Nothing in the second read covers these pixels, so nothing
+            # superseded them.  Dropping the line here would leave the source
+            # region with no owner at all - no group, no review, and no mask -
+            # which is how visible dialogue survives into the rendered page.
+            # A token too corrupted to yield letters ("iK3H") is exactly the
+            # case the lexical checks below cannot speak for, so geometry
+            # decides: only a read that saw the region may replace it.
+            retained.append(predecessor)
+            reasons.append("recovery_uncovered_predecessor_retained")
+            if decision != RECOVERY_REJECT:
+                decision = RECOVERY_RECONCILE
+            continue
+        covered = "".join(
+            source_completeness.compact(line.text) for line in overlapping
+        )
+        if compact_text and compact_text in covered:
+            continue
+        if not [
+            token
+            for token in source_completeness.meaningful_tokens(text)
+            if token not in candidate_compact
+        ]:
+            # Respaced, re-cased, re-punctuated or split across lines: every
+            # token the predecessor owned is still somewhere in the new read.
+            continue
+        if not (covered and covered in compact_text):
+            decision = RECOVERY_REJECT
+            reasons.append("recovery_lexical_conflict")
+            continue
+        start = compact_text.index(covered)
+        end = start + len(covered)
+        head = text[: positions[start]] if start else ""
+        tail = text[positions[end] :] if end < len(positions) else ""
+        head_ok = _credible_fragment(head)
+        tail_ok = _credible_fragment(tail)
+        if not head_ok and not tail_ok:
+            noise_dropped.append(predecessor)
+            reasons.append("recovery_noise_removed")
+            continue
+        if head_ok:
+            plans.append((overlapping[0], head.strip(), "", predecessor))
+        if tail_ok:
+            plans.append((overlapping[-1], "", tail.strip(), predecessor))
+        if decision != RECOVERY_REJECT:
+            decision = RECOVERY_RECONCILE
+        reasons.append("recovery_reconciled_predecessor_fragment")
+
+    if decision == RECOVERY_REJECT:
+        return RECOVERY_REJECT, predecessor_lines, ";".join(dict.fromkeys(reasons))
+
+    for line, head, tail, predecessor in plans:
+        line.text = " ".join(part for part in (head, line.text, tail) if part).strip()
+        line.raw_text = line.text
+        line.box = _union_box(line.box, predecessor.box)
+        # Re-attaching the tail without its geometry is how the tail became
+        # invisible to every cleaning mask: masks are built from ``polygon``,
+        # never from ``box``.  The hull of both reads is the narrowest shape
+        # that still contains the glyphs each of them actually saw.
+        line.polygon = cv2.convexHull(
+            np.vstack(
+                (
+                    np.asarray(line.polygon, dtype=np.int32).reshape(-1, 2),
+                    np.asarray(predecessor.polygon, dtype=np.int32).reshape(-1, 2),
+                )
+            )
+        ).reshape(-1, 2)
+        line.metadata = {
+            **(line.metadata or {}),
+            "recovery_reconciled_from": head or tail,
+        }
+    for line in noise_dropped:
+        line.metadata = {
+            **(line.metadata or {}),
+            "ocr_discard_reason": "recovery_noise_removed",
+        }
+    for line in retained:
+        line.metadata = {
+            **(line.metadata or {}),
+            "recovery_retained_reason": "recovery_uncovered_predecessor_retained",
+        }
+    return (
+        decision,
+        candidate_lines + retained,
+        ";".join(dict.fromkeys(reasons)) or "recovery_safe_replace",
+    )
+
+
+def _adopt_variant_vote(group, vote):
+    """Make a trusted variant vote the group's source, on the group and its lines.
+
+    The lines carry it too because a page whose other regions accepted a re-read
+    is regrouped from its lines afterwards (``apply_variant_votes``).
+    """
+    canonical = clean_ocr_text(str(vote.get("canonical_source") or ""))
+    group.source_recovery = dict(vote)
+    group.canonical_source_text = canonical
+    group.text = canonical
+    group.quality_score, group.quality_reasons = score_group_ocr_quality(group)
+    marker = {"id": f"{id(group)}:{canonical}", "canonical_source": canonical,
+              "reason": str(vote.get("reason") or ""),
+              "agreement_count": int(vote.get("agreement_count") or 0)}
+    for line in group.lines:
+        line.metadata = {**(line.metadata or {}), "variant_vote": marker}
+
+
+def _split_word_ambiguous(text):
+    """A short text where two neighbouring words also spell one word ("VISIT OR")."""
+    words = re.findall(r"[A-Za-z]+", str(text or ""))
+    if not 2 <= len(words) <= 4:
+        return False
+    return any(
+        len(left + right) >= 5 and region_taxonomy.is_english_word(left + right)
+        for left, right in zip(words, words[1:])
+    )
+
+
+def resolve_split_word_ambiguity(original_bgr, groups, ocr_lang, page_index=None):
+    """Let the variant vote decide a short read that may have split one word."""
+    resolved = 0
+    engine = None
+    for group in groups:
+        if group.ignored or not _split_word_ambiguous(group.text):
+            continue
+        if engine is None:
+            engine = OCREngine(ocr_lang, engine="rapidocr", fallback_engine="")
+        probe = TextGroup(group_id=group.group_id, lines=list(group.lines), text=group.text)
+        vote = recover_source_with_rapidocr_variants(
+            original_bgr, probe, ocr_lang, page_index=page_index, engine=engine
+        )
+        canonical = clean_ocr_text(str(vote.get("canonical_source") or ""))
+        own = len(_source_recovery_normalized(group.text))
+        if (
+            vote.get("trusted")
+            and canonical
+            and _source_recovery_normalized(canonical) == _source_recovery_normalized(group.text)
+            and canonical.split() != group.text.split()
+            and len(_source_recovery_normalized(canonical)) <= own * 1.3 + 4
+        ):
+            _adopt_variant_vote(group, vote)
+            resolved += 1
+    if resolved:
+        record_count("rapidocr_recovery.split_word_resolved", resolved, page_index=page_index)
+    return resolved
+
+
+def apply_variant_votes(groups):
+    """Re-apply trusted votes to groups rebuilt from exactly the voted lines."""
+    for group in groups:
+        votes = [(line.metadata or {}).get("variant_vote") for line in group.lines]
+        if not votes or not all(votes) or len({vote["id"] for vote in votes}) != 1:
+            continue
+        vote = votes[0]
+        group.source_recovery = {"trusted": True, "reason": vote["reason"],
+                                 "canonical_source": vote["canonical_source"],
+                                 "agreement_count": vote["agreement_count"]}
+        group.canonical_source_text = vote["canonical_source"]
+        group.text = vote["canonical_source"]
+        group.quality_score, group.quality_reasons = score_group_ocr_quality(group)
+    return groups
+
+
+def apply_rapidocr_region_recovery(
+    original_bgr,
+    raw_lines,
+    groups,
+    ocr_lang,
+    page_index=None,
+):
+    """Re-read suspicious RapidOCR regions once, with RapidOCR, on their own crop.
+
+    The fast path stays fast: a region whose diagnostics look clean costs exactly
+    one OCR call and is never touched here. A region carrying corruption evidence
+    costs exactly one more — the same recogniser, the same pixels, read at the
+    scale the recogniser prefers instead of at whatever scale the page happened
+    to have. Paddle is never invoked, no page or chapter is reprocessed, and a
+    second bad reading is reported rather than silently preferred.
+    """
+    lines = list(raw_lines or [])
+    if not _rapidocr_recovery_enabled():
+        return lines, []
+    if original_bgr is None or original_bgr.size == 0:
+        return lines, []
+
+    suspects = [group for group in groups if rapidocr_region_decision(group) == "retry"]
+    accepted = len(groups) - len(suspects)
+    record_count("rapidocr_recovery.primary_accepted", accepted, page_index=page_index)
+    if not suspects:
+        return lines, []
+    suspects = suspects[: config.RAPIDOCR_RECOVERY_MAX_REGIONS_PER_PAGE]
+
+    engine = None
+    records = []
+    for group in suspects:
+        crop_box = _fallback_crop_box(group, original_bgr.shape)
+        x, y, width, height = crop_box
+        crop = original_bgr[y : y + height, x : x + width]
+        record = {
+            "region_id": group.region_id or group.group_id,
+            "group_id": group.group_id,
+            "crop_box": list(crop_box),
+            "attempts": [
+                _rapidocr_attempt_record(
+                    1,
+                    "rapidocr_page_scale",
+                    group.text,
+                    group.quality_score,
+                    group.quality_reasons,
+                )
+            ],
+            "selection": "rejected",
+            "reason": "rapidocr_retry_not_better",
+        }
+        records.append(record)
+        if crop.size == 0:
+            record["reason"] = "rapidocr_retry_empty_crop"
+            record_count("rapidocr_recovery.retry_failed", page_index=page_index)
+            continue
+
+        record_count("rapidocr_recovery.retry_attempted", page_index=page_index)
+        try:
+            with profile_step(
+                "rapidocr_recovery.ocr",
+                page_index=page_index,
+                metadata={"group_id": group.group_id},
+            ):
+                if engine is None:
+                    engine = OCREngine(ocr_lang, engine="rapidocr", fallback_engine="")
+                crop_lines = engine.detect_lines(
+                    crop, page=page_index, rapidocr_upscale=True
+                )
+        except Exception as exc:  # noqa: BLE001 - a failed retry must fail closed.
+            record["reason"] = "rapidocr_retry_error"
+            record["error"] = f"{type(exc).__name__}: {exc}"
+            record_count("rapidocr_recovery.retry_failed", page_index=page_index)
+            continue
+
+        crop_lines = [
+            _offset_line(line, x, y, "rapidocr", group.group_id)
+            for line in (crop_lines or [])
+        ]
+        candidate_groups = _candidate_groups_for_fallback(
+            original_bgr, crop_lines, page_index=page_index
+        )
+        candidate = _best_candidate_group(candidate_groups, group.box)
+        if candidate is None:
+            record["reason"] = "rapidocr_retry_no_candidate"
+            record_count("rapidocr_recovery.retry_failed", page_index=page_index)
+            continue
+
+        # One region can legitimately re-read as more than one group: a sentence
+        # boundary inside the same speech container splits the crop, and only one
+        # of the pieces can win the overlap. Keeping only the winner discards the
+        # rest of the region's own text however well it was read - Full #9 p076
+        # read "HEY!" at 0.96 and dropped it for the longer group below it.
+        # Ownership decides what may join: see ``_adoptable_region_groups``.
+        region_groups = [candidate] + _adoptable_region_groups(
+            candidate_groups, candidate, group
+        )
+        region_groups.sort(key=lambda item: (item.box[1], item.box[0]))
+        for item in region_groups:
+            item.source_engine = "rapidocr"
+        record["region_groups"] = [
+            {"text": item.text, "box": [int(value) for value in item.box]}
+            for item in region_groups
+        ]
+        record["attempts"].append(
+            _rapidocr_attempt_record(
+                2,
+                "rapidocr_region_crop_upscaled",
+                " ".join(item.text for item in region_groups),
+                candidate.quality_score,
+                candidate.quality_reasons,
+            )
+        )
+        # Preserve the rejected primary/recovery evidence for downstream
+        # safety review.  The pairwise signatures deliberately reuse the
+        # source-recovery helpers so the safety gate can distinguish an
+        # unresolved variant without guessing which read is correct.
+        primary_raw = str(group.text or "")
+        recovery_raw = " ".join(str(item.text or "") for item in region_groups)
+        pair_attempts = [
+            {
+                "text": primary_raw,
+                "normalized_text": _source_recovery_normalized(primary_raw),
+                "word_signature": _source_recovery_word_signature(primary_raw),
+                "confidence": float(getattr(group, "confidence", 0.0) or 0.0),
+            },
+            {
+                "text": recovery_raw,
+                "normalized_text": _source_recovery_normalized(recovery_raw),
+                "word_signature": _source_recovery_word_signature(recovery_raw),
+                "confidence": float(getattr(candidate, "confidence", 0.0) or 0.0),
+            },
+        ]
+        agreement = _source_recovery_agreement(pair_attempts)
+        record["rejected_recovery_observation"] = {
+            "attempted": True,
+            "accepted": False,
+            "rejection_reason": "rapidocr_retry_not_better",
+            "primary": {
+                "raw_text": primary_raw,
+                "word_signature": pair_attempts[0]["word_signature"],
+                "compact_signature": pair_attempts[0]["normalized_text"],
+                "quality_score": float(group.quality_score),
+                "quality_reasons": list(group.quality_reasons or []),
+                "confidence": pair_attempts[0]["confidence"],
+            },
+            "recovery": {
+                "raw_text": recovery_raw,
+                "word_signature": pair_attempts[1]["word_signature"],
+                "compact_signature": pair_attempts[1]["normalized_text"],
+                "quality_score": float(candidate.quality_score),
+                "quality_reasons": list(candidate.quality_reasons or []),
+                "confidence": pair_attempts[1]["confidence"],
+            },
+            "agreement": agreement,
+        }
+        # A rejected read can still be credible evidence that the primary is
+        # not safe to trust.  Downgrade only when the two reads have different
+        # boundary/lexical signatures, preserve the same compact characters,
+        # and the alternative is not lower quality.  This deliberately does
+        # not select or rewrite the recovery; the existing P32 source-trust
+        # gate will route it to review on the next gate pass.
+        materially_variant = (
+            pair_attempts[0]["word_signature"]
+            != pair_attempts[1]["word_signature"]
+        )
+        credible_alternative = float(candidate.quality_score) >= float(group.quality_score)
+        # The crop reaches past the region; a re-read with clearly more letters
+        # than the region holds took a neighbour's line with it ("COMEON,
+        # CHEERS!" -> "ON A DAY SIHI COME ON, CHEERS!"), duplicating it.
+        own_letters = len(pair_attempts[0]["normalized_text"])
+        if len(pair_attempts[1]["normalized_text"]) > own_letters * 1.3 + 4:
+            record["reason"] = "recovery_reads_beyond_region"
+            record_count("rapidocr_recovery.retry_rejected", page_index=page_index)
+            continue
+        if materially_variant:
+            # Two reads disagree: let the bounded variant vote decide instead of
+            # sending the region to review (or keeping a worse primary). Only an
+            # agreement of independent reads (or a strictly cleaner one, see
+            # _lexical_variant_winner) is adopted; anything else falls through
+            # to the rules below unchanged.
+            vote = recover_source_with_rapidocr_variants(
+                original_bgr, group, ocr_lang, page_index=page_index, engine=engine
+            )
+            record["variant_vote"] = {
+                "trusted": bool(vote.get("trusted")),
+                "reason": str(vote.get("reason") or ""),
+                "canonical_source": str(vote.get("canonical_source") or ""),
+                "agreement_count": int(vote.get("agreement_count") or 0),
+            }
+            # The crop reaches past the region; a vote that reads clearly more
+            # letters than the region holds took a neighbour's line with it
+            # ("COMEON, CHEERS!" -> "ON A DAY SIHL COME ON, CHEERS!").
+            own = len(_source_recovery_normalized(group.text))
+            voted = len(_source_recovery_normalized(vote.get("canonical_source") or ""))
+            if voted > own * 1.3 + 4:
+                vote["trusted"] = False
+                record["variant_vote"]["trusted"] = False
+                record["variant_vote"]["reason"] = "vote_reads_beyond_region"
+            if vote.get("trusted") and str(vote.get("canonical_source") or "").strip():
+                vote["rejected_recovery"] = record["rejected_recovery_observation"]
+                _adopt_variant_vote(group, vote)
+                record["reason"] = "variant_vote_resolved_disagreement"
+                record_count("rapidocr_recovery.variant_vote_resolved", page_index=page_index)
+                continue
+        if materially_variant and credible_alternative:
+            record["rejected_recovery_observation"]["unresolved_material_disagreement"] = True
+            group.source_recovery = {
+                **(getattr(group, "source_recovery", {}) or {}),
+                "trusted": False,
+                "reason": "material_variant_disagreement",
+                "rejected_recovery": record["rejected_recovery_observation"],
+            }
+        # Attempt 1 already failed the policy, so there is no "both acceptable"
+        # tie to break: attempt 2 wins only by clearing the same bar attempt 1
+        # could not. Nothing is preferred merely for being newer.
+        if rapidocr_region_decision(candidate) != "accept":
+            record_count("rapidocr_recovery.retry_rejected", page_index=page_index)
+            continue
+
+        # Clearing the quality bar is not permission to take the predecessor's
+        # content with it: a truncated read scores well precisely because there
+        # is less of it left to score.
+        predecessors = _cleanup_lines_for_group(group)
+        candidate_lines = []
+        seen_candidate_lines = set()
+        for item in region_groups:
+            for line in _cleanup_lines_for_group(item):
+                if id(line) in seen_candidate_lines:
+                    continue
+                seen_candidate_lines.add(id(line))
+                candidate_lines.append(line)
+        candidate_lines.sort(key=lambda line: (line.box[1], line.box[0]))
+        decision, reconciled, decision_reason = reconcile_recovery_lines(
+            predecessors, candidate_lines
+        )
+        record["decision"] = decision
+        record["decision_reason"] = decision_reason
+        record["predecessor_text"] = " ".join(line.text for line in predecessors)[:400]
+        record["predecessor_bbox"] = list(_lines_union_box(predecessors) or ())
+        record["reconciled_text"] = " ".join(line.text for line in reconciled)[:400]
+        record["reconciled_bbox"] = list(_lines_union_box(reconciled) or ())
+        if decision == RECOVERY_REJECT:
+            record["reason"] = decision_reason
+            record_count("rapidocr_recovery.retry_rejected", page_index=page_index)
+            record_count(
+                "rapidocr_recovery.prevented_lexical_loss", page_index=page_index
+            )
+            continue
+        if decision == RECOVERY_RECONCILE:
+            record_count("rapidocr_recovery.reconciled", page_index=page_index)
+            record_count(
+                "rapidocr_recovery.prevented_lexical_loss", page_index=page_index
+            )
+            record_count(
+                "rapidocr_recovery.prevented_geometry_loss", page_index=page_index
+            )
+        else:
+            record_count("rapidocr_recovery.safe_replace", page_index=page_index)
+        record["selection"] = "attempt_2"
+        record["reason"] = "rapidocr_retry_accepted"
+        record_count("rapidocr_recovery.retry_selected", page_index=page_index)
+        replaced = {id(line) for line in predecessors}
+        lines = [line for line in lines if id(line) not in replaced]
+        predecessor_initial_engine = next(
+            (
+                (predecessor.metadata or {}).get("initial_ocr_engine")
+                for predecessor in predecessors
+                if (predecessor.metadata or {}).get("initial_ocr_engine")
+            ),
+            "rapidocr",
+        )
+        for line in reconciled:
+            line.metadata = {
+                **(line.metadata or {}),
+                "rapidocr_recovery_used": True,
+                "rapidocr_recovery_attempt": 2,
+                "rapidocr_recovery_strategy": "rapidocr_region_crop_upscaled",
+                "original_group_id": group.group_id,
+                "original_text": group.text,
+            }
+            mark_ocr_line_recovered(
+                line, "rapidocr", initial_ocr_engine=predecessor_initial_engine
+            )
+            lines.append(line)
+
+    lines.sort(key=lambda line: (line.box[1], line.box[0]))
+    return lines, records
+
+
+def enforce_rapidocr_quality_gate(groups, page_index=None):
+    """Hold back any region that still fails the policy after its last attempt."""
+    if not _rapidocr_recovery_enabled():
+        return []
+    blocked = []
+    warning_accepted = 0
+    recoverable = 0
+    for group in groups:
+        recovery = getattr(group, "source_recovery", {}) or {}
+        # A material variant disagreement is source-authority failure, not a
+        # cosmetic warning.  Do not send an explicitly untrusted reconstruction
+        # into the normal provider path; preserve it for review instead.
+        if (
+            recovery.get("trusted") is False
+            and str(recovery.get("reason") or "") == "material_variant_disagreement"
+        ):
+            group.ocr_quality_blocked = True
+            group.ocr_quality_block_reason = "source_recovery_untrusted:material_variant_disagreement"
+            group.manual_review_required = True
+            group.quality_evidence = {
+                **(group.quality_evidence or {}),
+                "source_recovery_untrusted": True,
+                "source_recovery_reason": str(recovery.get("reason") or ""),
+            }
+            blocked.append(group)
+            continue
+        if (
+            recovery.get("trusted")
+            and str(recovery.get("canonical_source") or "").strip()
+            and not group.ocr_quality_blocked
+        ):
+            # Independent variant reads agreed on this source: that agreement is
+            # the evidence the score below was standing in for.
+            continue
+        decision = rapidocr_region_decision(group)
+        if group.ocr_quality_blocked or decision == "accept":
+            if (
+                not group.ocr_quality_blocked
+                and decision == "accept"
+                and _rapidocr_warning_only_quality(group)
+            ):
+                warning_accepted += 1
+            continue
+        if ocr_suspicious_but_translatable(group):
+            # The read stays suspicious and keeps every warning it earned; only
+            # the routing changes, so the translator sees text it can actually
+            # work with and the candidate still faces the normal validators.
+            group.quality_evidence = {
+                **(group.quality_evidence or {}),
+                "ocr_source_suspicious": True,
+                "ocr_source_quality_reasons": list(group.quality_reasons or []),
+                "ocr_source_quality_score": float(group.quality_score),
+            }
+            recoverable += 1
+            continue
+        group.ocr_quality_blocked = True
+        group.ocr_quality_block_reason = ";".join(group.quality_reasons) or "low_quality_score"
+        group.manual_review_required = True
+        blocked.append(group)
+    if recoverable:
+        record_count(
+            "ocr_suspicious_translation_allowed",
+            recoverable,
+            page_index=page_index,
+        )
+    if warning_accepted:
+        record_count(
+            "ocr_quality_warning_accept",
+            warning_accepted,
+            page_index=page_index,
+        )
+    if blocked:
+        record_count(
+            "rapidocr_recovery.all_attempts_rejected",
+            len(blocked),
+            page_index=page_index,
+        )
+        record_count("ocr_quality_blocked", len(blocked), page_index=page_index)
+        record_count("translation_held_by_ocr", len(blocked), page_index=page_index)
+    return blocked
+
+
+def apply_selective_ocr_fallbacks(
+    original_bgr,
+    raw_lines,
+    groups,
+    ocr_lang,
+    page_index,
+    fast_ocr_budget=None,
+):
+    if not (
+        config.OCR_QUALITY_CONTROL
+        and config.OCR_REGION_SELECTIVE_FALLBACK
+        and config.OCR_ENGINE == "rapidocr"
+        and config.OCR_HYBRID_FALLBACK
+        and config.OCR_FALLBACK_ENGINE == "paddle"
+        and bool(getattr(config, "OCR_LEGACY_PADDLE_FALLBACK", False))
+    ):
+        return raw_lines, []
+
+    suspects = [
+        group
+        for group in groups
+        if group_needs_selective_fallback(group)
+    ][: config.OCR_GROUP_FALLBACK_MAX_GROUPS]
+    record_count("selective_fallback.suspect_groups", len(suspects), page_index=page_index)
+    if not suspects:
+        return raw_lines, []
+
+    updated_lines = list(raw_lines)
+    records = []
+    consumed_line_ids = set()
+    regional_engines = {}
+    full_region_fingerprints = {}
+    for group in suspects:
+        group_started = time.perf_counter()
+        current_quality = group.quality_score
+        with profile_step("selective_fallback.crop_box", page_index=page_index):
+            crop_box = _fallback_crop_box(group, original_bgr.shape)
+        x, y, w, h = crop_box
+        crop = original_bgr[y : y + h, x : x + w]
+        if crop.size == 0:
+            continue
+
+        best_lines = []
+        best_quality = current_quality
+        best_selection_score = current_quality
+        best_engine = ""
+        attempts = []
+        candidate_options = []
+        paddle_full_calls = []
+        mobile_summary = {
+            "attempted": False,
+            "candidate_exists": False,
+            "candidate_sufficient": False,
+            "quality_score": 0.0,
+            "selection_score": 0.0,
+            "rejection_reasons": ["mobile_not_attempted"],
+        }
+        repair_proposal_tokens = _repair_proposal_tokens(group)
+        context_text = " ".join(
+            [group.text]
+            + [line.text for line in group.cleanup_lines if line.text]
+        )
+        context_tokens = set(
+            re.findall(r"[A-Z]+", _ascii_fold(context_text).upper())
+        )
+        context_compact = re.sub(
+            r"[^A-Z0-9]",
+            "",
+            _ascii_fold(context_text).upper(),
+        )
+        crop_fingerprint = _ocr_crop_fingerprint(crop)
+        for engine_name, variant in (("paddle_mobile", "paddle_mobile"), ("paddle", "paddle_full")):
+            started = time.perf_counter()
+            pre_attempt_best_engine = best_engine
+            pre_attempt_best_quality = best_quality
+            pre_attempt_best_selection_score = best_selection_score
+            full_call_record = None
+            if variant == "paddle_full":
+                if fast_ocr_budget is not None:
+                    allowed, budget_reason = fast_ocr_budget.allow(
+                        kind="paddle_full_region", page=page_index
+                    )
+                    if not allowed:
+                        attempts.append(
+                            {
+                                "engine": variant,
+                                "skipped": True,
+                                "skip_reason": budget_reason,
+                            }
+                        )
+                        break
+                duplicate_source = full_region_fingerprints.get(crop_fingerprint)
+                duplicate_region = duplicate_source is not None
+                if duplicate_source is None:
+                    full_region_fingerprints[crop_fingerprint] = {
+                        "group_id": group.group_id,
+                        "crop_box": list(crop_box),
+                    }
+                full_call_record = {
+                    "page_index": page_index,
+                    "group_id": group.group_id,
+                    "region_id": group.region_id or group.group_id,
+                    "crop_fingerprint": crop_fingerprint,
+                    "crop_box": list(crop_box),
+                    "crop_width": int(w),
+                    "crop_height": int(h),
+                    "classification_before": group.classification,
+                    "fallback_reason": ";".join(group.quality_reasons),
+                    "previous_engine": "paddle_mobile" if mobile_summary.get("attempted") else "rapidocr",
+                    "previous_quality_score": round(float(current_quality or 0.0), 4),
+                    "mobile_candidate_exists": bool(mobile_summary.get("candidate_exists")),
+                    "mobile_quality_score": round(float(mobile_summary.get("quality_score") or 0.0), 4),
+                    "mobile_selection_score": round(float(mobile_summary.get("selection_score") or 0.0), 4),
+                    "mobile_candidate_sufficient": bool(mobile_summary.get("candidate_sufficient")),
+                    "mobile_rejection_reasons": list(mobile_summary.get("rejection_reasons") or []),
+                    "pre_full_best_engine": pre_attempt_best_engine,
+                    "pre_full_best_quality": round(float(pre_attempt_best_quality or 0.0), 4),
+                    "pre_full_best_selection_score": round(float(pre_attempt_best_selection_score or 0.0), 4),
+                    "duplicate_region": duplicate_region,
+                    "duplicate_of": duplicate_source,
+                    "full_candidate_exists": False,
+                    "full_quality_score": 0.0,
+                    "full_selection_score": 0.0,
+                    "full_adjusted_selection_score": 0.0,
+                    "full_accepted": False,
+                    "full_rejected": False,
+                    "result_changed": False,
+                    "call_classification": "",
+                    "final_engine": "",
+                    "final_selection_score": 0.0,
+                    "group_translated_or_ignored": "ignored" if group.ignored else "candidate",
+                    "classification_final": group.classification,
+                }
+                record_count("selective_fallback.paddle_full_calls", page_index=page_index)
+                record_count(
+                    f"selective_fallback.paddle_full_for_{group.classification or 'unknown'}",
+                    page_index=page_index,
+                )
+                if duplicate_region:
+                    record_count("selective_fallback.paddle_full_duplicate_region", page_index=page_index)
+                if mobile_summary.get("candidate_exists"):
+                    record_count("selective_fallback.paddle_full_after_mobile_candidate", page_index=page_index)
+                if mobile_summary.get("candidate_sufficient"):
+                    record_count("selective_fallback.paddle_full_after_mobile_sufficient", page_index=page_index)
+                if mobile_summary.get("attempted") and not mobile_summary.get("candidate_exists"):
+                    record_count("selective_fallback.paddle_full_after_mobile_failure", page_index=page_index)
+            try:
+                with profile_step(
+                    f"selective_fallback.ocr.{variant}",
+                    page_index=page_index,
+                    metadata={"group_id": group.group_id},
+                ):
+                    if fast_ocr_budget is not None:
+                        crop_lines, timeout_metadata = run_ocr_with_timeout(
+                            crop,
+                            lang=ocr_lang,
+                            engine_name=engine_name,
+                            page=page_index,
+                            timeout_seconds=fast_ocr_budget.region_timeout_seconds,
+                        )
+                        if timeout_metadata.get("timeout"):
+                            raise TimeoutError("fast_ocr_region_timeout")
+                    else:
+                        engine = regional_engines.get(engine_name)
+                        if engine is None:
+                            engine = OCREngine(ocr_lang, engine=engine_name, fallback_engine="")
+                            regional_engines[engine_name] = engine
+                        crop_lines = engine.detect_lines(crop, page=page_index)
+                elapsed = time.perf_counter() - started
+                if fast_ocr_budget is not None:
+                    fast_ocr_budget.record(
+                        kind=(
+                            "paddle_full_region"
+                            if variant == "paddle_full"
+                            else "paddle_mobile_region"
+                        ),
+                        elapsed=elapsed,
+                        page=page_index,
+                    )
+                with profile_step("selective_fallback.offset_lines", page_index=page_index, items=len(crop_lines)):
+                    crop_lines = [_offset_line(line, x, y, variant, group.group_id) for line in crop_lines]
+                with profile_step("selective_fallback.candidate_groups_for_fallback", page_index=page_index, items=len(crop_lines)):
+                    candidate_groups = _candidate_groups_for_fallback(
+                        original_bgr,
+                        crop_lines,
+                        page_index=page_index,
+                    )
+                with profile_step("selective_fallback.best_candidate_group", page_index=page_index, items=len(candidate_groups)):
+                    best_candidate = _best_candidate_group(candidate_groups, group.box)
+                candidate_lines = (
+                    _cleanup_lines_for_group(best_candidate)
+                    if best_candidate
+                    else []
+                )
+                with profile_step("selective_fallback.candidate_scoring", page_index=page_index):
+                    candidate_quality = _candidate_quality(best_candidate)
+                    candidate_text = best_candidate.text if best_candidate else ""
+                    candidate_tokens = set(
+                        re.findall(r"[A-Z]+", _ascii_fold(candidate_text).upper())
+                    )
+                    proposal_support = len(candidate_tokens & repair_proposal_tokens)
+                    context_coverage = (
+                        len(candidate_tokens & context_tokens) / max(1, len(context_tokens))
+                    )
+                    candidate_compact = re.sub(
+                        r"[^A-Z0-9]",
+                        "",
+                        _ascii_fold(candidate_text).upper(),
+                    )
+                    content_retention = min(
+                        1.0,
+                        len(candidate_compact) / max(1, len(context_compact)),
+                    )
+                    shrink_penalty = _content_shrink_penalty(
+                        content_retention,
+                        len(context_tokens),
+                        cross_region_suspected=(
+                            "possible_cross_region_group" in group.quality_reasons
+                        ),
+                    )
+                    expansion_penalty = (
+                        0.35
+                        if len(context_compact) >= 8
+                        and len(candidate_compact) > len(context_compact) * 1.8
+                        else 0.0
+                    )
+                    cross_region_resolution_bonus = _cross_region_resolution_bonus(
+                        group,
+                        best_candidate,
+                        content_retention,
+                    )
+                    selection_score = (
+                        candidate_quality
+                        + min(0.12, proposal_support * 0.06)
+                        + context_coverage * 0.35
+                        + content_retention * 0.35
+                        - shrink_penalty
+                        - expansion_penalty
+                        + cross_region_resolution_bonus
+                    )
+                attempt = {
+                    "engine": variant,
+                    "detected_line_count": len(crop_lines),
+                    "selected_line_count": len(candidate_lines),
+                    "elapsed_seconds": round(elapsed, 6),
+                    "quality_score": round(candidate_quality, 4),
+                    "selection_score": round(selection_score, 4),
+                    "repair_proposal_token_support": proposal_support,
+                    "context_token_coverage": round(context_coverage, 4),
+                    "content_retention": round(content_retention, 4),
+                    "shrink_penalty": round(shrink_penalty, 4),
+                    "expansion_penalty": round(expansion_penalty, 4),
+                    "cross_region_resolution_bonus": round(
+                        cross_region_resolution_bonus,
+                        4,
+                    ),
+                    "text": candidate_text,
+                }
+                attempts.append(attempt)
+                if candidate_lines:
+                    candidate_options.append(
+                        {
+                            "lines": candidate_lines,
+                            "quality": candidate_quality,
+                            "selection_score": selection_score,
+                            "engine": variant,
+                            "text": candidate_text,
+                            "attempt": attempt,
+                        }
+                    )
+                if candidate_lines and selection_score > best_selection_score + 0.03:
+                    best_lines = candidate_lines
+                    best_quality = candidate_quality
+                    best_selection_score = selection_score
+                    best_engine = variant
+                severe_original_suspicion = current_quality < 0.45
+                candidate_still_suspicious = bool(
+                    best_candidate
+                    and (
+                        candidate_quality < 0.9
+                        or best_candidate.quality_reasons
+                    )
+                )
+                candidate_sufficient = bool(
+                    best_quality >= 0.82
+                    and not (
+                        variant == "paddle_mobile"
+                        and (severe_original_suspicion or candidate_still_suspicious)
+                    )
+                )
+                if variant == "paddle_mobile":
+                    rejection_reasons = []
+                    if not candidate_lines:
+                        rejection_reasons.append("mobile_no_candidate")
+                    if best_quality < 0.82:
+                        rejection_reasons.append("best_quality_below_acceptance")
+                    if severe_original_suspicion:
+                        rejection_reasons.append("original_severe_suspicion")
+                    if candidate_still_suspicious:
+                        rejection_reasons.append("mobile_candidate_still_suspicious")
+                    if not rejection_reasons and not candidate_sufficient:
+                        rejection_reasons.append("mobile_not_sufficient")
+                    mobile_summary = {
+                        "attempted": True,
+                        "candidate_exists": bool(candidate_lines),
+                        "candidate_sufficient": candidate_sufficient,
+                        "quality_score": candidate_quality,
+                        "selection_score": selection_score,
+                        "rejection_reasons": rejection_reasons,
+                    }
+                    attempt.update(
+                        {
+                            "candidate_sufficient": candidate_sufficient,
+                            "escalation_reasons": rejection_reasons,
+                        }
+                    )
+                    if _should_skip_paddle_full_for_ignored_decorative(group):
+                        attempt["paddle_full_skipped_reason"] = "ignored_decorative"
+                        record_count(
+                            "selective_fallback.paddle_full_skipped_ignored_decorative",
+                            page_index=page_index,
+                        )
+                        break
+                elif full_call_record is not None:
+                    full_call_record.update(
+                        {
+                            "elapsed_seconds": round(elapsed, 6),
+                            "full_candidate_exists": bool(candidate_lines),
+                            "full_quality_score": round(float(candidate_quality or 0.0), 4),
+                            "full_selection_score": round(float(selection_score or 0.0), 4),
+                            "detected_line_count": len(crop_lines),
+                            "selected_line_count": len(candidate_lines),
+                        }
+                    )
+                    attempt["paddle_full_call"] = full_call_record
+                if best_quality >= 0.82 and not (
+                    variant == "paddle_mobile"
+                    and (severe_original_suspicion or candidate_still_suspicious)
+                ):
+                    break
+            except Exception as exc:
+                error_attempt = {
+                    "engine": variant,
+                    "error": f"{type(exc).__name__}: {exc}",
+                }
+                if variant == "paddle_mobile":
+                    mobile_summary = {
+                        "attempted": True,
+                        "candidate_exists": False,
+                        "candidate_sufficient": False,
+                        "quality_score": 0.0,
+                        "selection_score": 0.0,
+                        "rejection_reasons": ["mobile_error"],
+                    }
+                elif full_call_record is not None:
+                    full_call_record.update(
+                        {
+                            "elapsed_seconds": round(time.perf_counter() - started, 6),
+                            "error": error_attempt["error"],
+                        }
+                    )
+                    error_attempt["paddle_full_call"] = full_call_record
+                attempts.append(error_attempt)
+
+        with profile_step(
+            "selective_fallback.candidate_agreement_scoring",
+            page_index=page_index,
+            items=len(candidate_options),
+        ):
+            normalized_original = _normalized_ocr_candidate_text(group.text)
+            normalized_options = [
+                _normalized_ocr_candidate_text(option["text"])
+                for option in candidate_options
+            ]
+            for option_index, option in enumerate(candidate_options):
+                normalized = normalized_options[option_index]
+                original_agreement_bonus = (
+                    0.22
+                    if normalized and normalized == normalized_original
+                    else 0.0
+                )
+                peer_agreement_bonus = (
+                    0.28
+                    if normalized
+                    and any(
+                        normalized == peer
+                        for peer_index, peer in enumerate(normalized_options)
+                        if peer_index != option_index
+                    )
+                    else 0.0
+                )
+                adjusted_score = (
+                    option["selection_score"]
+                    + original_agreement_bonus
+                    + peer_agreement_bonus
+                )
+                option["attempt"].update(
+                    {
+                        "original_engine_agreement_bonus": original_agreement_bonus,
+                        "peer_engine_agreement_bonus": peer_agreement_bonus,
+                        "adjusted_selection_score": round(adjusted_score, 4),
+                    }
+                )
+                if option["engine"] == "paddle_full":
+                    full_call = option["attempt"].get("paddle_full_call")
+                    if full_call is not None:
+                        full_call["full_adjusted_selection_score"] = round(adjusted_score, 4)
+                if adjusted_score > best_selection_score + 0.03:
+                    best_lines = option["lines"]
+                    best_quality = option["quality"]
+                    best_selection_score = adjusted_score
+                    best_engine = option["engine"]
+
+        for attempt in attempts:
+            full_call = attempt.get("paddle_full_call")
+            if not full_call:
+                continue
+            full_call["final_engine"] = best_engine
+            full_call["final_selection_score"] = round(float(best_selection_score or 0.0), 4)
+            full_call["full_accepted"] = bool(best_engine == "paddle_full" and best_lines)
+            full_call["full_rejected"] = not full_call["full_accepted"]
+            full_call["result_changed"] = full_call["full_accepted"]
+            full_call["classification_final"] = group.classification
+            full_call["group_translated_or_ignored"] = "ignored" if group.ignored else "candidate"
+            full_call["call_classification"] = _classify_paddle_full_call(full_call)
+            paddle_full_calls.append(full_call)
+            record_count(
+                f"selective_fallback.paddle_full_{full_call['call_classification'].lower()}",
+                page_index=page_index,
+            )
+            if full_call["full_accepted"]:
+                record_count("selective_fallback.paddle_full_accepted", page_index=page_index)
+            else:
+                record_count("selective_fallback.paddle_full_rejected", page_index=page_index)
+
+        record = {
+            "group_id": group.group_id,
+            "region_id": group.region_id or group.group_id,
+            "original_text": group.text,
+            "original_quality_score": round(current_quality, 4),
+            "quality_reasons": list(group.quality_reasons),
+            "crop_box": list(crop_box),
+            "crop_fingerprint": crop_fingerprint,
+            "attempts": attempts,
+            "paddle_full_calls": paddle_full_calls,
+            "fallback_used": bool(best_lines),
+            "fallback_variant": best_engine,
+        }
+        records.append(record)
+        record_group(
+            page_index=page_index,
+            group_id=group.group_id,
+            elapsed_seconds=time.perf_counter() - group_started,
+            line_count=len(group.lines),
+            classification=group.classification,
+            fallback_used=bool(best_lines),
+            dominant_step="selective_fallback",
+        )
+        if not best_lines:
+            continue
+
+        line_ids = {
+            id(line)
+            for line in [*group.lines, *group.cleanup_lines]
+        }
+        consumed_line_ids.update(line_ids)
+        updated_lines = [
+            line
+            for line in updated_lines
+            if id(line) not in line_ids
+            or _line_is_nonoverlapping_context(line, best_lines)
+        ]
+        for line in best_lines:
+            line.metadata = {
+                **(line.metadata or {}),
+                "selective_fallback_used": True,
+                "fallback_variant": best_engine,
+                "fallback_reason": ";".join(group.quality_reasons),
+                "original_group_id": group.group_id,
+                "original_text": group.text,
+            }
+        updated_lines.extend(best_lines)
+
+    if consumed_line_ids:
+        updated_lines.sort(key=lambda line: (line.box[1], line.box[0]))
+    return updated_lines, records
+
+
+def _normalized_ocr_candidate_text(text):
+    return re.sub(r"[^A-Z0-9']", "", _ascii_fold(text).upper())
+
+
+def _fallback_crop_box(group, image_shape):
+    box = group.box
+    x, y, w, h = box
+    h_img, w_img = image_shape[:2]
+    pad = config.OCR_GROUP_FALLBACK_PADDING
+    if (
+        "short_context_word_needs_region_check" in group.quality_reasons
+        or w * h < 4200
+    ):
+        pad = max(pad, 90)
+    if any(
+        reason in group.quality_reasons
+        for reason in (
+            "compact_word_segmentation_candidate",
+            "dictionary_near_miss",
+            "short_balloon_text_needs_region_context",
+            "possible_cross_region_group",
+            "ignored_high_content_text",
+            "ignored_line_inside_text_region",
+        )
+    ):
+        pad = max(pad, 130)
+    x1 = max(0, x - pad)
+    y1 = max(0, y - pad)
+    x2 = min(w_img, x + w + pad)
+    y2 = min(h_img, y + h + pad)
+    return x1, y1, max(1, x2 - x1), max(1, y2 - y1)
+
+
+def _offset_line(line, dx, dy, engine_name, source_group_id):
+    polygon = np.asarray(line.polygon, dtype=np.int32).copy()
+    polygon[:, 0] += int(dx)
+    polygon[:, 1] += int(dy)
+    x, y, w, h = _box_from_poly(polygon)
+    return OCRLine(
+        text=line.text,
+        confidence=line.confidence,
+        polygon=polygon,
+        box=(x, y, w, h),
+        raw_text=line.raw_text,
+        engine=engine_name,
+        page=line.page,
+        metadata={
+            **(line.metadata or {}),
+            "source_engine": engine_name,
+            "selective_fallback_from_group": source_group_id,
+        },
+        original_text=line.original_text or line.raw_text,
+        repaired_text=line.repaired_text or line.text,
+        repair_reason=line.repair_reason,
+    )
+
+
+def _candidate_groups_for_fallback(original_bgr, crop_lines, page_index=None):
+    if not crop_lines:
+        return []
+    with profile_step(
+        "fallback_candidate_groups.assign_visual_white_regions",
+        page_index=page_index,
+        items=len(crop_lines),
+    ):
+        _assign_visual_white_regions(original_bgr, crop_lines)
+    with profile_step(
+        "fallback_candidate_groups.candidate_from_line",
+        page_index=page_index,
+        items=len(crop_lines),
+    ):
+        candidates = [_candidate_from_line(line, original_bgr.shape) for line in crop_lines]
+    usable_lines = [candidate.line for candidate in candidates if not candidate.ignored]
+    with profile_step(
+        "fallback_candidate_groups.group_lines",
+        page_index=page_index,
+        items=len(usable_lines),
+    ):
+        groups = _group_lines(usable_lines, page_index=page_index)
+    with profile_step("fallback_candidate_groups.split_sentence_boundaries", page_index=page_index, items=len(groups)):
+        groups = _split_groups_at_sentence_boundaries(groups)
+    with profile_step("fallback_candidate_groups.split_detached_story_outliers", page_index=page_index, items=len(groups)):
+        groups = _split_detached_story_outlier_lines(groups)
+    with profile_step("fallback_candidate_groups.associate_ignored_cleanup_lines", page_index=page_index, items=len(candidates)):
+        _associate_ignored_cleanup_lines(groups, candidates, original_bgr.shape, page_index=page_index)
+    with profile_step("fallback_candidate_groups.repair_group_texts", page_index=page_index, items=len(groups)):
+        _repair_group_texts(groups)
+    with profile_step("fallback_candidate_groups.filter_groups", page_index=page_index, items=len(groups)):
+        _filter_groups(groups, original_bgr.shape)
+    with profile_step("fallback_candidate_groups.classify_groups", page_index=page_index, items=len(groups)):
+        _classify_groups(groups, original_bgr, page_index=page_index)
+    with profile_step("fallback_candidate_groups.score_group_quality", page_index=page_index, items=len(groups)):
+        _score_group_quality(groups)
+    with profile_step("fallback_candidate_groups.assign_region_metadata", page_index=page_index, items=len(groups)):
+        _assign_region_metadata(groups)
+    return groups
+
+
+def _split_groups_at_sentence_boundaries(groups):
+    result = []
+    for group in groups:
+        lines = reading_order(group.lines)
+        if len(lines) < 4:
+            result.append(group)
+            continue
+
+        median_height = float(np.median([max(1, line.box[3]) for line in lines]))
+        split_after = []
+        for index, (current, following) in enumerate(zip(lines, lines[1:])):
+            vertical_gap = following.box[1] - (current.box[1] + current.box[3])
+            sentence_ended = bool(re.search(r"[.!?…]{1,}\s*$", current.text or ""))
+            next_has_content = len(re.sub(r"[^A-Za-z]", "", following.text or "")) >= 2
+            if (
+                sentence_ended
+                and next_has_content
+                and vertical_gap >= max(6, median_height * 0.35)
+            ):
+                split_after.append(index + 1)
+
+        if not split_after:
+            result.append(group)
+            continue
+
+        boundaries = [0, *split_after, len(lines)]
+        chunks = [
+            lines[start:end]
+            for start, end in zip(boundaries, boundaries[1:])
+            if end > start
+        ]
+        if len(chunks) <= 1:
+            result.append(group)
+            continue
+        for chunk in chunks:
+            result.append(
+                TextGroup(
+                    group_id=f"BALAO_{len(result) + 1}",
+                    lines=chunk,
+                    text=clean_ocr_text(" ".join(line.text for line in chunk)),
+                )
+            )
+
+    for index, group in enumerate(result, start=1):
+        group.group_id = f"BALAO_{index}"
+    return result
+
+
+def _split_detached_story_outlier_lines(groups):
+    """Split a short visual/SFX seed away from a coherent story block.
+
+    OCR can read a large effect drawn above a narration panel before the real
+    narration lines.  If that short effect becomes the seed group, the following
+    story lines are merged into an over-tall box; the renderer then tries to
+    clean both the effect and the narration with one Portuguese candidate.  This
+    pass keeps the coherent story cluster translatable and leaves the detached
+    short line preserved/reviewable as its own ignored group.
+    """
+
+    result = []
+    for group in groups:
+        lines = reading_order(group.lines)
+        if len(lines) < 4:
+            result.append(group)
+            continue
+
+        split = None
+        for index in (0, len(lines) - 1):
+            candidate = lines[index]
+            core = lines[1:] if index == 0 else lines[:-1]
+            if _line_is_detached_story_outlier(candidate, core):
+                split = (candidate, core)
+                break
+
+        if split is None:
+            result.append(group)
+            continue
+
+        outlier, core = split
+        story_group = TextGroup(
+            group_id=group.group_id,
+            lines=reading_order(core),
+            text=clean_ocr_text(" ".join(line.text for line in core)),
+        )
+        outlier_group = TextGroup(
+            group_id=f"{group.group_id}_DETACHED",
+            lines=[outlier],
+            text=clean_ocr_text(outlier.text),
+            ignored=True,
+            ignore_reason="detached_story_outlier_line",
+        )
+        # Preserve the story unit first so its BALAO_N identity remains stable
+        # after the final renumbering; the detached short effect is not a
+        # translation target.
+        result.extend([story_group, outlier_group])
+
+    for index, group in enumerate(result, start=1):
+        group.group_id = f"BALAO_{index}"
+    return result
+
+
+def _line_is_detached_story_outlier(line, core_lines):
+    if len(core_lines) < 3:
+        return False
+
+    compact = re.sub(r"[^A-Z]", "", _ascii_fold(line.text or "").upper())
+    if not compact or len(compact) > 4 or compact in COMMON_ENGLISH_WORDS:
+        return False
+
+    core_text = clean_ocr_text(" ".join(item.text for item in core_lines))
+    core_words = re.findall(r"[A-Za-zÀ-ÿ]{2,}", core_text)
+    if len(core_words) < 3:
+        return False
+
+    core = reading_order(core_lines)
+    core_heights = [max(1, item.box[3]) for item in core]
+    median_height = float(np.median(core_heights))
+    if median_height <= 0:
+        return False
+    core_areas = [max(1, item.box[2] * item.box[3]) for item in core]
+    median_area = float(np.median(core_areas))
+    lx, ly, lw, lh = line.box
+    if not (
+        lh >= median_height * 2.4
+        or lw * lh >= median_area * 4.0
+        or float(getattr(line, "confidence", 1.0)) <= 0.85
+    ):
+        return False
+
+    core_box = _union_boxes([item.box for item in core])
+    cx, cy, cw, ch = core_box
+    vertical_gap = max(cy - (ly + lh), ly - (cy + ch))
+    if vertical_gap < max(72.0, median_height * 2.2):
+        return False
+    horizontal_overlap = max(0, min(cx + cw, lx + lw) - max(cx, lx))
+    if horizontal_overlap / max(1, min(cw, lw)) < 0.30:
+        return False
+
+    core_gaps = [
+        following.box[1] - (current.box[1] + current.box[3])
+        for current, following in zip(core, core[1:])
+    ]
+    if core_gaps and max(core_gaps) > max(32.0, median_height * 0.85):
+        return False
+    core_widths = [max(1, item.box[2]) for item in core]
+    if min(core_widths) / max(core_widths) < 0.35:
+        return False
+    return True
+
+
+def _assign_visual_white_regions(image_bgr, lines):
+    if image_bgr is None or image_bgr.size == 0 or not lines:
+        return
+    gray = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2GRAY)
+    hsv = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2HSV)
+    white = np.where(
+        (gray >= 230) & (hsv[:, :, 1] <= 35),
+        255,
+        0,
+    ).astype(np.uint8)
+    white = cv2.morphologyEx(
+        white,
+        cv2.MORPH_CLOSE,
+        np.ones((5, 5), dtype=np.uint8),
+        iterations=1,
+    )
+    count, labels, stats, _ = cv2.connectedComponentsWithStats(white, connectivity=8)
+    minimum_area = max(220, int(gray.size * 0.00018))
+    valid_labels = {
+        label
+        for label in range(1, count)
+        if int(stats[label, cv2.CC_STAT_AREA]) >= minimum_area
+    }
+    if not valid_labels:
+        return
+
+    image_height, image_width = gray.shape
+    for line in lines:
+        x, y, box_width, box_height = line.box
+        pad_x = max(5, min(16, int(box_width * 0.12)))
+        pad_y = max(4, min(12, int(box_height * 0.20)))
+        x1 = max(0, x - pad_x)
+        y1 = max(0, y - pad_y)
+        x2 = min(image_width, x + box_width + pad_x)
+        y2 = min(image_height, y + box_height + pad_y)
+        region = labels[y1:y2, x1:x2]
+        if region.size == 0:
+            continue
+        values, frequencies = np.unique(region, return_counts=True)
+        candidates = [
+            (int(frequency), int(value))
+            for value, frequency in zip(values, frequencies)
+            if int(value) in valid_labels
+        ]
+        if not candidates:
+            continue
+        frequency, label = max(candidates)
+        coverage = frequency / max(1, region.size)
+        if coverage < 0.12:
+            continue
+        region_x, region_y, region_width, region_height, region_area = (
+            int(value) for value in stats[label]
+        )
+        touches_edge = sum(
+            (
+                region_x <= 1,
+                region_y <= 1,
+                region_x + region_width >= image_width - 1,
+                region_y + region_height >= image_height - 1,
+            )
+        )
+        width_ratio = region_width / max(1, box_width)
+        height_ratio = region_height / max(1, box_height)
+        region_box_area_ratio = (
+            region_width * region_height
+        ) / max(1, image_width * image_height)
+        # This supplements contour detection only for compact containers.
+        # Large white components remain under the existing narration rules.
+        enclosed = bool(
+            touches_edge == 0
+            and region_width >= max(box_width + 8, box_width * 1.15)
+            and region_height >= max(box_height + 10, box_height * 1.35)
+            and region_box_area_ratio <= 0.18
+        )
+        line.metadata = {
+            **(line.metadata or {}),
+            "visual_white_region_id": label,
+            "visual_white_region_coverage": round(coverage, 4),
+            "visual_white_region_box": [
+                region_x,
+                region_y,
+                region_width,
+                region_height,
+            ],
+            "visual_white_region_area_ratio": round(
+                region_area / max(1, image_width * image_height),
+                6,
+            ),
+            "visual_white_region_rectangularity": round(
+                region_area / max(1, region_width * region_height),
+                4,
+            ),
+            "visual_white_region_width_ratio": round(width_ratio, 4),
+            "visual_white_region_height_ratio": round(height_ratio, 4),
+            "visual_white_region_touches_edge": int(touches_edge),
+            "visual_white_region_enclosed": enclosed,
+        }
+
+
+_RECLAIMABLE_IGNORE_REASONS = frozenset(
+    {"noise_like_text", "too_few_useful_chars", "low_alpha_ratio"}
+)
+
+_INTERRUPTED_SPEECH_DASHES = r"\-‐-―−"
+_CONTAINER_COVERAGE_MIN = 0.9
+
+
+def _text_is_interrupted_speech_fragment(text):
+    """A single-letter utterance cut off by a dash or ellipsis.
+
+    Interrupted speech ("a pronoun the speaker never finishes") is a real line of
+    a balloon even though it carries too few letters for the lexical test. A bare
+    letter is deliberately excluded: alone it is ambiguous (a roman numeral, an
+    initial, a decorative glyph), so it must not be promoted into speech.
+    """
+    stripped = clean_ocr_text(text)
+    return bool(
+        re.fullmatch(
+            rf"[A-Za-zÀ-ÿ][{_INTERRUPTED_SPEECH_DASHES}.…]{{1,4}}[.!?]?",
+            stripped,
+        )
+    )
+
+
+def _glyph_count(text):
+    return len(re.sub(r"\s", "", clean_ocr_text(text)))
+
+
+def _box_fits_glyphs(box, text):
+    """True when a box is dimensionally plausible for the glyphs it is said to hold.
+
+    A glyph is at most about one line-height wide, so a box far wider than the
+    recognised glyph count is holding characters the engine never returned.
+    """
+    _, _, width, height = box
+    if width <= 0 or height <= 0:
+        return False
+    glyphs = _glyph_count(text)
+    if glyphs <= 0:
+        return False
+    return width <= height * 1.15 * glyphs
+
+
+def _line_box_matches_text_density(line):
+    """True when the box is dimensionally plausible for the recognised glyphs.
+
+    A box far wider than the text the engine returned means only part of the line
+    was recognised. Merging that partial text would corrupt the speech, so such a
+    line is never reclaimed; the selective re-OCR pass reprocesses it instead.
+    """
+    return _box_fits_glyphs(line.box, line.text)
+
+
+_UNDERREAD_MIN_CONFIDENCE = 0.8
+_REOCR_MIN_CONFIDENCE = 0.75
+_GAP_MIN_COMPONENTS = 3
+
+
+def _container_text_gap_boxes(image_bgr, lines):
+    """Text-like clusters inside a container that no recognised line covers.
+
+    Bounded to containers that already hold text: inside each one, dark glyph-like
+    components are collected, everything the existing lines already cover is
+    removed, and what is left is grouped into reading rows. A row survives only if
+    it holds several glyph-sized components at a text height comparable to the
+    lines already read there, so a balloon border, a tail, art bleeding in or a
+    speck of noise never becomes a candidate. The page as a whole is never
+    scanned; only containers with text are examined.
+    """
+    if image_bgr is None or image_bgr.size == 0 or not lines:
+        return []
+    regions = {}
+    for line in lines:
+        region_id = int((line.metadata or {}).get("visual_white_region_id") or 0)
+        if region_id:
+            regions.setdefault(region_id, []).append(line)
+    if not regions:
+        return []
+
+    gray = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2GRAY)
+    height, width = gray.shape
+    gaps = []
+    for region_id, region_lines in regions.items():
+        heights = [line.box[3] for line in region_lines if line.box[3] > 0]
+        if not heights:
+            continue
+        text_height = float(np.median(heights))
+        # Container extent: the block the known lines occupy, opened up enough to
+        # reach a row they may have missed, but never the whole page.
+        xs = [line.box[0] for line in region_lines]
+        ys = [line.box[1] for line in region_lines]
+        xe = [line.box[0] + line.box[2] for line in region_lines]
+        ye = [line.box[1] + line.box[3] for line in region_lines]
+        pad_x = int(text_height * 1.2)
+        pad_y = int(text_height * 1.6)
+        x1 = max(0, int(min(xs)) - pad_x)
+        y1 = max(0, int(min(ys)) - pad_y)
+        x2 = min(width, int(max(xe)) + pad_x)
+        y2 = min(height, int(max(ye)) + pad_y)
+        if x2 - x1 < 8 or y2 - y1 < 8:
+            continue
+        crop = gray[y1:y2, x1:x2]
+        # Glyphs are dark on the light inside of a container.
+        dark = np.where(crop <= 140, 255, 0).astype(np.uint8)
+        # Drop what any recognised line already covers. Every line counts, not
+        # only this container's: the crop reaches neighbouring text, and leaving
+        # it in would rediscover lines that were read perfectly well.
+        for line in lines:
+            lx, ly, lw, lh = line.box
+            margin = max(3, int(lh * 0.25))
+            cx1 = max(0, int(lx) - x1 - margin)
+            cy1 = max(0, int(ly) - y1 - margin)
+            cx2 = min(crop.shape[1], int(lx + lw) - x1 + margin)
+            cy2 = min(crop.shape[0], int(ly + lh) - y1 + margin)
+            if cx2 > cx1 and cy2 > cy1:
+                dark[cy1:cy2, cx1:cx2] = 0
+        count, _, stats, _ = cv2.connectedComponentsWithStats(dark, connectivity=8)
+        glyphs = []
+        for label in range(1, count):
+            cx = int(stats[label, cv2.CC_STAT_LEFT])
+            cy = int(stats[label, cv2.CC_STAT_TOP])
+            cw = int(stats[label, cv2.CC_STAT_WIDTH])
+            ch = int(stats[label, cv2.CC_STAT_HEIGHT])
+            area = int(stats[label, cv2.CC_STAT_AREA])
+            if ch < text_height * 0.25 or ch > text_height * 1.6:
+                continue  # not a glyph at this container's text size
+            if cw > text_height * 2.0 or area < max(12, text_height * 0.8):
+                continue  # a border stroke, a tail, or a speck
+            if cx <= 1 or cy <= 1 or cx + cw >= crop.shape[1] - 1 or cy + ch >= crop.shape[0] - 1:
+                continue  # touches the crop edge: art or balloon outline
+            glyphs.append((cx, cy, cw, ch))
+        if len(glyphs) < _GAP_MIN_COMPONENTS:
+            continue
+        # Group the leftover glyphs into reading rows.
+        for row in _cluster_glyphs_into_rows(glyphs, text_height):
+            if len(row) < _GAP_MIN_COMPONENTS:
+                continue
+            rx1 = min(g[0] for g in row)
+            ry1 = min(g[1] for g in row)
+            rx2 = max(g[0] + g[2] for g in row)
+            ry2 = max(g[1] + g[3] for g in row)
+            margin = int(text_height * 0.4)
+            gaps.append(
+                (
+                    int(region_id),
+                    (
+                        max(0, x1 + rx1 - margin),
+                        max(0, y1 + ry1 - margin),
+                        min(width, x1 + rx2 + margin) - max(0, x1 + rx1 - margin),
+                        min(height, y1 + ry2 + margin) - max(0, y1 + ry1 - margin),
+                    ),
+                )
+            )
+    return gaps
+
+
+_REOCR_RECOVERY_MIN_CONFIDENCE = 0.85
+
+
+def _recovered_text_is_acceptable(text, confidence):
+    """A newly recovered line must be confident and read like real words.
+
+    Adding text that was never read is the riskiest thing this pass can do, so the
+    bar is higher than for a re-read: the engine must be sure, and the result must
+    contain a real word rather than a smear of glyph-shaped noise.
+    """
+    if confidence < _REOCR_RECOVERY_MIN_CONFIDENCE:
+        return False
+    return _text_has_lexical_word(text)
+
+
+# Recovery is deliberately a second RapidOCR read with deterministic crop
+# variants.  Cross-engine retries made the Beta runtime probe Paddle even when
+# RapidOCR was healthy.
+_REOCR_ENGINES = ("rapidocr",)
+_CANONICAL_OCR_ENGINE = OCREngine
+_REOCR_ENGINE_CACHE: dict[tuple[str, str], OCREngine] = {}
+
+
+def _reocr_engines_for(ocr_lang, errors=None):
+    """Every recogniser available, so the crop gets a genuine second opinion.
+
+    The engine that produced the incomplete reading is the one that failed, and
+    which engine that was depends on how the run was configured, so no assumption
+    is made: each recogniser is asked and the candidates are scored against each
+    other.
+    """
+    engines = []
+    use_cache = OCREngine is _CANONICAL_OCR_ENGINE
+    for name in _REOCR_ENGINES:
+        cache_key = (str(ocr_lang or ""), name)
+        if use_cache and cache_key in _REOCR_ENGINE_CACHE:
+            engines.append(_REOCR_ENGINE_CACHE[cache_key])
+            continue
+        try:
+            eng = OCREngine(ocr_lang, engine=name, fallback_engine=name)
+            eng._skip_suspicion_retry = True
+            if use_cache:
+                _REOCR_ENGINE_CACHE[cache_key] = eng
+            engines.append(eng)
+        except Exception as exc:  # noqa: BLE001 - a missing recogniser is not fatal.
+            # Not fatal, but never silent: the report must say why no re-read ran.
+            if errors is not None:
+                errors.append({"engine": name, "stage": "init",
+                               "exception_type": type(exc).__name__})
+            continue
+    return engines
+
+
+def _recognize_single_row(engine, crop, page_index=None):
+    """Read a one-row crop with the recogniser alone, skipping text detection.
+
+    The detector is the weak stage on very short rows: "ME!" under "TRIED TO
+    KILL" was never detected (not on the page, not in a padded or upscaled crop),
+    yet the recogniser alone reads it at 0.98. Used only after detection found
+    nothing; the caller's acceptance rule (confidence, real words) still decides.
+    """
+    if getattr(engine, "engine", "") != "rapidocr" or crop is None or not crop.size:
+        return []
+    if crop.shape[1] < 8 or crop.shape[0] < 8 or crop.shape[0] > 3 * crop.shape[1]:
+        return []
+    try:
+        result, _elapsed = engine._get_rapidocr()(crop, use_det=False, use_cls=False, use_rec=True)
+    except Exception:  # noqa: BLE001 - recognition-only is a best-effort extra read
+        return []
+    lines = []
+    for item in result or []:
+        if not item or len(item) < 2:
+            continue
+        text, confidence = str(item[0] or ""), float(item[1] or 0.0)
+        if not text.strip():
+            continue
+        box = (0, 0, int(crop.shape[1]), int(crop.shape[0]))
+        lines.append(OCRLine(text=text, confidence=confidence, polygon=_polygon_from_box(box),
+                             box=box, raw_text=text, engine=engine.engine, page=page_index,
+                             metadata={"recognition_only": True}))
+    return lines[:1]
+
+
+def _reocr_crop_candidates(engines, crop, page_index=None, errors=None):
+    """Read a crop with every recogniser; return (engine, text, confidence, lines)."""
+    candidates = []
+    # The text detector needs a margin round the glyphs: a tight crop of one short
+    # row ("IT...") reads as "VT." at 0.74, the same row with a replicated border as
+    # "IT.." at 0.96. Boxes are shifted back to crop coordinates.
+    margin = max(8, int(crop.shape[0] // 3)) if crop is not None and crop.size else 0
+    padded = cv2.copyMakeBorder(crop, margin, margin, margin, margin, cv2.BORDER_REPLICATE) if margin else crop
+    for engine in engines:
+        try:
+            crop_lines = engine.detect_lines(padded, page=page_index)
+            for item in crop_lines or []:
+                bx, by, bw, bh = [int(v) for v in item.box]
+                item.box = (max(0, bx - margin), max(0, by - margin), bw, bh)
+                item.polygon = np.asarray(item.polygon) - margin
+        except Exception as exc:  # noqa: BLE001 - never break the page for one crop.
+            if errors is not None:
+                errors.append({"engine": engine.engine, "stage": "detect",
+                               "exception_type": type(exc).__name__})
+            continue
+        if not crop_lines:
+            crop_lines = _recognize_single_row(engine, crop, page_index)
+        if not crop_lines:
+            continue
+        text = clean_ocr_text(" ".join(item.text for item in crop_lines))
+        confidence = min(float(item.confidence or 0.0) for item in crop_lines)
+        candidates.append((engine.engine, text, confidence, crop_lines))
+    return candidates
+
+
+_CONTINUATION_ANCHOR_MIN_CONFIDENCE = 0.85
+
+
+def _is_weak_ocr_line(line):
+    """A reading too short or unsure to vouch for the pixels it sits on ("T", 0.67)."""
+    return (float(line.confidence or 0.0) < 0.8
+            or len(re.sub(r"[^A-Za-z0-9]", "", clean_ocr_text(line.text))) < 2)
+
+
+def _stroke_widths(ink):
+    """Per-pixel stroke width estimate: 2x the distance-transform ridge values."""
+    if not np.any(ink):
+        return np.empty(0, dtype=np.float32)
+    distance = cv2.distanceTransform(ink.astype(np.uint8), cv2.DIST_L2, 3)
+    ridge = (distance > 0) & (distance >= cv2.dilate(distance, np.ones((3, 3), np.uint8)))
+    return 2.0 * distance[ridge]
+
+
+def _box_overlap_fraction(box, other):
+    """Share of ``box`` (x, y, w, h) that lies inside ``other``."""
+    x, y, w, h = box
+    ox, oy, ow, oh = other
+    ix = max(0, min(x + w, ox + ow) - max(x, ox))
+    iy = max(0, min(y + h, oy + oh) - max(y, oy))
+    return (ix * iy) / max(1, w * h)
+
+
+def _lettering_continuation_boxes(image_bgr, lines):
+    """Rows directly above/below a confident line that carry the same lettering.
+
+    The full-page detector drops short trailing rows of a speech column ("BE...",
+    "IT...") on dense art. Each confident line proposes the row just above and just
+    below it in its own column. The proposal survives only when no confident line
+    already covers it and it holds ink with the anchor's own signature - same
+    polarity and ink level, glyph-sized height (0.35-1.2 h) and a stroke width
+    within 0.5-1.8x the anchor's. Nothing is accepted here: the crop is re-read and
+    the OCR acceptance rule decides.
+    """
+    if image_bgr is None or image_bgr.size == 0 or not lines:
+        return []
+    gray = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2GRAY)
+    height, width = gray.shape
+    strong = [line for line in lines
+              if not _is_weak_ocr_line(line)
+              and float(line.confidence or 0.0) >= _CONTINUATION_ANCHOR_MIN_CONFIDENCE]
+    boxes = []
+    for anchor in strong:
+        x, y, w, h = [int(v) for v in anchor.box]
+        if w < 4 or h < 6:
+            continue
+        roi = gray[y:y + h, x:x + w].astype(np.float32)
+        median = _line_polarity_level(gray, anchor, float(np.median(roi)))
+        if 118 < median < 138:
+            continue  # mid-tone polarity is not decidable from levels alone
+        contrast = max(8.0, float(np.percentile(roi, 80)) - float(np.percentile(roi, 20)))
+        offset = max(16.0, contrast * 0.28)
+        dark = median >= 138
+        anchor_ink = roi <= median - offset if dark else roi >= median + offset
+        widths = _stroke_widths(anchor_ink)
+        if widths.size < 8:
+            continue
+        stroke = float(np.median(widths))
+        pad = int(round(0.3 * h))
+        for top in (y + h, y - int(round(1.3 * h))):
+            cx1, cx2 = max(0, x - pad), min(width, x + w + pad)
+            cy1, cy2 = max(0, top), min(height, top + int(round(1.3 * h)))
+            if cx2 - cx1 < 4 or cy2 - cy1 < 6:
+                continue
+            area = (cx2 - cx1) * (cy2 - cy1)
+            if any(
+                max(0, min(cx2, int(o.box[0] + o.box[2])) - max(cx1, int(o.box[0])))
+                * max(0, min(cy2, int(o.box[1] + o.box[3])) - max(cy1, int(o.box[1])))
+                > 0.2 * area
+                for o in strong
+            ):
+                continue
+            band = gray[cy1:cy2, cx1:cx2].astype(np.float32)
+            ink = band <= median - offset if dark else band >= median + offset
+            count, labels, stats, _ = cv2.connectedComponentsWithStats(ink.astype(np.uint8), 8)
+            keep = np.zeros(ink.shape, dtype=bool)
+            for label in range(1, count):
+                ch = int(stats[label, cv2.CC_STAT_HEIGHT])
+                if not (0.35 * h <= ch <= 1.2 * h):
+                    continue
+                component = labels == label
+                comp_widths = _stroke_widths(component)
+                if comp_widths.size and 0.5 * stroke <= float(np.median(comp_widths)) <= 1.8 * stroke:
+                    keep |= component
+            if np.count_nonzero(keep) < 0.15 * h * h:
+                continue
+            ys, xs = np.where(keep)
+            bx1 = max(0, cx1 + int(xs.min()) - pad)
+            by1 = max(0, cy1 + int(ys.min()) - pad)
+            bx2 = min(width, cx1 + int(xs.max()) + 1 + pad)
+            by2 = min(height, cy1 + int(ys.max()) + 1 + pad)
+            box = (bx1, by1, bx2 - bx1, by2 - by1)
+            if all(_box_iou(box, other) < 0.5 for other in boxes):
+                boxes.append(box)
+    return boxes
+
+
+def apply_speech_container_reocr(original_bgr, raw_lines, ocr_lang, page_index=None):
+    """Selective re-OCR of under-read lines and gaps, then a masked-page rediscovery."""
+    lines, records = _apply_speech_container_reocr_core(original_bgr, raw_lines, ocr_lang, page_index)
+    if (original_bgr is not None and getattr(original_bgr, "size", 0) and lines
+            and config.OCR_REGION_SELECTIVE_FALLBACK and config.OCR_MASKED_REDISCOVERY):
+        lines, record = _masked_page_rediscovery(original_bgr, lines, ocr_lang, page_index)
+        if record:
+            records.append(record)
+    if (original_bgr is not None and getattr(original_bgr, "size", 0) and lines
+            and config.OCR_REGION_SELECTIVE_FALLBACK and config.OCR_SPLIT_AT_CROSSING_BORDERS):
+        lines, record = _split_lines_at_crossing_borders(original_bgr, lines, ocr_lang, page_index)
+        if record:
+            records.append(record)
+    if (original_bgr is not None and getattr(original_bgr, "size", 0) and lines
+            and config.OCR_REGION_SELECTIVE_FALLBACK and config.OCR_EXTEND_CLIPPED_EDGE_GLYPHS):
+        lines, record = _extend_lines_to_edge_glyphs(original_bgr, lines, ocr_lang, page_index)
+        if record:
+            records.append(record)
+    if (original_bgr is not None and getattr(original_bgr, "size", 0) and lines
+            and config.OCR_REGION_SELECTIVE_FALLBACK and config.OCR_RECOVER_ADJACENT_ROWS):
+        lines, record = _recover_adjacent_unread_rows(original_bgr, lines, ocr_lang, page_index)
+        if record:
+            records.append(record)
+    return lines, records
+
+
+def _recover_adjacent_unread_rows(original_bgr, lines, ocr_lang, page_index=None):
+    """Read a short row the detector skipped right above or below a read line.
+
+    "SO" (two italic letters) over "COLD..." was never detected: it stayed on the
+    page in English beside the Portuguese "FRIO...". Ink components with the line's
+    glyph height (0.6-1.3 h), in the same column (within 0.6 w of the line on either
+    side), one row away (up to 1.8 h) and covered by no detected box form the
+    candidate row; it is read with the recogniser alone and kept only if made of
+    common English words (the guard: a stroke of the art never reads as one) at a
+    recogniser confidence >= 0.6 (two italic letters read "SO" at 0.68).
+    """
+    from komyst.review.region_taxonomy import is_english_word, word_zipf
+
+    gray = cv2.cvtColor(original_bgr, cv2.COLOR_BGR2GRAY)
+    height, width = gray.shape
+    errors = []
+    engines = None
+    record = {"trigger": "recover_adjacent_row", "page": page_index, "accepted": False,
+              "reason": "no_unread_adjacent_row", "engine_errors": errors}
+    boxes = [tuple(int(v) for v in line.box) for line in lines]
+    recovered = []
+    for x, y, w, h in list(boxes):
+        if h < 8:
+            continue
+        for y1, y2 in ((max(0, y - int(1.8 * h)), y), (y + h, min(height, y + h + int(1.8 * h)))):
+            x1, x2 = max(0, x - int(0.6 * w)), min(width, x + w + int(0.6 * w))
+            band = gray[y1:y2, x1:x2]
+            if band.size == 0 or band.shape[0] < int(0.6 * h):
+                continue
+            _t, ink = cv2.threshold(band, 0, 255, cv2.THRESH_BINARY_INV | cv2.THRESH_OTSU)
+            if float(np.median(band)) < 127:
+                ink = cv2.bitwise_not(ink)
+            count, _labels, stats, _ = cv2.connectedComponentsWithStats(ink, 8)
+            glyphs = []
+            for label in range(1, count):
+                cx, cy, cw, ch, _area = [int(v) for v in stats[label]]
+                gx1, gy1 = x1 + cx, y1 + cy
+                if not (0.6 * h <= ch <= 1.3 * h) or cw > 2.5 * h:
+                    continue
+                if any(not (gx1 + cw <= bx or gx1 >= bx + bw or gy1 + ch <= by or gy1 >= by + bh)
+                       for bx, by, bw, bh in boxes):
+                    continue
+                glyphs.append((gx1, gy1, cw, ch))
+            if not glyphs:
+                continue
+            # One row: glyphs sharing the rows of the tallest one, joined by word gaps.
+            glyphs.sort()
+            anchor = max(glyphs, key=lambda g: g[3])
+            row = [g for g in glyphs if min(g[1] + g[3], anchor[1] + anchor[3]) - max(g[1], anchor[1])
+                   >= 0.5 * min(g[3], anchor[3])]
+            rx1 = min(g[0] for g in row)
+            rx2 = max(g[0] + g[2] for g in row)
+            ry1 = min(g[1] for g in row)
+            ry2 = max(g[1] + g[3] for g in row)
+            if rx2 - rx1 < 0.5 * h or any(not (rx2 <= bx or rx1 >= bx + bw or ry2 <= by or ry1 >= by + bh)
+                                          for bx, by, bw, bh in boxes):
+                continue
+            if engines is None:
+                engines = _reocr_engines_for(ocr_lang, errors)
+            if not engines:
+                return lines, record
+            # A tight crop: extra margin lowered the recogniser on short words.
+            pad = max(2, h // 12)
+            box = (max(0, rx1 - pad), max(0, ry1 - pad),
+                   min(width, rx2 + pad) - max(0, rx1 - pad), min(height, ry2 + pad) - max(0, ry1 - pad))
+            read = _recognize_single_row(
+                engines[0], original_bgr[box[1]:box[1] + box[3], box[0]:box[0] + box[2]], page_index)
+            text = clean_ocr_text(read[0].text) if read else ""
+            words = re.findall(r"[A-Za-z']+", text)
+            if not (read and float(read[0].confidence) >= 0.6 and words
+                    and sum(len(re.sub(r"[^A-Za-z]", "", word)) for word in words) >= 2
+                    and all(is_english_word(word.replace("'", "")) or word_zipf(word.replace("'", "")) >= 3.0
+                            for word in words)):
+                continue
+            recovered.append(OCRLine(text=text, confidence=float(read[0].confidence),
+                                     polygon=_polygon_from_box(box), box=box, raw_text=read[0].text,
+                                     engine=lines[0].engine, page=page_index,
+                                     metadata={"recovered_adjacent_row": True}))
+            boxes.append(box)
+            record.setdefault("rows", []).append({"text": text, "box": list(box)})
+    if not recovered:
+        return lines, record
+    record["accepted"] = True
+    record["reason"] = "adjacent_row_recovered"
+    return list(lines) + recovered, record
+
+
+def _extend_lines_to_edge_glyphs(original_bgr, lines, ocr_lang, page_index=None):
+    """Extend a line over a glyph the detector clipped at its start or end.
+
+    A narrow leading glyph ("I" of "I DO INDEED!") fell outside the detected box:
+    it was neither read nor cleaned. An ink component beside the box with the
+    line's glyph height (0.6-1.2 h), overlapping its rows by >= 60 %, within 0.8 h
+    and not part of another line extends the box; the extended box is re-read with
+    the recogniser alone and kept only if confident and the old reading is
+    contained in the new, longer one.
+    """
+    gray = cv2.cvtColor(original_bgr, cv2.COLOR_BGR2GRAY)
+    height, width = gray.shape
+    errors = []
+    engines = None
+    record = {"trigger": "extend_to_edge_glyph", "page": page_index, "accepted": False,
+              "reason": "no_clipped_edge_glyph", "engine_errors": errors}
+    boxes = [tuple(int(v) for v in line.box) for line in lines]
+    result = []
+    for index, line in enumerate(lines):
+        x, y, w, h = boxes[index]
+        reach = int(round(0.8 * h)) + h
+        wx1, wx2 = max(0, x - reach), min(width, x + w + reach)
+        wy1, wy2 = max(0, y - h // 4), min(height, y + h + h // 4)
+        band = gray[wy1:wy2, wx1:wx2]
+        if band.size == 0:
+            result.append(line)
+            continue
+        _t, ink = cv2.threshold(band, 0, 255, cv2.THRESH_BINARY_INV | cv2.THRESH_OTSU)
+        if float(np.median(band)) < 127:
+            ink = cv2.bitwise_not(ink)
+        count, labels, stats, _ = cv2.connectedComponentsWithStats(ink, 8)
+        new_x1, new_x2 = x, x + w
+        for label in range(1, count):
+            cx, cy, cw, ch, _area = [int(v) for v in stats[label]]
+            gx1, gx2 = wx1 + cx, wx1 + cx + cw
+            gy1, gy2 = wy1 + cy, wy1 + cy + ch
+            if not (0.6 * h <= ch <= 1.2 * h):
+                continue
+            overlap = max(0, min(gy2, y + h) - max(gy1, y))
+            if overlap < 0.6 * min(ch, h):
+                continue
+            gap = (x - gx2) if gx2 <= x else (gx1 - (x + w)) if gx1 >= x + w else -1
+            if gap < 0 or gap > 0.8 * h:
+                continue
+            if any(j != index and not (gx2 <= bx or gx1 >= bx + bw or gy2 <= by or gy1 >= by + bh)
+                   for j, (bx, by, bw, bh) in enumerate(boxes)):
+                continue
+            new_x1, new_x2 = min(new_x1, gx1), max(new_x2, gx2)
+        if (new_x1, new_x2) == (x, x + w):
+            result.append(line)
+            continue
+        if engines is None:
+            engines = _reocr_engines_for(ocr_lang, errors)
+        if not engines:
+            result.append(line)
+            continue
+        box = (max(0, new_x1 - 2), y, min(width, new_x2 + 2) - max(0, new_x1 - 2), h)
+        read = _recognize_single_row(engines[0], original_bgr[y:y + h, box[0]:box[0] + box[2]], page_index)
+        old_compact = re.sub(r"[^A-Z0-9]", "", str(line.text).upper())
+        new_text = clean_ocr_text(read[0].text) if read else ""
+        new_compact = re.sub(r"[^A-Z0-9]", "", new_text.upper())
+        if (read and float(read[0].confidence) >= 0.8 and old_compact and old_compact in new_compact
+                and len(new_compact) > len(old_compact)):
+            extended = OCRLine(text=new_text, confidence=float(read[0].confidence),
+                               polygon=_polygon_from_box(box), box=box, raw_text=read[0].text,
+                               engine=line.engine, page=page_index,
+                               metadata={**(line.metadata or {}), "extended_from_line": line.text})
+            result.append(extended)
+            boxes[index] = box
+            record["accepted"] = True
+            record["reason"] = "line_extended_to_clipped_glyph"
+            record.setdefault("extensions", []).append({"from": line.text, "to": new_text})
+        else:
+            result.append(line)
+    return (result if record["accepted"] else lines), record
+
+
+def _border_crossing_columns(gray, box):
+    """x positions where a dark stroke runs through a line from above to below it.
+
+    A balloon border between two balloons set side by side passes through the
+    row the detector read as one line; glyphs never extend both above and below
+    their own line. Ink is the darker Otsu class of a band one line height above
+    and below the box; a component touching both the top and the bottom of the
+    band is a crossing stroke, located by its median x inside the line rows.
+    """
+    x, y, w, h = [int(v) for v in box]
+    height, width = gray.shape
+    y1, y2 = max(0, y - h), min(height, y + 2 * h)
+    x1, x2 = max(0, x), min(width, x + w)
+    band = gray[y1:y2, x1:x2]
+    if band.size == 0 or band.shape[0] < 3 * h - 2 or band.shape[1] < 4:
+        return []
+    _t, ink = cv2.threshold(band, 0, 255, cv2.THRESH_BINARY_INV | cv2.THRESH_OTSU)
+    count, labels, _stats, _ = cv2.connectedComponentsWithStats(ink, 8)
+    top_rows = labels[: max(1, h // 2)]
+    bottom_rows = labels[-max(1, h // 2):]
+    line_rows = labels[y - y1:y - y1 + h]
+    positions = []
+    for label in set(np.unique(top_rows)) & set(np.unique(bottom_rows)) - {0}:
+        cols = np.nonzero(line_rows == label)[1]
+        if cols.size and 0.15 * w <= float(np.median(cols)) <= 0.85 * w:
+            # a crossing stroke is thin within the line rows (not a glyph block)
+            if (cols.max() - cols.min()) <= 0.5 * h:
+                positions.append(int(np.median(cols)) + x1)
+    return sorted(set(positions))
+
+
+def _column_split_positions(gray, line, lines):
+    """Split point of a line that joins two centred text columns.
+
+    Balloon lettering is centred, so the lines of one balloon share a centre. When
+    the detector read across two balloons set side by side, the widest gap between
+    words separates two parts whose centres each match a *different* neighbouring
+    column (other lines within three line heights), while the joined line's own
+    centre matches neither.
+    """
+    x, y, w, h = [int(v) for v in line.box]
+    if w < 3 * h:
+        return []
+    neighbours = [other for other in lines if other is not line
+                  and abs((other.box[1] + other.box[3] / 2) - (y + h / 2)) <= 3 * h
+                  and not (other.box[1] < y + h and other.box[1] + other.box[3] > y)
+                  # a column's own lines are narrower than a line joining two columns
+                  and other.box[2] < 0.8 * w]
+    centres = [other.box[0] + other.box[2] / 2 for other in neighbours]
+    if len(centres) < 2:
+        return []
+    tolerance = max(6.0, 0.35 * h)
+    row = gray[max(0, y):y + h, max(0, x):x + w]
+    if row.size == 0:
+        return []
+    _t, ink = cv2.threshold(row, 0, 255, cv2.THRESH_BINARY_INV | cv2.THRESH_OTSU)
+    filled = (ink > 0).any(axis=0)
+    cols = np.nonzero(filled)[0]
+    if cols.size < 2:
+        return []
+    gaps, col = [], 0
+    while col < filled.size:
+        if filled[col]:
+            col += 1
+            continue
+        begin = col
+        while col < filled.size and not filled[col]:
+            col += 1
+        if cols.min() < begin and col <= cols.max():
+            gaps.append((col - begin, begin, col))
+    for _width, begin, end in sorted(gaps, reverse=True)[:3]:
+        left_c = x + (cols.min() + begin) / 2
+        right_c = x + (end + cols.max()) / 2
+        left_match = [c for c in centres if abs(c - left_c) <= tolerance]
+        right_match = [c for c in centres if abs(c - right_c) <= tolerance]
+        whole = x + (cols.min() + cols.max()) / 2
+        if left_match and right_match and not any(abs(c - whole) <= tolerance for c in centres):
+            return [x + (begin + end) // 2]
+    return []
+
+
+def _split_lines_at_crossing_borders(original_bgr, lines, ocr_lang, page_index=None):
+    """Split detector lines that run across a balloon border into separate lines.
+
+    "YOU'RE STILL" (left balloon) and "LEAVING YOU" (right balloon) came back as
+    one line, so one group spanned two balloons: the cleanup used the wrong
+    balloon as reference and the translation read nonsense. Each side of the
+    crossing stroke is re-read with the recogniser alone; the split is kept only
+    when both sides read confidently, otherwise the line is left as it was.
+    """
+    gray = cv2.cvtColor(original_bgr, cv2.COLOR_BGR2GRAY)
+    errors = []
+    engines = None
+    record = {"trigger": "split_at_crossing_border", "page": page_index, "accepted": False,
+              "reason": "no_line_crosses_a_border", "engine_errors": errors}
+    result = []
+    for line in lines:
+        positions = []
+        if len(str(line.text).split()) >= 2:
+            positions = (_border_crossing_columns(gray, line.box)
+                         or _column_split_positions(gray, line, lines))
+        if not positions:
+            result.append(line)
+            continue
+        if engines is None:
+            engines = _reocr_engines_for(ocr_lang, errors)
+        if not engines:
+            result.append(line)
+            continue
+        x, y, w, h = [int(v) for v in line.box]
+        cuts = [x] + positions + [x + w]
+        parts = []
+        for a, b in zip(cuts[:-1], cuts[1:]):
+            left, right = (a + 3 if a != x else a), (b - 3 if b != x + w else b)
+            if right - left < max(8, h // 2):
+                continue
+            crop = original_bgr[y:y + h, left:right]
+            read = _recognize_single_row(engines[0], crop, page_index)
+            if not read or float(read[0].confidence) < 0.8 or not clean_ocr_text(read[0].text):
+                parts = None
+                break
+            box = (left, y, right - left, h)
+            part = OCRLine(text=clean_ocr_text(read[0].text), confidence=float(read[0].confidence),
+                           polygon=_polygon_from_box(box), box=box, raw_text=read[0].text,
+                           engine=line.engine, page=page_index,
+                           metadata={**(line.metadata or {}), "split_from_line": line.text,
+                                     "ocr_line_id": f"{(line.metadata or {}).get('ocr_line_id', '')}~{len(parts)}"})
+            parts.append(part)
+        if parts and len(parts) >= 2:
+            result.extend(parts)
+            record["accepted"] = True
+            record["reason"] = "line_split_at_crossing_border"
+            record.setdefault("splits", []).append({"from": line.text, "to": [p.text for p in parts]})
+        else:
+            result.append(line)
+    return (result if record["accepted"] else lines), record
+
+
+def _masked_page_rediscovery(original_bgr, lines, ocr_lang, page_index=None):
+    """Lines the detector only finds once the text it already read is out of the way.
+
+    The text detector is context-dependent: a news ticker set between two dense
+    speech columns was never detected on the page, yet read at 0.91 on the
+    cleaned page. Every line already read is painted with the median colour of the
+    band around its box and the detector runs once more on that copy; a new line is
+    kept only when the recovery rule accepts it (confident, real words) and it does
+    not overlap a line already read or a painted box.
+    """
+    started = time.perf_counter()
+    errors = []
+    engines = _reocr_engines_for(ocr_lang, errors)
+    record = {"trigger": "masked_page_rediscovery", "page": page_index, "accepted": False,
+              "reason": "masked_rediscovery_nothing_new", "engine_errors": errors}
+    if not engines:
+        record["reason"] = "selective_reocr_engine_unavailable"
+        return lines, record
+    height, width = original_bgr.shape[:2]
+    painted = original_bgr.copy()
+    covered = np.zeros((height, width), dtype=bool)
+    for line in lines:
+        x, y, w, h = [int(v) for v in line.box]
+        x1, y1, x2, y2 = max(0, x - 2), max(0, y - 2), min(width, x + w + 2), min(height, y + h + 2)
+        if x2 <= x1 or y2 <= y1:
+            continue
+        ry1, ry2 = max(0, y1 - 3), min(height, y2 + 3)
+        rx1, rx2 = max(0, x1 - 3), min(width, x2 + 3)
+        band = np.ones((ry2 - ry1, rx2 - rx1), dtype=bool)
+        band[y1 - ry1:y2 - ry1, x1 - rx1:x2 - rx1] = False  # the band only, not the ink
+        ring = original_bgr[ry1:ry2, rx1:rx2][band]
+        if ring.size:
+            painted[y1:y2, x1:x2] = np.median(ring, axis=0).astype(original_bgr.dtype)
+        covered[y1:y2, x1:x2] = True
+    try:
+        found = engines[0].detect_lines(painted, page=page_index)
+    except Exception as exc:  # noqa: BLE001 - recorded, never fatal
+        errors.append({"engine": engines[0].engine, "stage": "detect", "exception_type": type(exc).__name__})
+        record["reason"] = "selective_reocr_engine_failed"
+        return lines, record
+    new_lines = []
+    for item in found or []:
+        text = clean_ocr_text(item.text)
+        confidence = float(item.confidence or 0.0)
+        box = tuple(int(v) for v in item.box)
+        if not _recovered_text_is_acceptable(text, confidence):
+            continue
+        bx, by, bw, bh = box
+        if np.mean(covered[max(0, by):by + bh, max(0, bx):bx + bw]) > 0.3:
+            continue
+        if any(_box_iou(box, tuple(int(v) for v in known.box)) >= 0.2 for known in lines):
+            continue
+        new_line = OCRLine(text=text, confidence=confidence, polygon=_polygon_from_box(box), box=box,
+                           raw_text=text, engine=f"{engines[0].engine}+reocr", page=page_index,
+                           metadata={"selective_reocr": "masked_page_rediscovery"})
+        mark_ocr_line_recovered(new_line, engines[0].engine, initial_ocr_engine=None)
+        new_lines.append(new_line)
+    if new_lines:
+        lines = list(lines) + new_lines
+        record.update(accepted=True, reason="selective_reocr_recovered_text",
+                      new_lines=[{"text": l.text, "box": list(l.box), "confidence": round(l.confidence, 4)}
+                                 for l in new_lines])
+    record["duration_ms"] = round((time.perf_counter() - started) * 1000, 3)
+    return lines, record
+
+
+def _apply_speech_container_reocr_core(
+    original_bgr,
+    raw_lines,
+    ocr_lang,
+    page_index=None,
+):
+    """Second, selective OCR pass over speech containers with coverage gaps.
+
+    Two things make a container's coverage incomplete, and each is reprocessed on
+    its own pixels with the alternate engine:
+
+    * a confidently recognised line whose box is far too wide for the glyphs it
+      returned, meaning the rest of the line was never read;
+    * a run of glyph-sized components inside a container that no line covers,
+      meaning a whole row of text was never detected.
+
+    Nothing is inferred: a replacement is accepted only when it explains the box
+    the old reading could not, and a recovered row only when the engine is sure and
+    returns real words. Otherwise the previous reading is kept untouched and the
+    gap is reported, so the region can be flagged rather than silently completed.
+    Returns the (possibly extended) lines and a record of every decision.
+    """
+    lines = list(raw_lines or [])
+    records = []
+    if original_bgr is None or original_bgr.size == 0 or not lines:
+        return lines, records
+    if not config.OCR_REGION_SELECTIVE_FALLBACK:
+        return lines, records
+
+    underread = [line for line in lines if _line_needs_underread_reocr(line)]
+    gaps = [(container_id, box, "speech_container_uncovered_text")
+            for container_id, box in _container_text_gap_boxes(original_bgr, lines)]
+    gaps += [(0, box, "lettering_continuation_uncovered_text")
+             for box in _lettering_continuation_boxes(original_bgr, lines)]
+    if not underread and not gaps:
+        return lines, records
+
+    engine_errors = []
+    engines = _reocr_engines_for(ocr_lang, engine_errors)
+    if not engines:
+        records.append({
+            "trigger": "selective_reocr",
+            "page": page_index,
+            "accepted": False,
+            "reason": "selective_reocr_engine_unavailable",
+            "engine_errors": engine_errors,
+        })
+        return lines, records
+    height, width = original_bgr.shape[:2]
+
+    engine_names = [engine.engine for engine in engines]
+
+    for line in underread:
+        x, y, w, h = line.box
+        pad = max(4, int(h * 0.35))
+        x1, y1 = max(0, x - pad), max(0, y - pad)
+        x2, y2 = min(width, x + w + pad), min(height, y + h + pad)
+        crop = original_bgr[y1:y2, x1:x2]
+        started = time.perf_counter()
+        record = {
+            "trigger": "speech_line_underread",
+            "page": page_index,
+            "container_id": int(
+                (line.metadata or {}).get("visual_white_region_id") or 0
+            ),
+            "box": [int(v) for v in line.box],
+            "crop_box": [int(x1), int(y1), int(x2 - x1), int(y2 - y1)],
+            "previous_engine": line.engine,
+            "previous_text": line.text,
+            "previous_confidence": round(float(line.confidence or 0.0), 4),
+            "engines_attempted": list(engine_names),
+            "candidates": [],
+            "engine_errors": [],
+            "accepted": False,
+            "reason": "selective_reocr_no_confident_candidate",
+        }
+        best = None
+        if crop.size:
+            for engine_name, _, _, crop_lines in _reocr_crop_candidates(
+                engines, crop, page_index, record["engine_errors"]
+            ):
+                # The crop holds one line, so read the detection that lands on the
+                # original box. Anything the padding picked up along the way (a
+                # balloon border, a neighbouring glyph) is not this line.
+                for item in crop_lines:
+                    ix, iy, iw, ih = item.box
+                    overlap = _box_iou(
+                        (int(x1 + ix), int(y1 + iy), int(iw), int(ih)),
+                        tuple(int(v) for v in line.box),
+                    )
+                    if overlap < 0.25:
+                        continue
+                    text = clean_ocr_text(item.text)
+                    confidence = float(item.confidence or 0.0)
+                    record["candidates"].append(
+                        {
+                            "engine": engine_name,
+                            "text": text,
+                            "confidence": round(confidence, 4),
+                            "overlap": round(overlap, 3),
+                        }
+                    )
+                    if not _underread_candidate_is_better(
+                        line.text, text, confidence, line.box
+                    ):
+                        continue
+                    # Prefer the reading that explains the box with the most glyphs
+                    # it is confident about, not merely the longest or the boldest.
+                    score = _glyph_count(text) + confidence
+                    if best is None or score > best[0]:
+                        best = (score, engine_name, text, confidence)
+        if best:
+            _, engine_name, text, confidence = best
+            record["accepted"] = True
+            record["reason"] = "selective_reocr_recovered_text"
+            record["selected_engine"] = engine_name
+            record["selected_confidence"] = round(float(confidence), 4)
+            record["new_text"] = text
+            previous_initial_engine = (line.metadata or {}).get(
+                "initial_ocr_engine"
+            ) or line.engine
+            line.original_text = line.original_text or line.raw_text or line.text
+            line.text = text
+            line.raw_text = text
+            line.confidence = confidence
+            line.engine = f"{engine_name}+reocr"
+            mark_ocr_line_recovered(
+                line, engine_name, initial_ocr_engine=previous_initial_engine
+            )
+        if record["engine_errors"] and not record["candidates"] and not record["accepted"]:
+            record["reason"] = "selective_reocr_engine_failed"
+        record["duration_ms"] = round((time.perf_counter() - started) * 1000, 3)
+        records.append(record)
+
+    for container_id, box, trigger in gaps:
+        x, y, w, h = box
+        crop = original_bgr[y:y + h, x:x + w]
+        started = time.perf_counter()
+        record = {
+            "trigger": trigger,
+            "page": page_index,
+            "container_id": int(container_id),
+            "box": [int(v) for v in box],
+            "crop_box": [int(x), int(y), int(w), int(h)],
+            "previous_text": "",
+            "engines_attempted": list(engine_names),
+            "candidates": [],
+            "engine_errors": [],
+            "accepted": False,
+            "reason": "selective_reocr_no_confident_candidate",
+        }
+        if not crop.size:
+            record["duration_ms"] = round((time.perf_counter() - started) * 1000, 3)
+            records.append(record)
+            continue
+        best = None
+        crops = [(x, y, crop)]
+        if trigger == "lettering_continuation_uncovered_text":
+            # The detector reads a short row better with its neighbour row in view
+            # ("HEY, YOU!" above "DRIVE THIS": nothing alone, 0.91 with context);
+            # readings landing on known lines are dropped below as rediscoveries.
+            cy1, cy2 = max(0, y - h), min(height, y + 2 * h)
+            crops.append((x, cy1, original_bgr[cy1:cy2, x:x + w]))
+        for crop_x, crop_y, crop_image in crops:
+            for engine_name, text, confidence, crop_lines in _reocr_crop_candidates(
+                engines, crop_image, page_index, record["engine_errors"]
+            ):
+                record["candidates"].append(
+                    {"engine": engine_name, "text": text, "confidence": round(confidence, 4)}
+                )
+                if crop_image is not crop:
+                    # Context crop: only readings mostly inside the proposed row.
+                    crop_lines = [item for item in crop_lines
+                                  if _box_overlap_fraction((crop_x + int(item.box[0]), crop_y + int(item.box[1]),
+                                                            int(item.box[2]), int(item.box[3])), box) >= 0.5]
+                    text = " ".join(clean_ocr_text(item.text) for item in crop_lines)
+                    confidence = min((float(item.confidence or 0.0) for item in crop_lines), default=0.0)
+                if not crop_lines or not _recovered_text_is_acceptable(text, confidence):
+                    continue
+                score = _glyph_count(text) + confidence
+                if best is None or score > best[0]:
+                    best = (score, engine_name, crop_lines, crop_x, crop_y)
+            if best:
+                break
+        if best:
+            _, engine_name, crop_lines, crop_x, crop_y = best
+            for item in crop_lines:
+                text = clean_ocr_text(item.text)
+                confidence = float(item.confidence or 0.0)
+                if not _recovered_text_is_acceptable(text, confidence):
+                    continue
+                ix, iy, iw, ih = item.box
+                recovered_box = (int(crop_x + ix), int(crop_y + iy), int(iw), int(ih))
+                # A crop cut around leftover components can still reach text that
+                # was read perfectly well. A reading that lands on a line we
+                # already have is a rediscovery, not a recovery, and adding it
+                # would duplicate the line.
+                overlapped = [
+                    known for known in lines
+                    if _box_iou(recovered_box, tuple(int(v) for v in known.box)) >= 0.2
+                ]
+                # A continuation read may replace a weak reading of the same row
+                # ("T" for "IT..."), never a confident one.
+                replaceable = (trigger == "lettering_continuation_uncovered_text"
+                               and overlapped and all(_is_weak_ocr_line(k) for k in overlapped)
+                               and _glyph_count(text) > max(_glyph_count(k.text) for k in overlapped))
+                if overlapped and not replaceable:
+                    record.setdefault("skipped", []).append(
+                        {"text": text, "reason": "overlaps_existing_line"}
+                    )
+                    continue
+                for known in overlapped:
+                    lines.remove(known)
+                    record.setdefault("replaced", []).append(
+                        {"text": known.text, "confidence": round(float(known.confidence or 0.0), 4)})
+                new_line = OCRLine(
+                    text=text,
+                    confidence=confidence,
+                    polygon=_polygon_from_box(recovered_box),
+                    box=recovered_box,
+                    raw_text=text,
+                    engine=f"{engine_name}+reocr",
+                    page=page_index,
+                    metadata={
+                        "selective_reocr": trigger,
+                    },
+                )
+                # No prior line covered this box -- there is no earlier engine
+                # to preserve, only the one that found it just now.
+                mark_ocr_line_recovered(new_line, engine_name, initial_ocr_engine=None)
+                lines.append(new_line)
+                record["accepted"] = True
+                record["reason"] = "selective_reocr_recovered_text"
+                record["selected_engine"] = engine_name
+                record["selected_confidence"] = round(float(confidence), 4)
+                record.setdefault("new_lines", []).append(
+                    {
+                        "text": text,
+                        "box": list(recovered_box),
+                        "confidence": round(confidence, 4),
+                    }
+                )
+        if record["engine_errors"] and not record["candidates"] and not record["accepted"]:
+            record["reason"] = "selective_reocr_engine_failed"
+        record["duration_ms"] = round((time.perf_counter() - started) * 1000, 3)
+        records.append(record)
+
+    return lines, records
+
+
+def summarize_speech_container_reocr(records):
+    """Roll the per-container decisions up into auditable counters.
+
+    The mechanism was already deciding correctly in production, but nothing it
+    decided reached an artifact, so a recovered line could not be traced back to the
+    container, engine and score that recovered it.
+    """
+    records = list(records or [])
+    triggers = {}
+    for record in records:
+        trigger = str(record.get("trigger") or "unknown")
+        triggers[trigger] = triggers.get(trigger, 0) + 1
+    accepted = [record for record in records if record.get("accepted")]
+    return {
+        "containers_evaluated": len(records),
+        "triggers": triggers,
+        "accepted": len(accepted),
+        "rejected": len(records) - len(accepted),
+        "underread_recovered": sum(
+            record.get("trigger") == "speech_line_underread" for record in accepted
+        ),
+        "uncovered_text_recovered": sum(
+            record.get("trigger") == "speech_container_uncovered_text"
+            for record in accepted
+        ),
+        "total_duration_ms": round(
+            sum(float(record.get("duration_ms") or 0.0) for record in records),
+            3,
+        ),
+    }
+
+
+def _polygon_from_box(box):
+    x, y, w, h = box
+    return np.array(
+        [[x, y], [x + w, y], [x + w, y + h], [x, y + h]],
+        dtype=np.int32,
+    )
+
+
+def _cluster_glyphs_into_rows(glyphs, text_height):
+    """Group glyph boxes that share a reading row."""
+    rows = []
+    for glyph in sorted(glyphs, key=lambda g: (g[1], g[0])):
+        cy_center = glyph[1] + glyph[3] / 2.0
+        placed = False
+        for row in rows:
+            ref = row[0]
+            ref_center = ref[1] + ref[3] / 2.0
+            if abs(cy_center - ref_center) <= text_height * 0.6:
+                row.append(glyph)
+                placed = True
+                break
+        if not placed:
+            rows.append([glyph])
+    return rows
+
+
+def _line_needs_underread_reocr(line):
+    """A confidently recognised line whose box still holds unread characters.
+
+    The engine was sure of the glyphs it returned, so this is not noise, yet the
+    box is far too wide for them: the rest of the line was never read. Such a line
+    is worth reprocessing on its own pixels. A low-confidence read is left alone,
+    since it is more likely a phantom picked up from art or a balloon border.
+    """
+    try:
+        confidence = float(line.confidence or 0.0)
+    except (TypeError, ValueError):
+        return False
+    if confidence < _UNDERREAD_MIN_CONFIDENCE:
+        return False
+    if not re.search(r"[A-Za-zÀ-ÿ]", clean_ocr_text(line.text or "")):
+        return False
+    return not _box_fits_glyphs(line.box, line.text)
+
+
+def _underread_candidate_is_better(previous_text, candidate_text, candidate_confidence, box):
+    """Accept a re-read only when it explains the box the old reading could not.
+
+    The replacement must be confident, must return more glyphs than before, and
+    those glyphs must make the box plausible. A longer but still implausible read,
+    or a confident read that does not add characters, is rejected, so a valid
+    reading is never replaced by a worse one.
+    """
+    if candidate_confidence < _REOCR_MIN_CONFIDENCE:
+        return False
+    if not re.search(r"[A-Za-zÀ-ÿ]", clean_ocr_text(candidate_text or "")):
+        return False
+    if _glyph_count(candidate_text) <= _glyph_count(previous_text):
+        return False
+    return _box_fits_glyphs(box, candidate_text)
+
+
+def _text_has_lexical_word(text):
+    """A word of >=2 letters containing a vowel (generic, language-agnostic).
+
+    Excludes OCR noise and consonant-cluster onomatopoeia so a phantom read is
+    never promoted into a translated line.
+    """
+    for word in re.findall(r"[A-Za-zÀ-ÿ]{2,}", str(text or "")):
+        if re.search(r"[aeiouyAEIOUYÀ-ÿ]", word):
+            return True
+    return False
+
+
+def _short_line_joins_group(line, group):
+    """Symmetric structural test: does a filtered short line belong to a group.
+
+    Uses only generic geometry (comparable text height, strong horizontal
+    overlap, a small vertical gap in either direction). A confirmed *enclosed*
+    visual container with a different id vetoes the join; a weak, non-enclosed
+    region assignment does not, since it over-fragments a single balloon.
+    """
+    line_region_id = int((line.metadata or {}).get("visual_white_region_id") or 0)
+    line_enclosed = bool((line.metadata or {}).get("visual_white_region_enclosed"))
+    group_region_ids = {
+        int((item.metadata or {}).get("visual_white_region_id") or 0)
+        for item in group.lines
+    }
+    group_region_ids.discard(0)
+    if (
+        line_region_id
+        and group_region_ids
+        and line_region_id not in group_region_ids
+        and line_enclosed
+    ):
+        return False
+    gx, gy, gw, gh = group.box
+    lx, ly, lw, lh = line.box
+    if lw <= 0 or lh <= 0 or gw <= 0 or gh <= 0:
+        return False
+    heights = [item.box[3] for item in group.lines if item.box[3] > 0]
+    base_height = float(np.median(heights)) if heights else max(1, gh)
+    if min(lh, base_height) / max(lh, base_height) < 0.5:
+        return False
+    horizontal_overlap = max(0, min(gx + gw, lx + lw) - max(gx, lx))
+    if horizontal_overlap / max(1, min(gw, lw)) < 0.35:
+        return False
+    vertical_gap = max(gy - (ly + lh), ly - (gy + gh))
+    return vertical_gap <= 0.8 * base_height
+
+
+def _group_has_enclosed_container(group):
+    """True when a group sits in a confirmed enclosed visual container.
+
+    Distinguishes real dialogue balloons from stylized vocalizations/SFX drawn
+    on open art, which are not enclosed. Reclaiming short lines only into
+    confirmed containers keeps screams and art onomatopoeia from being merged.
+
+    A closed contour is the strongest signal, but a balloon drawn on a light page
+    can merge with the background so its region is never marked enclosed even
+    though the text sits almost entirely inside it. Such a region counts as a
+    container when it covers nearly all of the line; stylized shouts lettered on
+    open art keep only partial coverage and stay out.
+    """
+    for line in group.lines:
+        metadata = line.metadata or {}
+        if metadata.get("visual_white_region_enclosed"):
+            return True
+        try:
+            coverage = float(metadata.get("visual_white_region_coverage") or 0.0)
+        except (TypeError, ValueError):
+            coverage = 0.0
+        if coverage >= _CONTAINER_COVERAGE_MIN:
+            return True
+    return False
+
+
+def _group_accepts_ignored_cleanup_attachment(group):
+    """Whether ignored child-line geometry may be cleaned by this story group.
+
+    Cleanup ownership is stricter than translation ownership but broader than a
+    closed-contour balloon: real narration boxes can be visually open/merged with
+    the page background while still being the obvious owner of a short corrupted
+    child line.  The child text is not merged into provider input here; only its
+    source glyph geometry joins the cleanup mask.
+    """
+
+    if _group_has_enclosed_container(group):
+        return True
+    background_type = str(getattr(group, "background_type", "") or "")
+    metrics = getattr(group, "background_metrics", None) or {}
+    if background_type == "narration_box" and (
+        metrics.get("open_white_narration")
+        or metrics.get("open_dark_narration")
+        or metrics.get("dominant_white_enclosure")
+        or metrics.get("stylized_white_enclosure")
+    ):
+        return True
+    return bool(getattr(group, "inside_narration_box_like_region", False))
+
+
+def _shared_open_visual_region_cleanup_owner(line, group):
+    """True when an ignored child physically belongs to the same open text region.
+
+    This path deliberately attaches geometry only.  It does not merge the child
+    OCR text into the provider input, and it is gated by story translation
+    authority so stylized SFX/open art lettering is not erased just because it
+    happens to share a weak white-region id.
+    """
+
+    line_metadata = getattr(line, "metadata", None) or {}
+    line_region = int(line_metadata.get("visual_white_region_id") or 0)
+    if not line_region or line_metadata.get("visual_white_region_enclosed"):
+        return False
+    try:
+        line_coverage = float(line_metadata.get("visual_white_region_coverage") or 0.0)
+    except (TypeError, ValueError):
+        line_coverage = 0.0
+    if line_coverage < 0.65:
+        return False
+    group_regions = []
+    group_coverages = []
+    for item in getattr(group, "lines", None) or []:
+        metadata = getattr(item, "metadata", None) or {}
+        if metadata.get("visual_white_region_enclosed"):
+            continue
+        region = int(metadata.get("visual_white_region_id") or 0)
+        if not region:
+            continue
+        group_regions.append(region)
+        try:
+            group_coverages.append(float(metadata.get("visual_white_region_coverage") or 0.0))
+        except (TypeError, ValueError):
+            group_coverages.append(0.0)
+    if line_region not in group_regions:
+        return False
+    if max(group_coverages or [0.0]) < 0.45:
+        return False
+    return _group_has_story_translation_authority(group)
+
+
+def _reclaim_short_lexical_lines(groups, candidates, image_shape):
+    """Reclaim short speech lines filtered as noise into their speech group.
+
+    A short line dropped by a length/shape noise filter can be a real part of a
+    balloon: a leading word, a short interjection, or an utterance the speaker
+    cuts off. When it reads as speech and structurally belongs to an existing
+    text group, merge it before classification so it is translated and rendered
+    with the rest of the speech instead of surviving as visible source text.
+    A line whose box is far wider than the glyphs the engine returned is only
+    partially recognised and is never merged, since its text would corrupt the
+    speech. Purely structural: no word, page, coordinate or chapter rule.
+    """
+    for candidate in candidates:
+        if not candidate.ignored:
+            continue
+        if candidate.ignore_reason not in _RECLAIMABLE_IGNORE_REASONS:
+            continue
+        line = candidate.line
+        if not (
+            _text_has_lexical_word(line.text)
+            or _text_is_interrupted_speech_fragment(line.text)
+        ):
+            continue
+        if not _line_box_matches_text_density(line):
+            continue
+        target = None
+        for group in groups:
+            if group.ignored or not _text_has_lexical_word(group.text):
+                continue
+            if not _group_has_enclosed_container(group):
+                continue
+            if _short_line_joins_group(line, group):
+                target = group
+                break
+        if target is None:
+            continue
+        if any(id(existing) == id(line) for existing in target.lines):
+            continue
+        target.lines.append(line)
+        target.lines = reading_order(target.lines)
+        target.text = clean_ocr_text(" ".join(item.text for item in target.lines))
+        candidate.ignored = False
+        candidate.ignore_reason = ""
+
+
+def _associate_ignored_cleanup_lines(groups, candidates, image_shape, page_index=None):
+    """Attach ignored OCR geometry to the surrounding text region for cleanup.
+
+    Recognition may collapse an otherwise valid visual line to one character.
+    The text itself remains ignored, but its polygon is still useful for safely
+    removing the original glyphs and for triggering a regional OCR fallback.
+    """
+    for candidate in candidates:
+        if not candidate.ignored:
+            continue
+        line = candidate.line
+        if line.confidence < 0.25 or line.box[2] * line.box[3] < 80:
+            continue
+        possible = []
+        for group in groups:
+            record_count("associate_ignored.group_checks", 1, page_index=page_index)
+            with profile_step("associate_ignored.safe_draw_box", page_index=page_index):
+                safe_box = _safe_draw_box(group.box, image_shape, group)
+            if not (
+                _center_inside(line.box, safe_box)
+                or _box_iou(line.box, group.box) >= 0.08
+            ):
+                continue
+            gx, gy, gw, gh = group.box
+            lx, ly, lw, lh = line.box
+            horizontal_overlap = max(0, min(gx + gw, lx + lw) - max(gx, lx))
+            if horizontal_overlap / max(1, min(gw, lw)) < 0.3:
+                continue
+            center_gap = abs((gy + gh / 2) - (ly + lh / 2))
+            possible.append((center_gap, group))
+            continue
+        # A real #65 residual can be a high-confidence but text-corrupted OCR line
+        # ("IT'LL" read back as punctuation/digits) directly attached to a translated
+        # story box.  Its text is intentionally not reclaimed into the provider input,
+        # but its source glyph geometry still belongs to the story render unit and
+        # must be cleaned with that unit.  Use the same structural join as short-line
+        # reclamation, guarded by story authority and an enclosed/near-total container,
+        # so open-art SFX, credits and unrelated fragments stay untouched.
+        if (
+            not possible
+            and candidate.ignore_reason in _RECLAIMABLE_IGNORE_REASONS
+            and not _text_has_lexical_word(line.text)
+        ):
+            for group in groups:
+                record_count("associate_ignored.story_block_checks", 1, page_index=page_index)
+                if group.ignored or not _text_has_lexical_word(group.text):
+                    continue
+                if not (
+                    _group_accepts_ignored_cleanup_attachment(group)
+                    or _shared_open_visual_region_cleanup_owner(line, group)
+                ):
+                    continue
+                if str(getattr(group, "classification", "") or "") in {
+                    "decorative",
+                    "logo",
+                    "sfx",
+                }:
+                    continue
+                if not _group_has_story_translation_authority(group):
+                    continue
+                if _short_line_joins_group(line, group):
+                    possible.append((0.0, group))
+                    break
+        if not possible:
+            continue
+        _, target = min(possible, key=lambda item: item[0])
+        if all(id(existing) != id(line) for existing in target.cleanup_lines):
+            target.cleanup_lines.append(line)
+
+
+def _cleanup_lines_for_group(group):
+    result = []
+    seen = set()
+    for line in list(group.lines) + list(group.cleanup_lines):
+        key = id(line)
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append(line)
+    return result
+
+
+def _best_candidate_quality(groups, reference_box):
+    return _candidate_quality(_best_candidate_group(groups, reference_box))
+
+
+def _best_candidate_text(groups, reference_box):
+    best = _best_candidate_group(groups, reference_box)
+    return best.text if best else ""
+
+
+def _best_candidate_group(groups, reference_box):
+    candidates = [
+        group
+        for group in groups
+        if _box_iou(group.box, reference_box) >= 0.05
+        or _center_inside(group.box, reference_box)
+        or _center_inside(reference_box, group.box)
+    ]
+    if not candidates:
+        return None
+    return max(
+        candidates,
+        key=lambda group: (
+            _candidate_quality(group),
+            _box_iou(group.box, reference_box),
+            len(group.text),
+        ),
+    )
+
+
+def _candidate_quality(group):
+    if group is None:
+        return 0.0
+    if group.ignored and len(group.text) < 8:
+        return min(group.quality_score, 0.35)
+    return group.quality_score
+
+
+_SHRINK_PENALTY_MAX = 0.75
+_SHRINK_PENALTY_FREE_RETENTION = 0.95
+_SHRINK_PENALTY_FULL_RETENTION = 0.55
+
+
+def _content_shrink_penalty(
+    content_retention,
+    context_token_count,
+    cross_region_suspected=False,
+):
+    """Penalise a fallback OCR candidate in proportion to the content it drops.
+
+    A hard threshold let a candidate that discarded a whole line of speech pass
+    free whenever it landed just above the cut-off, so the truncated reading
+    could win and the missing text never reached translation. Scale the penalty
+    with how much content is lost instead: a candidate must be clearly better to
+    justify dropping source text, while a small trim backed by a clean read (for
+    example shedding a leading sound effect) is only lightly penalised.
+
+    When the original reading is itself suspected of merging text across regions,
+    dropping content is the intended correction, so no penalty applies.
+    """
+    if cross_region_suspected:
+        return 0.0
+    if context_token_count < 2:
+        return 0.0
+    if content_retention >= _SHRINK_PENALTY_FREE_RETENTION:
+        return 0.0
+    span = _SHRINK_PENALTY_FREE_RETENTION - _SHRINK_PENALTY_FULL_RETENTION
+    lost = _SHRINK_PENALTY_FREE_RETENTION - content_retention
+    return _SHRINK_PENALTY_MAX * min(1.0, lost / span)
+
+
+def _cross_region_resolution_bonus(original_group, candidate_group, content_retention):
+    """Prefer a clean regional reading over agreement with a crossed region."""
+    if "possible_cross_region_group" not in original_group.quality_reasons:
+        return 0.0
+    if candidate_group is None or (
+        "possible_cross_region_group" in candidate_group.quality_reasons
+    ):
+        return 0.0
+    if _candidate_quality(candidate_group) < 0.82 or content_retention < 0.70:
+        return 0.0
+    return 0.32
+
+
+def _repair_proposal_tokens(group):
+    tokens = set()
+    for line in group.lines:
+        metadata = line.metadata or {}
+        candidate = metadata.get("repair_candidate") or {}
+        if candidate.get("accepted", False):
+            continue
+        repaired = candidate.get("repaired_text", "")
+        original = candidate.get("original_text", "")
+        repaired_tokens = set(re.findall(r"[A-Z]+", _ascii_fold(repaired).upper()))
+        original_tokens = set(re.findall(r"[A-Z]+", _ascii_fold(original).upper()))
+        tokens.update(repaired_tokens - original_tokens)
+    return tokens
+
+
+def _line_is_nonoverlapping_context(line, fallback_lines):
+    if not fallback_lines:
+        return False
+    text = clean_ocr_text(line.text)
+    if not text:
+        return False
+    if any(_box_iou(line.box, fallback.box) >= 0.18 for fallback in fallback_lines):
+        return False
+    return len(re.sub(r"[^A-Za-z0-9]", "", text)) <= 3
+
+
+def _box_iou(left, right):
+    lx, ly, lw, lh = left
+    rx, ry, rw, rh = right
+    x1 = max(lx, rx)
+    y1 = max(ly, ry)
+    x2 = min(lx + lw, rx + rw)
+    y2 = min(ly + lh, ry + rh)
+    inter = max(0, x2 - x1) * max(0, y2 - y1)
+    union = lw * lh + rw * rh - inter
+    return inter / max(1, union)
+
+
+def _center_inside(inner, outer):
+    ix, iy, iw, ih = inner
+    ox, oy, ow, oh = outer
+    cx = ix + iw / 2
+    cy = iy + ih / 2
+    return ox <= cx <= ox + ow and oy <= cy <= oy + oh
+
+
+def _box_inside(inner, outer):
+    """True when ``inner`` lies within ``outer``, allowing for re-read jitter.
+
+    A region re-read at the recogniser's preferred scale returns boxes a couple
+    of pixels off the ones the page scale produced, so exact containment would
+    reject a line the region plainly owns.  The tolerance is a fraction of the
+    inner box's own height - always less than one text line - so it can absorb
+    that jitter and still never reach into a neighbouring container.
+    """
+    ix, iy, iw, ih = inner
+    ox, oy, ow, oh = outer
+    slack = max(2.0, ih * 0.25)
+    return (
+        ix >= ox - slack
+        and iy >= oy - slack
+        and ix + iw <= ox + ow + slack
+        and iy + ih <= oy + oh + slack
+    )
+
+
+PORTUGUESE_ACCENTED_FOLD_TOKENS = {"SO"}
+PORTUGUESE_FOR_PREVIOUS_CONTEXT = {"COMO", "ONDE", "QUANDO", "QUE", "QUEM", "SE"}
+PORTUGUESE_FOR_CONTEXT_BRIDGE_TOKENS = {
+    "AINDA",
+    "ASSIM",
+    "DEPOIS",
+    "DISSO",
+    "ELE",
+    "ELA",
+    "EU",
+    "ISSO",
+    "ISTO",
+    "MAIS",
+    "MESMO",
+    "NAO",
+    "O",
+    "TAMBEM",
+    "VOCE",
+}
+PORTUGUESE_FOR_LEFT_CONTEXT_WINDOW = 4
+HIGH_CONFIDENCE_RESIDUAL_SPANISH_MARKERS = {
+    "AHORA",
+    "AUNQUE",
+    "ENTONCES",
+    "GRACIAS",
+    "HOLA",
+    "MUY",
+    "PERO",
+    "QUIZA",
+    "QUIZAS",
+    "USTED",
+    "USTEDES",
+}
+HIGH_CONFIDENCE_RESIDUAL_SPANISH_FORMS = {"QUÉ"}
+
+
+def _has_diacritic(text):
+    return any(unicodedata.combining(char) for char in unicodedata.normalize("NFKD", text))
+
+
+def _translation_token_infos(text):
+    value = str(text or "")
+    quoted_spans = [
+        match.span()
+        for match in re.finditer(
+            r'"[^"\r\n]*"|“[^”\r\n]*”|«[^»\r\n]*»',
+            value,
+        )
+    ]
+    infos = []
+    for match in re.finditer(
+        r"[A-Za-zÀ-ÖØ-öø-ÿ\u0300-\u036f']+",
+        value,
+    ):
+        raw = match.group(0)
+        token = re.sub(r"[^A-Z']", "", _ascii_fold(raw).upper())
+        if not token:
+            continue
+        infos.append(
+            {
+                "raw": raw,
+                "token": token,
+                "start": match.start(),
+                "end": match.end(),
+                "left_hyphen": match.start() > 0 and value[match.start() - 1] == "-",
+                "right_hyphen": match.end() < len(value) and value[match.end()] == "-",
+                "has_diacritic": _has_diacritic(raw),
+                "normalized": unicodedata.normalize("NFC", raw).upper(),
+                "quoted": any(
+                    start <= match.start() and match.end() <= end
+                    for start, end in quoted_spans
+                ),
+            }
+        )
+    return infos
+
+
+def _is_accented_portuguese_fold_token(info):
+    return info["has_diacritic"] and info["token"] in PORTUGUESE_ACCENTED_FOLD_TOKENS
+
+
+def _is_portuguese_for_context_bridge_token(token):
+    return (
+        token in PORTUGUESE_MARKERS
+        or token in PORTUGUESE_FOR_CONTEXT_BRIDGE_TOKENS
+    )
+
+
+def _has_portuguese_for_left_context(tokens, index):
+    start = max(0, index - PORTUGUESE_FOR_LEFT_CONTEXT_WINDOW)
+    for anchor_index in range(index - 1, start - 1, -1):
+        anchor = tokens[anchor_index]
+        if anchor in PORTUGUESE_FOR_PREVIOUS_CONTEXT:
+            return all(
+                _is_portuguese_for_context_bridge_token(token)
+                for token in tokens[anchor_index + 1:index]
+            )
+        if not _is_portuguese_for_context_bridge_token(anchor):
+            break
+    return False
+
+
+def _is_portuguese_folded_token(token_infos, index):
+    info = token_infos[index]
+    token = info["token"]
+    if _is_accented_portuguese_fold_token(info):
+        return True
+    if token != "FOR":
+        return False
+
+    tokens = [item["token"] for item in token_infos]
+    next_token = tokens[index + 1] if index + 1 < len(tokens) else ""
+    next_next_token = tokens[index + 2] if index + 2 < len(tokens) else ""
+
+    if _has_portuguese_for_left_context(tokens, index):
+        return True
+    if next_token == "O" and next_next_token == "QUE":
+        return True
+    return False
+
+
+def _is_english_residual_candidate(token_infos, index, vocabulary):
+    token = token_infos[index]["token"]
+    if token not in vocabulary:
+        return False
+    if _is_token_inside_hyphenated_entity_fragment(token_infos, index):
+        return False
+    return not _is_portuguese_folded_token(token_infos, index)
+
+
+def _is_token_inside_hyphenated_entity_fragment(token_infos, index):
+    info = token_infos[index]
+    token = info["token"]
+    if not token:
+        return False
+    if len(token) > 2:
+        return False
+    previous_info = token_infos[index - 1] if index > 0 and info.get("left_hyphen") else None
+    next_info = (
+        token_infos[index + 1]
+        if index + 1 < len(token_infos) and info.get("right_hyphen")
+        else None
+    )
+    return any(_hyphenated_entity_neighbour(item) for item in (previous_info, next_info))
+
+
+def _hyphenated_entity_neighbour(info):
+    if not info:
+        return False
+    token = info["token"]
+    return bool(
+        token
+        and len(token) >= 3
+        and token not in RESIDUAL_TRANSLATION_ENGLISH_WORDS
+        and not _looks_like_inflected_english_token(token)
+        and not _is_nonlexical_vocalization_token({token})
+    )
+
+
+_HORIZONTAL_WHITESPACE_PATTERN = (
+    r"[\t \u00A0\u1680\u2000-\u200A\u202F\u205F\u3000]*"
+)
+
+
+def _leading_hyphenated_fragment(text):
+    match = re.match(
+        r"^\s*([A-Za-zÀ-ÖØ-öø-ÿ\u0300-\u036f]{1,4})"
+        rf"{_HORIZONTAL_WHITESPACE_PATTERN}"
+        rf"-{_HORIZONTAL_WHITESPACE_PATTERN}"
+        r"([A-Za-zÀ-ÖØ-öø-ÿ\u0300-\u036f']+)",
+        str(text or ""),
+    )
+    if not match:
+        return None
+    return tuple(
+        re.sub(r"[^A-Z']", "", _ascii_fold(part).upper())
+        for part in match.groups()
+    )
+
+
+def _residual_source_hyphen_fragment(source_text, translation, allowed_names):
+    source = _leading_hyphenated_fragment(source_text)
+    translated = _leading_hyphenated_fragment(translation)
+    if not source or not translated:
+        return ""
+
+    source_prefix, source_word = source
+    translated_prefix, translated_word = translated
+    if (
+        source_prefix != translated_prefix
+        or source_word == translated_word
+        or not source_word.startswith(source_prefix)
+    ):
+        return ""
+    if {
+        source_prefix,
+        source_word,
+        translated_word,
+    } & set(allowed_names or []):
+        return ""
+    # A kept stutter letter is speech disfluency, not language. Once the word after
+    # the hyphen has actually been translated, that letter carries no source-language
+    # meaning, and demanding it be re-derived from the translated word ("G-SAIA"
+    # rejected for not being "S-SAIA") sent correct lines to review over one glyph.
+    # A body that was NOT translated is a real residual, and the English-token checks
+    # below catch it whether or not a stutter precedes it. Only a known source word
+    # surviving the hyphen is reported here.
+    if source_word not in RESIDUAL_TRANSLATION_ENGLISH_WORDS:
+        return ""
+    return source_prefix
+
+
+def _normalized_allowed_name_tokens(allowed_proper_names):
+    allowed = set()
+    for name in allowed_proper_names or []:
+        folded = _ascii_fold(name).upper()
+        compact = re.sub(r"[^A-Z]", "", folded)
+        if compact:
+            allowed.add(compact)
+        allowed.update(re.findall(r"[A-Z]+", folded))
+    return allowed
+
+
+def _source_token_is_name_like(info):
+    """Mixed case is OCR noise, not evidence of a name, so this proves nothing.
+
+    Comic lettering is all-caps: an internally alternating token like an OCR misread
+    of a common word is the recogniser stumbling on glyphs, not a character name.
+    Treating that casing as name evidence let an ordinary word survive untranslated
+    as a "name-like" echo. Real names are established from detected spans and chapter
+    consensus (which reach the validator through ``allowed_names``) and, for a lone
+    token, from the model refusing to translate it - never from case alone.
+    """
+    return False
+
+
+def _is_stuttered_name_fragment(text):
+    return bool(
+        re.fullmatch(
+            r"\s*[A-Za-z]\s*-\s*[A-Za-z]{3,}\s*[.!?…]*\s*",
+            str(text or ""),
+        )
+    )
+
+
+def _same_sound_in_target(source_text, translated):
+    """A known sound that pt-BR writes the same way ("HUM HUM", "AH...")."""
+    from komyst.translation.sfx_glossary import translate_sfx
+
+    rendered = translate_sfx(source_text)
+    return bool(rendered) and _normalized_translation_text(rendered) == _normalized_translation_text(translated)
+
+
+def _is_nonlexical_vocalization_token(source_tokens):
+    if len(source_tokens) != 1:
+        return False
+    token = next(iter(source_tokens))
+    if not 3 <= len(token) <= 4:
+        return False
+    if token in RESIDUAL_TRANSLATION_ENGLISH_WORDS or _looks_like_inflected_english_token(
+        token
+    ):
+        return False
+    return bool(
+        re.fullmatch(r"[AEIOU][A-Z]{1,3}H|H[AEIOU]H|[A-Z]*([AEIOU])\1+[A-Z]*", token)
+    )
+
+
+OCR_JOINED_NAME_FALSE_POSITIVE_PARTS = frozenset(
+    {
+        "A", "ABOUT", "AGAIN", "ALOT", "AS", "BACK", "BARELY", "BE", "BECOMING",
+        "BECAREFUL", "BOSS", "BUT", "CONSIDER", "CRAP", "DEVOURED", "DO", "DUNGEON",
+        "ELSE", "ENTRANCE", "FEEL", "GET", "GOING", "HAVE", "HERE", "HOLY", "I",
+        "INTO", "IS", "IT", "JUST", "KNOW", "LATE", "LIKE", "LOOKS", "LUCKY",
+        "LL", "M", "MADE", "MATTER", "MONSTER", "MORE", "NEAR", "NEXT", "NO", "OF", "OUT",
+        "PLEASE", "REASON", "RIGHT", "SEEN", "SERIOUSLY", "SO", "SOMEONE",
+        "SPECIAL", "STILL", "STOP", "TALKING", "THAN", "THAT", "THE", "THERE",
+        "TIME", "TO", "TURNED", "UNFORTUNATE", "US", "VE", "WAY", "WERE", "YOUR",
+        "YOURSELVES",
+    }
+)
+
+
+def _can_segment_ocr_joined_source_words(token):
+    token = re.sub(r"[^A-Z]", "", str(token or "").upper())
+    if len(token) < 7:
+        return False
+    if token in OCR_LEXICAL_REFERENCE_WORDS:
+        return False
+    parts = OCR_JOINED_NAME_FALSE_POSITIVE_PARTS | OCR_LEXICAL_REFERENCE_WORDS
+    reachable = [False] * (len(token) + 1)
+    reachable[0] = True
+    for start in range(len(token)):
+        if not reachable[start]:
+            continue
+        for end in range(start + 1, len(token) + 1):
+            piece = token[start:end]
+            if len(piece) >= 1 and piece in parts:
+                reachable[end] = True
+    return reachable[-1]
+
+
+def _looks_like_source_contraction_token(token):
+    token = str(token or "").upper().strip()
+    if "'" not in token:
+        return False
+    left, right = token.split("'", 1)
+    right = right.strip("'")
+    if right not in {"D", "LL", "M", "RE", "S", "T", "VE"}:
+        return False
+    if left in ENGLISH_FUNCTION_TOKENS or left in OCR_LEXICAL_REFERENCE_WORDS:
+        return True
+    return _can_segment_ocr_joined_source_words(left)
+
+
+def _looks_like_title_name_ocr_compound(token):
+    token = re.sub(r"[^A-Z]", "", str(token or "").upper())
+    for title in sorted(NAME_TITLE_TOKENS | {"HUNTER"}, key=len, reverse=True):
+        if not token.startswith(title) or len(token) <= len(title) + 2:
+            continue
+        remainder = token[len(title):]
+        if remainder and not _token_is_source_vocabulary(remainder):
+            return True
+    return False
+
+
+def _required_name_span_is_hard_authority(span):
+    token = _name_token_of(span)
+    if not token:
+        return False
+    if _looks_like_source_contraction_token(token):
+        return False
+    if token in ENGLISH_FUNCTION_TOKENS:
+        return False
+    if _token_is_source_vocabulary(token):
+        return False
+    if _looks_like_inflected_english_token(token):
+        return False
+    if _is_nonlexical_vocalization_token({token}):
+        return False
+    if _can_segment_ocr_joined_source_words(token):
+        return False
+    if _looks_like_title_name_ocr_compound(token):
+        return False
+    return True
+
+
+def validate_translation_text(
+    source_text,
+    translation,
+    classification="speech",
+    allowed_proper_names=None,
+    required_name_spans=None,
+):
+    translated = clean_ocr_text(translation)
+    if classification == "sfx" and not config.TRANSLATE_SFX:
+        return True, "sfx_preserved"
+    if not translated:
+        return False, "empty_translation"
+    if classification == "sfx" and translated:
+        # Onomatopoeia is not prose: no lexical overlap or name rules apply.
+        return True, "sfx_translated"
+
+    source_infos = _translation_token_infos(source_text)
+    translated_infos = _translation_token_infos(translated)
+    source_tokens = {info["token"] for info in source_infos}
+    translated_tokens = [info["token"] for info in translated_infos]
+    allowed_names = _normalized_allowed_name_tokens(allowed_proper_names)
+    translatable_context_for_names = classification in {
+        "speech",
+        "thought",
+        "narration",
+        "unknown",
+    }
+    declared_name_authority = {
+        _name_token_of(span) for span in _declared_name_tokens(source_text)
+    }
+    chapter_known = getattr(allowed_proper_names, "chapter_known", None)
+    known_name_tokens = allowed_names if chapter_known is None else chapter_known
+    altered_names = sorted(
+        {
+            token
+            for span in (required_name_spans or ())
+            for token in [_name_token_of(span)]
+            if token in source_tokens
+            and token not in translated_tokens
+            and (
+                # A word of the full English dictionary ("legate") that merely sits where a name
+                # could be (after a title) is not authority: all-caps lettering has no
+                # capitalisation signal, and rejecting a correct translation of it turned a whole
+                # story sentence into untranslated English. A name the chapter knows (allowed or
+                # declared) keeps its protection.
+                (_required_name_span_is_hard_authority(span)
+                 and (token in known_name_tokens or not region_taxonomy.is_english_word(token)))
+                or token in declared_name_authority
+            )
+        }
+    )
+    if translatable_context_for_names and altered_names:
+        # A detected name must survive the translation verbatim. When it does not,
+        # the model replaced it with a target-language equivalent it invented.
+        return False, "proper_name_altered:" + ",".join(altered_names[:6])
+    translatable_context = classification in {"speech", "thought", "narration", "unknown"}
+    portuguese_hits = sum(token in PORTUGUESE_MARKERS for token in translated_tokens)
+    target_language_signal = portuguese_hits or any(
+        info["has_diacritic"] for info in translated_infos
+    )
+    # A title used as a common noun in the source ("the count's ...") that survived
+    # verbatim into an otherwise-translated candidate is a partial translation, not a
+    # loanword: reject it so the retry finishes the job. A title bound to a name is
+    # not flagged, so a form of address like a title before a character name stays.
+    residual_titles = sorted(
+        {
+            info["token"]
+            for info in translated_infos
+            if info["token"] in _title_used_as_common_noun_tokens(source_infos)
+            and info["token"] not in allowed_names
+            and not info["has_diacritic"]
+        }
+    )
+    if translatable_context and residual_titles and target_language_signal:
+        return (
+            False,
+            "residual_source_language_title:" + ",".join(residual_titles[:6]),
+        )
+    source_has_known_english = any(
+        token in RESIDUAL_TRANSLATION_ENGLISH_WORDS
+        or _looks_like_inflected_english_token(token)
+        for token in source_tokens
+    )
+    source_has_name_like_token = any(
+        _source_token_is_name_like(info) for info in source_infos
+    )
+    normalized_source = _normalized_translation_text(source_text)
+    if (
+        translatable_context
+        and normalized_source
+        and normalized_source == _normalized_translation_text(translated)
+        and not (source_tokens and source_tokens.issubset(allowed_names))
+        and not target_language_signal
+        and not source_has_known_english
+        and not source_has_name_like_token
+        and not _is_stuttered_name_fragment(source_text)
+        and not _is_nonlexical_vocalization_token(source_tokens)
+        and not _same_sound_in_target(source_text, translated)
+    ):
+        if not (
+            len(source_tokens) == 1
+            and (
+                len(next(iter(source_tokens))) <= 2
+                or bool(re.fullmatch(r"(.)\1{2,}", next(iter(source_tokens))))
+            )
+        ):
+            return False, "candidate_equals_source"
+    forbidden = []
+    for index, token in enumerate(translated_tokens):
+        if token in {"A", "O", "E", "DO", "DA", "DOS", "DAS"}:
+            continue
+        if (
+            token in COMMON_ENGLISH_WORDS
+            and token in source_tokens
+            and not _is_token_inside_hyphenated_entity_fragment(translated_infos, index)
+            and not _is_portuguese_folded_token(translated_infos, index)
+        ):
+            forbidden.append(token)
+
+    longest_english_run = 0
+    current_run = 0
+    for index, token in enumerate(translated_tokens):
+        if (
+            token in COMMON_ENGLISH_WORDS
+            and token not in {"A", "I", "O", "E"}
+            and not _is_token_inside_hyphenated_entity_fragment(translated_infos, index)
+            and not _is_portuguese_folded_token(translated_infos, index)
+        ):
+            current_run += 1
+            longest_english_run = max(longest_english_run, current_run)
+        else:
+            current_run = 0
+
+    if forbidden and (
+        portuguese_hits
+        or len(forbidden) >= 2
+        or longest_english_run >= 2
+    ):
+        return False, "mixed_language_tokens:" + ",".join(sorted(set(forbidden))[:6])
+
+    preserved_english_phrase_tokens = [
+        token
+        for index, token in enumerate(translated_tokens)
+        if token in source_tokens
+        and token in SOURCE_PRESERVED_ENGLISH_PHRASE_WORDS
+        and token not in allowed_names
+        and not _is_token_inside_hyphenated_entity_fragment(translated_infos, index)
+        and not _is_portuguese_folded_token(translated_infos, index)
+    ]
+    if (
+        translatable_context
+        and target_language_signal
+        and len(preserved_english_phrase_tokens) >= 3
+    ):
+        return (
+            False,
+            "mixed_language_tokens:"
+            + ",".join(sorted(set(preserved_english_phrase_tokens))[:6]),
+        )
+
+    partial_source_fragment = _residual_source_hyphen_fragment(
+        source_text,
+        translated,
+        allowed_names,
+    )
+    if translatable_context and partial_source_fragment:
+        return (
+            False,
+            "multilingual_partial_translation:" + partial_source_fragment,
+        )
+
+    residual_spanish_tokens = sorted(
+        {
+            info["token"]
+            for info in translated_infos
+            if (
+                info["token"] in HIGH_CONFIDENCE_RESIDUAL_SPANISH_MARKERS
+                or info["normalized"]
+                in HIGH_CONFIDENCE_RESIDUAL_SPANISH_FORMS
+            )
+            and info["token"] not in allowed_names
+            and not info["quoted"]
+        }
+    )
+    if translatable_context and residual_spanish_tokens and (
+        portuguese_hits or len(residual_spanish_tokens) >= 2
+    ):
+        return (
+            False,
+            "residual_spanish_token:" + ",".join(residual_spanish_tokens[:6]),
+        )
+
+    residual_english_tokens = [
+        token
+        for index, token in enumerate(translated_tokens)
+        if token not in {"A", "O", "E", "I"}
+        and token not in allowed_names
+        and token not in PORTUGUESE_MARKERS
+        and _is_english_residual_candidate(
+            translated_infos,
+            index,
+            RESIDUAL_TRANSLATION_ENGLISH_WORDS,
+        )
+    ]
+    residual_unique = sorted(set(residual_english_tokens))
+    if translatable_context and residual_unique:
+        if portuguese_hits or len(translated_tokens) >= 4:
+            return (
+                False,
+                "residual_english_token:" + ",".join(residual_unique[:6]),
+            )
+        if len(residual_english_tokens) >= 2:
+            return (
+                False,
+                "untranslated_english_text:" + ",".join(residual_unique[:6]),
+            )
+        if len(translated_tokens) <= 3:
+            return (
+                False,
+                "untranslated_single_english_token:" + residual_unique[0],
+            )
+
+    residual_inflected_english = sorted(
+        {
+            token
+            for index, token in enumerate(translated_tokens)
+            if token in source_tokens
+            and token not in allowed_names
+            and token not in PORTUGUESE_MARKERS
+            and not _is_token_inside_hyphenated_entity_fragment(translated_infos, index)
+            and not _is_portuguese_folded_token(translated_infos, index)
+            and _looks_like_inflected_english_token(token)
+        }
+    )
+    if residual_inflected_english and (
+        portuguese_hits or len(translated_tokens) >= 4
+    ):
+        return (
+            False,
+            "residual_inflected_english:"
+            + ",".join(residual_inflected_english[:6]),
+        )
+
+    folded_translation = _ascii_fold(translated).upper()
+    folded_source = _ascii_fold(source_text).upper()
+    if translatable_context and target_language_signal:
+        if re.search(r"\bVOCE\s+(FAZER|SER|ESTAR|TER|IR)\b", folded_translation):
+            return False, "unnatural_ptbr_verb_mood:voce_infinitive"
+        stray_parenthetical = re.search(r"\b([A-Z])\)", folded_translation)
+        if stray_parenthetical and stray_parenthetical.group(0) not in folded_source:
+            return False, "stray_ocr_fragment:" + stray_parenthetical.group(0)
+
+    source_english_tokens = [
+        token
+        for token in source_tokens
+        if token in COMMON_ENGLISH_WORDS and token not in {"I"}
+    ]
+    translated_english_tokens = [
+        token
+        for index, token in enumerate(translated_tokens)
+        if token in COMMON_ENGLISH_WORDS
+        and token not in {"I"}
+        and not _is_token_inside_hyphenated_entity_fragment(translated_infos, index)
+        and not _is_portuguese_folded_token(translated_infos, index)
+    ]
+    if (
+        source_english_tokens
+        and translated_english_tokens
+        and not portuguese_hits
+        and len(translated_english_tokens) >= max(1, min(2, len(source_english_tokens)))
+    ):
+        return False, "untranslated_english_text"
+
+    if (
+        len(translated_tokens) == 1
+        and translated_tokens[0] in COMMON_ENGLISH_WORDS
+        and not _is_portuguese_folded_token(translated_infos, 0)
+    ):
+        return False, "untranslated_single_english_token"
+
+    repeated_fragment = _translation_repeated_fragment(
+        translated_tokens,
+        allowed_names,
+    )
+    if repeated_fragment:
+        return False, "repeated_translation_fragment:" + repeated_fragment
+
+    return True, "ok"
+
+
+def _translation_repeated_fragment(tokens, allowed_names=None):
+    """Detect a malformed token followed shortly by a longer near-duplicate."""
+    allowed = set(allowed_names or [])
+    for index, left in enumerate(tokens):
+        if (
+            len(left) < 5
+            or left in allowed
+            or not _translation_fragment_token_looks_malformed(left)
+        ):
+            continue
+        for right in tokens[index + 1 : index + 4]:
+            if len(right) < 5 or right in allowed or left == right:
+                continue
+            shorter, longer = sorted((left, right), key=len)
+            prefix = 0
+            for lchar, rchar in zip(shorter, longer):
+                if lchar != rchar:
+                    break
+                prefix += 1
+            if prefix >= 4 and prefix / len(shorter) >= 0.6:
+                return f"{left}->{right}"
+    return ""
+
+
+def _translation_fragment_token_looks_malformed(token):
+    """Whether a repeated-fragment candidate looks like OCR/provider damage.
+
+    Prefix similarity alone is too broad for Portuguese: a valid pair such as
+    ``PROVOCA``/``PROVAS`` shares a long stem but expresses different story
+    semantics.  Keep the retry guard for compact malformed fragments such as
+    ``PROVDE`` before ``PROVINCIA`` by requiring an internal consonant join that
+    is unusual in ordinary PT-BR morphology.
+    """
+
+    value = re.sub(r"[^A-Z]", "", str(token or "").upper())
+    if len(value) < 5:
+        return False
+    if re.search(r"(?:[BCDFGHJKLMNPQRSTVWXYZ]{4,}|VD|TD|DB|PB|KG|GQ|QG|QJ)", value):
+        return True
+    return False
+
+
+def _english_inflection_base(token):
+    token = str(token or "").upper().strip("'")
+    if len(token) < 4 or not re.search(
+        r"(?:ING|ED|LY|TION|NESS|MENT|ERS|IES|S)$",
+        token,
+    ):
+        return ""
+
+    candidates = []
+
+    def add(candidate):
+        # Some common English verbs have a two-character base.  Keep those
+        # candidates and let the fixed lexical reference set decide whether
+        # they are actual English bases.
+        if len(candidate) >= 2 and candidate not in candidates:
+            candidates.append(candidate)
+
+    if token.endswith("IES") and len(token) > 4:
+        add(token[:-3] + "Y")
+    if token.endswith("IED") and len(token) > 4:
+        add(token[:-3] + "Y")
+    if token.endswith("ING") and len(token) > 4:
+        stem = token[:-3]
+        add(stem)
+        add(stem + "E")
+        if len(stem) >= 2 and stem[-1] == stem[-2]:
+            add(stem[:-1])
+    if token.endswith("ED") and len(token) > 4:
+        stem = token[:-2]
+        add(stem)
+        add(stem + "E")
+        if len(stem) >= 2 and stem[-1] == stem[-2]:
+            add(stem[:-1])
+    if token.endswith("ERS") and len(token) > 4:
+        stem = token[:-3]
+        add(token[:-1])
+        add(stem)
+        if len(stem) >= 2 and stem[-1] == stem[-2]:
+            add(stem[:-1])
+    for suffix in ("TION", "NESS", "MENT", "LY"):
+        if token.endswith(suffix) and len(token) > len(suffix) + 2:
+            add(token[: -len(suffix)])
+    if token.endswith("ES") and len(token) > 4:
+        add(token[:-2])
+    if token.endswith("S"):
+        add(token[:-1])
+    add(token)
+
+    return next(
+        (
+            candidate
+            for candidate in candidates
+            if candidate in ENGLISH_INFLECTION_BASE_WORDS
+        ),
+        "",
+    )
+
+
+def _looks_like_inflected_english_token(token):
+    return bool(_english_inflection_base(token))
+
+
+def _needs_isolated_retry(group, reason):
+    """True when a final, fully-translating attempt is justified for a group.
+
+    The strict retry tells the model it may keep proper names, so a source word
+    it mistakes for a name survives and the candidate keeps failing validation.
+    When the pipeline detected no proper name in this group, nothing justifies
+    leaving a source-language word, so one last isolated attempt may demand a
+    full translation. Groups with a known proper name are left alone, so the name
+    is never translated away.
+    """
+    if group_proper_name_spans(group):
+        return False
+    if group.classification not in {"speech", "thought", "narration", "unknown"}:
+        return False
+    return str(reason or "").startswith(
+        (
+            "mixed_language_tokens",
+            "residual_source_language",
+            "residual_spanish_token",
+            # A candidate identical to its source is either a word the model failed
+            # to translate or a name it correctly refused to. Asking once more, with
+            # names forbidden, is what separates the two.
+            "candidate_equals_source",
+        )
+    )
+
+
+def _selective_translation_retry_budget(groups):
+    """Global production retry budget for one validation pass.
+
+    The initial translator already batched the chapter. This gate may ask for a
+    bounded selective correction, but it must never turn many validation
+    findings into one request per region. For the 96-region production fixture
+    this yields 12 retries, keeping total logical calls near 12 + 12 = 24.
+    """
+    total = len([group for group in (groups or []) if getattr(group, "sent_to_translation", False)])
+    if total <= 0 or int(config.TRANSLATION_MAX_RETRIES) <= 0:
+        return 0
+    return max(1, min(total, math.ceil(total / 8)))
+
+
+def _chapter_consistency_reason(ledger, source, candidate):
+    """Why a candidate contradicts something the chapter already established.
+
+    Terminology first, then character identity: both are chapter-scoped facts
+    the pipeline decided earlier, and both are reported with the same structured
+    ``reason:subject`` shape so the retry can name the constraint.
+    """
+    if ledger is None:
+        return ""
+    reason = str(ledger.drift_reason(source, candidate) or "")
+    if reason or not hasattr(ledger, "character_conflict_reason"):
+        return reason
+    return str(ledger.character_conflict_reason(source, candidate) or "")
+
+
+def _retry_terminology_drift(
+    group, translator, ledger, force, retry_records, fidelity_check=None
+):
+    """One extra call when a candidate contradicts a decision already taken.
+
+    Chapter facts are part of the trust boundary. If the only available target
+    keeps contradicting established terminology or character identity after the
+    bounded retry, the region is review-required instead of silently trusting a
+    known-conflicting candidate.
+    """
+    if ledger is None or not hasattr(translator, "translate_strict"):
+        return
+    drift = _chapter_consistency_reason(ledger, group.text, group.translation)
+    if not drift:
+        return
+    reason_code = drift.split(":", 1)[0]
+    if reason_code != "terminology_conflict" and hasattr(ledger, "note_character_retry"):
+        ledger.note_character_retry()
+    name_spans = group_proper_name_spans(group)
+    try:
+        candidate = translator.translate_strict(
+            group.text,
+            previous_translation=group.translation,
+            validation_reason=reason_code,
+            force=force,
+            proper_names=name_spans,
+            retry_origin="terminology_retry",
+            retry_attempt=group.translation_retry_count + 1,
+        )
+    except Exception as exc:  # noqa: BLE001 - one region must not sink the chapter.
+        if isinstance(exc, SystemicTranslationFailure):
+            raise
+        retry_records.append({
+            "group_id": group.group_id,
+            "source": group.text,
+            "previous_translation": group.translation,
+            "candidate_translation": "",
+            "attempt": group.translation_retry_count + 1,
+            "valid": False,
+            "reason": f"terminology_retry_error:{type(exc).__name__}",
+            "terminology": drift,
+        })
+        group.translation_retry_count += 1
+        _finalize_translation_failure(
+            group,
+            f"{reason_code}_after_retries",
+            candidate="",
+            rejected_candidate=group.translation,
+            validator_reason=drift,
+        )
+        return
+    candidate = _match_source_case(group.text, clean_ocr_text(candidate))
+    valid = False
+    if candidate:
+        valid, _reason = validate_translation_text(
+            group.text,
+            candidate,
+            group.classification,
+            _group_validation_allowed_proper_names(group),
+            required_name_spans=name_spans,
+        )
+        valid = bool(valid) and not _chapter_consistency_reason(
+            ledger, group.text, candidate
+        )
+        # This retry may only ever improve the region. A consistency fix that
+        # arrived with a changed meaning is not an improvement.
+        if valid and fidelity_check is not None:
+            # The check re-files the semantic verdict against the candidate it is
+            # given. A candidate that is then discarded must not leave its verdict
+            # on the region that kept the previous translation.
+            prior_review = group.semantic_review_reason
+            valid = not fidelity_check(candidate)
+            if not valid:
+                group.semantic_review_reason = prior_review
+    resolved_reason = f"{reason_code.removesuffix('_conflict')}_retry_ok"
+    retry_records.append({
+        "group_id": group.group_id,
+        "source": group.text,
+        "previous_translation": group.translation,
+        "candidate_translation": candidate,
+        "attempt": group.translation_retry_count + 1,
+        "valid": valid,
+        "reason": resolved_reason if valid else f"{reason_code}_unresolved",
+        "terminology": drift,
+    })
+    group.translation_retry_count += 1
+    if valid:
+        group.translation = candidate
+        group.translation_candidate = candidate
+        group.translation_validation_reason = resolved_reason
+        _set_translation_terminal_state(group, "translated", resolved_reason)
+        return
+    _finalize_translation_failure(
+        group,
+        f"{reason_code}_after_retries",
+        candidate=candidate,
+        rejected_candidate=candidate or group.translation,
+        validator_reason=drift,
+    )
+
+
+def _retry_unknown_target_words(group, translator, force, retry_records, fidelity_check=None, ledger=None):
+    """One extra call when the translation carries a word Portuguese does not have.
+
+    DeepL returned "ESTOVA ESPERANDO" and "VAMOS CURTIRE"; every validator passed,
+    since the text is Portuguese overall. The new candidate is kept only if it is
+    valid and carries fewer unknown words; otherwise the region stays exactly as
+    it was - this retry can only ever improve a translation, never sink it.
+    """
+    if group.classification == "sfx" or not hasattr(translator, "translate_strict"):
+        return
+    source = _source_text_for_validation(group)
+    unknown = portuguese_words.unknown_target_words(group.translation, source)
+    if not unknown:
+        return
+    name_spans = group_proper_name_spans(group)
+    retry_source = str(getattr(group, "canonical_source_text", "") or group.text)
+    try:
+        candidate = translator.translate_strict(
+            retry_source,
+            previous_translation=group.translation,
+            validation_reason=f"target_unknown_words:{','.join(unknown)}",
+            force=force,
+            proper_names=name_spans,
+            retry_origin="unknown_target_word_retry",
+            retry_attempt=group.translation_retry_count + 1,
+            source_context=getattr(group, "page_context_texts", ()),
+        )
+    except Exception as exc:  # noqa: BLE001 - one region must not sink the chapter.
+        if isinstance(exc, SystemicTranslationFailure):
+            raise
+        return
+    candidate = _match_source_case(retry_source, clean_ocr_text(candidate))
+    valid = False
+    if candidate and candidate != group.translation:
+        valid, _reason = validate_translation_text(
+            source, candidate, group.classification,
+            _group_validation_allowed_proper_names(group), required_name_spans=name_spans)
+        valid = bool(valid) and len(portuguese_words.unknown_target_words(candidate, source)) < len(unknown)
+        if valid and fidelity_check is not None:
+            prior_review = group.semantic_review_reason
+            valid = not fidelity_check(candidate)
+            if not valid:
+                group.semantic_review_reason = prior_review
+    retry_records.append({
+        "group_id": group.group_id, "source": retry_source,
+        "previous_translation": group.translation, "candidate_translation": candidate,
+        "attempt": group.translation_retry_count + 1, "valid": valid,
+        "reason": "unknown_target_word_retry_ok" if valid else "unknown_target_word_kept",
+        "unknown_words": unknown, "retry_type": "unknown_target_word",
+    })
+    group.translation_retry_count += 1
+    if valid:
+        group.translation = candidate
+        group.translation_candidate = candidate
+        group.translation_validation_reason = "unknown_target_word_retry_ok"
+    else:
+        repaired = portuguese_words.restore_corrupted_source_words(group.translation, source, unknown)
+        if repaired != group.translation:
+            ok, _reason = validate_translation_text(
+                source, repaired, group.classification,
+                _group_validation_allowed_proper_names(group), required_name_spans=name_spans)
+            if (ok and len(portuguese_words.unknown_target_words(repaired, source)) < len(unknown)
+                    and not _chapter_consistency_reason(ledger, group.text, repaired)):
+                group.translation = repaired
+                group.translation_candidate = repaired
+                group.translation_validation_reason = "unknown_target_word_restored_from_source"
+
+
+NATURALIZATION_ELIGIBILITY_SIGNALS = frozenset({
+    "ptbr_naturalization_needed",
+    "naturalization_needed",
+    "style_refinement_needed",
+    "literal_translation",
+    "awkward_ptbr",
+})
+
+
+def _bump_counter(stats, name, value=1):
+    if stats is None:
+        return
+    stats[name] = int(stats.get(name, 0)) + value
+
+
+def _naturalization_signal(group):
+    evidence = {}
+    for source in (
+        getattr(group, "quality_evidence", None),
+        getattr(group, "classification_evidence", None),
+        getattr(group, "visual_validation", None),
+    ):
+        if isinstance(source, dict):
+            evidence.update(source)
+    reasons = set(str(item) for item in getattr(group, "quality_reasons", []) or [])
+    for signal in NATURALIZATION_ELIGIBILITY_SIGNALS:
+        if bool(evidence.get(signal)) or signal in reasons:
+            return signal
+    return ""
+
+
+def _naturalization_candidate_text(value):
+    if isinstance(value, dict):
+        for key in ("natural_ptbr", "text", "candidate", "translation"):
+            text = clean_ocr_text(value.get(key) or "")
+            if text:
+                return text
+        return ""
+    return clean_ocr_text(value)
+
+
+def _naturalization_rejection_reason(reason):
+    reason = str(reason or "").strip()
+    if reason.startswith(f"{semantic_fidelity.FIDELITY_UNCERTAIN}:"):
+        details = [item for item in reason.split(":", 1)[1].split(",") if item]
+        return details[0] if details else semantic_fidelity.FIDELITY_UNCERTAIN
+    return reason.split(":", 1)[0] if reason else "naturalization_rejected"
+
+
+def _naturalization_request(group, trusted_translation, ledger, reason):
+    context_lines, terms = _fidelity_context(ledger)
+    request = {
+        "source_text": str(group.text or ""),
+        "trusted_translation": str(trusted_translation or ""),
+        "target_locale": "pt-BR",
+        "classification": str(group.classification or ""),
+        "region_type": str(group.region_type or ""),
+        "group_id": str(group.group_id or ""),
+        "region_id": str(group.region_id or ""),
+        "reason": str(reason or ""),
+        "terminology": dict(terms or {}),
+        "protected_proper_names": list(group_proper_name_spans(group)),
+        "character_context": list(context_lines or ()),
+        "max_context_lines": FIDELITY_CONTEXT_MAX_LINES,
+        "max_terms": FIDELITY_CONTEXT_MAX_TERMS,
+    }
+    group.naturalization_context = {
+        "reason": request["reason"],
+        "term_count": len(request["terminology"]),
+        "character_context_count": len(request["character_context"]),
+        "bounded": True,
+    }
+    return request
+
+
+def _naturalizer_call(naturalizer, request):
+    if hasattr(naturalizer, "naturalize_ptbr"):
+        return naturalizer.naturalize_ptbr(request)
+    if hasattr(naturalizer, "naturalize"):
+        return naturalizer.naturalize(request)
+    if callable(naturalizer):
+        return naturalizer(request)
+    raise RuntimeError("naturalizer_unavailable")
+
+
+def _maybe_naturalize_translation(
+    group,
+    naturalizer,
+    *,
+    terminology_ledger,
+    fidelity_verifier,
+    fidelity_stats,
+):
+    group.naturalization_selected_version = "trusted_translation"
+    if (
+        naturalizer is None
+        or not group.translation_valid
+        or group.translation_final_state != "translated"
+        or group.ocr_quality_blocked
+        or group.classification not in semantic_fidelity.TRANSLATABLE_CLASSIFICATIONS
+    ):
+        _bump_counter(fidelity_stats, "naturalization_skipped")
+        return
+    signal = _naturalization_signal(group)
+    if not signal:
+        _bump_counter(fidelity_stats, "naturalization_skipped")
+        return
+
+    trusted_translation = clean_ocr_text(group.translation)
+    if not trusted_translation:
+        _bump_counter(fidelity_stats, "naturalization_skipped")
+        return
+    group.naturalization_eligible = True
+    _bump_counter(fidelity_stats, "naturalization_eligible")
+
+    request = _naturalization_request(
+        group, trusted_translation, terminology_ledger, signal
+    )
+    try:
+        raw = _naturalizer_call(naturalizer, request)
+    except Exception as exc:  # noqa: BLE001 - enhancement failure falls back.
+        group.naturalization_attempted = True
+        group.naturalization_status = "failed"
+        group.naturalization_rejected_reason = f"naturalizer_error:{type(exc).__name__}"
+        _bump_counter(fidelity_stats, "naturalization_attempted")
+        _bump_counter(fidelity_stats, "naturalization_failed")
+        _bump_counter(fidelity_stats, "naturalization_fallback_to_translation")
+        return
+
+    group.naturalization_attempted = True
+    _bump_counter(fidelity_stats, "naturalization_attempted")
+    candidate = _match_source_case(
+        group.text,
+        _naturalization_candidate_text(raw),
+    )
+    group.naturalization_candidate = candidate
+    if not candidate:
+        group.naturalization_status = "failed"
+        group.naturalization_rejected_reason = "naturalization_candidate_empty"
+        _bump_counter(fidelity_stats, "naturalization_failed")
+        _bump_counter(fidelity_stats, "naturalization_fallback_to_translation")
+        return
+
+    name_spans = group_proper_name_spans(group)
+    prior_review = None
+    valid, reason = validate_translation_text(
+        group.text,
+        candidate,
+        group.classification,
+        _group_validation_allowed_proper_names(group),
+        required_name_spans=name_spans,
+    )
+    if valid:
+        drift = _chapter_consistency_reason(
+            terminology_ledger, group.text, candidate
+        )
+        if drift:
+            valid, reason = False, drift
+    if valid:
+        local_post_fidelity = semantic_fidelity.evaluate_local_fidelity(
+            group.text,
+            candidate,
+            classification=group.classification,
+            protected_entities=_fidelity_protected_entities(
+                group, terminology_ledger
+            ),
+            proper_names=name_spans,
+            is_source_word=_token_is_source_vocabulary,
+            source_repair_reason=str(getattr(group, "repair_reason", "")),
+            context_texts=tuple(getattr(group, "page_context_texts", ()) or ()),
+        )
+        post_budget = {"verifier_calls": 0}
+        # Same rule as the terminology retry: the verdict below is about the
+        # naturalized candidate, and must not survive its rejection.
+        prior_review = group.semantic_review_reason
+        reason = _fidelity_reason_for(
+            group,
+            candidate,
+            ledger=terminology_ledger,
+            verifier=fidelity_verifier,
+            budget=post_budget,
+            name_spans=name_spans,
+            stats=fidelity_stats,
+        )
+        if (
+            reason == semantic_fidelity.FIDELITY_UNCERTAIN
+            and local_post_fidelity.primary_reason
+        ):
+            reason = local_post_fidelity.primary_reason
+        valid = not bool(reason)
+    if valid:
+        group.translation = candidate
+        group.translation_candidate = candidate
+        group.naturalization_accepted = True
+        group.naturalization_status = "accepted"
+        group.naturalization_selected_version = "naturalized"
+        group.translation_validation_reason = "naturalization_ok"
+        _set_translation_terminal_state(group, "translated", "naturalization_ok")
+        _bump_counter(fidelity_stats, "naturalization_accepted")
+        return
+
+    group.naturalization_status = "rejected"
+    if prior_review is not None:
+        group.semantic_review_reason = prior_review
+    group.naturalization_rejected_reason = _naturalization_rejection_reason(reason)
+    _bump_counter(fidelity_stats, "naturalization_rejected_fidelity")
+    _bump_counter(fidelity_stats, "naturalization_fallback_to_translation")
+
+
+FIDELITY_VERIFIER_CALLS_PER_GROUP = 1
+FIDELITY_CONTEXT_MAX_LINES = 4
+FIDELITY_CONTEXT_MAX_TERMS = 20
+
+
+def _bump_fidelity(stats, name, value=1):
+    if stats is None:
+        return
+    stats[name] = int(stats.get(name, 0)) + value
+
+
+def _fidelity_context(ledger):
+    """The bounded facts the adjudicator may see - never the chapter."""
+    lines, terms = (), {}
+    if ledger is None:
+        return lines, terms
+    if hasattr(ledger, "character_prompt_lines"):
+        lines = tuple(ledger.character_prompt_lines() or ())[:FIDELITY_CONTEXT_MAX_LINES]
+    if hasattr(ledger, "term_bindings"):
+        terms = {
+            str(entry.get("source") or key): str(entry.get("target") or "")
+            for key, entry in list((ledger.term_bindings() or {}).items())[
+                :FIDELITY_CONTEXT_MAX_TERMS
+            ]
+            if isinstance(entry, dict)
+        }
+    return lines, terms
+
+
+def _fidelity_protected_entities(group, ledger):
+    """Chapter identities strong enough to block a translation on their own.
+
+    The ledger files a name under its source spelling, and an ordinary source
+    word that once survived a region is filed the same way. Blocking on those
+    would reject correct translations of common nouns, so the same lexical
+    authority that decides whether a token may be preserved as a name decides
+    here too - this adds no proper-name detector of its own.
+    """
+    return tuple(
+        entity
+        for entity in semantic_fidelity.ledger_entities_for(group.text, ledger)
+        if not all(
+            _token_is_source_vocabulary(token.upper())
+            for token in re.findall(r"[^\W\d_]+", entity, flags=re.UNICODE)
+        )
+    )
+
+
+def _fidelity_reason_for(
+    group, candidate, *, ledger, verifier, budget, name_spans, stats,
+):
+    """Why this candidate may not be trusted, or '' when it may.
+
+    Local invariants first and free; the semantic verifier only for what they
+    cannot settle, at most once per region, and its uncertainty is never read as
+    a yes.
+    """
+    protected = _fidelity_protected_entities(group, ledger)
+    source_text = _source_text_for_validation(group)
+    finding = semantic_fidelity.evaluate_local_fidelity(
+        source_text,
+        candidate,
+        classification=group.classification,
+        protected_entities=protected,
+        proper_names=name_spans,
+        is_source_word=_token_is_source_vocabulary,
+        source_repair_reason=str(getattr(group, "repair_reason", "")),
+        context_texts=tuple(getattr(group, "page_context_texts", ()) or ()),
+    )
+    # Every verdict is about *this* candidate: a retry that cleared the doubt must
+    # not inherit the rejected candidate's review flag.
+    group.semantic_review_reason = ""
+    if finding.faithful:
+        _bump_fidelity(stats, "fidelity_fast_path_pass")
+        return ""
+    if finding.status == semantic_fidelity.REVIEW:
+        # Doubt about the source or the surface form, not a proven wrong meaning.
+        # The candidate still renders - holding it would show English again - but
+        # the region is never reported as clean.
+        group.semantic_review_reason = finding.reason()
+        _bump_fidelity(stats, "semantic_review")
+        _bump_fidelity(stats, f"semantic_review_{finding.primary_reason}")
+        if semantic_fidelity.is_review_unusable(group.semantic_review_reason):
+            # Detection was where this used to stop. A candidate a reader cannot
+            # use is worth the one retry the region already has, so the reason is
+            # returned like any other rejection; the caller restores this exact
+            # review verdict if the second candidate is no better, and the region
+            # renders as it did before.
+            _bump_fidelity(stats, "semantic_recovery_requested")
+            return group.semantic_review_reason
+        return ""
+    if finding.status == semantic_fidelity.BLOCKED:
+        _bump_fidelity(stats, "fidelity_local_block")
+        return finding.reason()
+
+    can_adjudicate = verifier is not None and hasattr(verifier, "verify_fidelity")
+    if not can_adjudicate or budget["verifier_calls"] >= FIDELITY_VERIFIER_CALLS_PER_GROUP:
+        # No adjudication available or already spent: unproven, so not trusted.
+        _bump_fidelity(stats, "fidelity_verifier_uncertain")
+        return semantic_fidelity.FidelityFinding(
+            semantic_fidelity.VERIFY,
+            (semantic_fidelity.FIDELITY_UNCERTAIN,) + tuple(finding.reason_codes),
+        ).reason()
+
+    budget["verifier_calls"] += 1
+    _bump_fidelity(stats, "fidelity_verifier_requested")
+    context_lines, terms = _fidelity_context(ledger)
+    verdict = semantic_fidelity.adjudicate(
+        verifier,
+        source_text=source_text,
+        candidate=candidate,
+        finding=finding,
+        target_language=getattr(config, "TARGET_LANGUAGE", "pt"),
+        protected_entities=protected + tuple(name_spans or ()),
+        terminology=terms,
+        context=context_lines,
+    )
+    if verdict.status == semantic_fidelity.REVIEW:
+        group.semantic_review_reason = verdict.reason() or semantic_fidelity.FIDELITY_UNCERTAIN
+        _bump_fidelity(stats, "fidelity_verifier_review")
+        _bump_fidelity(stats, f"fidelity_verifier_review_{verdict.primary_reason}")
+        if semantic_fidelity.is_review_unusable(group.semantic_review_reason):
+            return group.semantic_review_reason
+        # Unavailable/uncertain QE is not a reason to spend a provider retry.
+        # Preserve the useful candidate, mark it for QC, and fail closed on
+        # clean/automatic acceptance through the semantic review ledger.
+        return ""
+    if verdict.faithful:
+        _bump_fidelity(stats, "fidelity_verifier_pass")
+        return ""
+    _bump_fidelity(
+        stats,
+        "fidelity_verifier_fail"
+        if verdict.status == semantic_fidelity.BLOCKED
+        else "fidelity_verifier_uncertain",
+    )
+    return verdict.reason()
+
+
+def _source_text_for_validation(group):
+    recovery = getattr(group, "source_recovery", {}) or {}
+    canonical = str(recovery.get("canonical_source") or "").strip()
+    if recovery.get("trusted") and canonical:
+        return canonical
+    return group.text
+
+
+def _source_recovery_context(source_recovery_context, group):
+    if not source_recovery_context:
+        return None
+    if id(group) in source_recovery_context:
+        return source_recovery_context[id(group)]
+    group_id = getattr(group, "group_id", "")
+    region_id = getattr(group, "region_id", "")
+    return (
+        source_recovery_context.get((group_id, region_id))
+        or source_recovery_context.get(group_id)
+    )
+
+
+def _suspicious_tokens_confirmed_by_reads(group, reason, source_recovery_context):
+    """True when independent variant reads all agree on the suspicious tokens."""
+    if not str(reason or "").startswith(semantic_fidelity.SOURCE_OCR_SUSPICIOUS):
+        return False
+    tokens = semantic_fidelity.suspicious_source_tokens(
+        group.text,
+        group.translation_candidate or group.translation,
+        known_entities=group_proper_name_spans(group),
+        is_source_word=_token_is_source_vocabulary,
+    )
+    context = _source_recovery_context(source_recovery_context, group)
+    if not tokens or not context or context.get("original_bgr") is None:
+        return False
+    probe = TextGroup(group_id=group.group_id, lines=list(group.lines), text=group.text)
+    record = recover_source_with_rapidocr_variants(
+        context["original_bgr"], probe, context.get("ocr_lang", "eng"),
+        page_index=context.get("page_index"), engine=context.get("engine"),
+    )
+    reads = [
+        re.sub(r"[^A-Z]", "", str(attempt.get("text") or "").upper())
+        for attempt in record.get("attempts") or []
+        if float(attempt.get("confidence") or 0.0) >= 0.55
+    ]
+    return all(sum(token in read for read in reads) >= 2 for token in tokens)
+
+
+def _ensure_local_source_recovery_before_retry(group, reason, source_recovery_context):
+    if not str(reason or "").startswith(semantic_fidelity.SOURCE_SEGMENTATION_INCOMPLETE):
+        return None
+    recovery = getattr(group, "source_recovery", {}) or {}
+    if recovery.get("trusted") and str(recovery.get("canonical_source") or "").strip():
+        return recovery
+    context = _source_recovery_context(source_recovery_context, group)
+    if not context:
+        return None
+    original_bgr = context.get("original_bgr")
+    if original_bgr is None:
+        return None
+    record = recover_source_with_rapidocr_variants(
+        original_bgr,
+        group,
+        context.get("ocr_lang", "eng"),
+        page_index=context.get("page_index"),
+        engine=context.get("engine"),
+        max_variants=context.get(
+            "max_variants",
+            RAPIDOCR_SOURCE_RECOVERY_MAX_VARIANTS,
+        ),
+    )
+    group.source_recovery = dict(record or {})
+    if record and record.get("trusted") and str(record.get("canonical_source") or "").strip():
+        group.canonical_source_text = str(record.get("canonical_source") or "")
+    return record
+
+
+def _canonical_retry_source(group, reason):
+    """The source the retry should translate: repaired if that can be proved.
+
+    Only for the one rejection class where the source itself is the defect. The
+    provider is otherwise being asked to translate a word that does not exist,
+    and the first attempt already showed what it does with one - it carries the
+    garbage through untranslated.
+
+    A repair happens only when the vocabulary this scene vouches for holds
+    exactly one word a single edit away; anything ambiguous is left alone, and
+    ``group.text`` - the raw OCR - is never overwritten either way.
+    """
+    if str(reason or "").startswith(semantic_fidelity.SOURCE_SEGMENTATION_INCOMPLETE):
+        recovery = getattr(group, "source_recovery", {}) or {}
+        if recovery.get("trusted") and str(recovery.get("canonical_source") or "").strip():
+            group.canonical_source_text = str(recovery.get("canonical_source") or "")
+            return group.canonical_source_text
+        return group.text
+    if not str(reason or "").startswith(semantic_fidelity.SOURCE_OCR_SUSPICIOUS):
+        return group.text
+    context = tuple(getattr(group, "page_context_texts", ()) or ())
+    suspicious = semantic_fidelity.suspicious_source_tokens(
+        group.text,
+        group.translation_candidate or group.translation,
+        known_entities=group_proper_name_spans(group),
+        is_source_word=_token_is_source_vocabulary,
+    )
+    if not suspicious:
+        return group.text
+    canonical, repairs = semantic_fidelity.repair_suspicious_source(
+        group.text,
+        suspicious,
+        source_repair_vocabulary(context),
+        protected=group_proper_name_spans(group),
+    )
+    # A suspicious token that is several dictionary words glued together
+    # ("LEATHERTHIS") is split instead; the provider then reads real words.
+    for token in suspicious:
+        if any(token in str(repair) for repair in repairs):
+            continue
+        pieces = region_taxonomy.segment_words(token)
+        if pieces and len(pieces) > 1:
+            spaced = " ".join(pieces)
+            canonical = re.sub(re.escape(token), spaced, canonical, count=1, flags=re.I)
+            repairs = tuple(repairs) + (f"{token}->{spaced}:dictionary_segmentation",)
+    if not repairs:
+        return group.text
+    group.source_repairs = tuple(repairs)
+    group.canonical_source_text = canonical
+    return canonical
+
+
+def validate_and_retry_translations(
+    groups,
+    translator,
+    force=False,
+    terminology_ledger=None,
+    fidelity_verifier=None,
+    fidelity_stats=None,
+    ptbr_naturalizer=None,
+    source_recovery_context=None,
+):
+    retry_records = []
+    selective_retry_budget_remaining = _selective_translation_retry_budget(groups)
+    # What else this page says, given to every region as lexical context. The
+    # page is the bound: no chapter is ever assembled, and nothing here reaches a
+    # provider prompt - it only decides which sense of an ambiguous word the
+    # scene supports.
+    page_texts = [str(other.text or "") for other in groups if str(other.text or "").strip()]
+    for group in groups:
+        group.page_context_texts = tuple(
+            text for text in page_texts if text != str(group.text or "")
+        )
+    # Scanned once, and only if some region actually hands its source back: a chapter
+    # with nothing to explain never pays for the scan.
+    chapter_entities = {}
+
+    def chapter_entity_tokens():
+        if "tokens" not in chapter_entities:
+            chapter_entities["tokens"] = _chapter_preserved_entity_tokens(groups)
+        return chapter_entities["tokens"]
+
+    for group in groups:
+        if not group.sent_to_translation:
+            continue
+        group.initial_translation_calls = 1
+        group.selective_retry_calls = 0
+        group.retry_reasons_seen = []
+        group.retry_budget_remaining = 1 if selective_retry_budget_remaining > 0 else 0
+        name_spans = group_proper_name_spans(group)
+        # One budget per region: no module state, so two workers translating two
+        # chapters can never spend each other's calls or contaminate a verdict.
+        fidelity_budget = {"verifier_calls": 0}
+
+        def fidelity_reason_for(candidate):
+            return _fidelity_reason_for(
+                group,
+                candidate,
+                ledger=terminology_ledger,
+                verifier=fidelity_verifier,
+                budget=fidelity_budget,
+                name_spans=name_spans,
+                stats=fidelity_stats,
+            )
+
+        validation_source = _source_text_for_validation(group)
+        valid, reason = validate_translation_text(
+            validation_source,
+            group.translation,
+            group.classification,
+            _group_validation_allowed_proper_names(group),
+            required_name_spans=name_spans,
+        )
+        # What every validator *except* the fidelity gate concluded. If a
+        # recovery attempt below fails, this is the reason the region goes back
+        # to: a review is not a rejection, and stamping the review reason onto
+        # the rejection channel would make the accounting count it as one.
+        pre_fidelity_reason = reason
+        if valid:
+            # Everything above answered "is this the target language". This asks
+            # whether it still says what the source said.
+            fidelity_reason = fidelity_reason_for(group.translation)
+            if fidelity_reason:
+                valid, reason = False, fidelity_reason
+        group.translation_valid = valid
+        group.translation_validation_reason = reason
+        if reason:
+            group.retry_reasons_seen.append(reason)
+        if valid:
+            _set_translation_terminal_state(group, "translated", reason)
+            _retry_terminology_drift(
+                group,
+                translator,
+                terminology_ledger,
+                force,
+                retry_records,
+                fidelity_check=fidelity_reason_for,
+            )
+            if group.translation_valid:
+                _retry_unknown_target_words(
+                    group, translator, force, retry_records,
+                    fidelity_check=fidelity_reason_for, ledger=terminology_ledger)
+            _maybe_naturalize_translation(
+                group,
+                ptbr_naturalizer,
+                terminology_ledger=terminology_ledger,
+                fidelity_verifier=fidelity_verifier,
+                fidelity_stats=fidelity_stats,
+            )
+            continue
+        if semantic_fidelity.is_fidelity_reason(reason):
+            _bump_fidelity(fidelity_stats, "fidelity_retry")
+        # A review the reader cannot use is being *recovered*, not rejected: the
+        # verdict is held here so that a second candidate which is no better
+        # leaves the region exactly where detection left it - rendering, under
+        # review, never clean.
+        pending_review = (
+            reason if semantic_fidelity.is_review_unusable(reason) else ""
+        )
+        original_translation = group.translation
+        original_candidate = group.translation_candidate or clean_ocr_text(
+            group.translation
+        )
+        latest_candidate = original_candidate
+        # The verdict a retry inherits if it produces nothing new.  An empty or
+        # errored retry casts no judgement on the first-pass candidate, so it must
+        # not overwrite this with "empty_translation" and downgrade a quality-only
+        # hold (which the finalize rescue would ship as PT-BR under review) into an
+        # untranslated-source failure that leaves English on the page.
+        pre_retry_reason = reason
+        if _suspicious_tokens_confirmed_by_reads(group, reason, source_recovery_context):
+            # Every "suspicious" token reads the same in independent variant
+            # reads: it is a real name ("HG FASHION"), carried verbatim on
+            # purpose, not OCR garbage.
+            group.translation_valid = True
+            group.translation_validation_reason = "ok"
+            continue
+        _ensure_local_source_recovery_before_retry(
+            group,
+            reason,
+            source_recovery_context,
+        )
+        retry_source = _canonical_retry_source(group, reason)
+        had_retry_error = False
+        names_were_forbidden = False
+        retry_enabled = bool(
+            config.TRANSLATION_VALIDATION
+            and config.TRANSLATION_RETRY_ON_MIXED_LANGUAGE
+            and int(config.TRANSLATION_MAX_RETRIES) > 0
+            and hasattr(translator, "translate_strict")
+            and group.retry_budget_remaining > 0
+            and selective_retry_budget_remaining > 0
+        )
+        if retry_enabled:
+            selective_retry_budget_remaining -= 1
+            attempt = group.translation_retry_count + 1
+            isolated_first = _needs_isolated_retry(group, reason)
+            names_were_forbidden = bool(isolated_first)
+            try:
+                candidate = translator.translate_strict(
+                    retry_source,
+                    previous_translation=latest_candidate,
+                    validation_reason=reason,
+                    force=force,
+                    allow_proper_names=not isolated_first,
+                    proper_names=[] if isolated_first else name_spans,
+                    retry_origin="isolated_retry" if isolated_first else "quality_retry",
+                    retry_attempt=attempt,
+                    source_context=group.page_context_texts,
+                )
+            except Exception as exc:  # noqa: BLE001 - keep the caller on failure.
+                if isinstance(exc, SystemicTranslationFailure):
+                    raise
+                candidate = ""
+                had_retry_error = True
+                reason = (
+                    f"isolated_retry_error:{type(exc).__name__}"
+                    if isolated_first
+                    else f"strict_retry_error:{type(exc).__name__}"
+                )
+            candidate = _repair_translation_candidate_before_validation(
+                retry_source,
+                clean_ocr_text(candidate),
+                group.classification,
+                required_name_spans=name_spans,
+            )
+            candidate = _match_source_case(retry_source, candidate)
+            group.retry_candidate = candidate
+            group.retry_candidate_class = _candidate_forensic_class(
+                group.text,
+                candidate,
+                group.classification,
+            )
+            if candidate:
+                latest_candidate = candidate
+                group.translation_candidate = candidate
+            validation_source = _source_text_for_validation(group)
+            valid, new_reason = validate_translation_text(
+                validation_source,
+                candidate,
+                group.classification,
+                _group_validation_allowed_proper_names(group),
+                required_name_spans=name_spans,
+            )
+            if valid and candidate:
+                # A retry is a new candidate, not a correction we may assume
+                # worked: it faces the same fidelity gate as the first one.
+                fidelity_reason = fidelity_reason_for(candidate)
+                if fidelity_reason:
+                    valid, new_reason = False, fidelity_reason
+            retry_record = {
+                "group_id": group.group_id,
+                "source": retry_source,
+                "previous_translation": group.translation,
+                "candidate_translation": candidate,
+                "attempt": attempt,
+                "valid": valid,
+                "reason": new_reason,
+                "retry_type": "isolated" if isolated_first else "quality",
+            }
+            if retry_source != group.text:
+                retry_record["raw_source"] = group.text
+            recovery_record = getattr(group, "source_recovery", {}) or {}
+            if recovery_record:
+                retry_record["source_recovery"] = dict(recovery_record)
+            if isolated_first:
+                retry_record["isolated"] = True
+            retry_records.append(retry_record)
+            group.translation_retry_count = attempt
+            group.selective_retry_calls += 1
+            group.retry_budget_remaining = 0
+            if new_reason:
+                group.retry_reasons_seen.append(new_reason)
+            if valid:
+                group.translation = candidate
+                group.translation_candidate = candidate
+                group.translation_valid = True
+                group.translation_validation_reason = "retry_ok"
+                group.rejected_translation = ""
+                group.manual_review_required = False
+                _set_translation_terminal_state(
+                    group,
+                    "translated",
+                    "retry_ok",
+                )
+                _maybe_naturalize_translation(
+                    group,
+                    ptbr_naturalizer,
+                    terminology_ledger=terminology_ledger,
+                    fidelity_verifier=fidelity_verifier,
+                    fidelity_stats=fidelity_stats,
+                )
+            elif candidate:
+                # A non-empty but invalid retry candidate is a real new verdict.
+                reason = new_reason
+            else:
+                # The retry produced nothing (empty or errored): keep the
+                # first-pass reason so a quality-only hold still ships its PT-BR
+                # under review instead of falling back to the English source.
+                reason = pre_retry_reason
+
+        if group.translation_valid:
+            continue
+        if pending_review:
+            # Recovery was attempted and did not produce anything better. The
+            # region goes back to the verdict detection gave it: the first
+            # candidate renders, under review, never counted as clean and still a
+            # Setup blocker. Withholding it instead would put the English source
+            # back on the page, which is the defect this whole gate exists to
+            # avoid, and promoting it to clean would be a lie.
+            group.translation = original_translation
+            group.translation_candidate = original_candidate
+            group.translation_valid = True
+            group.semantic_review_reason = pending_review
+            group.translation_validation_reason = pre_fidelity_reason
+            _set_translation_terminal_state(group, "translated", pre_fidelity_reason)
+            _bump_fidelity(fidelity_stats, "semantic_recovery_failed")
+            continue
+        # The model was told this text held no names and that every word had to be
+        # translated, and it handed the text straight back. For a lone
+        # out-of-vocabulary token that is not a failure to translate: it is the
+        # model reporting there is nothing to translate, which is what a name is.
+        if names_were_forbidden and _finalize_proper_name_only(group, latest_candidate):
+            continue
+        # A provider that cannot be instructed never produces the answer above, so the
+        # chapter answers instead: every word kept here may already have been proved a
+        # name by a region the translator turned into valid target text while keeping
+        # that word verbatim. One unproven word and the group is still held.
+        if _group_is_proven_entity_echo(
+            group, latest_candidate, chapter_entity_tokens()
+        ):
+            _finalize_proper_name_only(group, latest_candidate, proven=True)
+            continue
+        if semantic_fidelity.is_fidelity_reason(reason):
+            # Both attempts stayed materially unfaithful. The least bad of two
+            # wrong meanings is still a wrong meaning: the region is held.
+            _bump_fidelity(fidelity_stats, "fidelity_blocked")
+        failure_reason = _terminal_translation_failure_reason(
+            group,
+            "strict_retry_error" if had_retry_error and not latest_candidate else reason,
+            latest_candidate,
+        )
+        _finalize_translation_failure(
+            group,
+            failure_reason,
+            candidate=latest_candidate,
+            rejected_candidate=original_candidate,
+            validator_reason=reason,
+        )
+    return retry_records
+
+
+def _group_angle_degrees(group):
+    angles = []
+    for line in group.lines:
+        poly = np.asarray(line.polygon, dtype=np.float32).reshape(-1, 2)
+        if len(poly) < 2:
+            continue
+        dx = float(poly[1][0] - poly[0][0])
+        dy = float(poly[1][1] - poly[0][1])
+        if abs(dx) + abs(dy) < 1:
+            continue
+        angle = float(np.degrees(np.arctan2(dy, dx)))
+        while angle > 90:
+            angle -= 180
+        while angle < -90:
+            angle += 180
+        angles.append(angle)
+    return float(np.median(angles)) if angles else 0.0
+
+
+def _group_alignment_score(group):
+    if len(group.lines) < 2:
+        return 1.0
+
+    centers = np.array([line.box[0] + line.box[2] / 2 for line in group.lines], dtype=np.float32)
+    lefts = np.array([line.box[0] for line in group.lines], dtype=np.float32)
+    widths = np.array([max(1, line.box[2]) for line in group.lines], dtype=np.float32)
+    scale = max(8.0, float(np.median(widths)) * 0.42)
+    center_score = 1.0 - min(1.0, float(np.std(centers)) / scale)
+    left_score = 1.0 - min(1.0, float(np.std(lefts)) / scale)
+    return max(0.0, max(center_score, left_score))
+
+
+def _source_text_alignment(group):
+    """'left', 'right' or 'center' for how the source's lines sit inside their block.
+
+    Needs two or more lines of visibly different width: equal-width lines are aligned
+    every way at once, so they stay centred (the renderer's long-standing default).
+    """
+    lines = list(getattr(group, "lines", None) or [])
+    if len(lines) < 2:
+        return "center"
+    lefts = np.array([ln.box[0] for ln in lines], dtype=np.float32)
+    widths = np.array([max(1, ln.box[2]) for ln in lines], dtype=np.float32)
+    rights = lefts + widths
+    centers = lefts + widths / 2
+    med_w = float(np.median(widths))
+    spread = {"left": float(np.std(lefts)), "right": float(np.std(rights)), "center": float(np.std(centers))}
+    best = min(spread, key=spread.get)
+    # A flush edge sits within a few pixels while the centres wander: lines of equal width
+    # are flush every way at once, so there the centre (the default) wins.
+    if best == "center" or spread[best] > 0.08 * med_w:
+        return "center"
+    if spread["center"] < max(3.0, 2.5 * spread[best]):
+        return "center"
+    return best
+
+
+def _external_narration_evidence(group, image_bgr, words, reading_phrase, page_index=None):
+    if group.ignored:
+        return False
+    if not reading_phrase or len(words) < 3:
+        return False
+    if abs(group.angle_degrees) >= 7:
+        return False
+    if group.alignment_score < 0.55:
+        return False
+    if group.confidence < 0.58:
+        return False
+
+    x, y, w, h = group.box
+    h_img, w_img = image_bgr.shape[:2]
+    if w > w_img * 0.82 or h > h_img * 0.22:
+        return False
+
+    with profile_step("external_narration.classification_roi", page_index=page_index):
+        roi, _ = _classification_roi(image_bgr, group.box)
+    if roi.size == 0:
+        return False
+    with profile_step("external_narration.gray_stats", page_index=page_index):
+        gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
+        local_std = float(np.std(gray))
+        local_mean = float(np.mean(gray))
+    uniform_background = local_std <= 58 or local_mean >= 168 or local_mean <= 88
+    with profile_step("external_narration.horizontal_whitespace_band", page_index=page_index):
+        between_panels_or_top = y <= h_img * 0.2 or _horizontal_whitespace_band(image_bgr, y, h)
+    return bool(uniform_background and between_panels_or_top)
+
+
+def _horizontal_whitespace_band(image_bgr, y, h):
+    h_img, w_img = image_bgr.shape[:2]
+    pad = max(12, int(h * 1.4))
+    y1 = max(0, y - pad)
+    y2 = min(h_img, y + h + pad)
+    if y2 <= y1:
+        return False
+    roi = image_bgr[y1:y2, :]
+    gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
+    row_std = np.std(gray, axis=1)
+    row_mean = np.mean(gray, axis=1)
+    quiet_rows = (row_std < 34) & ((row_mean > 165) | (row_mean < 92))
+    return float(np.mean(quiet_rows)) >= 0.28
+
+
+def _enclosure_evidence(image_bgr, group_box, page_index=None):
+    with profile_step("enclosure.classification_roi", page_index=page_index):
+        roi, local_box = _classification_roi(image_bgr, group_box)
+    if roi.size == 0:
+        return False, False
+
+    with profile_step("enclosure.uniform_container_evidence", page_index=page_index):
+        component = _uniform_container_evidence(roi, local_box)
+    with profile_step("enclosure.contour_container_evidence", page_index=page_index):
+        contour = _contour_container_evidence(roi, local_box)
+    narration_like = component["rectangular"] or contour["rectangular"]
+    balloon_like = narration_like or component["enclosed"] or contour["enclosed"]
+    return balloon_like, narration_like
+
+
+def _classification_roi(image_bgr, box):
+    x, y, w, h = box
+    h_img, w_img = image_bgr.shape[:2]
+    pad_x = max(36, min(int(w * 1.15), int(w_img * 0.24)))
+    pad_y = max(86, min(int(h * 3.2), int(h_img * 0.26)))
+    x1 = max(0, x - pad_x)
+    y1 = max(0, y - pad_y)
+    x2 = min(w_img, x + w + pad_x)
+    y2 = min(h_img, y + h + pad_y)
+    return image_bgr[y1:y2, x1:x2], (x - x1, y - y1, w, h)
+
+
+def _uniform_container_evidence(roi, group_box):
+    hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
+    value = hsv[:, :, 2]
+    saturation = hsv[:, :, 1]
+    masks = [
+        ((value >= 150) & (saturation <= 155)).astype(np.uint8) * 255,
+        (value <= 120).astype(np.uint8) * 255,
+    ]
+    best = {"enclosed": False, "rectangular": False, "score": 0.0}
+
+    for mask in masks:
+        kernel_size = max(5, min(13, int(min(roi.shape[:2]) * 0.035) | 1))
+        kernel = np.ones((kernel_size, kernel_size), np.uint8)
+        mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel, iterations=2)
+        mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, np.ones((3, 3), np.uint8))
+        count, labels, stats, _ = cv2.connectedComponentsWithStats(mask, 8)
+
+        gx, gy, gw, gh = group_box
+        gcx, gcy = gx + gw / 2, gy + gh / 2
+        group_area = max(1, gw * gh)
+
+        for label in range(1, count):
+            cx, cy, cw, ch, area = stats[label]
+            if not (cx <= gcx <= cx + cw and cy <= gcy <= cy + ch):
+                continue
+            if cw < gw * 1.12 or ch < gh * 1.12 or area < group_area * 1.25:
+                continue
+
+            touches = sum(
+                (
+                    cx <= 1,
+                    cy <= 1,
+                    cx + cw >= roi.shape[1] - 1,
+                    cy + ch >= roi.shape[0] - 1,
+                )
+            )
+            # A dense component clipped by one or two ROI edges can still be
+            # a real container. A component spanning three or more edges is
+            # connected to the exterior field and cannot establish enclosure.
+            if touches >= 3:
+                continue
+
+            rectangularity = float(area) / max(1, cw * ch)
+            margin_score = min(cw / max(1, gw), ch / max(1, gh), 3.0) / 3.0
+            score = rectangularity * 0.65 + margin_score * 0.35
+            if score > best["score"]:
+                best = {
+                    "enclosed": True,
+                    "rectangular": rectangularity >= 0.76 and touches <= 1,
+                    "score": score,
+                }
+
+    return best
+
+
+def _contour_container_evidence(roi, group_box):
+    gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
+    edges = cv2.Canny(cv2.GaussianBlur(gray, (5, 5), 0), 45, 135)
+    edges = cv2.morphologyEx(edges, cv2.MORPH_CLOSE, np.ones((5, 5), np.uint8), iterations=2)
+    contours, _ = cv2.findContours(edges, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
+    gx, gy, gw, gh = group_box
+    center = (float(gx + gw / 2), float(gy + gh / 2))
+    group_area = max(1, gw * gh)
+    best = {"enclosed": False, "rectangular": False, "score": 0.0}
+
+    for contour in contours:
+        area = abs(float(cv2.contourArea(contour)))
+        if area < group_area * 1.2:
+            continue
+        if cv2.pointPolygonTest(contour, center, False) < 0:
+            continue
+
+        x, y, w, h = cv2.boundingRect(contour)
+        if w < gw * 1.1 or h < gh * 1.1:
+            continue
+        if w >= roi.shape[1] * 0.98 and h >= roi.shape[0] * 0.98:
+            continue
+        touches = sum(
+            (
+                x <= 1,
+                y <= 1,
+                x + w >= roi.shape[1] - 1,
+                y + h >= roi.shape[0] - 1,
+            )
+        )
+        perimeter = cv2.arcLength(contour, True)
+        approx = cv2.approxPolyDP(contour, 0.025 * perimeter, True)
+        rectangularity = area / max(1, w * h)
+        # A contour may meet one or two ROI edges simply because the crop is
+        # tight. Treat it as external art only when it spans at least three
+        # borders *and* has too little filled area to describe a closed
+        # container. Edge contact is therefore evidence, not a sole verdict.
+        if touches >= 3 and rectangularity < 0.45:
+            continue
+        rectangular = 4 <= len(approx) <= 10 and rectangularity >= 0.62
+        score = min(1.0, area / max(group_area * 3.0, 1.0))
+        if score > best["score"]:
+            best = {"enclosed": True, "rectangular": rectangular, "score": score}
+
+    return best
+
+
+def _ascii_fold(text):
+    normalized = unicodedata.normalize("NFKD", str(text or ""))
+    return "".join(char for char in normalized if not unicodedata.combining(char))
+
+
+def _translate_texts(translator, texts):
+    if not texts:
+        return []
+
+    if hasattr(translator, "translate_many"):
+        try:
+            return translator.translate_many(texts)
+        except Exception as exc:
+            print(f"Falha na traducao em lote. Usando traducao individual: {exc}")
+
+    translate_one = translator.translate if hasattr(translator, "translate") else translator
+    translations = []
+
+    for text in texts:
+        try:
+            translations.append(translate_one(text))
+        except Exception as exc:
+            print(f"Falha ao traduzir texto. Mantendo original: {exc}")
+            translations.append(text)
+
+    return translations
+
+
+def _match_source_case(source, translation):
+    source_letters = _letters(source or "")
+    if len(source_letters) < 3:
+        return translation
+
+    uppercase_ratio = sum(char.isupper() for char in source_letters) / len(source_letters)
+    if uppercase_ratio >= 0.82:
+        return str(translation).upper()
+
+    return translation
+
+
+def _letters(text):
+    return [char for char in str(text or "") if char.isalpha()]
+
+
+def _edge_continuity_fidelity_findings(cleaned_bgr, original_bgr, cleanup_mask, group) -> dict:
+    """Detect large SFX removals over complex line art — route those to LaMA.
+
+    The existing flat-patch gate measures luminance spread, so a smooth
+    gradient fill over clothing/screentone passes while the artwork's lines
+    are gone (observed on ep. 285 p9: "CRACKLE" removed over the character's
+    arm left a featureless smear). The question "is this region on complex
+    art?" is about the ORIGINAL artwork, so the ring is measured on
+    ``original_bgr`` — strategy fills can blur or flatten the area right
+    around the mask and would underestimate the surrounding line density.
+
+    The original ring-density threshold (0.02) was calibrated on diff-based
+    masks and never fired in production: real lettering masks sit on broad
+    tonal areas (measured: ring 0.006-0.013 on the ep. 285 SFX), where any
+    flat fill is visible against the smooth gradient. Route by risk profile
+    instead of trying to detect the smear: a LARGE lettering mask over an
+    art-typical backdrop is exactly where analytic fills are weakest and the
+    LaMA-large reconstruction is strongest (measured 0.5 s/region on GPU).
+    The ring floor (0.004) only spares obviously flat neighbourhoods.
+
+    A fired flag blocks accepting the analytic fill and routes the region to
+    the LaMA fallback, or to review if the model output fails the validators
+    (fail-closed either way — a smear never ships silently again).
+    """
+
+    background_type = str(getattr(group, "background_type", "") or "")
+    if background_type not in {"textured_art", "sfx_area"}:
+        return {"art_fidelity_uncertain": False, "edge_continuity": {"background_type": background_type}}
+    mask = (np.asarray(cleanup_mask) > 0)
+    mask_px = int(np.count_nonzero(mask))
+    if mask_px < 1500:
+        return {"art_fidelity_uncertain": False, "edge_continuity": {"mask_px": mask_px}}
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (31, 31))
+    dilated = cv2.dilate(mask.astype(np.uint8), kernel) > 0
+    ring = dilated & ~mask
+    ring_px = int(np.count_nonzero(ring))
+    if ring_px < 2000:
+        return {"art_fidelity_uncertain": False, "edge_continuity": {"ring_px": ring_px}}
+    ring_source = np.asarray(original_bgr) if original_bgr is not None else np.asarray(cleaned_bgr)
+    gray_ring = cv2.cvtColor(ring_source, cv2.COLOR_BGR2GRAY)
+    edges_ring = cv2.Canny(gray_ring, 60, 160) > 0
+    gray_inner = cv2.cvtColor(np.asarray(cleaned_bgr), cv2.COLOR_BGR2GRAY)
+    edges_inner = cv2.Canny(gray_inner, 60, 160) > 0
+    ring_density = float(np.count_nonzero(edges_ring & ring)) / ring_px
+    inner_density = float(np.count_nonzero(edges_inner & mask)) / mask_px
+    fired = bool(mask_px >= 10000 and ring_density >= 0.004)
+    return {
+        "art_fidelity_uncertain": fired,
+        "edge_continuity": {
+            "ring_edge_density": round(ring_density, 5),
+            "inner_edge_density": round(inner_density, 5),
+            "mask_px": mask_px,
+            "ring_px": ring_px,
+        },
+    }
+
+
+def _advanced_art_fallback_eligibility_trace(group, mask_metrics=None) -> dict:
+    """Per-gate verdicts for the LaMA fallback route (diagnostic telemetry)."""
+
+    metrics = mask_metrics or getattr(group, "mask_metrics", {}) or {}
+    classification = str(getattr(group, "classification", "") or "").lower()
+    translation_state, translation_reason = translation_render_state(group)
+    completeness_status = str(
+        (getattr(group, "source_completeness", {}) or {}).get("status") or ""
+    )
+    background_type = str(
+        metrics.get("background_type")
+        or getattr(group, "background_type", "")
+        or ""
+    )
+    reason = str(metrics.get("reason") or "")
+    flags = {
+        flag: bool(metrics.get(flag))
+        for flag in (
+            "white_patch_rejected",
+            "flat_patch_rejected",
+            "seam_suspected",
+            "dark_blotch_rejected",
+            "art_fidelity_uncertain",
+            "residual_source_lettering_detected",
+            "narrow_mask_reconstruction_retry",
+        )
+    }
+    fidelity_evidence = bool(
+        flags["art_fidelity_uncertain"]
+        or flags["narrow_mask_reconstruction_retry"]
+    )
+    trace = {
+        "advanced_art_inpainting": bool(getattr(config, "ADVANCED_ART_INPAINTING", False)),
+        "max_attempts": int(getattr(config, "ADVANCED_ART_INPAINT_MAX_ATTEMPTS_PER_REGION", 1) or 0),
+        "classification": classification,
+        "fidelity_evidence": fidelity_evidence,
+        "edge_continuity": metrics.get("edge_continuity"),
+        "translation_state": translation_state,
+        "translation_reason": translation_reason,
+        "completeness_status": completeness_status,
+        "background_type": background_type,
+        "reason": reason,
+        "flags": flags,
+    }
+    return trace
+
+
+def _advanced_art_fallback_eligible(group, mask_metrics=None):
+    """True only for semantically valid hard-art cleanup failures."""
+    if not getattr(config, "ADVANCED_ART_INPAINTING", False):
+        return False
+    if int(getattr(config, "ADVANCED_ART_INPAINT_MAX_ATTEMPTS_PER_REGION", 1) or 0) <= 0:
+        return False
+    classification = str(getattr(group, "classification", "") or "").lower()
+    metrics = mask_metrics or getattr(group, "mask_metrics", {}) or {}
+    if classification == "logo":
+        return False
+    if classification == "sfx" and not (
+        metrics.get("art_fidelity_uncertain")
+        or metrics.get("narrow_mask_reconstruction_retry")
+    ):
+        # Sound lettering over art is eligible only on measured evidence that
+        # the analytic fill destroyed line continuity (edge_continuity gate);
+        # the blanket exclusion stays for ordinary SFX regions.
+        return False
+    translation_state, _translation_reason = translation_render_state(group)
+    completeness = getattr(group, "source_completeness", {}) or {}
+    fidelity_evidence = bool(
+        metrics.get("art_fidelity_uncertain")
+        or metrics.get("narrow_mask_reconstruction_retry")
+    )
+    if translation_state == "reject":
+        return False
+    if not fidelity_evidence and translation_state not in {"clean", "translated", "renderable_review"}:
+        return False
+    if not fidelity_evidence and completeness.get("status") != source_completeness.STATUS_PASS:
+        return False
+    if fidelity_evidence and completeness.get("status") not in {
+        source_completeness.STATUS_PASS, source_completeness.STATUS_REVIEW
+    }:
+        return False
+    background_type = str(
+        metrics.get("background_type")
+        or getattr(group, "background_type", "")
+        or ""
+    )
+    if background_type not in {"textured_art", "speed_lines", "sfx_area", "unknown"}:
+        return False
+    reason = str(metrics.get("reason") or "")
+    if reason not in ART_RECONSTRUCTION_REVIEW_REASONS and not any(
+        bool(metrics.get(flag))
+        for flag in (
+            "white_patch_rejected",
+            "flat_patch_rejected",
+            "seam_suspected",
+            "dark_blotch_rejected",
+            "art_fidelity_uncertain",
+            "residual_source_lettering_detected",
+        )
+    ):
+        return False
+    return True
+
+
+_LAMA_COMPOSITE_LEAK_BUDGET_PX = 64
+
+
+def _lama_composite_leak_px(base_bgr, composite_bgr, mask) -> int:
+    """Pixels the LaMA composite changed OUTSIDE its mask (inpainter contract).
+
+    The inpainter promises "composited only inside mask". A composite that
+    touches pixels beyond the mask is model misbehaviour; counting the leak
+    lets the caller reject it before any typography is drawn on top.
+    """
+
+    base = np.asarray(base_bgr)
+    composite = np.asarray(composite_bgr)
+    if base.shape != composite.shape:
+        return 10**9
+    mask_bool = np.asarray(mask) > 0
+    outside = ~mask_bool
+    changed = np.any(base != composite, axis=2) & outside
+    return int(np.count_nonzero(changed))
+
+
+def _inpaint_change_metrics(before_bgr, after_bgr, mask) -> dict:
+    """Measure candidate changes inside and outside its authorized mask."""
+    before = np.asarray(before_bgr)
+    after = np.asarray(after_bgr)
+    raw_mask = np.asarray(mask)
+    if before.shape != after.shape or before.shape[:2] != raw_mask.shape[:2]:
+        return {"changed_pixels_in_mask": None, "changed_pixels_outside_mask": None,
+                "changed_fraction_in_mask": None, "change_measurement_error": "shape_mismatch"}
+    inside = raw_mask > 0
+    changed = np.any(before != after, axis=2)
+    changed_inside = int(np.count_nonzero(changed & inside))
+    changed_outside = int(np.count_nonzero(changed & ~inside))
+    return {
+        "changed_pixels_in_mask": changed_inside,
+        "changed_pixels_outside_mask": changed_outside,
+        "changed_fraction_in_mask": round(changed_inside / max(1, int(np.count_nonzero(inside))), 4),
+    }
+
+
+def _long_stroke_halo_barrier(original_bgr, group, base_mask):
+    """Long dark strokes (balloon and panel borders) a lettering halo must not grow into.
+
+    Only for dark ink: a long stroke of the same polarity as the lettering is
+    structure, not fringe, and a blind halo would paint over it. Light lettering on
+    a dark container has no such stroke, so nothing is protected there. The base mask
+    is never reduced: pixels it already owns stay owned.
+    """
+    if original_bgr is None or base_mask is None or not np.any(base_mask):
+        return None
+    border = _balloon_border_mask(original_bgr, _cleanup_lines_for_group(group))
+    if border is None:
+        return None
+    gray, long_strokes = border
+    if gray.shape != np.asarray(base_mask).shape[:2]:
+        return None
+    owned = np.asarray(base_mask) > 0
+    owned_u8 = owned.astype(np.uint8)
+    near = cv2.dilate(owned_u8, np.ones((11, 11), np.uint8)) > 0
+    far = cv2.dilate(owned_u8, np.ones((27, 27), np.uint8)) > 0
+    ring = far & ~near
+    if int(np.count_nonzero(ring)) < 30:
+        ring = ~owned
+    background = float(np.median(gray[ring]))
+    low, high = np.percentile(gray[owned], [10, 90])
+    if (background - float(low)) <= (float(high) - background):
+        return None  # light lettering: no same-polarity structure to protect
+    # Only pixels as dark as the ink itself are structure. A lighter pixel on a stroke
+    # is the glyph's own anti-alias fringe, which the halo exists to cover.
+    full_ink = gray <= float(low) + 0.25 * (background - float(low))
+    return long_strokes & full_ink & ~owned
+
+
+def _refine_lettering_mask(cleanup_mask, group, mask_metrics, halo_barrier=None):
+    """Grow a lettering mask only by a small, line-height-scaled halo.
+
+    Add a small halo scaled to source line height. Complex backgrounds get a
+    stricter cap and no closing operation, so disconnected letters do not turn
+    into one broad paint region. Residual/removal gates decide whether this
+    tighter attempt covered enough of the lettering.
+    """
+
+    if (mask_metrics or {}).get("sfx_glyph_halo_mask"):
+        return cleanup_mask
+    mask = (np.asarray(cleanup_mask) > 0).astype(np.uint8)
+    if not np.any(mask):
+        return cleanup_mask
+    lines = _cleanup_lines_for_group(group)
+    line_heights = [int(line.box[3]) for line in lines if len(line.box) >= 4 and int(line.box[3]) > 0]
+    line_height = max(1, int(np.median(line_heights))) if line_heights else max(1, int(group.box[3]))
+    background_type = str(
+        (mask_metrics or {}).get("background_type")
+        or getattr(group, "background_type", "unknown")
+    ).lower()
+    background_metrics = getattr(group, "background_metrics", {}) or {}
+    profile = str(background_metrics.get("local_background_class") or "").lower()
+    simple_container = background_type in {"white_balloon", "dark_balloon", "narration_box"}
+    complex_background = (
+        background_type in {"textured_art", "speed_lines", "sfx_area", "unknown"}
+        or profile in {"gradient", "structured_or_textured"}
+    ) and not simple_container
+    stroke = int((mask_metrics or {}).get("lettering_stroke_width") or 0)
+    # The component mask already follows observed ink. Add a modest outline
+    # allowance; cap it more tightly over art/reticulation than in a balloon.
+    proportional_cap = max(2, min(7 if complex_background else 9,
+                                  int(round(line_height * (0.06 if complex_background else 0.08)))))
+    radius = min(proportional_cap, max(2, stroke + 1))
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (radius * 2 + 1, radius * 2 + 1))
+    refined = cv2.dilate(mask, kernel)
+    # Do not close across gaps: on a wide effect this can join separate strokes
+    # and turn the whole lettering box into one painted patch.
+    max_mask_ratio = (2.0 if complex_background else 3.0)
+    text_area = max(1, int((mask_metrics or {}).get("text_component_pixels", 0) or 0))
+    max_pixels = int(round(text_area * max_mask_ratio))
+    if int(np.count_nonzero(refined)) > max_pixels:
+        # Keep the observed component mask and drop only the added halo. The
+        # normal removal/visual gates decide whether that tighter attempt worked.
+        refined = mask.copy()
+    if halo_barrier is not None and np.asarray(halo_barrier).shape == refined.shape:
+        refined[np.asarray(halo_barrier, dtype=bool)] = 0
+    return (refined * 255).astype(np.uint8)
+
+
+def _eroded_mask_variant(cleanup_mask, radius=5):
+    """Cores-only mask: for the LaMA retry, starving ambiguous background out
+    of the prompt so the model continues the surrounding art instead of
+    hallucinating white patches."""
+
+    mask = (np.asarray(cleanup_mask) > 0).astype(np.uint8)
+    if not np.any(mask):
+        return cleanup_mask
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (radius * 2 + 1, radius * 2 + 1))
+    eroded = cv2.erode(mask, kernel)
+    if not np.any(eroded):
+        return cleanup_mask
+    return (eroded * 255).astype(np.uint8)
+
+
+def _generative_second_chance(current_bgr, cleanup_mask, original_bgr, group, mask_metrics):
+    """FLUX.2 klein edit for regions LaMA could not reconstruct acceptably."""
+    from komyst.clean.inpainting import flux_edit
+
+    if not flux_edit.available():
+        return None
+    try:
+        # Use the same protected, halo-aware mask as the LaMA path and a
+        # region-contextual prompt. FLUX remains opt-in; its output is still
+        # judged by the existing reconstruction gates below.
+        flux_mask = _grown_fill_mask(group, cleanup_mask)
+        prompt = flux_edit.manga_reconstruction_prompt(group)
+        composited = flux_edit.flux_edit_inpaint(
+            current_bgr, flux_mask, prompt=prompt,
+        )
+    except Exception:  # noqa: BLE001 - generative engine is best-effort
+        return None
+    if composited is None:
+        return None
+    metrics = _advanced_art_reconstruction_metrics(
+        original_bgr, composited, group, flux_mask, mask_metrics or {},
+    )
+    return composited, metrics
+
+
+def _try_advanced_art_fallback(current_bgr, original_bgr, group, cleanup_mask, mask_metrics, stage_timings=None):
+    mask_pixels = int(np.count_nonzero(cleanup_mask)) if cleanup_mask is not None else 0
+    page_pixels = max(1, int(np.asarray(original_bgr).shape[0] * np.asarray(original_bgr).shape[1]))
+    attempt = {
+        "strategy": "lama_large",
+        "inpaint_method": "lama_large",
+        "mask_pixels": mask_pixels,
+        "mask_page_area_pixels": page_pixels,
+        "mask_page_area_ratio": round(mask_pixels / page_pixels, 7),
+        "fill_mask_pixels": mask_pixels,
+        "fill_mask_page_area_ratio": round(mask_pixels / page_pixels, 7),
+        "advanced_fallback_attempted": True,
+        "advanced_fallback_eligible": True,
+        "advanced_fallback_status": "failed",
+        "fallback_reason": str((mask_metrics or {}).get("reason") or "art_unsafe"),
+        "visual_validation_passed": False,
+    }
+    try:
+        inpainter = advanced_art_inpainting.get_default_inpainter()
+        lama_metrics = (stage_timings if isinstance(stage_timings, dict) else None)
+        lama_bucket = lama_metrics.setdefault("lama", {}) if lama_metrics is not None else None
+        queue_enter = time.perf_counter()
+        request_started = queue_enter
+        acquired_at = None
+        _LAMA_INFERENCE_LOCK.acquire()
+        acquired_at = time.perf_counter()
+        if lama_bucket is not None:
+            lama_bucket["queue_wait_ms"] = lama_bucket.get("queue_wait_ms", 0.0) + (acquired_at - request_started) * 1000.0
+            lama_bucket["call_count"] = lama_bucket.get("call_count", 0) + 1
+        try:
+            cleaned, telemetry = inpainter.reconstruct(current_bgr, cleanup_mask)
+        finally:
+            _LAMA_INFERENCE_LOCK.release()
+        if lama_bucket is not None:
+            lama_bucket["hash_lookup_count"] = int(telemetry.get("hash_lookup_count", 0) or 0)
+            lama_bucket["hash_cache_hit_count"] = int(telemetry.get("hash_cache_hit_count", 0) or 0)
+            lama_bucket["hash_cache_miss_count"] = int(telemetry.get("hash_cache_miss_count", 0) or 0)
+            lama_bucket["real_hash_compute_count"] = int(telemetry.get("real_hash_compute_count", 0) or 0)
+            lama_bucket["hash_ms"] = float(telemetry.get("hash_total_ms", 0) or 0)
+            lama_bucket["load_ms"] = float(telemetry.get("load_ms", 0) or 0)
+            lama_bucket["inference_ms"] = float(telemetry.get("inference_ms", 0) or 0)
+            lama_bucket["resource_wait_ms"] = lama_bucket.get("queue_wait_ms", 0.0)
+        attempt.update(telemetry)
+        advanced_metrics = _advanced_art_reconstruction_metrics(
+            original_bgr,
+            cleaned,
+            group,
+            cleanup_mask,
+            mask_metrics or {},
+        )
+        advanced_metrics.update(_inpaint_change_metrics(current_bgr, cleaned, cleanup_mask))
+        attempt.update(advanced_metrics)
+        if _advanced_art_metrics_rejected(advanced_metrics):
+            # Retry once with a cores-only mask: when the metrics reject with a
+            # white patch or a boundary seam, the mask carried ambiguous
+            # background into the prompt. Starving it down to the glyph cores
+            # leaves surrounding art as the only context, which is exactly
+            # what the model continues.
+            _retry_reasons = str(advanced_metrics.get("advanced_art_reason") or "")
+            if "white_patch" in _retry_reasons or "seam" in _retry_reasons:
+                _eroded = _eroded_mask_variant(cleanup_mask)
+                if int(np.count_nonzero(_eroded)) > 0 and not np.array_equal(
+                    (_eroded > 0), (np.asarray(cleanup_mask) > 0)
+                ):
+                    try:
+                        _LAMA_INFERENCE_LOCK.acquire()
+                        try:
+                            retry_cleaned, retry_telemetry = inpainter.reconstruct(
+                                current_bgr, _eroded,
+                            )
+                        finally:
+                            _LAMA_INFERENCE_LOCK.release()
+                        attempt["lama_retry"] = {
+                            "telemetry": {
+                                k: v for k, v in (retry_telemetry or {}).items()
+                                if isinstance(v, (str, int, float, bool))
+                            },
+                        }
+                        retry_metrics = _advanced_art_reconstruction_metrics(
+                            original_bgr, retry_cleaned, group, _eroded, mask_metrics or {},
+                        )
+                        retry_metrics.update(_inpaint_change_metrics(current_bgr, retry_cleaned, _eroded))
+                        attempt["lama_retry"]["metrics"] = retry_metrics
+                        if not _advanced_art_metrics_rejected(retry_metrics):
+                            attempt["advanced_fallback_status"] = "success"
+                            attempt["advanced_fallback_reason"] = "model_reconstruction_available_after_mask_retry"
+                            attempt["_advanced_cleaned_bgr"] = retry_cleaned
+                            return attempt
+                        advanced_metrics = retry_metrics
+                    except Exception as exc:  # noqa: BLE001 - retry is best-effort
+                        attempt["lama_retry"] = {"error": type(exc).__name__}
+            # LaMA could not reconstruct this region acceptably. When the
+            # generative engine is enabled, give it the same mask: FLUX.2
+            # klein conditions on the surrounding art and can rebuild what
+            # convolutional inpainting cannot. Same validators apply.
+            second = _generative_second_chance(
+                current_bgr, cleanup_mask, original_bgr, group, mask_metrics or {},
+            )
+            if second is not None:
+                flux_cleaned, flux_metrics = second
+                flux_mask = _grown_fill_mask(group, cleanup_mask)
+                flux_metrics.update(_inpaint_change_metrics(current_bgr, flux_cleaned, flux_mask))
+                flux_pixels = int(np.count_nonzero(flux_mask))
+                flux_page_pixels = max(1, int(np.asarray(original_bgr).shape[0] * np.asarray(original_bgr).shape[1]))
+                flux_metrics.update({
+                    "fill_mask_pixels": flux_pixels,
+                    "fill_mask_page_area_ratio": round(flux_pixels / flux_page_pixels, 7),
+                    "inpaint_method": "flux2_klein",
+                })
+                attempt["generative_attempted"] = True
+                attempt["generative_metrics"] = flux_metrics
+                if not _advanced_art_metrics_rejected(flux_metrics):
+                    attempt["advanced_fallback_status"] = "success"
+                    attempt["advanced_fallback_reason"] = "generative_model_reconstruction"
+                    attempt["generative_engine"] = "flux2_klein"
+                    attempt["inpaint_method"] = "flux2_klein"
+                    attempt["fill_mask_pixels"] = flux_pixels
+                    attempt["fill_mask_page_area_ratio"] = round(flux_pixels / flux_page_pixels, 7)
+                    attempt.update(_inpaint_change_metrics(current_bgr, flux_cleaned, flux_mask))
+                    attempt["_advanced_cleaned_bgr"] = flux_cleaned
+                    return attempt
+                attempt["advanced_fallback_reason"] = (
+                    str(advanced_metrics.get("advanced_art_reason", "advanced_art_rejected"))
+                    + ";generative_rejected:"
+                    + str(flux_metrics.get("advanced_art_reason", ""))[:80]
+                )
+            else:
+                attempt["advanced_fallback_status"] = "rejected"
+                attempt["advanced_fallback_reason"] = advanced_metrics.get(
+                    "advanced_art_reason",
+                    "advanced_art_rejected",
+                )
+            return attempt
+        attempt["advanced_fallback_status"] = "success"
+        attempt["advanced_fallback_reason"] = "model_reconstruction_available"
+        attempt["_advanced_cleaned_bgr"] = cleaned
+        return attempt
+    except advanced_art_inpainting.AdvancedInpaintIntegrityError as exc:
+        attempt["advanced_fallback_status"] = "integrity_failed"
+        attempt["advanced_fallback_reason"] = str(exc)
+    except advanced_art_inpainting.AdvancedInpaintUnavailable as exc:
+        attempt["advanced_fallback_status"] = "unavailable"
+        attempt["advanced_fallback_reason"] = str(exc)
+    except Exception as exc:  # pragma: no cover - fail closed for runtime surprises
+        attempt["advanced_fallback_status"] = "failed"
+        attempt["advanced_fallback_reason"] = type(exc).__name__
+    return attempt
+
+
+def _advanced_art_reconstruction_metrics(original_bgr, cleaned_bgr, group, cleanup_mask, base_metrics):
+    background_type = str(
+        (base_metrics or {}).get("background_type")
+        or getattr(group, "background_type", "")
+        or "unknown"
+    )
+    metrics = {
+        key: value
+        for key, value in (base_metrics or {}).items()
+        if key not in {
+            "white_patch_rejected",
+            "new_white_patch_pixels",
+            "largest_new_white_component_area",
+            "new_white_patch_to_group_ratio",
+            "flat_patch_rejected",
+            "flat_patch_source_ring_texture",
+            "flat_patch_reconstruction_texture",
+            "flat_patch_texture_ratio",
+            "flat_patch_largest_component_area",
+            "seam_suspected",
+            "seam_reason",
+            "dark_blotch_rejected",
+            "new_dark_patch_pixels",
+            "largest_new_dark_component_area",
+            "new_dark_patch_to_group_ratio",
+            "reason",
+        }
+    }
+    metrics["advanced_art_metrics_recomputed"] = True
+    metrics.update(_white_patch_artifact_metrics(
+        original_bgr, cleaned_bgr, group, cleanup_mask, background_type
+    ))
+    metrics.update(_flat_patch_artifact_metrics(original_bgr, cleaned_bgr, group, cleanup_mask))
+    metrics.update(_reconstruction_seam_metrics(original_bgr, cleaned_bgr, group, cleanup_mask))
+    metrics.update(_dark_blotch_artifact_metrics(
+        original_bgr,
+        cleaned_bgr,
+        group,
+        cleanup_mask,
+        background_type,
+        "source_scoped",
+    ))
+    source_evidence = _build_text_mask(original_bgr.shape, [group])
+    lettering_metrics = residual_source_lettering_metrics(
+        original_bgr,
+        cleaned_bgr,
+        group,
+        cleanup_mask,
+        source_evidence,
+    )
+    metrics.update(lettering_metrics)
+    if metrics.get("residual_source_lettering_detected"):
+        legibility = _legible_source_residual(cleaned_bgr, group)
+        metrics["residual_ocr_check"] = legibility
+        if legibility["status"] == "not_legible":
+            metrics["residual_source_lettering_detected"] = False
+            metrics["residual_overruled_by_ocr"] = True
+    if _advanced_tiny_white_highlight_false_positive(metrics):
+        metrics["advanced_white_patch_original_rejected"] = True
+        metrics["advanced_white_patch_tiny_highlight_reviewed"] = True
+        metrics["white_patch_rejected"] = False
+    reasons = []
+    if metrics.get("white_patch_rejected"):
+        reasons.append("large_white_patch_on_nonwhite_background")
+    if metrics.get("flat_patch_rejected"):
+        reasons.append("flat_reconstruction_patch_on_textured_background")
+    if metrics.get("seam_suspected"):
+        reasons.append("visible_reconstruction_seam_at_mask_boundary")
+    if metrics.get("dark_blotch_rejected"):
+        reasons.append("dark_blotch_created_on_textured_art")
+    if metrics.get("residual_source_lettering_detected"):
+        reasons.append("residual_source_lettering_after_cleanup")
+    metrics["advanced_art_reason"] = ";".join(reasons) or "ok"
+    metrics["advanced_art_passed"] = not reasons
+    return metrics
+
+
+def _advanced_art_metrics_rejected(metrics):
+    return not bool((metrics or {}).get("advanced_art_passed"))
+
+
+def _advanced_tiny_white_highlight_false_positive(metrics):
+    if not (metrics or {}).get("white_patch_rejected"):
+        return False
+    if (metrics or {}).get("residual_source_lettering_detected"):
+        return False
+    if (metrics or {}).get("flat_patch_rejected"):
+        return False
+    if (metrics or {}).get("seam_suspected"):
+        return False
+    if (metrics or {}).get("dark_blotch_rejected"):
+        return False
+    largest = int((metrics or {}).get("largest_new_white_component_area") or 0)
+    pixels = int((metrics or {}).get("new_white_patch_pixels") or 0)
+    ratio = float((metrics or {}).get("new_white_patch_to_group_ratio") or 0.0)
+    return bool(
+        largest <= int(config.MAX_OUTSIDE_COMPONENT_AREA * 1.10)
+        and pixels <= int(config.MAX_OUTSIDE_COMPONENT_AREA * 1.25)
+        and ratio <= 0.0015
+    )
+
+
+def _build_text_mask(image_shape, groups, padding=None):
+    mask = np.zeros(image_shape[:2], dtype=np.uint8)
+
+    for group in groups:
+        for line in _cleanup_lines_for_group(group):
+            line_mask = np.zeros(image_shape[:2], dtype=np.uint8)
+            cv2.fillPoly(line_mask, [np.asarray(line.polygon, dtype=np.int32)], 255)
+            line_padding = _mask_padding(line.box) if padding is None else max(0, int(padding))
+            if line_padding > 0:
+                kernel = np.ones((line_padding * 2 + 1, line_padding * 2 + 1), np.uint8)
+                line_mask = cv2.dilate(line_mask, kernel, iterations=1)
+            mask = cv2.bitwise_or(mask, line_mask)
+
+    return mask
+
+
+def _expand_poly(poly, image_shape, padding=3):
+    x, y, w, h = _box_from_poly(poly)
+    h_img, w_img = image_shape[:2]
+    x1 = max(0, x - padding)
+    y1 = max(0, y - padding)
+    x2 = min(w_img - 1, x + w + padding)
+    y2 = min(h_img - 1, y + h + padding)
+    return np.array([[x1, y1], [x2, y1], [x2, y2], [x1, y2]], dtype=np.int32)
+
+
+def _mask_padding(box):
+    _, _, _, h = box
+    return max(1, min(config.MAX_MASK_EXPANSION, config.TEXT_MASK_PADDING, int(h * 0.16)))
+
+
+def _remove_text_with_mask(img_bgr, mask):
+    if mask is None or not np.any(mask):
+        return img_bgr.copy()
+
+    kernel = np.ones((3, 3), np.uint8)
+    mask = cv2.dilate(mask, kernel, iterations=1)
+    return cv2.inpaint(img_bgr, mask, 3, cv2.INPAINT_TELEA)
+
+
+def _remove_text_for_groups(img_bgr, groups):
+    if not groups:
+        return img_bgr.copy()
+
+    result = img_bgr.copy()
+    for group in groups:
+        result, _, _ = _remove_text_for_group(
+            result,
+            img_bgr,
+            group,
+            strategy="primary",
+        )
+    return result
+
+
+def _group_stroke_band(gray, mask_all, lines, max_width=14):
+    """The lettering's outline stroke, measured and selected like "expand by N px".
+
+    Lettering over art usually carries an outline of the opposite polarity (a
+    white stroke round black letters); left behind, it reads as ghost letters.
+    Going outward from the ink, the fraction of pixels markedly lighter (darker for
+    light ink) than the background beyond the stroke is measured at each distance;
+    while it stays >= 0.5 the stroke continues. The band up to that width (plus the
+    anti-aliased edge) joins the mask. No stroke - nothing at distance 1-2 differs
+    from the background (white balloon) - adds nothing.
+    """
+    empty = np.zeros(mask_all.shape, dtype=bool)
+    if not lines or not np.any(mask_all):
+        return empty, 0
+    height, width = gray.shape
+    line_h = max(int(line.box[3]) for line in lines)
+    gx1 = min(int(line.box[0]) for line in lines)
+    gy1 = min(int(line.box[1]) for line in lines)
+    gx2 = max(int(line.box[0] + line.box[2]) for line in lines)
+    gy2 = max(int(line.box[1] + line.box[3]) for line in lines)
+    reach = max_width + 12
+    wx1, wy1 = max(0, gx1 - reach), max(0, gy1 - reach)
+    wx2, wy2 = min(width, gx2 + reach), min(height, gy2 + reach)
+    roi = gray[wy1:wy2, wx1:wx2].astype(np.float32)
+    glyphs = mask_all[wy1:wy2, wx1:wx2]
+    own = np.zeros(roi.shape, dtype=bool)
+    own[max(0, gy1 - wy1):gy2 - wy1, max(0, gx1 - wx1):gx2 - wx1] = True
+    glyphs = glyphs & cv2.dilate(own.astype(np.uint8), np.ones((5, 5), np.uint8)).astype(bool)
+    if np.count_nonzero(glyphs) < 20:
+        return empty, 0
+    distance = cv2.distanceTransform((~glyphs).astype(np.uint8), cv2.DIST_L2, 3)
+    far = (distance > max_width + 2) & (distance <= max_width + 10)
+    if np.count_nonzero(far) < 50:
+        return empty, 0
+    background = float(np.median(roi[far]))
+    # No polarity guess: the mask also holds fringe and part of the outline, so
+    # neither its extremes (black letters, white outline: p10 6 / p90 254 around
+    # 122) nor its deepest pixels (merged white outline between letters) tell
+    # the ink apart. Both a lighter and a darker stroke are measured; lettering
+    # has one outline, and the side that forms a ring is it.
+    far_values = roi[far]
+
+    glyph_values = roi[glyphs]
+
+    def measure(lighter):
+        room = (255.0 - background) if lighter else background
+        if room < 12.0:
+            return 0, None
+        # An outline is on the opposite side from the ink: a lighter stroke needs
+        # ink clearly darker than the backdrop inside the mask (and vice versa),
+        # else it is only the light letters' own anti-aliased edge.
+        if lighter:
+            opposite_ink = np.mean(glyph_values <= background - max(10.0, 0.5 * background))
+        else:
+            opposite_ink = np.mean(glyph_values >= background + max(10.0, 0.5 * (255.0 - background)))
+        if opposite_ink < 0.15:
+            return 0, None
+        # Half the room left towards the far end of the range (a white stroke on
+        # mid grey art); not scaled by the backdrop's spread, which on textured
+        # art pushed the step past any real stroke (measured regression).
+        step = max(10.0, 0.5 * room)
+        like = (roi >= background + step) if lighter else (roi <= background - step)
+        # Relative to the backdrop's own spread as well: only 10 % of the backdrop
+        # is beyond its 10th/90th percentile, so a ring where half the pixels are
+        # is an outline even when the step is small (black outline on a dark wall).
+        if lighter:
+            like |= roi > float(np.percentile(far_values, 90))
+        else:
+            like |= roi < float(np.percentile(far_values, 10))
+        width = 0
+        for d in range(1, max_width + 1):
+            ring = (distance > d - 1) & (distance <= d)
+            if np.count_nonzero(ring) < 10:
+                break
+            if float(np.mean(like[ring])) >= 0.5:
+                width = d
+            else:
+                break
+        return width, like
+
+    measured = [measure(True), measure(False)]
+    width_px, stroke_like = max(measured, key=lambda item: item[0])
+    if width_px < 1:
+        return empty, 0
+    band = (distance <= width_px + 1) & ~glyphs
+    # The measured width is the outline's typical width; where it is thicker (the
+    # stroke under a line is often wider than at its sides) the stroke pixels that
+    # stay connected to the band are followed out to max_width, otherwise the
+    # thicker part is left behind as a bright line along the mask edge. Stroke-
+    # coloured art beyond max_width (a white area beside the text) is not outline:
+    # what it reaches within max_width steps stays out, the outline further along
+    # the lettering (not reachable that fast) is still followed.
+    stroke_pixels = (stroke_like & ~glyphs).astype(np.uint8)
+    art = (stroke_pixels > 0) & (distance > max_width)
+    kernel = np.ones((3, 3), np.uint8)
+    for _ in range(max_width):
+        grown_art = (cv2.dilate(art.astype(np.uint8), kernel) > 0) & (stroke_pixels > 0)
+        if np.array_equal(grown_art, art):
+            break
+        art = grown_art
+    candidates = (stroke_pixels > 0) & (distance <= max_width) & ~art
+    count, labels = cv2.connectedComponents((candidates | band).astype(np.uint8), connectivity=4)
+    seeds = np.unique(labels[band])
+    band |= candidates & np.isin(labels, seeds[seeds > 0])
+    band &= cv2.dilate(own.astype(np.uint8), np.ones((2 * max_width + 3,) * 2, np.uint8)).astype(bool)
+    out = empty.copy()
+    out[wy1:wy2, wx1:wx2] = band
+    return out, int(width_px)
+
+
+def _fill_enclosed_glyph_holes(cleanup_mask, group):
+    """Close holes the lettering mask fully encloses.
+
+    A hole surrounded on every side by the text mask is part of a glyph: the
+    black core of a letter whose white outline was the part selected ("*ding*"
+    on a dark wall left its cores behind as ghost letters), or a counter (the
+    inside of an "o"). Either way no art from outside the lettering can reach it,
+    so refilling it is safe. Holes larger than a line height squared are not
+    glyph-sized and stay.
+    """
+    mask = (np.asarray(cleanup_mask) > 0).astype(np.uint8)
+    lines = _cleanup_lines_for_group(group)
+    if not np.any(mask) or not lines:
+        return cleanup_mask, 0
+    limit = max(int(line.box[3]) for line in lines) ** 2
+    count, labels, stats, _ = cv2.connectedComponentsWithStats(1 - mask, connectivity=4)
+    edge = np.unique(np.concatenate([labels[0], labels[-1], labels[:, 0], labels[:, -1]]))
+    holes = [label for label in range(1, count)
+             if label not in edge and stats[label, cv2.CC_STAT_AREA] <= limit]
+    if not holes:
+        return cleanup_mask, 0
+    fill = np.isin(labels, holes)
+    filled = np.asarray(cleanup_mask).copy()
+    filled[fill] = 255
+    return filled, int(np.count_nonzero(fill))
+
+
+def _antialias_fringe_mask(original_bgr, cleanup_mask, group):
+    """Partial-ink pixels hugging the glyph mask, measured instead of dilated.
+
+    The anti-alias/outline fringe of lettering lies just outside the OCR polygon; on
+    textured backgrounds the mask may extend only 1 px past it, so the fringe stayed
+    on the page and fed Telea as boundary data, drawing a faint outline ghost. For
+    each line the background is estimated on a band 3-6 px beyond the fringe radius
+    and the ink colour from the masked core; a neighbouring pixel joins only when its
+    ink fraction ``alpha = (bg - I) / (bg - fg)`` is >= 0.12, it is connected to the
+    mask and lies within ``max(2, min(4, 0.08 h))`` px; an outline pixel (offset from
+    the background opposite to the ink by >= max(16, 3 sigma)) joins the same way, but
+    only when such pixels ring at least half of the glyph edge.
+    Candidate runs that continue beyond the radius are art strokes and are dropped.
+    Nothing is added when the background is too textured to separate fringe from art,
+    or when the growth would exceed 0.5x the line mask (1.2x with a validated outline).
+    """
+    empty = np.zeros(np.asarray(cleanup_mask).shape[:2], dtype=np.uint8)
+    metrics = {"antialias_fringe_pixels": 0, "antialias_fringe_lines": 0,
+               "antialias_fringe_skipped_textured_lines": 0}
+    if (not config.CLEAN_FRINGE_EVIDENCE or original_bgr is None or cleanup_mask is None
+            or not np.any(cleanup_mask) or original_bgr.shape[:2] != empty.shape):
+        return empty, metrics
+    gray = cv2.cvtColor(original_bgr, cv2.COLOR_BGR2GRAY).astype(np.float32)
+    mask_all = np.asarray(cleanup_mask) > 0
+    height, width = mask_all.shape
+    fringe = np.zeros(mask_all.shape, dtype=bool)
+    for line in _cleanup_lines_for_group(group):
+        x, y, w, h = [int(value) for value in line.box]
+        radius = max(2, min(4, int(round(max(1, h) * 0.08))))
+        pad = radius + 8
+        x1, y1 = max(0, x - pad), max(0, y - pad)
+        x2, y2 = min(width, x + max(1, w) + pad), min(height, y + max(1, h) + pad)
+        if x2 - x1 < 4 or y2 - y1 < 4:
+            continue
+        roi_mask = mask_all[y1:y2, x1:x2].copy()
+        own = np.zeros_like(roi_mask)
+        own[max(0, y - 2 - y1):min(y2, y + h + 2) - y1, max(0, x - 2 - x1):min(x2, x + w + 2) - x1] = True
+        roi_mask &= own
+        if np.count_nonzero(roi_mask) < 8:
+            continue
+        roi_gray = gray[y1:y2, x1:x2]
+        distance = cv2.distanceTransform((~roi_mask).astype(np.uint8), cv2.DIST_L2, 3)
+        near = (~mask_all[y1:y2, x1:x2]) & (distance <= radius)
+        far = (~mask_all[y1:y2, x1:x2]) & (distance >= radius + 3) & (distance <= radius + 6)
+        if np.count_nonzero(far) < 30:
+            continue
+        background = float(np.median(roi_gray[far]))
+        mad = float(np.median(np.abs(roi_gray[far] - background)))
+        core = roi_gray[roi_mask]
+        low, high = np.percentile(core, [10, 90])
+        dark_text = (background - float(low)) > (float(high) - background)
+        ink = float(low if dark_text else high)
+        contrast = abs(background - ink)
+        if contrast < max(24.0, 6.0 * 1.4826 * mad):
+            metrics["antialias_fringe_skipped_textured_lines"] += 1
+            continue
+        alpha = (background - roi_gray) / (background - ink)
+        # A lettering outline sits on the opposite side of the background from the
+        # ink (white halo round black text); it is part of the lettering too.
+        # Only when it rings most of the glyph edge: a bright art stroke touching
+        # one side of a letter is not an outline.
+        partial = (alpha >= 0.12) & (alpha <= 1.2)
+        # The outline is judged against the background *near each glyph*: a white
+        # halo round letters in a translucent balloon over grey clothing is invisible
+        # against the line-wide median (white) yet stands 40 levels above the
+        # clothing right behind it.
+        span = 4 * radius + 13
+        weight = cv2.blur(far.astype(np.float32), (span, span))
+        local_bg = np.where(weight > 1e-3,
+                            cv2.blur(roi_gray * far, (span, span)) / np.maximum(weight, 1e-3),
+                            background)
+        sign = 1.0 if dark_text else -1.0  # outline sits opposite to the ink
+        outline_step = max(16.0, 3.0 * 1.4826 * mad)
+        bright = (sign * (roi_gray - local_bg)) >= outline_step
+        # Real fringe fades out within the radius; a candidate run that continues
+        # well beyond it is an art stroke touching the glyph, so it is dropped.
+        kernel = np.ones((3, 3), np.uint8)
+        wide = (~mask_all[y1:y2, x1:x2]) & (distance <= radius + 4) & (partial | bright)
+        art = wide & (distance > radius + 2)
+        for _ in range(radius + 4):
+            art |= (cv2.dilate(art.astype(np.uint8), kernel) > 0) & wide
+        # The outline band sits beyond the anti-alias ramp: one extra pixel of reach.
+        outline = (~mask_all[y1:y2, x1:x2]) & (distance <= radius + 1) & bright & ~art
+        perimeter = (~mask_all[y1:y2, x1:x2]) & (distance <= 1.5)
+        # Only where an outline could show: against a local background already at
+        # the outline's own level (white halo on white) there is nothing to remove.
+        if dark_text:
+            perimeter &= local_bg <= 255.0 - outline_step
+        else:
+            perimeter &= local_bg >= outline_step
+        ringed = cv2.dilate(outline.astype(np.uint8), np.ones((2 * radius + 1,) * 2, np.uint8)) > 0
+        if np.count_nonzero(ringed & perimeter) < 0.5 * max(1, np.count_nonzero(perimeter)):
+            outline[:] = False
+        candidate = (near & ~art & partial) | outline
+        grown = roi_mask.copy()
+        for _ in range(radius + 1):
+            grown |= (cv2.dilate(grown.astype(np.uint8), kernel) > 0) & candidate
+        added = grown & ~roi_mask
+        # A validated outline ring (or glow) may be as large as a thin glyph core itself.
+        growth_limit = 1.2 if np.any(outline) else 0.5
+        if np.count_nonzero(added) > growth_limit * np.count_nonzero(roi_mask):
+            metrics["antialias_fringe_skipped_textured_lines"] += 1
+            continue
+        if np.any(added):
+            fringe[y1:y2, x1:x2] |= added
+            metrics["antialias_fringe_lines"] += 1
+    stroke_band, stroke_width = _group_stroke_band(gray, mask_all, _cleanup_lines_for_group(group))
+    metrics["lettering_stroke_width"] = stroke_width
+    metrics["lettering_stroke_pixels"] = int(np.count_nonzero(stroke_band & ~mask_all))
+    fringe |= stroke_band
+    fringe &= ~mask_all
+    metrics["antialias_fringe_pixels"] = int(np.count_nonzero(fringe))
+    return fringe.astype(np.uint8) * 255, metrics
+
+
+def in_mask_residual_metrics(original_bgr, cleaned_bgr, cleanup_mask):
+    """Diagnostic (shadow-mode) measure of lettering that survives *inside* the mask.
+
+    The removal verifier assumes everything under the mask was flattened, so a ghost
+    regenerated by the reconstruction is invisible to it. This reports, without
+    deciding anything: pixels inside the mask still offset from the surrounding
+    background in the lettering's polarity, and how much of the source glyph contour
+    reappears as an edge inside the mask (an outline ghost).
+    """
+    empty = {"status": "not_measured", "decision_impact": "none"}
+    if original_bgr is None or cleaned_bgr is None or cleanup_mask is None:
+        return empty
+    mask = np.asarray(cleanup_mask) > 0
+    if (not np.any(mask) or original_bgr.shape[:2] != mask.shape
+            or cleaned_bgr.shape[:2] != mask.shape):
+        return empty
+    mask_u8 = mask.astype(np.uint8) * 255
+    ring = (cv2.dilate(mask_u8, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (11, 11))) > 0) & ~(
+        cv2.dilate(mask_u8, np.ones((3, 3), np.uint8)) > 0)
+    if np.count_nonzero(ring) < 20:
+        return empty
+    source = cv2.cvtColor(original_bgr, cv2.COLOR_BGR2GRAY).astype(np.float32)
+    cleaned = cv2.cvtColor(cleaned_bgr, cv2.COLOR_BGR2GRAY).astype(np.float32)
+    ring_values = cleaned[ring]
+    ring_median = float(np.median(ring_values))
+    ring_mad = float(np.median(np.abs(ring_values - ring_median)))
+    sign = -1.0 if float(np.median(source[mask])) <= ring_median else 1.0
+    cut = max(12.0, 3.0 * 1.4826 * ring_mad)
+    residual = mask & (sign * (cleaned - ring_median) > cut)
+    count, _labels, stats, _ = cv2.connectedComponentsWithStats(residual.astype(np.uint8), 8)
+    largest = max((int(stats[label, cv2.CC_STAT_AREA]) for label in range(1, count)), default=0)
+    contour = (cv2.Canny(source.astype(np.uint8), 55, 155) > 0) & (
+        cv2.dilate(mask_u8, np.ones((3, 3), np.uint8)) > 0)
+    echo = (cv2.Canny(cleaned.astype(np.uint8), 55, 155) > 0) & (
+        cv2.dilate(contour.astype(np.uint8), np.ones((3, 3), np.uint8)) > 0) & mask
+    contour_pixels = int(np.count_nonzero(contour))
+    # Silhouette: a flat fill leaves a weak but continuous step at the mask edge.
+    # Compare the step across the edge with the natural step one pixel further out.
+    across, natural = [], []
+    for dy, dx in ((0, 1), (1, 0), (0, -1), (-1, 0)):
+        inner = np.roll(mask, (dy, dx), axis=(0, 1))
+        outer = np.roll(mask, (2 * dy, 2 * dx), axis=(0, 1))
+        edge = mask & ~inner & ~outer
+        if not np.any(edge):
+            continue
+        ys, xs = np.nonzero(edge)
+        y1, x1 = ys - dy, xs - dx
+        y2, x2 = ys - 2 * dy, xs - 2 * dx
+        valid = (y2 >= 0) & (x2 >= 0) & (y2 < mask.shape[0]) & (x2 < mask.shape[1])
+        ys, xs, y1, x1, y2, x2 = ys[valid], xs[valid], y1[valid], x1[valid], y2[valid], x2[valid]
+        across.append(np.abs(cleaned[ys, xs] - cleaned[y1, x1]))
+        natural.append(np.abs(cleaned[y1, x1] - cleaned[y2, x2]))
+    step_excess = None
+    if across:
+        step_excess = round(float(np.median(np.concatenate(across)) - np.median(np.concatenate(natural))), 3)
+    return {
+        "status": "measured",
+        "boundary_step_excess": step_excess,
+        "decision_impact": "none",
+        "mask_pixels": int(np.count_nonzero(mask)),
+        "residual_pixels": int(np.count_nonzero(residual)),
+        "residual_fraction": round(float(np.count_nonzero(residual) / np.count_nonzero(mask)), 5),
+        "largest_residual_component": largest,
+        "ring_median": round(ring_median, 3),
+        "residual_cut": round(cut, 3),
+        "source_contour_pixels": contour_pixels,
+        "contour_echo_pixels": int(np.count_nonzero(echo)),
+        "contour_echo_fraction": round(float(np.count_nonzero(echo) / max(1, contour_pixels)), 5),
+    }
+
+
+def _try_harmonic_boundary_fill(original_bgr, cleanup_mask, profile, spatial_class, group):
+    """Return an accepted harmonic candidate for a smooth non-uniform backdrop, else None.
+
+    Only SMOOTH_NONUNIFORM is attempted; uniform backdrops keep the exact constant
+    fill and structured/textured ones stay in review. The solver's own gates decide
+    acceptance; its diagnostic is recorded on the group either way.
+    """
+    if spatial_class != "SMOOTH_NONUNIFORM" or cleanup_mask is None:
+        return None
+    from komyst.clean.inpainting.harmonic_fill import harmonic_boundary_fill
+
+    polarity = str(profile.get("local_background_polarity") or "unknown")
+    try:
+        outcome = harmonic_boundary_fill(
+            original_bgr,
+            (np.asarray(cleanup_mask) > 0).astype(np.uint8) * 255,
+            spatial_class=spatial_class,
+            polarity=polarity if polarity in {
+                "dark_text_on_light_bg", "light_text_on_dark_bg", "mixed_unknown",
+            } else "unknown",
+        )
+    except ValueError as exc:
+        group.background_metrics["harmonic_fill"] = {"status": "error", "error": str(exc)}
+        return None
+    group.background_metrics["harmonic_fill"] = {
+        "status": outcome.get("status"),
+        "accepted": bool(outcome.get("accepted")),
+        "rejection_reasons": list(outcome.get("rejection_reasons") or []),
+        "iterations": int(outcome.get("iterations") or 0),
+        "runtime_ms": round(float(outcome.get("runtime_ms") or 0.0), 3),
+    }
+    if not outcome.get("accepted") or int(outcome.get("changed_pixels_outside_authorized_mask") or 0):
+        return None
+    return outcome["candidate_bgr"]
+
+
+def _component_continues_beyond_line(gray, component, origin, line_limit, median, contrast):
+    """True when a "glyph" is really art of the lettering's colour running through.
+
+    The component is followed on the full page at its own ink level; if >= 30 %
+    of that connected ink lies outside the line's allowed area
+    (polygon plus padding), it is a line of the art (a white "/" next to white
+    lettering), not a letter. Mid-tone polarity is not judged here.
+    """
+    if 118 < median < 138:
+        return False
+    ys, xs = np.nonzero(component)
+    if not ys.size:
+        return False
+    ox, oy = origin
+    height, width = gray.shape
+    reach = max(8, int(component.shape[0]))
+    y1, y2 = max(0, oy + ys.min() - reach), min(height, oy + ys.max() + reach + 1)
+    x1, x2 = max(0, ox + xs.min() - reach), min(width, ox + xs.max() + reach + 1)
+    window = gray[y1:y2, x1:x2]
+    # Followed at the component's own ink level (halfway from the background to
+    # its 10th/90th percentile): grey art lines touching white letters on a dark
+    # panel are not the letters' colour and must not make them "art".
+    values = gray[oy + ys, ox + xs].astype(np.float32)
+    offset = max(16.0, contrast * 0.28)
+    if median >= 138:
+        level = min(median - offset, (median + float(np.percentile(values, 10))) / 2.0)
+        ink = window <= level
+    else:
+        level = max(median + offset, (median + float(np.percentile(values, 90))) / 2.0)
+        ink = window >= level
+    count, labels = cv2.connectedComponents(ink.astype(np.uint8), connectivity=8)
+    seeds = labels[oy + ys - y1, ox + xs - x1]
+    seeds = np.unique(seeds[seeds > 0])
+    if not seeds.size:
+        return False
+    connected = np.isin(labels, seeds)
+    allowed = np.asarray(line_limit)[y1:y2, x1:x2] > 0
+    total = int(np.count_nonzero(connected))
+    return bool(total and np.count_nonzero(connected & ~allowed) >= 0.3 * total)
+
+
+def _glyph_strokes_in_network(network, roi_gray, dark_text, ink_level, background_level,
+                              stroke, line_height):
+    """Glyph strokes inside a component where letters fused with same-colour art.
+
+    The size filter dropped the whole component, letters included, so the word
+    stayed on the page ("WORD" over hatching came out as "ORD"). Inside it the
+    lettering is the part closest to the line's own ink level (within a quarter
+    of the ink-background contrast); hatching and outlines that reach that level
+    are thinner than lettering strokes, so an opening the size of the glyph stroke
+    removes them. Pieces are grown back one pixel for their anti-aliased edges and
+    kept only when glyph-height (0.3-1.3 h) and stroke-shaped (<= 75 % of their
+    bbox, or a narrow vertical stroke): a dark block of background is not a letter.
+    """
+    if stroke < 2.0:
+        return np.zeros(network.shape, dtype=bool)
+    reach = 0.25 * abs(float(background_level) - float(ink_level))
+    near_ink = (roi_gray <= ink_level + reach) if dark_text else (roi_gray >= ink_level - reach)
+    candidate = network & near_ink
+    size = max(2, int(round(0.7 * stroke)))
+    opened = cv2.morphologyEx(
+        candidate.astype(np.uint8), cv2.MORPH_OPEN,
+        cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (size, size)))
+    grown = (cv2.dilate(opened, np.ones((3, 3), np.uint8)) > 0) & network
+    count, labels, stats, _ = cv2.connectedComponentsWithStats(grown.astype(np.uint8), 8)
+    keep = np.zeros(network.shape, dtype=bool)
+    for label in range(1, count):
+        width = int(stats[label, cv2.CC_STAT_WIDTH])
+        height = int(stats[label, cv2.CC_STAT_HEIGHT])
+        area = int(stats[label, cv2.CC_STAT_AREA])
+        if not 0.3 * line_height <= height <= 1.3 * line_height:
+            continue
+        if area > 0.75 * width * height and width > 0.35 * line_height:
+            continue
+        keep |= labels == label
+    return keep
+
+
+def _component_is_background_shaped(component, area, width, height, line_height=None):
+    """Whether a large/box-spanning foreground component is background, not lettering.
+
+    The size filter in ``_component_text_mask`` exists to drop balloon interiors,
+    solid boxes and frames. It used to drop every large component, which removed a
+    bold word whose letters touch and any single-glyph line ("!", "?!"), leaving
+    the source text uncleaned. Background shapes are near-solid (>= 70 % of their
+    bbox), ring-like frames (pixels <= 35 % of the contour-filled area) or sparse
+    strokes spanning the box (< 12 % of their bbox: art lines merged with glyphs).
+    A narrow vertical solid is a glyph stroke (the bar of "!", "I"), not a patch.
+    """
+    bbox = max(1, width * height)
+    vertical_stroke = line_height is not None and width <= 0.35 * line_height <= height
+    if (area >= 0.70 * bbox and not vertical_stroke) or area < 0.12 * bbox:
+        return True
+    contours, _ = cv2.findContours(
+        component.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE,
+    )
+    filled = np.zeros(component.shape, dtype=np.uint8)
+    cv2.drawContours(filled, contours, -1, 1, thickness=-1)
+    return area <= 0.35 * max(1, int(np.count_nonzero(filled)))
+
+
+def _midtone_stroke_kernel(line_height):
+    """Black/top-hat structuring element wide enough for the line's stroke width.
+
+    A morphological hat only responds to features narrower than its kernel. A fixed
+    5x5 kernel caught just the edges of bold lettering on mid-tone backgrounds and
+    left a hollow mask (letter interiors survived the clean). Stroke width scales
+    with line height (~0.15 h for bold comic lettering).
+    """
+    size = max(5, min(31, 2 * int(round(max(1.0, float(line_height)) * 0.15)) + 1))
+    return cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (size, size))
+
+
+def _midtone_hats(roi_u8, line_height, values=None):
+    """Polarity-gated black/top-hat responses for a mid-tone line ROI.
+
+    With a stroke-sized kernel the opposite hat also fires on the background gaps
+    between letters (bright gaps between dark strokes), so only the hat of the
+    lettering's polarity is kept. The lettering side is the luminance extreme farther
+    from the median; comparable extremes (outlined lettering) keep both hats.
+    """
+    kernel = _midtone_stroke_kernel(line_height)
+    blackhat = cv2.morphologyEx(roi_u8, cv2.MORPH_BLACKHAT, kernel)
+    tophat = cv2.morphologyEx(roi_u8, cv2.MORPH_TOPHAT, kernel)
+    sample = np.asarray(roi_u8 if values is None else values, dtype=np.float32).ravel()
+    if sample.size:
+        median = float(np.median(sample))
+        dark_reach = median - float(np.percentile(sample, 5))
+        light_reach = float(np.percentile(sample, 95)) - median
+        if dark_reach > 1.5 * max(light_reach, 1.0):
+            tophat = np.zeros_like(tophat)
+        elif light_reach > 1.5 * max(dark_reach, 1.0):
+            blackhat = np.zeros_like(blackhat)
+    return blackhat, tophat
+
+
+def _outline_polarity_evidence(roi_gray, roi_seed, dark, light, line_height, display_footprint):
+    """Keep opposite-polarity pixels only when they hug the glyph core as an outline.
+
+    The footprint admits both polarities so a white outline around black lettering
+    is erased with it. Bright artwork next to dark lettering (a light column behind a
+    caption) satisfies the same luminance rule; it differs by extending away from the
+    glyph. Opposite-polarity components are kept only when nearly all of their pixels
+    lie within an outline-width ring around the seed.
+    """
+    seed = np.asarray(roi_seed) > 0
+    if not np.any(seed):
+        return dark, light
+    seed_median = float(np.median(roi_gray[seed]))
+    roi_median = float(np.median(roi_gray))
+    text_is_dark = seed_median <= roi_median
+    opposite = light if text_is_dark else dark
+    if not np.any(opposite):
+        return dark, light
+    ring_radius = (
+        max(3, min(24, int(round(max(1, line_height) * 0.25))))
+        if display_footprint
+        else max(2, min(12, int(round(max(1, line_height) * 0.12))))
+    )
+    distance = cv2.distanceTransform((~seed).astype(np.uint8), cv2.DIST_L2, 3)
+    count, labels, stats, _ = cv2.connectedComponentsWithStats(
+        opposite.astype(np.uint8), 8,
+    )
+    kept = np.zeros(opposite.shape, dtype=bool)
+    for label in range(1, count):
+        component = labels == label
+        inside_ring = np.count_nonzero(component & (distance <= ring_radius))
+        if inside_ring >= 0.8 * int(stats[label, cv2.CC_STAT_AREA]):
+            kept |= component
+    if text_is_dark:
+        return dark, kept
+    return kept, light
+
+
+def source_lettering_footprint(
+    original_bgr,
+    group,
+    cleanup_mask,
+    source_evidence_mask,
+):
+    """Return the physical pixels occupied by source lettering.
+
+    This is deliberately narrower than the OCR polygon and broader than the bare
+    glyph body: outlined/haloed manga lettering owns the stroke, the outline and
+    the antialias fringe, but never artwork outside the OCR evidence envelope.
+    """
+
+    if original_bgr is None or cleanup_mask is None:
+        return np.zeros((0, 0), dtype=np.uint8)
+    if source_evidence_mask is None:
+        source_evidence_mask = _build_text_mask(original_bgr.shape, [group])
+    if original_bgr.shape[:2] != cleanup_mask.shape[:2]:
+        return np.zeros(original_bgr.shape[:2], dtype=np.uint8)
+    if original_bgr.shape[:2] != source_evidence_mask.shape[:2]:
+        return np.zeros(original_bgr.shape[:2], dtype=np.uint8)
+
+    gray = cv2.cvtColor(original_bgr, cv2.COLOR_BGR2GRAY)
+    evidence = source_evidence_mask > 0
+    footprint = np.zeros(gray.shape, dtype=np.uint8)
+    display_footprint = _source_scoped_display_footprint_required(original_bgr, group)
+    seed = ((cleanup_mask > 0) & evidence).astype(np.uint8) * 255
+    if not np.any(seed):
+        seed, _ = _component_text_mask(
+            original_bgr,
+            group,
+            maximum_mask=source_evidence_mask,
+            strategy="conservative",
+        )
+        seed = cv2.bitwise_and(seed, source_evidence_mask)
+
+    for line in _cleanup_lines_for_group(group):
+        line_limit = np.zeros(gray.shape, dtype=np.uint8)
+        cv2.fillPoly(line_limit, [np.asarray(line.polygon, dtype=np.int32)], 255)
+        x, y, w, h = [int(value) for value in line.box]
+        padding = (
+            max(8, min(70, int(round(max(1, h) * 0.48))))
+            if display_footprint
+            else max(2, min(24, int(round(max(1, h) * 0.24))))
+        )
+        if padding > 0:
+            line_limit = cv2.dilate(
+                line_limit,
+                cv2.getStructuringElement(
+                    cv2.MORPH_ELLIPSE,
+                    (padding * 2 + 1, padding * 2 + 1),
+                ),
+                iterations=1,
+            )
+        line_limit = cv2.bitwise_and(line_limit, source_evidence_mask)
+        x1 = max(0, x - padding)
+        y1 = max(0, y - padding)
+        x2 = min(gray.shape[1], x + max(1, w) + padding)
+        y2 = min(gray.shape[0], y + max(1, h) + padding)
+        if x2 <= x1 or y2 <= y1:
+            continue
+        roi_limit = line_limit[y1:y2, x1:x2] > 0
+        if not np.any(roi_limit):
+            continue
+        roi_gray = gray[y1:y2, x1:x2]
+        values = roi_gray[roi_limit]
+        if values.size < 16:
+            continue
+        median = float(np.median(values))
+        lower = float(np.percentile(values, 18))
+        upper = float(np.percentile(values, 82))
+        spread = max(10.0, upper - lower)
+        dark = roi_gray <= max(8.0, min(220.0, median - max(14.0, spread * 0.32)))
+        light = roi_gray >= min(247.0, max(35.0, median + max(14.0, spread * 0.32)))
+        roi_seed = seed[y1:y2, x1:x2]
+        dark, light = _outline_polarity_evidence(
+            roi_gray, roi_seed, dark, light, h, display_footprint,
+        )
+        high_contrast = (dark | light) & roi_limit
+        support_radius = (
+            max(12, min(70, int(round(max(1, h) * 0.55))))
+            if display_footprint
+            else max(5, min(26, int(round(max(1, h) * 0.30))))
+        )
+        support = cv2.dilate(
+            roi_seed,
+            cv2.getStructuringElement(
+                cv2.MORPH_ELLIPSE,
+                (support_radius * 2 + 1, support_radius * 2 + 1),
+            ),
+            iterations=1,
+        )
+        selected = (high_contrast & (support > 0)).astype(np.uint8) * 255
+        selected = cv2.morphologyEx(
+            selected,
+            cv2.MORPH_CLOSE,
+            cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5)),
+        )
+        if np.any(selected):
+            selected = cv2.dilate(
+                selected,
+                cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3)),
+                iterations=1,
+            )
+            selected = cv2.bitwise_and(
+                selected,
+                line_limit[y1:y2, x1:x2],
+            )
+            footprint[y1:y2, x1:x2] = cv2.bitwise_or(
+                footprint[y1:y2, x1:x2],
+                selected,
+            )
+
+    footprint = cv2.bitwise_or(footprint, seed)
+    return cv2.bitwise_and(footprint, source_evidence_mask)
+
+
+_RESIDUAL_OCR_ENGINES = []
+
+
+def _legible_source_residual(cleaned_bgr, group, *, include_shared_tokens=False):
+    """Whether the source words are still legible on the cleaned pixels.
+
+    The pixel residual checks compare against a "lettering footprint" that, on
+    hatching or halftone, also contains the art next to the glyphs, so they kept
+    refusing reconstructions that had removed every letter. Reading the cleaned
+    crop with the OCR answers the question that matters: is the English still
+    there? ``not_legible`` only when the OCR ran and read none of the group's
+    meaningful source tokens; otherwise the caller keeps its refusal.
+    """
+    if not config.CLEAN_RESIDUAL_OCR_CHECK:
+        return {"status": "disabled"}
+    lines = _cleanup_lines_for_group(group)
+    if cleaned_bgr is None or not lines:
+        return {"status": "unavailable", "reason": "no_lines"}
+    source_tokens = set(source_completeness.meaningful_tokens(getattr(group, "text", "") or ""))
+    if not source_tokens:
+        return {"status": "unavailable", "reason": "no_meaningful_source_tokens"}
+    x1 = min(int(line.box[0]) for line in lines)
+    y1 = min(int(line.box[1]) for line in lines)
+    x2 = max(int(line.box[0] + line.box[2]) for line in lines)
+    y2 = max(int(line.box[1] + line.box[3]) for line in lines)
+    line_height = max(int(line.box[3]) for line in lines)
+    height, width = cleaned_bgr.shape[:2]
+    errors = []
+    if not _RESIDUAL_OCR_ENGINES:
+        _RESIDUAL_OCR_ENGINES.extend(_reocr_engines_for(getattr(group, "ocr_lang", None) or "en", errors))
+    if not _RESIDUAL_OCR_ENGINES:
+        return {"status": "unavailable", "reason": "engine_unavailable", "engine_errors": errors}
+    read_stream = []
+    # The detector's reading depends on the crop (a margin of half a line missed
+    # "RURAL" that a full line of margin read); either crop reading a source word
+    # means it is still there.
+    # Only readings over the group's own lines count: a wider crop can reach a
+    # neighbouring caption with the same words (two "*flicker*" on one page).
+    own_pad = max(2, int(round(0.25 * line_height)))
+    own = (x1 - own_pad, y1 - own_pad, x2 + own_pad, y2 + own_pad)
+    for pad in (max(4, int(round(0.5 * line_height))), max(8, line_height)):
+        cx, cy = max(0, x1 - pad), max(0, y1 - pad)
+        crop = cleaned_bgr[cy:min(height, y2 + pad), cx:min(width, x2 + pad)]
+        if not crop.size:
+            continue
+        for _engine, text, _confidence, crop_lines in _reocr_crop_candidates(
+                _RESIDUAL_OCR_ENGINES, crop, errors=errors):
+            for item in crop_lines:
+                if float(item.confidence or 0.0) < 0.5:
+                    continue
+                bx, by, bw, bh = (int(v) for v in item.box)
+                ix = max(0, min(cx + bx + bw, own[2]) - max(cx + bx, own[0]))
+                iy = max(0, min(cy + by + bh, own[3]) - max(cy + by, own[1]))
+                if ix * iy >= 0.3 * max(1, bw * bh):
+                    read_stream.extend(source_completeness.fold_tokens(item.text))
+        if read_stream:
+            _early_present = source_completeness._represented_token_forms(
+                source_completeness.fold_tokens(getattr(group, "text", "") or ""), [read_stream])
+            _early_target = set() if include_shared_tokens else set(source_completeness.fold_tokens(getattr(group, "translation", "") or ""))
+            if any(tok in _early_present and tok not in _early_target for tok in source_tokens):
+                break
+    if errors and not read_stream:
+        return {"status": "unavailable", "reason": "engine_failed", "engine_errors": errors}
+    present = source_completeness._represented_token_forms(
+        source_completeness.fold_tokens(getattr(group, "text", "") or ""), [read_stream])
+    target_tokens = set() if include_shared_tokens else set(source_completeness.fold_tokens(getattr(group, "translation", "") or ""))
+    legible = sorted(token for token in source_tokens if token in present and token not in target_tokens)
+    return {"status": "legible" if legible else "not_legible",
+            "legible_source_tokens": legible, "read_token_count": len(read_stream)}
+
+
+def residual_source_lettering_metrics(
+    original_bgr,
+    cleaned_bgr,
+    group,
+    cleanup_mask,
+    source_evidence_mask,
+):
+    """Measure source lettering that physically survived the cleanup."""
+
+    empty = {
+        "source_lettering_footprint_pixels": 0,
+        "residual_source_lettering_pixels": 0,
+        "largest_residual_source_lettering_component": 0,
+        "residual_source_lettering_detected": False,
+    }
+    if original_bgr is None or cleaned_bgr is None or cleanup_mask is None:
+        return empty
+    if original_bgr.shape[:2] != cleaned_bgr.shape[:2]:
+        return empty
+    if original_bgr.shape[:2] != cleanup_mask.shape[:2]:
+        return empty
+    if source_evidence_mask is None:
+        source_evidence_mask = _build_text_mask(original_bgr.shape, [group])
+    if original_bgr.shape[:2] != source_evidence_mask.shape[:2]:
+        return empty
+
+    footprint = source_lettering_footprint(
+        original_bgr,
+        group,
+        cleanup_mask,
+        source_evidence_mask,
+    )
+    if not np.any(footprint):
+        return empty
+    original_gray = cv2.cvtColor(original_bgr, cv2.COLOR_BGR2GRAY).astype(np.int16)
+    cleaned_gray = cv2.cvtColor(cleaned_bgr, cv2.COLOR_BGR2GRAY).astype(np.int16)
+    unchanged = np.abs(original_gray - cleaned_gray) <= config.VISUAL_DIFF_THRESHOLD
+    line_height = max((int(line.box[3]) for line in _cleanup_lines_for_group(group)), default=1)
+    # On textured art the footprint is "everything that differs from the
+    # background" inside the OCR box, hatching included, so all unmasked art used
+    # to count as surviving lettering. This check is about lettering left at the
+    # edge of the cleanup (fringe, outline, glow); a glyph missed entirely is the
+    # removal verifier's job (_uncovered_source_text_evidence).
+    edge_radius = max(3, int(round(0.15 * line_height)))
+    near_cleanup = cv2.dilate(
+        (np.asarray(cleanup_mask) > 0).astype(np.uint8),
+        cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * edge_radius + 1,) * 2),
+    ) > 0
+    residual = (
+        (footprint > 0)
+        & (cleanup_mask == 0)
+        & (source_evidence_mask > 0)
+        & near_cleanup
+        & unchanged
+    ).astype(np.uint8) * 255
+    count, _labels, stats, _centroids = cv2.connectedComponentsWithStats(
+        residual,
+        8,
+    )
+    largest = max(
+        (int(stats[label, cv2.CC_STAT_AREA]) for label in range(1, count)),
+        default=0,
+    )
+    residual_pixels = int(np.count_nonzero(residual))
+    footprint_pixels = int(np.count_nonzero(footprint))
+    pixel_limit = max(18, int(round(footprint_pixels * 0.015)))
+    component_limit = _glyph_scale_component_area(line_height)
+    detected = bool(residual_pixels > pixel_limit or largest >= component_limit)
+    return {
+        "source_lettering_footprint_pixels": footprint_pixels,
+        "residual_source_lettering_pixels": residual_pixels,
+        "residual_source_lettering_pixel_limit": int(pixel_limit),
+        "largest_residual_source_lettering_component": int(largest),
+        "residual_source_lettering_component_limit": int(component_limit),
+        "residual_source_lettering_detected": detected,
+    }
+
+
+def _safe_white_text_cleanup_mask(img_bgr, group, group_mask, draw_box):
+    del draw_box
+    component_mask, _ = _component_text_mask(
+        img_bgr,
+        group,
+        maximum_mask=group_mask,
+        strategy="primary",
+    )
+    return component_mask
+
+
+def _classify_background_region(img_bgr, group, page_index=None):
+    if group.classification == "sfx":
+        return "sfx_area", {"reason": "group_classified_as_sfx"}
+
+    with profile_step("background.safe_draw_box", page_index=page_index):
+        draw_box = _safe_draw_box(group.box, img_bgr.shape, group)
+    x, y, w, h = draw_box
+    roi = img_bgr[y : y + h, x : x + w]
+    if roi.size == 0:
+        return "unknown", {"reason": "empty_region"}
+
+    with profile_step("background.color_and_text_mask", page_index=page_index):
+        gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
+        hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
+        source_mask = _build_text_mask(img_bgr.shape, [group], padding=2)[y : y + h, x : x + w]
+        background_pixels = source_mask == 0
+        if np.count_nonzero(background_pixels) < max(32, int(gray.size * 0.18)):
+            background_pixels = np.ones(gray.shape, dtype=bool)
+
+        values = gray[background_pixels]
+        saturation = hsv[:, :, 1][background_pixels]
+        brightness = float(np.mean(values))
+        brightness_std = float(np.std(values))
+        saturation_mean = float(np.mean(saturation))
+        white_ratio = float(np.mean((values >= 220) & (saturation <= 45)))
+        dark_ratio = float(np.mean(values <= 75))
+
+    # Text polygons from OCR can occupy nearly the whole tight draw box.  In
+    # that case the glyphs themselves make a clean white page look textured.
+    # Sample a ring around the group as an independent signal for open
+    # narration printed directly on a white page.
+    image_h, image_w = img_bgr.shape[:2]
+    context_pad_x = max(16, min(64, int(w * 0.10)))
+    context_pad_y = max(12, min(64, int(h * 1.50)))
+    context_x1 = max(0, x - context_pad_x)
+    context_y1 = max(0, y - context_pad_y)
+    context_x2 = min(image_w, x + w + context_pad_x)
+    context_y2 = min(image_h, y + h + context_pad_y)
+    with profile_step("background.context_sampling", page_index=page_index):
+        context_roi = img_bgr[context_y1:context_y2, context_x1:context_x2]
+        context_gray = cv2.cvtColor(context_roi, cv2.COLOR_BGR2GRAY)
+        context_hsv = cv2.cvtColor(context_roi, cv2.COLOR_BGR2HSV)
+        context_background = np.ones(context_gray.shape, dtype=bool)
+        inner_x1 = max(0, x - context_x1)
+        inner_y1 = max(0, y - context_y1)
+        inner_x2 = min(context_gray.shape[1], x + w - context_x1)
+        inner_y2 = min(context_gray.shape[0], y + h - context_y1)
+        context_background[inner_y1:inner_y2, inner_x1:inner_x2] = False
+        context_values = context_gray[context_background]
+        context_saturation = context_hsv[:, :, 1][context_background]
+        context_brightness = float(np.mean(context_values)) if context_values.size else brightness
+        context_white_ratio = (
+            float(np.mean((context_values >= 220) & (context_saturation <= 45)))
+            if context_values.size
+            else white_ratio
+        )
+        context_dark_ratio = (
+            float(np.mean(context_values <= 75)) if context_values.size else dark_ratio
+        )
+        context_saturation_mean = (
+            float(np.mean(context_saturation)) if context_saturation.size else saturation_mean
+        )
+
+    with profile_step("background.texture_edges_gradients", page_index=page_index):
+        blurred = cv2.GaussianBlur(gray, (7, 7), 0)
+        local_texture = cv2.absdiff(gray, blurred)
+        local_texture_mean = float(np.mean(local_texture[background_pixels]))
+        edges = cv2.Canny(gray, 55, 155)
+        edge_density = float(np.mean((edges > 0)[background_pixels]))
+        sobel_x = cv2.Sobel(gray, cv2.CV_32F, 1, 0, ksize=3)
+        sobel_y = cv2.Sobel(gray, cv2.CV_32F, 0, 1, ksize=3)
+        gradient_magnitude = cv2.magnitude(sobel_x, sobel_y)
+        gradient_strength = float(np.mean(gradient_magnitude[background_pixels]))
+
+    # An OCR polygon can cover almost the whole draw box, in which case the
+    # sampled "background" falls back to every pixel and the group's own glyphs
+    # dominate every statistic above.  Measure the dark backdrop on its own,
+    # away from the glyph halo, so the region can be judged by what it actually
+    # is instead of by the lettering printed on it.
+    with profile_step("background.interior_backdrop", page_index=page_index):
+        dark_backdrop = ((gray <= 75) & background_pixels).astype(np.uint8)
+        interior_core = cv2.erode(
+            dark_backdrop,
+            np.ones((5, 5), dtype=np.uint8),
+            iterations=1,
+        ) > 0
+        if np.count_nonzero(interior_core) < 32:
+            interior_core = dark_backdrop > 0
+        if np.any(interior_core):
+            core_values = gray[interior_core]
+            interior_dark_std = float(np.std(core_values))
+            interior_value_span = float(
+                np.percentile(core_values, 97) - np.percentile(core_values, 3)
+            )
+            interior_dark_texture = float(np.mean(local_texture[interior_core]))
+            interior_dark_gradient = float(np.mean(gradient_magnitude[interior_core]))
+        else:
+            interior_dark_std = 255.0
+            interior_value_span = 255.0
+            interior_dark_texture = 255.0
+            interior_dark_gradient = 255.0
+
+    # Hough must inspect the background, not strokes from the OCR text itself.
+    # Otherwise ordinary letters inside a clean white balloon look like dozens
+    # of diagonal/action lines and incorrectly disable flat-fill cleanup.
+    with profile_step("background.hough_lines", page_index=page_index):
+        text_exclusion = cv2.dilate(
+            source_mask,
+            np.ones((5, 5), dtype=np.uint8),
+            iterations=1,
+        )
+        background_edges = edges.copy()
+        background_edges[text_exclusion > 0] = 0
+
+        minimum_line = max(12, int(min(w, h) * 0.16))
+        hough = cv2.HoughLinesP(
+            background_edges,
+            1,
+            np.pi / 180,
+            threshold=max(12, minimum_line // 2),
+            minLineLength=minimum_line,
+            maxLineGap=5,
+        )
+        # OpenCV encodes the same segments differently across releases:
+        # ``(N, 1, 4)`` up to OpenCV 4 and ``(N, 4)`` from OpenCV 5 on. Both are
+        # normalised to ``(N, 4)`` here. Anything whose trailing axis is not the
+        # 4 segment coordinates is treated as "no lines detected" instead of
+        # being reshaped into fabricated coordinates.
+        segments = np.empty((0, 4), dtype=np.int32)
+        if hough is not None:
+            candidate = np.asarray(hough)
+            if candidate.ndim >= 2 and candidate.shape[-1] == 4:
+                segments = candidate.reshape(-1, 4)
+
+        diagonal_lines = 0
+        long_lines = 0
+        for entry in segments:
+            x1, y1, x2, y2 = (int(value) for value in entry)
+            length = float(np.hypot(x2 - x1, y2 - y1))
+            if length < minimum_line:
+                continue
+            long_lines += 1
+            angle = abs(float(np.degrees(np.arctan2(y2 - y1, x2 - x1)))) % 180
+            acute = min(angle, 180 - angle)
+            if 12 <= acute <= 78:
+                diagonal_lines += 1
+
+    metrics = {
+        "draw_box": list(draw_box),
+        "image_width": int(image_w),
+        "image_height": int(image_h),
+        "brightness_mean": round(brightness, 3),
+        "brightness_std": round(brightness_std, 3),
+        "saturation_mean": round(saturation_mean, 3),
+        "white_pixel_ratio": round(white_ratio, 4),
+        "dark_pixel_ratio": round(dark_ratio, 4),
+        "context_brightness_mean": round(context_brightness, 3),
+        "context_white_pixel_ratio": round(context_white_ratio, 4),
+        "context_dark_pixel_ratio": round(context_dark_ratio, 4),
+        "context_saturation_mean": round(context_saturation_mean, 3),
+        "local_texture_mean": round(local_texture_mean, 3),
+        "edge_density": round(edge_density, 4),
+        "gradient_strength": round(gradient_strength, 3),
+        "long_line_count": int(long_lines),
+        "diagonal_line_count": int(diagonal_lines),
+    }
+    strongly_uniform_white = (
+        brightness >= max(235.0, float(config.WHITE_BACKGROUND_MIN_BRIGHTNESS))
+        and brightness_std <= min(34.0, float(config.WHITE_BACKGROUND_MAX_STD))
+        and saturation_mean <= min(12.0, float(config.WHITE_BACKGROUND_MAX_SATURATION))
+        and white_ratio >= max(0.90, float(config.WHITE_BACKGROUND_MIN_RATIO))
+        and local_texture_mean <= min(4.0, float(config.WHITE_BACKGROUND_MAX_TEXTURE))
+        and edge_density <= min(0.035, float(config.WHITE_BACKGROUND_MAX_EDGE_DENSITY))
+    )
+    enclosure_like = bool(
+        group.inside_balloon_like_region
+        or group.inside_narration_box_like_region
+    )
+    dominant_white_enclosure = (
+        enclosure_like
+        and brightness >= config.WHITE_ENCLOSURE_MIN_BRIGHTNESS
+        and white_ratio >= config.WHITE_ENCLOSURE_MIN_RATIO
+        and dark_ratio <= config.WHITE_ENCLOSURE_MAX_DARK_RATIO
+        and saturation_mean <= config.WHITE_ENCLOSURE_MAX_SATURATION
+    )
+    stylized_white_enclosure = (
+        enclosure_like
+        and brightness >= config.WHITE_STYLIZED_ENCLOSURE_MIN_BRIGHTNESS
+        and white_ratio >= config.WHITE_STYLIZED_ENCLOSURE_MIN_RATIO
+        and dark_ratio <= config.WHITE_STYLIZED_ENCLOSURE_MAX_DARK_RATIO
+        and saturation_mean <= config.WHITE_STYLIZED_ENCLOSURE_MAX_SATURATION
+    )
+    compact_text = re.sub(r"[^A-Z0-9]", "", _ascii_fold(group.text).upper())
+    near_page_edge = y <= int(image_h * 0.22) or y + h >= int(image_h * 0.78)
+    semantic_short_narration = (
+        compact_text in COMMON_ENGLISH_WORDS
+        and len(compact_text) >= 2
+        and near_page_edge
+    )
+    white_context = (
+        context_brightness >= 238.0
+        and context_white_ratio >= 0.93
+        and context_dark_ratio <= 0.03
+        and context_saturation_mean <= 8.0
+    )
+    relaxed_white_context = (
+        context_brightness >= 248.0
+        and context_white_ratio >= 0.975
+        and context_dark_ratio <= 0.015
+        and context_saturation_mean <= 5.0
+    )
+    short_text_white_context = (
+        group.classification in {"narration", "unknown"}
+        and 3 <= len(compact_text) <= 14
+        and w >= max(38, int(h * 1.0))
+        and h <= 96
+        and context_brightness >= 242.0
+        and context_white_ratio >= 0.94
+        and context_dark_ratio <= 0.04
+        and context_saturation_mean <= 8.0
+        and long_lines == 0
+        and diagonal_lines <= 1
+    )
+    open_white_narration = (
+        group.classification in {"narration", "unknown"}
+        and w >= max(50, int(h * 1.5))
+        and (
+            len(compact_text) >= 8
+            or semantic_short_narration
+            or short_text_white_context
+            or (white_context and len(compact_text) >= 3)
+            or (relaxed_white_context and len(compact_text) >= 5)
+        )
+        and (
+            (
+                brightness >= 190.0
+                and white_ratio >= 0.70
+                and dark_ratio <= 0.21
+                and saturation_mean <= 8.0
+            )
+            or short_text_white_context
+            or white_context
+        )
+    )
+    dark_context = (
+        context_brightness <= 32.0
+        and context_dark_ratio >= 0.96
+        and context_white_ratio <= 0.02
+        and context_saturation_mean <= 12.0
+    )
+    # ``dark_context`` samples the ring *around* the group, so bright artwork
+    # next to an open narration caption contaminates it.  Measure the group's
+    # own interior as an independent signal: a region that is dark, flat and
+    # free of local structure is a uniform dark backdrop regardless of what
+    # surrounds it.  The bar is deliberately stricter than ``uniform_dark``
+    # (used for enclosed dark balloons) because no balloon contour proves the
+    # extent of the region here.
+    uniform_dark_interior = bool(
+        # The non-dark minority has to be small enough to be the lettering
+        # itself; the uniformity evidence below is measured on the dark
+        # backdrop only, so it stays valid however the glyphs are sampled.
+        dark_ratio >= 0.80
+        and interior_dark_std <= 18.0
+        and interior_value_span <= 40.0
+        and interior_dark_texture <= 6.0
+        and interior_dark_gradient <= 30.0
+        and saturation_mean <= 60.0
+    )
+    open_dark_narration = (
+        group.classification in {"narration", "unknown"}
+        and w >= max(80, int(h * 1.8))
+        and len(compact_text) >= 8
+        and (
+            dark_context
+            or (uniform_dark_interior and not group.inside_balloon_like_region)
+        )
+    )
+    strict_uniform_light = (
+        brightness >= config.WHITE_BACKGROUND_MIN_BRIGHTNESS
+        and brightness_std <= config.WHITE_BACKGROUND_MAX_STD
+        and saturation_mean <= config.WHITE_BACKGROUND_MAX_SATURATION
+        and white_ratio >= config.WHITE_BACKGROUND_MIN_RATIO
+        and local_texture_mean <= config.WHITE_BACKGROUND_MAX_TEXTURE
+        and edge_density <= config.WHITE_BACKGROUND_MAX_EDGE_DENSITY
+        and (
+            strongly_uniform_white
+            or dominant_white_enclosure
+            or diagonal_lines <= config.WHITE_BACKGROUND_MAX_DIAGONAL_LINES
+        )
+    )
+    uniform_light = bool(
+        strict_uniform_light
+        or dominant_white_enclosure
+        or stylized_white_enclosure
+        or open_white_narration
+    )
+    uniform_dark = (
+        brightness <= 92
+        and brightness_std <= 42
+        and local_texture_mean <= 11
+        and edge_density <= 0.14
+    )
+    speed_lines = (
+        not strongly_uniform_white
+        and not dominant_white_enclosure
+        and not stylized_white_enclosure
+        and not open_white_narration
+        and
+        diagonal_lines >= 3
+        and (
+            edge_density >= 0.055
+            or local_texture_mean >= 8.0
+            or gradient_strength >= 42.0
+        )
+    )
+    textured = (
+        brightness_std >= 42
+        or local_texture_mean >= 12
+        or edge_density >= 0.14
+        or gradient_strength >= 58
+    )
+    open_light_art_caption = bool(
+        group.classification in {"speech", "narration", "unknown"}
+        and (
+            enclosure_like
+            or (
+                brightness >= 205.0
+                and saturation_mean <= 30.0
+                and white_ratio >= 0.40
+                and dark_ratio <= 0.03
+                and context_brightness >= 180.0
+                and context_brightness < 238.0
+                and 0.35 <= context_white_ratio < 0.86
+                and context_dark_ratio <= 0.04
+                and context_saturation_mean <= 30.0
+                and local_texture_mean <= 2.0
+                and edge_density <= 0.02
+                and gradient_strength <= 28.0
+            )
+        )
+        and not strongly_uniform_white
+        and not open_white_narration
+        and brightness >= 170.0
+        and white_ratio < 0.96
+        and dark_ratio <= 0.08
+        and context_white_ratio < 0.86
+        and context_brightness < 238.0
+        and long_lines <= 1
+        and diagonal_lines <= 1
+    )
+
+    if open_light_art_caption:
+        background_type = "textured_art"
+    elif open_white_narration or open_dark_narration:
+        background_type = "narration_box"
+    elif strongly_uniform_white:
+        background_type = (
+            "white_balloon"
+            if group.classification == "speech"
+            else "narration_box"
+        )
+    elif uniform_light and group.inside_balloon_like_region:
+        background_type = "white_balloon"
+    elif uniform_light and group.inside_narration_box_like_region:
+        background_type = "narration_box"
+    elif speed_lines:
+        background_type = "speed_lines"
+    elif (uniform_dark or dark_context) and group.inside_balloon_like_region:
+        background_type = "dark_balloon"
+    elif textured:
+        background_type = "textured_art"
+    else:
+        background_type = "unknown"
+    metrics["background_type"] = background_type
+    local_profile = _estimate_local_background_profile(
+        img_bgr,
+        group,
+        source_mask,
+        draw_box,
+    )
+    metrics.update(local_profile)
+    metrics["uniform_light"] = bool(uniform_light)
+    metrics["strict_uniform_light"] = bool(strict_uniform_light)
+    metrics["strongly_uniform_white"] = bool(strongly_uniform_white)
+    metrics["dominant_white_enclosure"] = bool(dominant_white_enclosure)
+    metrics["stylized_white_enclosure"] = bool(stylized_white_enclosure)
+    metrics["open_white_narration"] = bool(open_white_narration)
+    metrics["open_dark_narration"] = bool(open_dark_narration)
+    metrics["open_light_art_caption"] = bool(open_light_art_caption)
+    metrics["dark_context"] = bool(dark_context)
+    metrics["uniform_dark_interior"] = bool(uniform_dark_interior)
+    metrics["interior_dark_std"] = round(interior_dark_std, 3)
+    metrics["interior_value_span"] = round(interior_value_span, 3)
+    metrics["interior_dark_texture"] = round(interior_dark_texture, 3)
+    metrics["interior_dark_gradient"] = round(interior_dark_gradient, 3)
+    metrics["relaxed_white_context"] = bool(relaxed_white_context)
+    metrics["short_text_white_context"] = bool(short_text_white_context)
+    metrics["background_edge_density"] = round(float(np.mean(background_edges > 0)), 4)
+    return background_type, metrics
+
+
+def _estimate_local_background_profile(img_bgr, group, source_mask, draw_box):
+    """Estimate the background from the pixels immediately around the glyphs.
+
+    This is deliberately image-local.  It does not know the title, page, source,
+    or an expected colour.  The ring is preferred over the whole OCR box because
+    the latter is often dominated by antialiased lettering.  The profile is only
+    used for uniform/low-variation fills; textured artwork remains on the
+    conservative inpainting path.
+    """
+    empty = {
+        "local_background_class": "unknown",
+        "local_background_sample_count": 0,
+        "local_background_median_bgr": None,
+        "local_background_std_bgr": None,
+        "local_background_luminance_std": None,
+        "local_background_spatial_gradient": None,
+        "local_background_polarity": "unknown",
+        "local_background_spatial_class": "INSUFFICIENT_EVIDENCE",
+        "local_background_spatial_tile_count": 0,
+        "local_background_spatial_tile_luma_spread": None,
+        "local_background_spatial_edge_fraction": None,
+    }
+    if img_bgr is None or source_mask is None or not np.any(source_mask):
+        return empty
+    x, y, w, h = (int(value) for value in draw_box)
+    image_h, image_w = img_bgr.shape[:2]
+    x1, y1 = max(0, x), max(0, y)
+    x2, y2 = min(image_w, x + w), min(image_h, y + h)
+    if x2 <= x1 or y2 <= y1:
+        return empty
+    roi = img_bgr[y1:y2, x1:x2]
+    if tuple(source_mask.shape[:2]) == tuple(roi.shape[:2]):
+        local_mask = (source_mask > 0).astype(np.uint8)
+    else:
+        local_mask = (source_mask[y1:y2, x1:x2] > 0).astype(np.uint8)
+    ring_radius = max(3, min(12, int(round(max(2, min(w, h) * 0.08)))))
+    ring = cv2.dilate(local_mask, cv2.getStructuringElement(
+        cv2.MORPH_ELLIPSE, (ring_radius * 2 + 1, ring_radius * 2 + 1),
+    ), iterations=1) > 0
+    ring &= local_mask == 0
+    # Keep samples in the owned draw box. If the text fills the box, use the
+    # non-text pixels there rather than inventing a colour from a global page.
+    samples = roi[ring]
+    if samples.shape[0] < 12:
+        samples = roi[local_mask == 0]
+    if samples.shape[0] < 12:
+        return empty
+    samples = samples.astype(np.float32)
+    median_bgr = np.median(samples, axis=0)
+    std_bgr = np.std(samples, axis=0)
+    sample_gray = cv2.cvtColor(samples.reshape(-1, 1, 3).astype(np.uint8), cv2.COLOR_BGR2GRAY).reshape(-1)
+    luminance_std = float(np.std(sample_gray))
+    hsv_samples = cv2.cvtColor(samples.reshape(-1, 1, 3).astype(np.uint8), cv2.COLOR_BGR2HSV).reshape(-1, 3)
+    median_luma = float(np.median(sample_gray))
+    median_sat = float(np.median(hsv_samples[:, 1]))
+    # A directional gradient is meaningful only when the ring has enough
+    # spatial extent.  Compare robust medians on opposite sides of the mask.
+    gradient = 0.0
+    if roi.shape[0] >= 8 and roi.shape[1] >= 8:
+        gray_roi = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY).astype(np.float32)
+        top = gray_roi[: max(2, gray_roi.shape[0] // 5)]
+        bottom = gray_roi[-max(2, gray_roi.shape[0] // 5):]
+        left = gray_roi[:, : max(2, gray_roi.shape[1] // 5)]
+        right = gray_roi[:, -max(2, gray_roi.shape[1] // 5):]
+        gradient = float(max(
+            abs(float(np.median(top)) - float(np.median(bottom))),
+            abs(float(np.median(left)) - float(np.median(right))),
+        ))
+    robust_std = float(np.mean(std_bgr))
+    # Aggregate standard deviation loses where its variation occurs. Compare
+    # robust luminance/color medians in occupied ring tiles and detect edges in
+    # those same trusted samples. These are diagnostics/gating evidence only;
+    # they do not label hidden pixels or authorize an algorithm by themselves.
+    gray_roi = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
+    tile_luma = []
+    tile_color = []
+    tile_positions = []
+    for row in range(4):
+        ya, yb = row * roi.shape[0] // 4, (row + 1) * roi.shape[0] // 4
+        for col in range(4):
+            xa, xb = col * roi.shape[1] // 4, (col + 1) * roi.shape[1] // 4
+            tile_samples = roi[ya:yb, xa:xb][ring[ya:yb, xa:xb]]
+            if tile_samples.shape[0] < 8:
+                continue
+            tile_luma.append(float(np.median(gray_roi[ya:yb, xa:xb][ring[ya:yb, xa:xb]])))
+            tile_color.append(np.median(tile_samples.astype(np.float32), axis=0))
+            tile_positions.append(((col + 0.5) / 4.0, (row + 0.5) / 4.0))
+    edge_map = cv2.Canny(gray_roi, 55, 155) > 0
+    ring_count = max(1, int(np.count_nonzero(ring)))
+    edge_fraction = float(np.count_nonzero(edge_map & ring) / ring_count)
+    tile_spread = float(np.ptp(tile_luma)) if len(tile_luma) >= 2 else None
+    color_spread = (
+        float(np.max(np.linalg.norm(np.asarray(tile_color) - np.asarray(tile_color).mean(axis=0), axis=1)))
+        if len(tile_color) >= 2 else None
+    )
+    plane_residual = None
+    if len(tile_luma) >= 4:
+        design = np.column_stack((np.asarray(tile_positions), np.ones(len(tile_luma))))
+        fitted = design @ np.linalg.lstsq(design, np.asarray(tile_luma), rcond=None)[0]
+        plane_residual = float(np.median(np.abs(np.asarray(tile_luma) - fitted)))
+    if len(tile_luma) < 4:
+        spatial_class = "INSUFFICIENT_EVIDENCE"
+    elif tile_spread is not None and tile_spread <= 6.0 and color_spread <= 8.0 and edge_fraction <= 0.01:
+        spatial_class = "PROVEN_UNIFORM"
+    elif (
+        tile_spread is not None and tile_spread <= 48.0
+        and plane_residual is not None
+        # Structure means edges. A ring with no Canny edges at all varies only at
+        # low frequency (a translucent box over faint art), whatever the plane fit
+        # says; it is smooth, not textured.
+        and (plane_residual <= 3.0 or edge_fraction <= 0.01)
+        and edge_fraction <= 0.25
+    ):
+        # Low residual edge density is necessary, not sufficient, for a smooth
+        # field. The harmonic solver keeps its independent review gates.
+        spatial_class = "SMOOTH_NONUNIFORM"
+    else:
+        spatial_class = "STRUCTURED_OR_TEXTURED"
+    if robust_std <= 11.0 and luminance_std <= 12.0:
+        if median_luma >= 190.0:
+            background_class = "solid_light"
+        elif median_luma <= 85.0:
+            background_class = "solid_dark"
+        else:
+            background_class = "solid_colored" if median_sat >= 28.0 else "solid_midtone"
+    elif gradient >= 18.0 and robust_std <= 48.0 and luminance_std <= 42.0:
+        background_class = "gradient"
+    else:
+        background_class = "textured_art"
+    polarity = "dark_text_on_light_bg" if median_luma >= 150.0 else (
+        "light_text_on_dark_bg" if median_luma <= 105.0 else "mixed_unknown"
+    )
+    return {
+        "local_background_class": background_class,
+        "local_background_sample_count": int(samples.shape[0]),
+        "local_background_median_bgr": [round(float(v), 2) for v in median_bgr],
+        "local_background_std_bgr": [round(float(v), 2) for v in std_bgr],
+        "local_background_luminance_std": round(luminance_std, 3),
+        "local_background_spatial_gradient": round(gradient, 3),
+        "local_background_polarity": polarity,
+        "local_background_spatial_class": spatial_class,
+        "local_background_spatial_tile_count": len(tile_luma),
+        "local_background_spatial_tile_luma_spread": round(tile_spread, 3) if tile_spread is not None else None,
+        "local_background_spatial_edge_fraction": round(edge_fraction, 5),
+        "local_background_spatial_plane_residual": round(plane_residual, 3) if plane_residual is not None else None,
+    }
+
+
+def _source_scoped_speech_reason(group):
+    """Empty when the group is proven ordinary speech we may clean narrowly.
+
+    The narrow fallback is only allowed where the source itself is the evidence:
+    an ordinary story group whose ownership is complete and whose lines are
+    individually traceable. A target-language translation is not needed to erase
+    source text in a CLEAN-only plan. Anything
+    unproven - a stylized title, an SFX, a preserved entity, an unreadable OCR
+    result, an incomplete source - keeps the legacy behaviour and fails closed.
+    """
+
+    if not config.SOURCE_SCOPED_SPEECH_CLEANUP:
+        return "source_scoped_disabled"
+    classification = str(getattr(group, "classification", "") or "").strip().lower()
+    if classification in {"logo", "sfx"} or (
+        classification == "decorative"
+        and not _decorative_textured_story_promotion_allowed(group)
+        and not _legible_sentence_promotion_allowed(group)
+    ):
+        return "source_scoped_requires_story_translation_authority"
+    if getattr(group, "preserve_as_name", False):
+        return "source_scoped_excludes_preserved_entity"
+    if not _group_has_story_translation_authority(group):
+        return "source_scoped_requires_story_translation_authority"
+    if group.ocr_quality_blocked or _ocr_unintelligible_source_text(group.text):
+        return "source_scoped_requires_intelligible_source"
+    status = str((getattr(group, "source_completeness", None) or {}).get("status") or "")
+    if status != source_completeness.STATUS_PASS:
+        return "source_scoped_requires_source_completeness_pass"
+    lines = _cleanup_lines_for_group(group)
+    if not lines:
+        return "source_scoped_requires_owned_source_lines"
+    for line in lines:
+        if not (getattr(line, "metadata", None) or {}).get("ocr_line_id"):
+            return "source_scoped_requires_line_provenance"
+    return ""
+
+
+def _source_scoped_display_footprint_required(original_bgr, group):
+    """Whether source-scoped cleanup must include outline/glow footprint.
+
+    Display lettering is materially larger than its dark/light core.  If the
+    cleanup only removes the core component, the translated text can render on
+    top while red/blue/white source edges remain physically visible.  This
+    helper is evidence-based and still bounded by the owned source geometry.
+    """
+
+    try:
+        lettering = extract_original_lettering_profile(
+            original_bgr,
+            group,
+            group.box,
+        )
+    except Exception:
+        return False
+    if float(lettering.get("confidence") or 0.0) < 0.42:
+        return False
+    color_family = str(lettering.get("color_family") or "")
+    if color_family in {"red", "blue"}:
+        return True
+    if color_family == "white" and (
+        int(lettering.get("glow_strength") or 0) > 0
+        or float(lettering.get("glyph_occupancy") or 0.0) >= 0.32
+    ):
+        return True
+    return bool(
+        float(lettering.get("glyph_occupancy") or 0.0) >= 0.18
+        and int(lettering.get("glow_strength") or 0) > 0
+    )
+
+
+def _build_display_source_evidence_mask(image_shape, group):
+    """Source-evidence envelope for large display lettering.
+
+    OCR boxes often hug the glyph body while manga lettering glow/outline
+    extends outside that rectangle.  This mask remains per-line and local, but
+    expands by observed line height so source-scoped cleanup can remove the
+    physical lettering the reader sees.
+    """
+
+    mask = np.zeros(image_shape[:2], dtype=np.uint8)
+    relaxed_light_context = bool(
+        _proven_light_cleanup_region(getattr(group, "background_metrics", {}))
+        and (getattr(group, "background_metrics", {}) or {}).get("relaxed_white_context")
+    )
+    h_img, w_img = image_shape[:2]
+    for line in _cleanup_lines_for_group(group):
+        line_mask = np.zeros(image_shape[:2], dtype=np.uint8)
+        cv2.fillPoly(line_mask, [np.asarray(line.polygon, dtype=np.int32)], 255)
+        if relaxed_light_context:
+            padding = max(
+                _mask_padding(line.box),
+                min(64, int(round(max(1, int(line.box[3])) * 0.34))),
+            )
+        else:
+            padding = max(
+                _mask_padding(line.box),
+                min(48, int(round(max(1, int(line.box[3])) * 0.18))),
+            )
+        if padding > 0:
+            line_mask = cv2.dilate(
+                line_mask,
+                cv2.getStructuringElement(
+                    cv2.MORPH_ELLIPSE,
+                    (padding * 2 + 1, padding * 2 + 1),
+                ),
+                iterations=1,
+            )
+        mask = cv2.bitwise_or(mask, line_mask)
+        if relaxed_light_context:
+            x, y, w, h = (int(v) for v in line.box)
+            xpad = min(
+                240,
+                max(96, int(round(max(1, int(group.box[2])) * 0.36))),
+            )
+            ypad = min(60, max(24, int(round(max(1, h) * 0.32))))
+            cv2.rectangle(
+                mask,
+                (max(0, x - xpad), max(0, y - ypad)),
+                (min(w_img - 1, x + w + xpad), min(h_img - 1, y + h + ypad)),
+                255,
+                -1,
+            )
+    return mask
+
+
+def _light_enclosure_interior(original_bgr, group, background_metrics):
+    """Interior of the light balloon/box holding the group, letters included.
+
+    The OCR box of text set tight in a balloon reaches the balloon border; the
+    mask followed it, the border was taken for crossing art and the region was
+    refused (or the border was erased). The interior is the light connected region
+    that holds the lettering, with its holes (the letters) filled, slightly eroded
+    so the border line stays outside. ``None`` when the light region is not closed
+    within a generous window (open narration on art), so nothing is clipped.
+    """
+    lines = _cleanup_lines_for_group(group)
+    if original_bgr is None or not lines:
+        return None
+    gray = cv2.cvtColor(original_bgr, cv2.COLOR_BGR2GRAY)
+    height, width = gray.shape
+    line_h = max(int(line.box[3]) for line in lines)
+    x1 = min(int(line.box[0]) for line in lines)
+    y1 = min(int(line.box[1]) for line in lines)
+    x2 = max(int(line.box[0] + line.box[2]) for line in lines)
+    y2 = max(int(line.box[1] + line.box[3]) for line in lines)
+    # Balloons are larger than their text; the window grows with the text block.
+    pad = max(3 * line_h, x2 - x1, y2 - y1)
+    wx1, wy1, wx2, wy2 = max(0, x1 - pad), max(0, y1 - pad), min(width, x2 + pad), min(height, y2 + pad)
+    roi = gray[wy1:wy2, wx1:wx2]
+    level = float(np.median(np.asarray(
+        (background_metrics or {}).get("local_background_median_bgr") or [np.percentile(roi, 90)] * 3)))
+    light = (roi >= level - 40).astype(np.uint8)
+    count, labels, stats, _ = cv2.connectedComponentsWithStats(light, 4)
+    box = np.zeros(roi.shape, dtype=bool)
+    box[y1 - wy1:y2 - wy1, x1 - wx1:x2 - wx1] = True
+    inside_box = np.bincount(labels[box], minlength=count)
+    owners = [label for label in range(1, count) if inside_box[label] > 0.05 * np.count_nonzero(box)]
+    if not owners:
+        return None
+    region = np.isin(labels, owners)
+    if region[0, :].any() or region[-1, :].any() or region[:, 0].any() or region[:, -1].any():
+        return None  # not closed inside the window: no enclosure to clip to
+    filled = region.astype(np.uint8) * 255
+    contours, _ = cv2.findContours(filled, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    cv2.drawContours(filled, contours, -1, 255, thickness=-1)
+    filled = cv2.erode(filled, np.ones((3, 3), np.uint8))
+    interior = np.zeros(gray.shape, dtype=bool)
+    interior[wy1:wy2, wx1:wx2] = filled > 0
+    return interior
+
+
+def _remove_text_for_group(
+    current_bgr,
+    original_bgr,
+    group,
+    strategy="primary",
+    forensic_capture=None,
+):
+    if strategy == "caption_effect":
+        return _caption_effect_cleanup(current_bgr, original_bgr, group)
+    # Attempt-scoped, like texture_synthesized: never carry a previous strategy's lines.
+    group.structure_continuations = []
+    group.structure_protect_mask = None
+    background_type, background_metrics = _classify_background_region(
+        original_bgr,
+        group,
+    )
+    group.background_type = background_type
+    group.background_metrics = background_metrics
+    tight_background = background_type in {
+        "textured_art",
+        "speed_lines",
+        "sfx_area",
+        "unknown",
+    }
+    # "unknown" only means no balloon/box was found; "textured_art" can be triggered
+    # by the lettering's own ink in the wider context. When the ring that the cleanup
+    # actually touches is proven uniform and solid, it is not textured art and must not
+    # inherit the textured-background restrictions (they rejected every bold word).
+    local_metrics = background_metrics or {}
+    # Only the ordinary strategies are relaxed; the dedicated textured fallbacks keep
+    # their own scope so they still run when the ordinary ones fail.
+    if (strategy in {"primary", "conservative"}
+            and background_type in {"unknown", "textured_art"}
+            and local_metrics.get("local_background_spatial_class") == "PROVEN_UNIFORM"
+            and str(local_metrics.get("local_background_class") or "").startswith("solid_")):
+        tight_background = False
+    if strategy in {"glyph_overlay", "caption_overlay"} and not tight_background:
+        return current_bgr.copy(), np.zeros(original_bgr.shape[:2], dtype=np.uint8), {
+            "mask_valid": False,
+            "reason": f"{strategy}_not_needed_on_uniform_background",
+        }
+    if strategy == "caption_overlay" and not config.TEXTURED_CAPTION_OVERLAY:
+        return current_bgr.copy(), np.zeros(original_bgr.shape[:2], dtype=np.uint8), {
+            "mask_valid": False,
+            "reason": "textured_caption_overlay_disabled",
+        }
+    is_sfx_group = str(getattr(group, "classification", "") or "").lower() == "sfx"
+    if strategy == "source_scoped":
+        if not tight_background:
+            return current_bgr.copy(), np.zeros(original_bgr.shape[:2], dtype=np.uint8), {
+                "mask_valid": False,
+                "reason": "source_scoped_not_needed_on_uniform_background",
+            }
+        if not is_sfx_group:
+            scope_reason = _source_scoped_speech_reason(group)
+            if scope_reason:
+                return current_bgr.copy(), np.zeros(original_bgr.shape[:2], dtype=np.uint8), {
+                    "mask_valid": False,
+                    "reason": scope_reason,
+                }
+    base_mask = _build_text_mask(original_bgr.shape, [group], padding=0)
+    if not np.any(base_mask):
+        return current_bgr.copy(), base_mask, {
+            "mask_valid": False,
+            "reason": "empty_source_polygon",
+        }
+
+    if strategy == "caption_overlay":
+        limit_padding = min(3, config.MAX_MASK_EXPANSION)
+    else:
+        limit_padding = 1 if (strategy == "conservative" or tight_background) else (
+            _glyph_footprint_padding(
+                group,
+                min(config.MAX_MASK_EXPANSION, config.TEXT_MASK_PADDING + 1),
+            )
+        )
+    maximum_mask = base_mask.copy()
+    if limit_padding > 0:
+        maximum_mask = cv2.dilate(
+            maximum_mask,
+            np.ones((limit_padding * 2 + 1, limit_padding * 2 + 1), np.uint8),
+            iterations=1,
+        )
+    mask_strategy = "conservative" if tight_background else strategy
+    if is_sfx_group and tight_background:
+        sfx_max_mask = cv2.dilate(
+            maximum_mask,
+            cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (25, 25)),
+            iterations=1,
+        )
+        # v4 measures complete components inside the OCR line's bounding box.
+        # A rotated OCR polygon can cut the tapered ends of those same proven
+        # glyphs. This rectangle is only a ceiling for v4's surgical mask, never
+        # a filled removal mask; v4 still rejects hair, panel borders and art.
+        for source_line in _cleanup_lines_for_group(group):
+            sx, sy, sw, sh = _expanded_box(source_line.box, original_bgr.shape, 12)
+            sfx_max_mask[sy:sy+sh, sx:sx+sw] = 255
+        component_mask, component_metrics = _sfx_glyph_halo_mask(
+            original_bgr,
+            group,
+            maximum_mask=sfx_max_mask,
+        )
+        halo_area = int(np.count_nonzero(component_mask))
+        halo_ratio = halo_area / max(1, int(component_metrics.get("text_component_pixels", 0)))
+        halo_oversized = bool(halo_area and halo_ratio > config.MAX_MASK_TO_TEXT_AREA_RATIO)
+        if not halo_area or halo_oversized:
+            # A blurred sound can yield only a few pure-black cores in v4.
+            # Do not relax its area guard or repeatedly retry the same refused
+            # mask. Try the existing bounded component extractor instead;
+            # every normal reconstruction/removal/art gate still follows.
+            component_mask, component_metrics = _component_text_mask(
+                original_bgr,
+                group,
+                maximum_mask=maximum_mask,
+                strategy=mask_strategy,
+            )
+            if halo_oversized:
+                component_metrics["sfx_glyph_halo_rejected_reason"] = "mask_too_large_for_detected_characters"
+                component_metrics["sfx_glyph_halo_rejected_ratio"] = round(halo_ratio, 4)
+    elif strategy == "caption_overlay":
+        component_mask, component_metrics = _caption_overlay_mask(
+            original_bgr,
+            group,
+            maximum_mask=maximum_mask,
+        )
+    elif strategy == "glyph_overlay":
+        component_mask, component_metrics = _outlined_light_text_mask(
+            original_bgr,
+            group,
+            maximum_mask=maximum_mask,
+        )
+    else:
+        component_mask, component_metrics = _component_text_mask(
+            original_bgr,
+            group,
+            maximum_mask=maximum_mask,
+            strategy=mask_strategy,
+        )
+    cleanup_mask = component_mask
+    source_evidence_mask = (
+        _build_text_mask(original_bgr.shape, [group], padding=12 if is_sfx_group else None)
+        if strategy == "source_scoped"
+        else None
+    )
+    source_scoped_display_required = bool(
+        strategy == "source_scoped"
+        and tight_background
+        and _source_scoped_display_footprint_required(original_bgr, group)
+    )
+    if source_scoped_display_required:
+        component_metrics["source_scoped_display_footprint_required"] = True
+        display_dark_cleanup_context = bool(
+            float((group.background_metrics or {}).get("context_dark_pixel_ratio", 0.0))
+            >= 0.90
+            and float((group.background_metrics or {}).get("context_white_pixel_ratio", 1.0))
+            <= 0.01
+        )
+        display_cleanup_context = bool(
+            _proven_light_cleanup_region(group.background_metrics)
+            and (group.background_metrics or {}).get("relaxed_white_context")
+        ) or display_dark_cleanup_context
+        if display_cleanup_context:
+            expanded_source_evidence = _build_display_source_evidence_mask(
+                original_bgr.shape,
+                group,
+            )
+            source_evidence_mask = cv2.bitwise_or(
+                source_evidence_mask,
+                expanded_source_evidence,
+            )
+            display_evidence_pixels = int(np.count_nonzero(expanded_source_evidence))
+            component_metrics["source_scoped_display_evidence_pixels"] = display_evidence_pixels
+            cleanup_mask = cv2.bitwise_or(cleanup_mask, expanded_source_evidence)
+            component_metrics["text_component_pixels"] = max(
+                int(component_metrics.get("text_component_pixels", 0)),
+                display_evidence_pixels,
+            )
+            if display_dark_cleanup_context:
+                component_metrics["source_scoped_display_dark_evidence_cleanup"] = True
+    source_scoped_outline_growth_pixels = 0
+    source_scoped_outline_material = False
+    if strategy == "source_scoped" and tight_background and not component_metrics.get("sfx_glyph_halo_mask"):
+        source_scoped_evidence_page_ratio = (
+            float(np.count_nonzero(source_evidence_mask))
+            / max(1.0, float(original_bgr.shape[0] * original_bgr.shape[1]))
+        )
+        outline_mask, outline_metrics = _outlined_light_text_mask(
+            original_bgr,
+            group,
+            maximum_mask=maximum_mask,
+        )
+        if np.any(outline_mask):
+            new_outline_pixels = int(
+                np.count_nonzero((outline_mask > 0) & (cleanup_mask == 0))
+            )
+            source_scoped_outline_growth_pixels = new_outline_pixels
+            source_scoped_outline_material = bool(
+                new_outline_pixels
+                >= max(
+                    300,
+                    int(round(max(1, component_metrics.get("text_component_pixels", 0)) * 0.05)),
+                )
+            )
+            cleanup_mask = cv2.bitwise_or(cleanup_mask, outline_mask)
+            component_metrics["text_component_pixels"] = int(
+                component_metrics.get("text_component_pixels", 0)
+                + new_outline_pixels
+            )
+            component_metrics["source_scoped_outline_light_pixels"] = new_outline_pixels
+            component_metrics["source_scoped_outline_light_components"] = int(
+                outline_metrics.get("accepted_text_components", 0)
+            )
+        source_scoped_growth_allowed = (
+            source_scoped_display_required
+            or source_scoped_evidence_page_ratio
+            <= max(
+                config.MAX_SOURCE_SCOPED_PAGE_AREA_RATIO,
+                config.MAX_SOURCE_SCOPED_PAGE_AREA_RATIO * 1.75,
+            )
+        )
+        if (
+            source_scoped_growth_allowed
+            and (source_scoped_outline_material or source_scoped_display_required)
+        ):
+            total_footprint_growth = 0
+            footprint_iterations = 0
+            # Outlined/glowing display letters have a physical footprint that is
+            # discovered from the current seed.  One expansion can reveal the
+            # next halo band, so iterate to a bounded fixed point inside the
+            # owned source evidence instead of leaving the final fringe behind.
+            for _ in range(4):
+                lettering_footprint = source_lettering_footprint(
+                    original_bgr,
+                    group,
+                    cleanup_mask,
+                    source_evidence_mask,
+                )
+                if not np.any(lettering_footprint):
+                    break
+                new_footprint_pixels = int(
+                    np.count_nonzero((lettering_footprint > 0) & (cleanup_mask == 0))
+                )
+                component_metrics["source_lettering_footprint_pixels"] = int(
+                    np.count_nonzero(lettering_footprint)
+                )
+                if new_footprint_pixels <= 0:
+                    break
+                cleanup_mask = cv2.bitwise_or(cleanup_mask, lettering_footprint)
+                total_footprint_growth += new_footprint_pixels
+                footprint_iterations += 1
+            if total_footprint_growth:
+                component_metrics["text_component_pixels"] = int(
+                    component_metrics.get("text_component_pixels", 0)
+                    + total_footprint_growth
+                )
+                component_metrics["source_scoped_footprint_growth_pixels"] = (
+                    total_footprint_growth
+                )
+                component_metrics["source_scoped_footprint_iterations"] = (
+                    footprint_iterations
+                )
+    if not component_metrics.get("sfx_glyph_halo_mask"):
+        dark_line_mask, dark_line_metrics = _uniform_dark_line_text_mask(
+            original_bgr,
+            group,
+        )
+        if np.any(dark_line_mask):
+            new_dark_line_pixels = int(
+                np.count_nonzero((dark_line_mask > 0) & (cleanup_mask == 0))
+            )
+            cleanup_mask = cv2.bitwise_or(cleanup_mask, dark_line_mask)
+            component_metrics["text_component_pixels"] = int(
+                component_metrics.get("text_component_pixels", 0)
+                + new_dark_line_pixels
+            )
+        component_metrics.update(dark_line_metrics)
+        light_line_mask, light_line_metrics = _uniform_light_line_text_mask(
+            original_bgr,
+            group,
+        )
+        if np.any(light_line_mask):
+            new_light_line_pixels = int(
+                np.count_nonzero((light_line_mask > 0) & (cleanup_mask == 0))
+            )
+            cleanup_mask = cv2.bitwise_or(cleanup_mask, light_line_mask)
+            component_metrics["text_component_pixels"] = int(
+                component_metrics.get("text_component_pixels", 0)
+                + new_light_line_pixels
+            )
+        component_metrics.update(light_line_metrics)
+        detached_dark_mask, detached_dark_metrics = _detached_dark_text_components_mask(
+            original_bgr,
+            group,
+            cleanup_mask,
+        )
+        if np.any(detached_dark_mask):
+            cleanup_mask = cv2.bitwise_or(cleanup_mask, detached_dark_mask)
+            component_metrics["text_component_pixels"] = int(
+                component_metrics.get("text_component_pixels", 0)
+                + detached_dark_metrics["detached_dark_text_pixels"]
+            )
+        component_metrics.update(detached_dark_metrics)
+        detached_mask, detached_metrics = _detached_light_text_components_mask(
+            original_bgr,
+            group,
+            cleanup_mask,
+        )
+        if np.any(detached_mask):
+            cleanup_mask = cv2.bitwise_or(cleanup_mask, detached_mask)
+            component_metrics["text_component_pixels"] = int(
+                component_metrics.get("text_component_pixels", 0)
+                + detached_metrics["detached_text_pixels"]
+            )
+        component_metrics.update(detached_metrics)
+        fringe_mask, fringe_metrics = _antialias_fringe_mask(original_bgr, cleanup_mask, group)
+        if np.any(fringe_mask):
+            cleanup_mask = cv2.bitwise_or(cleanup_mask, fringe_mask)
+            # Fringe pixels are glyph pixels (partial ink), so they count as text area.
+            component_metrics["text_component_pixels"] = int(
+                component_metrics.get("text_component_pixels", 0)
+                + fringe_metrics["antialias_fringe_pixels"]
+            )
+        component_metrics.update(fringe_metrics)
+        cleanup_mask, hole_pixels = _fill_enclosed_glyph_holes(cleanup_mask, group)
+        component_metrics["enclosed_glyph_hole_pixels"] = hole_pixels
+        if hole_pixels:
+            component_metrics["text_component_pixels"] = int(
+                component_metrics.get("text_component_pixels", 0) + hole_pixels)
+    if strategy == "source_scoped":
+        # The owned OCR line polygons expanded by the existing text-scale padding
+        # are the only artwork this strategy is ever allowed to touch.
+        component_metrics["source_evidence_pixels"] = int(
+            np.count_nonzero(source_evidence_mask)
+        )
+        component_metrics["mask_pixels_clipped_to_source_evidence"] = int(
+            np.count_nonzero((cleanup_mask > 0) & (source_evidence_mask == 0))
+        )
+        cleanup_mask = cv2.bitwise_and(cleanup_mask, source_evidence_mask)
+        component_metrics["mask_pixels_outside_source_evidence"] = int(
+            np.count_nonzero((cleanup_mask > 0) & (source_evidence_mask == 0))
+        )
+    group.light_enclosure_interior = None
+    ring_level = float(np.median(np.asarray(
+        (background_metrics or {}).get("local_background_median_bgr") or [0, 0, 0])))
+    if config.CLEAN_CLIP_TO_ENCLOSURE and (
+            background_type in {"white_balloon", "narration_box"} or ring_level >= 200):
+        enclosure = _light_enclosure_interior(original_bgr, group, background_metrics)
+        group.light_enclosure_interior = enclosure
+        if enclosure is not None:
+            clipped = int(np.count_nonzero((cleanup_mask > 0) & ~enclosure))
+            if clipped:
+                cleanup_mask = cleanup_mask.copy()
+                cleanup_mask[~enclosure] = 0
+            component_metrics["mask_pixels_clipped_to_enclosure"] = clipped
+    detector_view = original_bgr
+    enclosure = getattr(group, "light_enclosure_interior", None)
+    if isinstance(enclosure, np.ndarray) and np.any(enclosure):
+        # Inside a known balloon/box only art *inside* it can cross the lettering;
+        # its frame and the art beyond are painted out so they cannot pose as such.
+        detector_view = original_bgr.copy()
+        detector_view[~enclosure] = np.median(original_bgr[enclosure], axis=0).astype(original_bgr.dtype)
+    boundary_conflict = detect_linear_boundary_conflict(
+        detector_view,
+        cleanup_mask,
+        [tuple(int(value) for value in line.box)
+         for line in _cleanup_lines_for_group(group)],
+    )
+    component_metrics.update({
+        "boundary_candidate_segments": boundary_conflict["candidate_segment_count"],
+        "boundary_candidate_curved_segments": boundary_conflict.get(
+            "candidate_curved_segment_count", 0),
+        "boundary_excluded_glyph_dominated_curves": boundary_conflict.get(
+            "excluded_glyph_dominated_curve_count", 0),
+        "boundary_conflict_pixels": boundary_conflict["conflict_pixel_count"],
+        "boundary_candidate_line_mask_hash": boundary_conflict[
+            "candidate_line_mask_hash"],
+        "boundary_detection_method": boundary_conflict["method"],
+    })
+    if not np.any(cleanup_mask):
+        return current_bgr.copy(), cleanup_mask, {
+            **component_metrics,
+            "mask_valid": False,
+            "reason": "no_conservative_text_components",
+        }
+
+    text_area = max(1, int(component_metrics.get("text_component_pixels", 0)))
+    mask_area = int(np.count_nonzero(cleanup_mask))
+    area_ratio = mask_area / text_area
+    shape_metrics = _mask_shape_metrics(cleanup_mask, group.box)
+    metrics = {
+        **component_metrics,
+        **shape_metrics,
+        "background_type": background_type,
+        "background_metrics": background_metrics,
+        "mask_pixels": mask_area,
+        "mask_to_text_area_ratio": round(float(area_ratio), 4),
+        "mask_valid": area_ratio <= config.MAX_MASK_TO_TEXT_AREA_RATIO,
+        "strategy": strategy,
+    }
+    group.structure_continuations = []
+    if (boundary_conflict["status"] == "review_required"
+            and config.CLEAN_STRUCTURE_CONTINUATION
+            and not boundary_conflict.get("candidate_curved_segment_count")
+            and boundary_conflict.get("candidate_segments")):
+        # Every conflict is a straight line seen on both sides of the lettering:
+        # clean the text and carry the line through instead of refusing the region.
+        continuations = [
+            _straight_structure_continuation(original_bgr, cleanup_mask, segment)
+            for segment in _distinct_segments(boundary_conflict["candidate_segments"])
+        ]
+        if all(continuations):
+            protect = np.zeros(cleanup_mask.shape, dtype=bool)
+            for item in continuations:
+                protect |= item.pop("protect")
+            cleanup_mask = cleanup_mask.copy()
+            cleanup_mask[protect] = 0
+            # The protected line hugs the mask; it is art, not a seam to judge.
+            group.structure_protect_mask = protect
+            group.structure_continuations = continuations
+            metrics["structure_continuation_segments"] = len(continuations)
+            metrics["structure_protected_pixels"] = int(np.count_nonzero(protect))
+            metrics["mask_pixels"] = int(np.count_nonzero(cleanup_mask))
+            boundary_conflict = {**boundary_conflict, "status": "structure_continued"}
+    if boundary_conflict["status"] == "review_required":
+        metrics["mask_valid"] = False
+        metrics["review_required"] = True
+        metrics["reason"] = "GLYPH_ART_BOUNDARY_UNCERTAIN"
+        metrics["reason_codes"] = boundary_conflict["reason_codes"]
+        group.glyph_art_boundary_review_required = True
+        group.glyph_art_boundary_review_reason = "GLYPH_ART_BOUNDARY_UNCERTAIN"
+        return current_bgr.copy(), cleanup_mask, metrics
+    if not metrics["mask_valid"]:
+        metrics["reason"] = "mask_too_large_for_detected_characters"
+        return current_bgr.copy(), cleanup_mask, metrics
+
+    if strategy == "source_scoped":
+        # ``mask_to_group_area_ratio`` measures the mask against the source text
+        # bbox, so an accurate glyph mask is structurally penalised for filling
+        # the region the glyphs themselves define.  Here the risk that matters is
+        # how much artwork the mask reaches outside the owned source evidence -
+        # which the clip above already pins to zero - plus a bound on how much of
+        # the page that evidence is allowed to be at all.
+        evidence_pixels = max(1, int(np.count_nonzero(source_evidence_mask)))
+        page_area = max(1, int(original_bgr.shape[0] * original_bgr.shape[1]))
+        metrics["source_evidence_to_page_ratio"] = round(
+            float(evidence_pixels / page_area),
+            6,
+        )
+        metrics["source_scoped_mask_to_page_ratio"] = round(
+            float(mask_area / page_area),
+            6,
+        )
+        metrics["mask_to_source_evidence_ratio"] = round(
+            float(mask_area / evidence_pixels),
+            4,
+        )
+        footprint_pixels = int(metrics.get("source_lettering_footprint_pixels", 0))
+        footprint_scoped = bool(
+            (
+                footprint_pixels
+                and metrics["mask_to_source_evidence_ratio"] <= 0.72
+            )
+            or (
+                metrics.get("sfx_glyph_halo_mask")
+                and metrics["mask_to_source_evidence_ratio"] <= 0.88
+                and metrics["source_scoped_mask_to_page_ratio"] <= 0.20
+            )
+        )
+        display_footprint_scoped = bool(
+            metrics.get("source_scoped_display_footprint_required")
+            and (
+                (
+                    _proven_light_cleanup_region(group.background_metrics)
+                    and metrics["mask_to_source_evidence_ratio"] <= 1.0
+                )
+                or metrics["mask_to_source_evidence_ratio"] <= 0.72
+            )
+            and metrics["source_scoped_mask_to_page_ratio"] <= 0.20
+        )
+        display_dark_footprint_scoped = bool(
+            metrics.get("source_scoped_display_footprint_required")
+            and metrics["mask_to_source_evidence_ratio"] <= 1.0
+            and metrics["source_scoped_mask_to_page_ratio"] <= 0.13
+            and float((group.background_metrics or {}).get("context_dark_pixel_ratio", 0.0))
+            >= 0.90
+            and float((group.background_metrics or {}).get("context_white_pixel_ratio", 1.0))
+            <= 0.01
+        )
+        if (
+            mask_area / page_area > config.MAX_SOURCE_SCOPED_PAGE_AREA_RATIO
+            and not footprint_scoped
+            and not display_footprint_scoped
+            and not display_dark_footprint_scoped
+        ):
+            metrics["mask_valid"] = False
+            metrics["reason"] = "source_scoped_region_too_large_for_safe_cleanup"
+            return current_bgr.copy(), cleanup_mask, metrics
+        if footprint_scoped or display_footprint_scoped or display_dark_footprint_scoped:
+            metrics["source_scoped_large_page_ratio_allowed_by_footprint"] = True
+        if display_footprint_scoped:
+            metrics["source_scoped_large_page_ratio_allowed_by_display_footprint"] = True
+        if display_dark_footprint_scoped:
+            metrics["source_scoped_large_page_ratio_allowed_by_dark_display_footprint"] = True
+    textured_group_ratio_limit = (
+        min(0.30, config.MAX_TEXTURED_MASK_GROUP_RATIO + 0.12)
+        if strategy in {"glyph_overlay", "caption_overlay"}
+        else config.MAX_TEXTURED_MASK_GROUP_RATIO
+    )
+    textured_component_ratio_limit = config.MAX_TEXTURED_MASK_COMPONENT_RATIO
+    if strategy != "source_scoped" and tight_background:
+        overmask = _textured_overmask_evidence(
+            cleanup_mask, group.box,
+            int(component_metrics.get("text_component_pixels", 0)),
+            legacy_group_ratio_limit=textured_group_ratio_limit,
+            legacy_component_ratio_limit=textured_component_ratio_limit,
+        )
+        metrics.update(overmask)
+        if overmask["textured_overmask_rejected"] and not (
+                overmask["textured_overmask_reason"] == "solid_rectangular_patch"
+                and strategy == "caption_overlay"):
+            metrics["mask_valid"] = False
+            metrics["reason"] = "broad_mask_rejected_on_nonuniform_background"
+            return current_bgr.copy(), cleanup_mask, metrics
+
+    if (
+        strategy == "source_scoped"
+        and bool(component_metrics.get("sfx_glyph_halo_mask"))
+        and config.RENDER_SFX_STRAIGHT_TO_LAMA
+        and int(group.box[2]) * int(group.box[3]) >= 8000
+    ):
+        metrics["mask_valid"] = False
+        metrics["reason"] = "sfx_straight_to_lama"
+        metrics["art_fidelity_uncertain"] = True
+        return current_bgr.copy(), cleanup_mask, metrics
+
+    metrics["mask_pixels_before_lettering_refine"] = int(np.count_nonzero(cleanup_mask))
+    cleanup_mask = _refine_lettering_mask(
+        cleanup_mask, group, metrics,
+        halo_barrier=_long_stroke_halo_barrier(original_bgr, group, cleanup_mask),
+    )
+    metrics["lettering_refined_before_fill"] = True
+    metrics["mask_pixels"] = int(np.count_nonzero(cleanup_mask))
+    metrics["mask_to_text_area_ratio"] = round(metrics["mask_pixels"] / text_area, 4)
+    if metrics["mask_to_text_area_ratio"] > config.MAX_MASK_TO_TEXT_AREA_RATIO:
+        metrics["mask_valid"] = False
+        metrics["reason"] = "mask_too_large_for_detected_characters"
+        return current_bgr.copy(), cleanup_mask, metrics
+    cleaned = _apply_cleanup_mask(
+        current_bgr, original_bgr, group, cleanup_mask, strategy=strategy,
+    )
+    if strategy == "caption_overlay":
+        metrics["reconstruction_method"] = "glyph_inpaint_telea"
+    gate_metrics = {}
+    failure = _reconstruction_gate_failure(
+        original_bgr, cleaned, group, cleanup_mask, background_type, strategy, gate_metrics)
+    alternatives = list(getattr(group, "fill_alternatives", None) or [])
+    group.fill_alternatives = []
+    for name, alternative in alternatives if failure else ():
+        # Another candidate may pass where the chosen one did not: an editor
+        # tries the other tools before giving up on the region.
+        alternative_metrics = {}
+        if _reconstruction_gate_failure(original_bgr, alternative, group, cleanup_mask,
+                                        background_type, strategy, alternative_metrics) is None:
+            metrics["fill_switched_by_gate"] = failure
+            if isinstance(getattr(group, "fill_choice", None), dict):
+                group.fill_choice["chosen"] = name
+                group.fill_choice["switched_by_gate"] = failure
+                group.spatial_harmonic_gate_rejected = bool(
+                    name == "classic" and group.fill_choice.get("classic_spatial_gate_rejected"))
+            cleaned, gate_metrics, failure = alternative, alternative_metrics, None
+            break
+    metrics.update(gate_metrics)
+    if failure:
+        metrics["mask_valid"] = False
+        metrics["reason"] = failure
+        return current_bgr.copy(), cleanup_mask, metrics
+    if strategy == "source_scoped" and (
+        source_scoped_outline_material
+        or bool(component_metrics.get("source_scoped_display_footprint_required"))
+    ):
+        lettering_metrics = residual_source_lettering_metrics(
+            original_bgr,
+            cleaned,
+            group,
+            cleanup_mask,
+            source_evidence_mask,
+        )
+        metrics.update(lettering_metrics)
+        if lettering_metrics.get("residual_source_lettering_detected"):
+            legibility = _legible_source_residual(cleaned, group)
+            metrics["residual_ocr_check"] = legibility
+            if legibility["status"] == "not_legible":
+                lettering_metrics["residual_source_lettering_detected"] = False
+                metrics["residual_source_lettering_detected"] = False
+                metrics["residual_overruled_by_ocr"] = True
+        if lettering_metrics.get("residual_source_lettering_detected"):
+            metrics["mask_valid"] = False
+            if metrics.get("source_scoped_mask_to_page_ratio", 1.0) <= 0.05:
+                metrics["reason"] = "residual_source_text_after_cleanup"
+            else:
+                metrics["reason"] = "residual_source_lettering_after_cleanup"
+            return current_bgr.copy(), cleanup_mask, metrics
+    residual_mask, residual_metrics = _component_text_mask(
+        cleaned,
+        group,
+        maximum_mask=maximum_mask,
+        strategy="conservative",
+    )
+    residual_mask = cv2.bitwise_and(residual_mask, cv2.bitwise_not(cleanup_mask))
+    protected_structure = getattr(group, "structure_protect_mask", None)
+    if isinstance(protected_structure, np.ndarray) and protected_structure.shape == residual_mask.shape:
+        # The protected art line is meant to survive; it is not residual lettering.
+        residual_mask[protected_structure] = 0
+    residual_pixels = int(np.count_nonzero(residual_mask))
+    residual_limit = max(12, int(text_area * 0.035))
+    display_residual_limit = max(120, int(text_area * 0.002))
+    if (
+        strategy == "source_scoped"
+        and component_metrics.get("source_scoped_display_footprint_required")
+        and residual_pixels > display_residual_limit
+        and source_evidence_mask is not None
+    ):
+        residual_cleanup = cv2.bitwise_and(residual_mask, source_evidence_mask)
+        if np.any(residual_cleanup):
+            residual_cleanup = cv2.dilate(
+                residual_cleanup,
+                cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5)),
+                iterations=1,
+            )
+            residual_cleanup = cv2.bitwise_and(residual_cleanup, source_evidence_mask)
+            expanded_cleanup = cv2.bitwise_or(cleanup_mask, residual_cleanup)
+            expanded_area = int(np.count_nonzero(expanded_cleanup))
+            expanded_ratio = expanded_area / text_area
+            if expanded_ratio <= config.MAX_MASK_TO_TEXT_AREA_RATIO:
+                cleanup_mask = expanded_cleanup
+                metrics["mask_pixels"] = expanded_area
+                metrics["mask_to_text_area_ratio"] = round(float(expanded_ratio), 4)
+                cleaned = _apply_cleanup_mask(
+                    current_bgr,
+                    original_bgr,
+                    group,
+                    cleanup_mask,
+                    strategy="source_scoped",
+                )
+                residual_mask, residual_metrics = _component_text_mask(
+                    cleaned,
+                    group,
+                    maximum_mask=maximum_mask,
+                    strategy="conservative",
+                )
+                residual_mask = cv2.bitwise_and(
+                    residual_mask,
+                    cv2.bitwise_not(cleanup_mask),
+                )
+                if isinstance(protected_structure, np.ndarray) and protected_structure.shape == residual_mask.shape:
+                    residual_mask[protected_structure] = 0
+                residual_pixels = int(np.count_nonzero(residual_mask))
+                metrics["source_scoped_display_residual_cleanup_pass_used"] = True
+                metrics["source_scoped_display_residual_pixel_limit"] = (
+                    display_residual_limit
+                )
+    if residual_pixels > residual_limit and strategy == "primary" and not tight_background:
+        expanded_cleanup = cv2.bitwise_or(cleanup_mask, residual_mask)
+        expanded_area = int(np.count_nonzero(expanded_cleanup))
+        expanded_ratio = expanded_area / text_area
+        if expanded_ratio <= config.MAX_MASK_TO_TEXT_AREA_RATIO:
+            cleanup_mask = expanded_cleanup
+            metrics["mask_pixels"] = expanded_area
+            metrics["mask_to_text_area_ratio"] = round(float(expanded_ratio), 4)
+            cleaned = _apply_cleanup_mask(
+                current_bgr,
+                original_bgr,
+                group,
+                cleanup_mask,
+                strategy="conservative",
+            )
+            residual_mask, residual_metrics = _component_text_mask(
+                cleaned,
+                group,
+                maximum_mask=maximum_mask,
+                strategy="conservative",
+            )
+            residual_mask = cv2.bitwise_and(
+                residual_mask,
+                cv2.bitwise_not(cleanup_mask),
+            )
+            residual_pixels = int(np.count_nonzero(residual_mask))
+            metrics["residual_cleanup_pass_used"] = True
+    metrics["residual_text_pixels_after_cleanup"] = residual_pixels
+    metrics["residual_text_pixel_limit"] = residual_limit
+    residual_blocks_render = bool(residual_pixels > residual_limit)
+    if residual_blocks_render and strategy not in {"glyph_overlay", "caption_overlay", "source_scoped"}:
+        # On texture the conservative re-scan finds art as "text"; ask the OCR.
+        legibility = _legible_source_residual(cleaned, group)
+        metrics["residual_ocr_check"] = legibility
+        if legibility["status"] == "not_legible":
+            residual_blocks_render = False
+            metrics["residual_overruled_by_ocr"] = True
+    metrics["residual_text_within_noise_budget"] = not residual_blocks_render
+    metrics["ordinary_source_residual_pixels_after_cleanup"] = (
+        residual_pixels if residual_blocks_render else 0
+    )
+    metrics["residual_component_count"] = int(
+        residual_metrics.get("accepted_text_components", 0)
+    )
+    if residual_blocks_render and strategy not in {
+        "glyph_overlay",
+        "caption_overlay",
+        "source_scoped",
+    }:
+        metrics["mask_valid"] = False
+        metrics["reason"] = "residual_source_text_after_cleanup"
+    elif strategy in {"glyph_overlay", "caption_overlay", "source_scoped"}:
+        metrics["residual_validation_deferred_to_post_render_ocr"] = True
+    if forensic_capture is not None:
+        forensic_capture.capture_cleanup(
+            group,
+            strategy=strategy,
+            pre_cleanup=current_bgr,
+            mask=cleanup_mask,
+            post_cleanup=cleaned,
+            metrics=metrics,
+        )
+    return cleaned, cleanup_mask, metrics
+
+
+def _textured_overmask_evidence(mask, group_box, text_component_pixels, *,
+                                legacy_group_ratio_limit, legacy_component_ratio_limit):
+    """Decide whether a mask on textured art reaches beyond its lettering.
+
+    The former rule compared the mask with the *group box*: bold lettering alone
+    covers 30-50 % of its own tight box, so legitimate masks were rejected and the
+    region ended with no clean at all. Over-masking is now measured against the
+    evidenced glyph pixels (mask may be at most 1.8x them: halo, fringe, padding)
+    and a patch is a near-solid component (>= 75 % of its bbox) covering >= 25 % of
+    the group. Without glyph evidence the legacy box-relative limits still apply.
+    """
+    mask_u8 = (np.asarray(mask) > 0).astype(np.uint8)
+    mask_area = int(np.count_nonzero(mask_u8))
+    gx, gy, gw, gh = (int(v) for v in group_box)
+    group_area = max(1, gw * gh)
+    result = {"textured_overmask_rejected": False, "textured_overmask_reason": None,
+              "mask_to_glyph_evidence_ratio": None}
+    if mask_area == 0:
+        return result
+    count, _labels, stats, _ = cv2.connectedComponentsWithStats(mask_u8, 8)
+    solid_patch = any(
+        int(stats[label, cv2.CC_STAT_AREA]) >= 0.25 * group_area
+        and int(stats[label, cv2.CC_STAT_AREA])
+        >= 0.75 * max(1, int(stats[label, cv2.CC_STAT_WIDTH]) * int(stats[label, cv2.CC_STAT_HEIGHT]))
+        for label in range(1, count)
+    )
+    ratio = mask_area / text_component_pixels if text_component_pixels > 0 else None
+    if ratio is not None:
+        result["mask_to_glyph_evidence_ratio"] = round(float(ratio), 4)
+    # A dense word in a tight OCR box is a near-solid component too; it is only a
+    # patch of artwork when the mask also exceeds what the glyph evidence explains.
+    if solid_patch and (ratio is None or ratio > 1.5):
+        result.update(textured_overmask_rejected=True, textured_overmask_reason="solid_rectangular_patch")
+        return result
+    if ratio is not None:
+        if ratio > 1.8:
+            result.update(textured_overmask_rejected=True,
+                          textured_overmask_reason="mask_exceeds_glyph_evidence")
+        return result
+    largest = max((int(stats[label, cv2.CC_STAT_AREA]) for label in range(1, count)), default=0)
+    if (mask_area / group_area > legacy_group_ratio_limit
+            or largest / group_area > legacy_component_ratio_limit):
+        result.update(textured_overmask_rejected=True,
+                      textured_overmask_reason="no_glyph_evidence_box_ratio")
+    return result
+
+
+def _mask_shape_metrics(mask, group_box):
+    ys, xs = np.where(mask > 0)
+    gx, gy, gw, gh = group_box
+    group_area = max(1, int(gw * gh))
+    if not len(xs):
+        return {
+            "mask_bounding_box": None,
+            "mask_bounding_box_fill_ratio": 0.0,
+            "mask_to_group_area_ratio": 0.0,
+            "largest_mask_component_area": 0,
+            "largest_mask_component_to_group_ratio": 0.0,
+            "broad_rectangular_mask": False,
+        }
+    x1, x2 = int(xs.min()), int(xs.max()) + 1
+    y1, y2 = int(ys.min()), int(ys.max()) + 1
+    bbox_area = max(1, (x2 - x1) * (y2 - y1))
+    mask_area = int(len(xs))
+    count, _, stats, _ = cv2.connectedComponentsWithStats(mask, 8)
+    largest = max(
+        (int(stats[label, cv2.CC_STAT_AREA]) for label in range(1, count)),
+        default=0,
+    )
+    fill_ratio = mask_area / bbox_area
+    group_ratio = mask_area / group_area
+    bbox_group_ratio = bbox_area / group_area
+    broad_rectangular = bool(
+        bbox_group_ratio >= 0.45
+        and fill_ratio >= 0.42
+        and group_ratio >= 0.20
+    )
+    return {
+        "mask_bounding_box": [x1, y1, x2 - x1, y2 - y1],
+        "mask_bounding_box_fill_ratio": round(float(fill_ratio), 4),
+        "mask_bounding_box_to_group_ratio": round(float(bbox_group_ratio), 4),
+        "mask_to_group_area_ratio": round(float(group_ratio), 4),
+        "largest_mask_component_area": int(largest),
+        "largest_mask_component_to_group_ratio": round(
+            float(largest / group_area),
+            4,
+        ),
+        "broad_rectangular_mask": broad_rectangular,
+    }
+
+
+def _lettering_contour_ghost_metrics(original_bgr, cleaned_bgr, cleanup_mask, protect_mask=None):
+    """Does the reconstruction redraw the letters' outline (a ghost)?
+
+    The learned fill works on the mask grown by 2 px, so the seam gates, which
+    look at the mask edge, compare model pixels with model pixels. Here the step
+    across the lettering contour itself (2 px inside vs 2 px outside, 9 px local
+    means) is compared with the natural step between two background bands further
+    out in the source: a ghost is a step above that natural level by more than a
+    just-visible 3 grey levels and by more than twice it (measured: ghost 4.7 vs
+    natural 0.8; clean fills on stripes 4.7 vs 5.0). Protected art lines, redrawn
+    across the contour on purpose, are not counted.
+    """
+    mask = (np.asarray(cleanup_mask) > 0).astype(np.uint8)
+    out = {"lettering_contour_ghost": False}
+    roi = _mask_roi(mask, 48)  # widest reach: 21 px band + 9 px means
+    if roi is None:
+        return out
+    mask, original_bgr, cleaned_bgr = mask[roi], original_bgr[roi], cleaned_bgr[roi]
+    if isinstance(protect_mask, np.ndarray) and protect_mask.shape[:2] == np.asarray(cleanup_mask).shape[:2]:
+        protect_mask = protect_mask[roi]
+    gray = cv2.cvtColor(cleaned_bgr, cv2.COLOR_BGR2GRAY).astype(np.float32)
+    source = cv2.cvtColor(original_bgr, cv2.COLOR_BGR2GRAY).astype(np.float32)
+
+    def band(inner_size, outer_size):
+        grown = cv2.dilate(mask, np.ones((outer_size, outer_size), np.uint8)) > 0 if outer_size else mask > 0
+        shrunk = cv2.dilate(mask, np.ones((inner_size, inner_size), np.uint8)) > 0 if inner_size else mask > 0
+        return grown & ~shrunk
+
+    def local_step(image, near, far):
+        k = (9, 9)
+        near_f, far_f = near.astype(np.float32), far.astype(np.float32)
+        near_mean = cv2.blur(image * near_f, k) / np.maximum(cv2.blur(near_f, k), 1e-3)
+        far_mean = cv2.blur(image * far_f, k) / np.maximum(cv2.blur(far_f, k), 1e-3)
+        both = near & (cv2.blur(far_f, k) > 0.05)
+        return np.abs(near_mean - far_mean)[both]
+
+    keep = np.ones(mask.shape, dtype=bool)
+    if isinstance(protect_mask, np.ndarray) and protect_mask.shape == mask.shape and np.any(protect_mask):
+        keep = ~(cv2.dilate((protect_mask > 0).astype(np.uint8), np.ones((9, 9), np.uint8)) > 0)
+    inner = (mask > 0) & ~(cv2.erode(mask, np.ones((5, 5), np.uint8)) > 0) & keep
+    step = local_step(gray, inner, band(0, 5) & keep)
+    natural = local_step(source, band(9, 13) & keep, band(17, 21) & keep)
+    if step.size < 30 or natural.size < 30:
+        return out
+    step_level, natural_level = float(np.median(step)), float(np.median(natural))
+    out.update(lettering_contour_step=round(step_level, 2), lettering_contour_natural_step=round(natural_level, 2),
+               lettering_contour_ghost=bool(step_level > natural_level + 3.0 and step_level > 2.0 * natural_level))
+    return out
+
+
+def _active_caption_effect_layers(original_bgr, group, mask):
+    layers = getattr(group, "_caption_effect_layers", None)
+    if (layers is None or not layers.profile.get("source_effect_verified")
+            or getattr(group, "source_completeness", {}).get("status") != source_completeness.STATUS_PASS
+            or not np.array_equal(np.asarray(mask), layers.authorized)
+            or getattr(group, "_caption_effect_source_hash", "") != hashlib.sha256(original_bgr.tobytes()).hexdigest()):
+        return None
+    return layers
+
+
+def _reconstruction_gate_failure(original_bgr, cleaned, group, cleanup_mask, background_type,
+                                strategy, metrics):
+    """Run the reconstruction gates on one fill; the first failing reason, or None."""
+    effect_layers = _active_caption_effect_layers(original_bgr, group, cleanup_mask)
+    if effect_layers is not None:
+        protected = (effect_layers.protected > 0) & (effect_layers.effect > 0)
+        count = int(np.count_nonzero(np.any(original_bgr != cleaned, axis=2) & protected))
+        metrics["protected_effect_art_changed_pixels"] = count
+        if count:
+            return "protected_effect_art_changed"
+    ghost_metrics = _lettering_contour_ghost_metrics(
+        original_bgr, cleaned, cleanup_mask, getattr(group, "structure_protect_mask", None))
+    metrics.update(ghost_metrics)
+    if ghost_metrics.get("lettering_contour_ghost"):
+        return "lettering_contour_ghost"
+    white_patch_metrics = _white_patch_artifact_metrics(
+        original_bgr,
+        cleaned,
+        group,
+        cleanup_mask,
+        background_type,
+    )
+    metrics.update(white_patch_metrics)
+    local_background_metrics = _local_background_reconstruction_metrics(
+        original_bgr,
+        cleaned,
+        group,
+        cleanup_mask,
+    )
+    metrics.update(local_background_metrics)
+    if local_background_metrics.get("local_background_color_mismatch"):
+        return "local_background_color_mismatch"
+    fill_shift_metrics = _textured_fill_shift_metrics(
+        original_bgr, cleaned, group, cleanup_mask)
+    metrics.update(fill_shift_metrics)
+    if fill_shift_metrics["textured_fill_shift_rejected"]:
+        return "textured_fill_level_mismatch"
+    if white_patch_metrics.get("white_patch_rejected"):
+        return "large_white_patch_on_nonwhite_background"
+    flat_patch_metrics = _flat_patch_artifact_metrics(
+        original_bgr,
+        cleaned,
+        group,
+        cleanup_mask,
+    )
+    metrics.update(flat_patch_metrics)
+    if flat_patch_metrics.get("flat_patch_rejected"):
+        return "flat_reconstruction_patch_on_textured_background"
+    # Fidelity finding, not a safety verdict: the reconstruction is provably not
+    # a synthetic block (the guard above cleared it) but it is markedly smoother
+    # than the artwork around it.  It renders, and it renders as review.
+    # Typical-texture ratio: None when the surround is typically flat (a plain
+    # balloon), so a flat fill there is not a fidelity finding.
+    fidelity_ratio = flat_patch_metrics.get("flat_patch_typical_ratio")
+    metrics["texture_synthesized"] = bool(getattr(group, "texture_synthesized", False))
+    # A plain container is meant to come back flat: its ring texture is the
+    # balloon outline and the art beyond it, not texture the fill lost.
+    plain_container = str(background_type or "") in {"white_balloon", "narration_box", "dark_balloon"}
+    metrics["art_fidelity_uncertain"] = bool(
+        (
+            fidelity_ratio is not None
+            and fidelity_ratio < config.MIN_ART_FIDELITY_TEXTURE_RATIO
+            and not plain_container
+        )
+        # Synthesised grain fixes the *visible* flat-block defect, but it is a
+        # statistical match, not a recovered original - it must not by itself
+        # promote the reconstruction to "clean" (ART-RECON-001).
+        or metrics["texture_synthesized"]
+    )
+    seam_metrics = _reconstruction_seam_metrics(
+        original_bgr,
+        cleaned,
+        group,
+        cleanup_mask,
+    )
+    metrics.update(seam_metrics)
+    if seam_metrics.get("seam_suspected"):
+        return "visible_reconstruction_seam_at_mask_boundary"
+    dark_patch_metrics = _dark_blotch_artifact_metrics(
+        original_bgr,
+        cleaned,
+        group,
+        cleanup_mask,
+        background_type,
+        strategy,
+    )
+    metrics.update(dark_patch_metrics)
+    if dark_patch_metrics.get("dark_blotch_rejected"):
+        return "dark_blotch_created_on_textured_art"
+    return None
+
+
+def _white_patch_artifact_metrics(
+    original_bgr,
+    cleaned_bgr,
+    group,
+    cleanup_mask,
+    background_type,
+):
+    if background_type in {"white_balloon", "narration_box"} or _proven_light_cleanup_region(
+        getattr(group, "background_metrics", {}) or {}
+    ):
+        return {
+            "new_white_patch_pixels": 0,
+            "largest_new_white_component_area": 0,
+            "white_patch_rejected": False,
+        }
+    cleanup_mask = np.asarray(cleanup_mask)
+    # White inside a closed *white* balloon is that balloon, not a patch. A
+    # translucent balloon over art (grey clothing showing through) is not white,
+    # and a white fill there is exactly the silhouette this gate must catch.
+    enclosure = getattr(group, "light_enclosure_interior", None)
+    if isinstance(enclosure, np.ndarray) and enclosure.shape == cleanup_mask.shape:
+        visible = cv2.cvtColor(original_bgr, cv2.COLOR_BGR2GRAY)[enclosure & (cleanup_mask == 0)]
+        if not (visible.size and float(np.median(visible)) >= 240 and float(np.percentile(visible, 10)) >= 225):
+            enclosure = None
+    else:
+        enclosure = None
+    roi = _mask_roi(cleanup_mask, 64)  # widest reach: 12 px ring + 41 px means
+    if roi is not None:
+        enclosure = enclosure[roi] if enclosure is not None else None
+        original_bgr, cleaned_bgr, cleanup_mask = original_bgr[roi], cleaned_bgr[roi], cleanup_mask[roi]
+    original_gray = cv2.cvtColor(original_bgr, cv2.COLOR_BGR2GRAY)
+    cleaned_gray = cv2.cvtColor(cleaned_bgr, cv2.COLOR_BGR2GRAY)
+    new_white = (
+        (cleanup_mask > 0)
+        & (original_gray < 220)
+        & (cleaned_gray >= 244)
+        & ((cleaned_gray.astype(np.int16) - original_gray.astype(np.int16)) >= 24)
+    )
+    # A level the surrounding art itself reaches nearby (light rays on a pale sky)
+    # is the backdrop continuing, not a patch: new white counts only where it is
+    # brighter than the local ring (3-12 px out) mean + 1.5 sigma.
+    mask_u8 = (np.asarray(cleanup_mask) > 0).astype(np.uint8)
+    ring = (cv2.dilate(mask_u8, np.ones((25, 25), np.uint8)) > 0) & ~(cv2.dilate(mask_u8, np.ones((7, 7), np.uint8)) > 0)
+    bright_outside = np.zeros(new_white.shape, dtype=bool)
+    if np.any(ring):
+        ring_f = ring.astype(np.float32)
+        values = original_gray.astype(np.float32)
+        support = np.maximum(cv2.blur(ring_f, (41, 41)), 1e-3)
+        local_mean = cv2.blur(values * ring_f, (41, 41)) / support
+        local_sq = cv2.blur(values * values * ring_f, (41, 41)) / support
+        local_std = np.sqrt(np.maximum(local_sq - local_mean * local_mean, 0.0))
+        reached = cleaned_gray.astype(np.float32) <= local_mean + 1.5 * local_std
+        new_white &= ~((support > 0.02) & reached)
+        bright_outside = values >= np.maximum(236.0, local_mean + local_std) - 12.0
+    # New white joined to bright art just outside the mask (brighter than its
+    # local surround) is a light line carried through the lettering, not a patch.
+    if np.any(new_white):
+        near = ((cv2.dilate(mask_u8, np.ones((7, 7), np.uint8)) > 0) & (mask_u8 == 0)
+                & (bright_outside | (original_gray >= 236)))
+        # Through any light reconstructed pixel (the lettering's own white outline
+        # lies between the ray inside and the ray outside).
+        joined = new_white | near | ((mask_u8 > 0) & (cleaned_gray >= 236))
+        count_j, labels_j = cv2.connectedComponents(joined.astype(np.uint8), connectivity=8)
+        anchored = np.unique(labels_j[near])
+        new_white &= ~np.isin(labels_j, anchored[anchored > 0])
+    if enclosure is not None:
+        new_white &= ~enclosure
+    new_white_u8 = new_white.astype(np.uint8) * 255
+    count, _, stats, _ = cv2.connectedComponentsWithStats(new_white_u8, 8)
+    largest = max(
+        (int(stats[label, cv2.CC_STAT_AREA]) for label in range(1, count)),
+        default=0,
+    )
+    pixels = int(np.count_nonzero(new_white))
+    group_area = max(1, int(group.box[2] * group.box[3]))
+    rejected = bool(
+        config.REJECT_WHITE_PATCH_OUTSIDE_BALLOON
+        and (largest > config.MAX_OUTSIDE_COMPONENT_AREA or pixels / group_area > 0.01)
+    )
+    return {
+        "new_white_patch_pixels": pixels,
+        "largest_new_white_component_area": int(largest),
+        "new_white_patch_to_group_ratio": round(float(pixels / group_area), 6),
+        "white_patch_rejected": rejected,
+    }
+
+
+def _local_background_reconstruction_metrics(original_bgr, cleaned_bgr, group, cleanup_mask):
+    """Compare a solid/gradient reconstruction with its local background profile."""
+    empty = {
+        "local_background_color_mismatch": False,
+        "local_background_color_error": None,
+        "local_background_gradient_consistent": None,
+    }
+    metrics = getattr(group, "background_metrics", {}) or {}
+    profile = str(metrics.get("local_background_class") or "unknown")
+    if profile not in {"solid_light", "solid_dark", "solid_colored", "solid_midtone", "gradient"}:
+        return empty
+    if cleanup_mask is None or not np.any(cleanup_mask):
+        return empty
+    expected = metrics.get("local_background_median_bgr")
+    if not isinstance(expected, (list, tuple)) or len(expected) != 3:
+        return empty
+    mask = np.asarray(cleanup_mask) > 0
+    actual = np.asarray(cleaned_bgr)[mask].astype(np.float32)
+    if actual.size == 0:
+        return empty
+    expected_arr = np.asarray(expected, dtype=np.float32)
+    error = float(np.mean(np.abs(np.median(actual, axis=0) - expected_arr)))
+    # A gradient is allowed to vary; compare its median only as a coarse guard.
+    threshold = 30.0 if profile == "gradient" else 24.0
+    result = {
+        "local_background_color_mismatch": bool(error > threshold),
+        "local_background_color_error": round(error, 3),
+        "local_background_gradient_consistent": (
+            None if profile != "gradient" else bool(error <= 42.0)
+        ),
+    }
+    layers = _active_caption_effect_layers(original_bgr, group, cleanup_mask)
+    if layers is not None:
+        from komyst.clean.ownership.lettering_effects import paired_boundary_color
+        paired = paired_boundary_color(original_bgr, cleaned_bgr, cleanup_mask,
+                                       protected_mask=layers.protected)
+        result.update({"global_background_color_mismatch": result["local_background_color_mismatch"],
+                       "local_background_color_basis": "paired_spatial_boundary",
+                       "paired_boundary_color": paired,
+                       "local_background_color_mismatch": not paired.get("passed", False)})
+    return result
+
+
+def _textured_fill_shift_metrics(original_bgr, cleaned_bgr, group, cleanup_mask):
+    """Reject a textured reconstruction whose overall level departs from its ring.
+
+    The profile colour check only knows solids (and lets a gradient drift 30 levels), so a fill pulled
+    lighter by a leftover white outline (or darker by ink) shipped as a visible
+    word-shaped silhouette. The median inside the mask must stay within
+    max(12, sigma/2) of the 2-8 px ring around it; texture may vary, its level may not.
+    """
+    empty = {"textured_fill_shift": None, "textured_fill_shift_limit": None,
+             "textured_fill_shift_rejected": False}
+    profile = str((getattr(group, "background_metrics", {}) or {}).get("local_background_class") or "")
+    # A ring surrounds the mask, so a linear gradient has the same median on both.
+    if profile.startswith("solid_"):
+        return empty
+    if cleanup_mask is None or not np.any(cleanup_mask):
+        return empty
+    mask = (np.asarray(cleanup_mask) > 0).astype(np.uint8)
+    ring = (cv2.dilate(mask, np.ones((9, 9), np.uint8)) > 0) & ~(
+        cv2.dilate(mask, np.ones((3, 3), np.uint8)) > 0)
+    if np.count_nonzero(ring) < 30:
+        return empty
+    cleaned = cv2.cvtColor(np.asarray(cleaned_bgr), cv2.COLOR_BGR2GRAY).astype(np.float32)
+    ring_values = cleaned[ring]
+    ring_median = float(np.median(ring_values))
+    limit = max(12.0, 0.5 * 1.4826 * float(np.median(np.abs(ring_values - ring_median))))
+    shift = float(np.median(cleaned[mask > 0])) - ring_median
+    return {"textured_fill_shift": round(shift, 3), "textured_fill_shift_limit": round(limit, 3),
+            "textured_fill_shift_rejected": bool(abs(shift) > limit)}
+
+
+def _flat_patch_artifact_metrics(original_bgr, cleaned_bgr, group, cleanup_mask):
+    """Reject a reconstruction that replaced artwork with a synthetic flat block.
+
+    This is independent of source-text removal: the source glyphs can be gone and
+    the result still be unacceptable.  A genuine flat balloon passes because its
+    own surrounding ring is flat too - the comparison is always against the local
+    source context, never against an absolute "white is suspicious" rule.
+    """
+
+    empty = {
+        "flat_patch_source_ring_texture": None,
+        "flat_patch_reconstruction_texture": None,
+        "flat_patch_texture_ratio": None,
+        "flat_patch_largest_component_area": 0,
+        "flat_patch_rejected": False,
+    }
+    if cleanup_mask is None or not np.any(cleanup_mask):
+        return empty
+    background_metrics = getattr(group, "background_metrics", {}) or {}
+    if (
+        _proven_light_cleanup_region(background_metrics)
+        and background_metrics.get("relaxed_white_context")
+    ):
+        return {
+            **empty,
+            "flat_fill_ring_pixels": 0,
+            "flat_fill_ring_luminance_spread": 0.0,
+            "flat_fill_supported": True,
+            "light_page_restoration": True,
+        }
+    flatness = _local_background_flatness(original_bgr, cleanup_mask)
+    if flatness["flat_fill_supported"]:
+        return {**empty, **flatness}
+    mask = np.asarray(cleanup_mask) > 0
+    count, _labels, stats, _centroids = cv2.connectedComponentsWithStats(
+        mask.astype(np.uint8),
+        8,
+    )
+    largest = max(
+        (int(stats[label, cv2.CC_STAT_AREA]) for label in range(1, count)),
+        default=0,
+    )
+    radius = int(config.FLAT_FILL_RING_RADIUS)
+    # The ring starts 3 px out: the band right at the mask still holds the
+    # lettering's outline/glow remains, which read as "texture" around a plain
+    # white balloon (TAP: ring 12.0 vs a clean fill 1.8) - the same reason the
+    # reconstruction side below is measured on the mask's interior.
+    gap = 3
+    ring = (
+        cv2.dilate(
+            mask.astype(np.uint8) * 255,
+            cv2.getStructuringElement(
+                cv2.MORPH_ELLIPSE,
+                ((radius + gap) * 2 + 1, (radius + gap) * 2 + 1),
+            ),
+            iterations=1,
+        ) > 0
+    ) & ~(cv2.dilate(mask.astype(np.uint8), cv2.getStructuringElement(
+        cv2.MORPH_ELLIPSE, (gap * 2 + 1, gap * 2 + 1))) > 0)
+    original_gray = cv2.cvtColor(original_bgr, cv2.COLOR_BGR2GRAY)
+    cleaned_gray = cv2.cvtColor(cleaned_bgr, cv2.COLOR_BGR2GRAY)
+    enclosure = getattr(group, "light_enclosure_interior", None)
+    if isinstance(enclosure, np.ndarray) and enclosure.shape == ring.shape and np.any(ring & enclosure):
+        # Inside a known balloon the reference is the balloon, not the art beyond its border.
+        ring = ring & enclosure
+    ring_laplacian = np.abs(cv2.Laplacian(original_gray, cv2.CV_32F))[ring]
+    source_texture = float(ring_laplacian.mean()) if ring_laplacian.size else 0.0
+    # Typical texture (median) on both sides for the fidelity finding: a few
+    # strong lines in the ring (balloon border, neighbouring art) raised the
+    # mean of a plain white surround and flagged clean balloons for review.
+    source_typical = float(np.median(ring_laplacian)) if ring_laplacian.size else 0.0
+    # A typically flat ring whose mean is raised only by a few line pixels (the
+    # balloon border the ring touches) is not textured art: there is no texture a
+    # flat fill could have failed to rebuild.
+    if ring_laplacian.size and float(np.percentile(ring_laplacian, 75)) < 1.0:
+        source_texture = 0.0
+    # Measure the reconstruction's *interior*: the mask boundary always carries a
+    # strong Laplacian response, which would hide a perfectly uniform fill.
+    interior = cv2.erode(
+        mask.astype(np.uint8) * 255,
+        cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7)),
+        iterations=1,
+    ) > 0
+    if not np.any(interior):
+        interior = mask
+    interior_laplacian = np.abs(cv2.Laplacian(cleaned_gray, cv2.CV_32F))[interior]
+    reconstruction_texture = float(interior_laplacian.mean())
+    reconstruction_typical = float(np.median(interior_laplacian))
+    ratio = (
+        reconstruction_texture / source_texture if source_texture > 0.0 else None
+    )
+    rejected = bool(
+        config.REJECT_FLAT_PATCH_ON_TEXTURED_ART
+        and ratio is not None
+        and ratio < config.MAX_FLAT_PATCH_TEXTURE_RATIO
+        # Absolute near-uniformity is what makes a patch read as synthetic. The
+        # ratio alone condemns any reconstruction of grainy artwork, because the
+        # context ring still holds the source lettering and inpainting cannot
+        # rebuild per-pixel noise.  Smoother than the original is
+        # reconstruction; one flat tone is a synthetic block.
+        and reconstruction_texture <= config.MAX_FLAT_PATCH_ABSOLUTE_TEXTURE
+        and largest >= config.MIN_FLAT_PATCH_COMPONENT_AREA
+    )
+    return {
+        **flatness,
+        "flat_patch_source_ring_texture": round(source_texture, 4),
+        "flat_patch_reconstruction_texture": round(reconstruction_texture, 4),
+        "flat_patch_texture_ratio": (
+            None if ratio is None else round(float(ratio), 4)
+        ),
+        "flat_patch_largest_component_area": int(largest),
+        "flat_patch_rejected": rejected,
+        "flat_patch_typical_ring_texture": round(source_typical, 4),
+        "flat_patch_typical_ratio": (
+            round(reconstruction_typical / source_typical, 4) if source_typical >= 1.0 else None),
+    }
+
+
+def _reconstruction_seam_metrics(original_bgr, cleaned_bgr, group, cleanup_mask):
+    """ART-SEAM-DETECTOR-001: reject a reconstruction that drew its own boundary.
+
+    The flat-patch detector answers "is the interior synthetic".  This answers a
+    different question: even with the source glyphs gone, no flat rectangle and
+    zero OCR residual, did the cleanup leave a *visible boundary* where the
+    artwork never had one?
+
+    Every signal is reconstruction-relative, measured in a narrow band around the
+    cleanup mask.  That is what separates a seam from a speech-balloon outline, a
+    panel border or a character contour crossing the mask edge:
+
+    * luminance step - how far the luminance jumps across the boundary compared
+      with how far it already moves over the same distance in the untouched art
+      just outside it.  A gradient reconstructed smoothly scores ~0; a flat block
+      dropped into that gradient scores ~23.
+    * texture ratio - texture energy immediately inside the boundary against the
+      untouched context, so texture that stops dead at the mask edge is caught.
+      Suppressed where the context is provably flat, because a genuine balloon
+      has ~0 variance on both sides and must not be condemned for it.
+    * halo delta - a ring hugging the contour that belongs to neither side.  A
+      source contour differs from one side only; a halo differs from both.
+
+    Nothing here needs the rendered Portuguese: it runs on the cleanup result, so
+    new lettering can never be mistaken for reconstruction evidence.  The work is
+    cropped to the mask neighbourhood, never the page.
+    """
+
+    empty = {
+        "seam_signals": [],
+        "seam_band_pixels": 0,
+        "seam_luminance_step": None,
+        "seam_natural_luminance_step": None,
+        "seam_texture_ratio": None,
+        "seam_boundary_halo_delta": None,
+        "seam_context_luminance_spread": None,
+        "seam_score": 0.0,
+        "seam_suspected": False,
+        "seam_reason": "no_reconstruction_mask",
+    }
+    if cleanup_mask is None or not np.any(cleanup_mask):
+        return empty
+    background_metrics = getattr(group, "background_metrics", {}) or {}
+    if (
+        _proven_light_cleanup_region(background_metrics)
+        and background_metrics.get("relaxed_white_context")
+    ):
+        return {
+            **empty,
+            "seam_reason": "light_page_restoration",
+            "light_page_restoration": True,
+        }
+
+    mask_full = (np.asarray(cleanup_mask) > 0).astype(np.uint8)
+    band = int(config.SEAM_BAND_RADIUS)
+    height, width = mask_full.shape[:2]
+    ys, xs = np.where(mask_full > 0)
+    margin = band * 3 + 2
+    y0 = max(0, int(ys.min()) - margin)
+    y1 = min(height, int(ys.max()) + margin + 1)
+    x0 = max(0, int(xs.min()) - margin)
+    x1 = min(width, int(xs.max()) + margin + 1)
+    mask = mask_full[y0:y1, x0:x1]
+    cleaned = np.asarray(cleaned_bgr)[y0:y1, x0:x1]
+    gray = (
+        cv2.cvtColor(cleaned, cv2.COLOR_BGR2GRAY)
+        if cleaned.ndim == 3
+        else cleaned
+    ).astype(np.float32)
+
+    def _disc(radius):
+        return cv2.getStructuringElement(
+            cv2.MORPH_ELLIPSE,
+            (radius * 2 + 1, radius * 2 + 1),
+        )
+
+    core = cv2.erode(mask, _disc(band))
+    # A stroke-width (glyph) mask has no interior: the whole mask is the inner band.
+    # It still gets the step and texture verdicts; only the halo test needs a core.
+    thin_mask = not np.any(core)
+    inner = (mask > 0) if thin_mask else ((mask > 0) & (core == 0))
+    near = cv2.dilate(mask, _disc(band))
+    wide = cv2.dilate(mask, _disc(band * 2))
+    outer = (near > 0) & (mask == 0)
+    context = (wide > 0) & (near == 0)
+    enclosure = getattr(group, "light_enclosure_interior", None)
+    if isinstance(enclosure, np.ndarray) and enclosure.shape == mask_full.shape:
+        # Inside a known balloon its border and the art beyond are not the context.
+        inside = enclosure[y0:y1, x0:x1]
+        if np.count_nonzero(outer & inside) >= int(config.MIN_SEAM_BAND_PIXELS):
+            outer &= inside
+            context &= inside
+    protected = getattr(group, "structure_protect_mask", None)
+    if isinstance(protected, np.ndarray) and protected.shape == mask_full.shape:
+        # An art line kept through the lettering sits on the mask edge by design.
+        structure = cv2.dilate(protected[y0:y1, x0:x1].astype(np.uint8), _disc(1)) > 0
+        outer &= ~structure
+        context &= ~structure
+    minimum = int(config.MIN_SEAM_BAND_PIXELS)
+    if min(inner.sum(), outer.sum(), context.sum()) < minimum:
+        return {**empty, "seam_reason": "insufficient_boundary_band_evidence"}
+    contour = (cv2.dilate(mask, _disc(2)) > 0) & (cv2.erode(mask, _disc(2)) == 0)
+
+    kernel = (band * 4 + 1, band * 4 + 1)
+
+    def _local(selection):
+        weights = selection.astype(np.float32)
+        return cv2.blur(gray * weights, kernel), cv2.blur(weights, kernel)
+
+    inner_sum, inner_weight = _local(inner)
+    outer_sum, outer_weight = _local(outer)
+    context_sum, context_weight = _local(context)
+
+    def _mean_step(first, second):
+        (a_sum, a_weight), (b_sum, b_weight) = first, second
+        usable = contour & (a_weight > 1e-3) & (b_weight > 1e-3)
+        if not np.any(usable):
+            return 0.0
+        return float(np.abs(
+            a_sum[usable] / a_weight[usable] - b_sum[usable] / b_weight[usable]
+        ).mean())
+
+    step = _mean_step((inner_sum, inner_weight), (outer_sum, outer_weight))
+    natural = _mean_step(
+        (outer_sum, outer_weight),
+        (context_sum, context_weight),
+    )
+
+    inner_texture = float(gray[inner].std())
+    outer_texture = float(gray[outer].std())
+    # Flatness is a property of the *source* context.  The outer band is untouched
+    # by the cleanup, so the two images agree there - reading the original is what
+    # makes the measurement mean "the artwork is flat" rather than "the result is".
+    source = np.asarray(original_bgr)[y0:y1, x0:x1]
+    source_gray = (
+        cv2.cvtColor(source, cv2.COLOR_BGR2GRAY) if source.ndim == 3 else source
+    ).astype(np.float32)
+    low, high = np.percentile(source_gray[outer], [5.0, 95.0])
+    context_spread = float(high - low)
+    # A thin line in the band (a balloon border) widens the 5-95 % spread without the
+    # context being textured; the interquartile spread is not moved by it.
+    q1, q3 = np.percentile(source_gray[outer], [25.0, 75.0])
+    context_spread = min(context_spread, 2.0 * float(q3 - q1))
+    flat_context = context_spread <= config.MAX_FLAT_FILL_RING_SPREAD
+    texture_ratio = (
+        inner_texture / outer_texture if outer_texture > 1e-3 else None
+    )
+
+    if thin_mask:
+        halo_delta = 0.0
+    else:
+        ring = (near > 0) & (core == 0)
+        ring_mean = float(gray[ring].mean())
+        halo_delta = min(
+            abs(ring_mean - float(gray[core > 0].mean())),
+            abs(ring_mean - float(gray[context].mean())),
+        )
+
+    step_limit = float(config.MAX_SEAM_LUMINANCE_STEP)
+    texture_limit = float(config.MIN_SEAM_TEXTURE_RATIO)
+    halo_limit = float(config.MAX_SEAM_BOUNDARY_HALO_DELTA)
+    findings = []
+    if step - natural > step_limit:
+        findings.append((
+            (step - natural - step_limit) / step_limit,
+            "reconstruction_luminance_step_at_mask_boundary",
+        ))
+    if not flat_context and texture_ratio is not None and texture_ratio < texture_limit:
+        findings.append((
+            (texture_limit - texture_ratio) / texture_limit,
+            "reconstruction_texture_stops_at_mask_boundary",
+        ))
+    if halo_delta > halo_limit:
+        findings.append((
+            (halo_delta - halo_limit) / halo_limit,
+            "reconstruction_boundary_halo_ring",
+        ))
+    score, reason = max(findings, default=(0.0, ""))
+    # Fail closed only on high-confidence evidence.  #81 showed that a single
+    # signal grazing its bound condemns legitimate reconstructions, so a seam is
+    # declared when a second signal corroborates the first, or when one signal
+    # reaches twice its own bound.
+    high_confidence = bool(
+        len(findings) > 1 or score >= float(config.SEAM_HIGH_CONFIDENCE_SCORE)
+    )
+    return {
+        "seam_signals": sorted(name for _score, name in findings),
+        "seam_band_pixels": int(inner.sum() + outer.sum()),
+        "seam_luminance_step": round(step, 4),
+        "seam_natural_luminance_step": round(natural, 4),
+        "seam_texture_ratio": (
+            None if texture_ratio is None else round(texture_ratio, 4)
+        ),
+        "seam_boundary_halo_delta": round(halo_delta, 4),
+        "seam_context_luminance_spread": round(context_spread, 3),
+        "seam_score": round(float(score), 4),
+        "seam_suspected": bool(
+            config.DETECT_RECONSTRUCTION_SEAMS and reason and high_confidence
+        ),
+        "seam_reason": reason or "boundary_consistent_with_source_context",
+        "seam_evidence_mode": "thin_mask" if thin_mask else "interior",
+    }
+
+
+def _dark_blotch_artifact_metrics(
+    original_bgr,
+    cleaned_bgr,
+    group,
+    cleanup_mask,
+    background_type,
+    strategy,
+):
+    """Reject new opaque dark islands created while cleaning textured artwork."""
+    if background_type not in {"textured_art", "speed_lines", "unknown"}:
+        return {
+            "new_dark_patch_pixels": 0,
+            "largest_new_dark_component_area": 0,
+            "new_dark_patch_to_group_ratio": 0.0,
+            "dark_blotch_rejected": False,
+        }
+
+    original_gray = cv2.cvtColor(original_bgr, cv2.COLOR_BGR2GRAY)
+    cleaned_gray = cv2.cvtColor(cleaned_bgr, cv2.COLOR_BGR2GRAY)
+    new_dark = (
+        (cleanup_mask > 0)
+        & (original_gray >= 90)
+        & (cleaned_gray <= 35)
+        & ((original_gray.astype(np.int16) - cleaned_gray.astype(np.int16)) >= 55)
+    )
+    original_new_dark_pixels = int(np.count_nonzero(new_dark))
+    owned_glow_darkened_pixels = 0
+    layers = _active_caption_effect_layers(original_bgr, group, cleanup_mask)
+    if layers is not None:
+        from komyst.clean.ownership.lettering_effects import paired_boundary_color
+        continuity = paired_boundary_color(original_bgr, cleaned_bgr, cleanup_mask,
+                                           protected_mask=layers.protected)
+        protected = (layers.protected > 0) & (layers.effect > 0)
+        protected_changed = np.any(np.any(original_bgr != cleaned_bgr, axis=2) & protected)
+        if continuity.get("passed") and not protected_changed:
+            owned_glow = layers.glow > 0
+            owned_glow_darkened_pixels = int(np.count_nonzero(new_dark & owned_glow))
+            # Only source-evidenced glow pixels are exempt. Remaining light art
+            # still enters the original island/continuity checks below.
+            new_dark = new_dark & ~owned_glow
+    new_dark_u8 = new_dark.astype(np.uint8) * 255
+    count, labels, stats, _ = cv2.connectedComponentsWithStats(new_dark_u8, 8)
+    # Dark reconstruction where light *lettering* was, touching dark artwork just
+    # outside the mask, is that artwork continuing under the removed letters. Dark
+    # where light *art* was (a light line the mask swallowed) is still erased art.
+    dark_context = (np.asarray(cleanup_mask) == 0) & (original_gray <= 45)
+    in_mask = original_gray[np.asarray(cleanup_mask) > 0]
+    ink = float(np.percentile(in_mask, 95)) if in_mask.size else 255.0
+    lettering_colored = original_gray >= ink - 0.25 * max(0.0, ink - 45.0)
+    outside = np.asarray(cleanup_mask) == 0
+    islands = np.zeros(new_dark.shape, dtype=bool)
+    for label in range(1, count):
+        component = labels == label
+        touch = cv2.dilate(component.astype(np.uint8), np.ones((7, 7), np.uint8)) > 0
+        continues_dark_art = (np.any(touch & dark_context)
+                              and np.mean(lettering_colored[component]) >= 0.8)
+        # Light lettering on a dark (not black) backdrop: the fill matches the
+        # backdrop right outside the mask, so it is that backdrop restored.
+        around = (cv2.dilate(component.astype(np.uint8), np.ones((25, 25), np.uint8)) > 0) & outside
+        backdrop = original_gray[around].astype(np.float32) if np.count_nonzero(around) >= 30 else None
+        restores_backdrop = bool(
+            backdrop is not None
+            # The tone match on a plain (low-spread) backdrop is the evidence; the
+            # letters' antialiased edge keeps the lettering share near 0.7 even
+            # where the region was all letters. Busy art never qualifies.
+            and float(np.median(np.abs(backdrop - np.median(backdrop)))) <= 12.0
+            # Light art that continues out of the mask (a line under the text)
+            # was erased, not lettering removed.
+            and not np.any(touch & outside & (original_gray >= 90))
+            and np.mean(lettering_colored[component]) >= 0.5
+            and abs(float(np.mean(cleaned_gray[component])) - float(np.median(backdrop))) <= 25
+        )
+        if not continues_dark_art and not restores_backdrop:
+            islands |= component
+    new_dark = islands
+    count, _, stats, _ = cv2.connectedComponentsWithStats(new_dark.astype(np.uint8), 8)
+    largest = max(
+        (int(stats[label, cv2.CC_STAT_AREA]) for label in range(1, count)),
+        default=0,
+    )
+    pixels = int(np.count_nonzero(new_dark))
+    group_area = max(1, int(group.box[2] * group.box[3]))
+    ratio = pixels / group_area
+    # Light lettering on a proven dark backdrop turns dark when it is removed,
+    # because the backdrop it exposes is dark.  That is the intended repair, not
+    # an invented island, and only the source-evidence-pinned strategy - whose
+    # mask cannot reach past the owned OCR lines - is trusted with it.
+    saturated_dark_context_restored = bool(
+        strategy == "source_scoped"
+        and float((getattr(group, "background_metrics", {}) or {}).get(
+            "context_brightness_mean", 255.0)) <= 50.0
+        and float((getattr(group, "background_metrics", {}) or {}).get(
+            "context_dark_pixel_ratio", 0.0)) >= 0.90
+        and float((getattr(group, "background_metrics", {}) or {}).get(
+            "context_white_pixel_ratio", 1.0)) <= 0.025
+    )
+    dark_backdrop_restored = bool(
+        strategy == "source_scoped"
+        and (
+            _proven_uniform_dark_region(getattr(group, "background_metrics", {}) or {})
+            or saturated_dark_context_restored
+        )
+    )
+    rejected = bool(
+        config.REJECT_DARK_BLOTCH_ON_TEXTURED_ART
+        and not dark_backdrop_restored
+        and (
+            largest > config.MAX_NEW_DARK_COMPONENT_AREA
+            or ratio > config.MAX_NEW_DARK_PIXEL_RATIO
+        )
+    )
+    return {
+        "new_dark_patch_pixels": pixels,
+        "largest_new_dark_component_area": int(largest),
+        "new_dark_patch_to_group_ratio": round(float(ratio), 6),
+        "dark_backdrop_restored": dark_backdrop_restored,
+        "saturated_dark_context_restored": saturated_dark_context_restored,
+        "dark_blotch_rejected": rejected,
+        "original_new_dark_pixels": original_new_dark_pixels,
+        "owned_glow_darkened_pixels": owned_glow_darkened_pixels,
+    }
+
+
+def _glyph_footprint_padding(group, base):
+    """How far past the OCR polygon the visual glyph footprint may reach.
+
+    Anti-aliasing, an outline and a drop shadow all scale with the lettering, so
+    a constant padding is either wasteful on small captions or too tight on
+    display lettering - where it truncated glyphs and left ghosts behind.  The
+    result is still bounded by ``MAX_MASK_EXPANSION`` and only ever admits
+    pixels that evidence connects to an accepted glyph component.
+    """
+
+    heights = [
+        int(line.box[3])
+        for line in _cleanup_lines_for_group(group)
+        if int(line.box[3]) > 0
+    ]
+    if not heights:
+        return base
+    return int(max(
+        base,
+        min(config.MAX_MASK_EXPANSION, int(round(float(np.median(heights)) * 0.10))),
+    ))
+
+
+def _local_line_background_level(gray, line, fallback):
+    """Median luminance of the clean band just outside one OCR line box."""
+    x, y, w, h = [int(value) for value in line.box]
+    radius = int(config.FLAT_FILL_RING_RADIUS)
+    height, width = gray.shape[:2]
+    x1, y1 = max(0, x - radius), max(0, y - radius)
+    x2 = min(width, x + max(1, w) + radius)
+    y2 = min(height, y + max(1, h) + radius)
+    band = np.ones((y2 - y1, x2 - x1), dtype=bool)
+    ix1, iy1 = max(0, x - x1), max(0, y - y1)
+    ix2, iy2 = min(band.shape[1], ix1 + max(1, w)), min(band.shape[0], iy1 + max(1, h))
+    band[iy1:iy2, ix1:ix2] = False
+    values = gray[y1:y2, x1:x2][band]
+    if values.size < int(config.MIN_FLAT_FILL_RING_PIXELS):
+        return float(fallback)
+    return float(np.median(values))
+
+
+def _line_polarity_level(gray, line, median):
+    """Box median for the text polarity, unless the band outside the box disagrees.
+
+    Bold lettering in a tight OCR box can own most of the box, and then the box
+    median is the ink: dark text on white read as light text on dark, and the
+    white background became the "source text" the verifier said was left behind.
+    """
+
+    ring = _local_line_background_level(gray, line, median)
+    if (median <= 118 and ring >= 138) or (median >= 138 and ring <= 118):
+        return ring
+    if 118 < ring < 138:
+        # Mid-tone surround: the box median says nothing (white text pulls it up,
+        # so the background between letters was masked). Polarity is the side the
+        # ink departs to; the level returned keeps the threshold on the background.
+        x, y, w, h = [int(v) for v in line.box]
+        roi = np.asarray(gray)[max(0, y):max(0, y) + max(1, h), max(0, x):max(0, x) + max(1, w)]
+        if roi.size:
+            light = float(np.percentile(roi, 95)) - ring
+            dark = ring - float(np.percentile(roi, 5))
+            if light > 1.5 * dark:
+                return min(ring, 118.0)
+            if dark > 1.5 * light:
+                return max(ring, 138.0)
+    return median
+
+
+def _component_text_mask(img_bgr, group, maximum_mask, strategy="primary"):
+    gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
+    mask = np.zeros(gray.shape, dtype=np.uint8)
+    raw_components = np.zeros(gray.shape, dtype=np.uint8)
+    accepted_components = 0
+    # Lettering of the same group may touch across lines (outlines merge between
+    # rows); only ink running outside every line of the group is art.
+    group_limit = None
+
+    for line in _cleanup_lines_for_group(group):
+        polygon_mask = np.zeros(gray.shape, dtype=np.uint8)
+        cv2.fillPoly(polygon_mask, [np.asarray(line.polygon, dtype=np.int32)], 255)
+        line_limit = polygon_mask.copy()
+        line_limit_padding = 1 if strategy == "conservative" else (
+            _glyph_footprint_padding(
+                group,
+                min(config.MAX_MASK_EXPANSION, config.TEXT_MASK_PADDING + 1),
+            )
+        )
+        if line_limit_padding > 0:
+            line_limit = cv2.dilate(
+                line_limit,
+                np.ones(
+                    (line_limit_padding * 2 + 1, line_limit_padding * 2 + 1),
+                    np.uint8,
+                ),
+                iterations=1,
+            )
+        line_limit = cv2.bitwise_and(line_limit, maximum_mask)
+        if group_limit is None:
+            group_limit = np.zeros(gray.shape, dtype=np.uint8)
+            for other in _cleanup_lines_for_group(group):
+                cv2.fillPoly(group_limit, [np.asarray(other.polygon, dtype=np.int32)], 255)
+            if line_limit_padding > 0:
+                group_limit = cv2.dilate(group_limit, np.ones((line_limit_padding * 2 + 1,) * 2, np.uint8))
+            group_limit = cv2.bitwise_and(group_limit, maximum_mask)
+        x, y, w, h = line.box
+        x1 = max(0, int(x) - line_limit_padding)
+        y1 = max(0, int(y) - line_limit_padding)
+        x2 = min(gray.shape[1], int(x + w) + line_limit_padding)
+        y2 = min(gray.shape[0], int(y + h) + line_limit_padding)
+        if x2 <= x1 or y2 <= y1:
+            continue
+
+        roi_gray = gray[y1:y2, x1:x2]
+        roi_poly = polygon_mask[y1:y2, x1:x2] > 0
+        values = roi_gray[roi_poly]
+        if values.size < 8:
+            continue
+        median = float(np.median(values))
+        median = _line_polarity_level(gray, line, median)
+        lower = float(np.percentile(values, 20))
+        upper = float(np.percentile(values, 80))
+        contrast = max(8.0, upper - lower)
+        if median >= 138:
+            threshold = max(25.0, min(205.0, median - max(16.0, contrast * 0.28)))
+            foreground = roi_gray <= threshold
+        elif median <= 118:
+            threshold = min(235.0, max(48.0, median + max(16.0, contrast * 0.28)))
+            foreground = roi_gray >= threshold
+        else:
+            blackhat, tophat = _midtone_hats(roi_gray, h, values)
+            foreground = (blackhat >= 12) | (tophat >= 12)
+        foreground &= roi_poly
+        foreground = cv2.morphologyEx(
+            foreground.astype(np.uint8) * 255,
+            cv2.MORPH_OPEN,
+            np.ones((2, 2), np.uint8),
+        )
+
+        count, labels, stats, _ = cv2.connectedComponentsWithStats(foreground, 8)
+        selected = np.zeros_like(foreground)
+        line_area = max(1, w * h)
+        merged_networks = []
+        for label in range(1, count):
+            area = int(stats[label, cv2.CC_STAT_AREA])
+            cw = int(stats[label, cv2.CC_STAT_WIDTH])
+            ch = int(stats[label, cv2.CC_STAT_HEIGHT])
+            if area < 2:
+                continue
+            if (area > line_area * 0.34 or (cw > w * 0.82 and ch > h * 0.72)) and \
+                    _component_is_background_shaped(labels == label, area, cw, ch, h):
+                # Background-shaped as a whole, but letters fused with same-colour
+                # art (hatching, a dark area) hide inside it: keep their strokes.
+                merged_networks.append(labels == label)
+                continue
+            if _component_continues_beyond_line(gray, labels == label, (x1, y1), group_limit, median, contrast):
+                continue
+            selected[labels == label] = 255
+            accepted_components += 1
+        if merged_networks and config.CLEAN_SPLIT_MERGED_GLYPHS and not (118 < median < 138):
+            widths = _stroke_widths(selected > 0)
+            if widths.size < 8:
+                widths = _stroke_widths(np.logical_or.reduce(merged_networks))
+            stroke = float(np.percentile(widths, 75)) if widths.size else 0.0
+            dark_text = median >= 138
+            ink_values = roi_gray[foreground > 0]
+            ink_level = float(np.percentile(ink_values, 5 if dark_text else 95))
+            for network in merged_networks:
+                glyphs = _glyph_strokes_in_network(
+                    network, roi_gray, dark_text, ink_level, median, stroke, h)
+                if np.any(glyphs):
+                    selected[glyphs] = 255
+                    accepted_components += 1
+
+        if np.any(selected):
+            # The glyph footprint is everything that differs from the *local
+            # background*, not from the polygon median - the median is dragged
+            # towards the lettering by the lettering itself, which used to hide
+            # a soft glow just under it and leave the glow behind as a ghost.
+            background_level = _local_line_background_level(gray, line, median)
+            if median >= 138:
+                weak_foreground = roi_gray <= min(252.0, background_level - 3.0)
+            elif median <= 118:
+                weak_foreground = roi_gray >= max(3.0, background_level + 3.0)
+            else:
+                weak_foreground = (blackhat >= 4) | (tophat >= 4)
+            # Glyph pixels do not stop at the OCR quadrilateral: a full stop or a
+            # descender routinely pokes a couple of pixels past it, and clipping
+            # the halo to the polygon leaves that sliver behind as a ghost.  The
+            # halo stays bounded by ``line_limit`` (polygon plus the existing
+            # padding) and by the support of an accepted glyph component, so this
+            # is evidence-driven local growth, not a wider mask.
+            weak_foreground &= line_limit[y1:y2, x1:x2] > 0
+            # The visual footprint of lettering scales with the lettering: small
+            # captions carry a one-pixel anti-alias edge, display lettering
+            # carries an outline and a soft glow several pixels wide.  A fixed
+            # 3px support left that glow behind as a ghost on large text, so the
+            # support radius follows the observed line height instead.
+            support_radius = max(3, min(16, int(round(h * 0.10))))
+            support = cv2.dilate(
+                selected,
+                cv2.getStructuringElement(
+                    cv2.MORPH_ELLIPSE,
+                    (support_radius * 2 + 1, support_radius * 2 + 1),
+                ),
+                iterations=1,
+            )
+            antialias_halo = (
+                weak_foreground
+                & (support > 0)
+            ).astype(np.uint8) * 255
+            selected = cv2.bitwise_or(selected, antialias_halo)
+
+        raw_components[y1:y2, x1:x2] = cv2.bitwise_or(
+            raw_components[y1:y2, x1:x2],
+            selected,
+        )
+        pad = 1 if strategy == "conservative" else min(2, config.TEXT_MASK_PADDING)
+        if pad > 0 and np.any(selected):
+            selected = cv2.dilate(
+                selected,
+                np.ones((pad * 2 + 1, pad * 2 + 1), np.uint8),
+                iterations=1,
+            )
+        selected = cv2.bitwise_and(selected, line_limit[y1:y2, x1:x2])
+        mask[y1:y2, x1:x2] = cv2.bitwise_or(mask[y1:y2, x1:x2], selected)
+
+    mask = cv2.bitwise_and(mask, maximum_mask)
+    return mask, {
+        "text_component_pixels": int(np.count_nonzero(raw_components)),
+        "accepted_text_components": int(accepted_components),
+        "component_based": True,
+    }
+
+
+def _outlined_light_text_mask(img_bgr, group, maximum_mask):
+    """Build a tight mask for white outlined lettering over artwork."""
+    gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
+    hsv = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2HSV)
+    result = np.zeros(gray.shape, dtype=np.uint8)
+    raw = np.zeros(gray.shape, dtype=np.uint8)
+    accepted = 0
+    for line in _cleanup_lines_for_group(group):
+        polygon = np.zeros(gray.shape, dtype=np.uint8)
+        cv2.fillPoly(polygon, [np.asarray(line.polygon, dtype=np.int32)], 255)
+        line_limit = cv2.dilate(polygon, np.ones((3, 3), np.uint8), iterations=1)
+        line_limit = cv2.bitwise_and(line_limit, maximum_mask)
+        x, y, w, h = line.box
+        x1, y1 = max(0, x - 1), max(0, y - 1)
+        x2 = min(gray.shape[1], x + w + 1)
+        y2 = min(gray.shape[0], y + h + 1)
+        if x2 <= x1 or y2 <= y1:
+            continue
+        roi_gray = gray[y1:y2, x1:x2]
+        roi_sat = hsv[y1:y2, x1:x2, 1]
+        roi_limit = line_limit[y1:y2, x1:x2] > 0
+        bright = ((roi_gray >= 238) & (roi_sat <= 55) & roi_limit).astype(np.uint8) * 255
+        nearby_dark = cv2.dilate(
+            ((roi_gray <= 95) & roi_limit).astype(np.uint8) * 255,
+            np.ones((5, 5), np.uint8),
+            iterations=1,
+        )
+        bright = cv2.bitwise_and(bright, nearby_dark)
+        count, labels, stats, _ = cv2.connectedComponentsWithStats(bright, 8)
+        selected = np.zeros_like(bright)
+        line_area = max(1, w * h)
+        for label in range(1, count):
+            area = int(stats[label, cv2.CC_STAT_AREA])
+            cw = int(stats[label, cv2.CC_STAT_WIDTH])
+            ch = int(stats[label, cv2.CC_STAT_HEIGHT])
+            if not 2 <= area <= line_area * 0.16:
+                continue
+            if cw > w * 0.48 or ch > h * 0.95:
+                continue
+            selected[labels == label] = 255
+            accepted += 1
+        if not np.any(selected):
+            continue
+        raw[y1:y2, x1:x2] = cv2.bitwise_or(raw[y1:y2, x1:x2], selected)
+        halo = cv2.dilate(selected, np.ones((3, 3), np.uint8), iterations=1)
+        halo = cv2.bitwise_and(halo, line_limit[y1:y2, x1:x2])
+        result[y1:y2, x1:x2] = cv2.bitwise_or(result[y1:y2, x1:x2], halo)
+    result = cv2.bitwise_and(result, maximum_mask)
+    return result, {
+        "text_component_pixels": int(np.count_nonzero(raw)),
+        "accepted_text_components": int(accepted),
+        "component_based": True,
+        "outlined_glyph_mask": True,
+    }
+
+
+def _sfx_glyph_halo_mask(img_bgr, group, maximum_mask=None, erode_outer=False):
+    """Build a surgical stroke-coupled SFX glyph + outline mask (v4).
+
+    Separates pure-ink SFX glyphs with a coupled white outline from dark background
+    art (hair strands, shadows, pillars, collar/tie, panel borders) and prevents
+    white outline flood-filling into bright background regions.
+    """
+    h_img, w_img = img_bgr.shape[:2]
+    bx, by, bw, bh = [int(v) for v in group.box]
+    x1 = max(0, bx)
+    y1 = max(0, by)
+    x2 = min(w_img, bx + bw)
+    y2 = min(h_img, by + bh)
+    if x2 <= x1 or y2 <= y1:
+        return np.zeros((h_img, w_img), dtype=np.uint8), {
+            "text_component_pixels": 0,
+            "accepted_text_components": 0,
+            "component_based": True,
+            "sfx_glyph_halo_mask": True,
+            "lettering_stroke_width": 3,
+        }
+
+    roi_bgr = img_bgr[y1:y2, x1:x2]
+    roi_g = cv2.cvtColor(roi_bgr, cv2.COLOR_BGR2GRAY)
+    rh, rw = roi_g.shape[:2]
+
+    # 1. Pure ink candidates (gray <= 45) inside the tight OCR box
+    dark_raw = (roi_g <= 45).astype(np.uint8) * 255
+    num_d, labels_d, stats_d, _ = cv2.connectedComponentsWithStats(dark_raw, connectivity=8)
+    core_dark = np.zeros_like(roi_g)
+    k_ring = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+
+    for i in range(1, num_d):
+        area = int(stats_d[i, cv2.CC_STAT_AREA])
+        if area < 12:
+            continue
+        cx = int(stats_d[i, cv2.CC_STAT_LEFT])
+        cy = int(stats_d[i, cv2.CC_STAT_TOP])
+        cw = int(stats_d[i, cv2.CC_STAT_WIDTH])
+        ch = int(stats_d[i, cv2.CC_STAT_HEIGHT])
+        touches_border = (cx <= 1) or (cy <= 1) or (cx + cw >= rw - 1) or (cy + ch >= rh - 1)
+        comp = (labels_d == i)
+        med_g = float(np.median(roi_g[comp]))
+        comp_u8 = comp.astype(np.uint8) * 255
+        ring_i = (cv2.dilate(comp_u8, k_ring) > 0) & (dark_raw == 0)
+        white_ring_frac = float(np.count_nonzero(ring_i & (roi_g >= 195))) / max(1, int(np.count_nonzero(ring_i)))
+
+        if med_g <= 15.0 and white_ring_frac >= 0.45:
+            if not touches_border or (ch >= int(0.45 * rh) and white_ring_frac >= 0.65):
+                core_dark[comp] = 255
+
+    # Fallback for synthetic or non-white-outlined SFX where no component passed the white-ring check
+    if int(np.count_nonzero(core_dark)) == 0:
+        for i in range(1, num_d):
+            area = int(stats_d[i, cv2.CC_STAT_AREA])
+            if area < 12:
+                continue
+            cx = int(stats_d[i, cv2.CC_STAT_LEFT])
+            cy = int(stats_d[i, cv2.CC_STAT_TOP])
+            cw = int(stats_d[i, cv2.CC_STAT_WIDTH])
+            ch = int(stats_d[i, cv2.CC_STAT_HEIGHT])
+            touches_border = (cx <= 1) or (cy <= 1) or (cx + cw >= rw - 1) or (cy + ch >= rh - 1)
+            if not touches_border or area >= int(0.18 * rw * rh):
+                core_dark[labels_d == i] = 255
+
+    if int(np.count_nonzero(core_dark)) == 0:
+        return np.zeros((h_img, w_img), dtype=np.uint8), {
+            "text_component_pixels": 0,
+            "accepted_text_components": 0,
+            "component_based": True,
+            "sfx_glyph_halo_mask": True,
+            "lettering_stroke_width": 3,
+        }
+
+    # Include small pure-black ink splatters (area <= 600) within 10px of primary glyph strokes
+    dist_to_core = cv2.distanceTransform((core_dark == 0).astype(np.uint8), cv2.DIST_L2, 5)
+    for i in range(1, num_d):
+        area = int(stats_d[i, cv2.CC_STAT_AREA])
+        if 8 <= area <= 600:
+            comp = (labels_d == i)
+            if float(np.median(roi_g[comp])) <= 20.0 and float(dist_to_core[comp].min()) <= 10.0:
+                core_dark[comp] = 255
+
+    dt_inside = cv2.distanceTransform((core_dark > 0).astype(np.uint8), cv2.DIST_L2, 5)
+    vals = dt_inside[dt_inside > 0]
+    stroke_w = max(2, int(round(float(np.percentile(vals, 70)) * 2.0))) if len(vals) > 0 else 4
+
+    # 2. Embed core_dark into a 12px halo-padded ROI so white outlines on box-edge glyphs aren't clipped
+    pad = 12
+    px1 = max(0, x1 - pad)
+    py1 = max(0, y1 - pad)
+    px2 = min(w_img, x2 + pad)
+    py2 = min(h_img, y2 + pad)
+    proi_g = cv2.cvtColor(img_bgr[py1:py2, px1:px2], cv2.COLOR_BGR2GRAY)
+    prh, prw = proi_g.shape[:2]
+    pcore_dark = np.zeros((prh, prw), dtype=np.uint8)
+    ox, oy = x1 - px1, y1 - py1
+    pcore_dark[oy : oy + rh, ox : ox + rw] = core_dark
+
+    # Allow 3px continuation of accepted pure-black strokes that were clipped by a tight OCR box edge
+    k_tip = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7))
+    tip_cand = (cv2.dilate(pcore_dark, k_tip) > 0) & (proi_g <= 15)
+    pcore_dark[tip_cand] = 255
+
+    pdist_to_core = cv2.distanceTransform((pcore_dark == 0).astype(np.uint8), cv2.DIST_L2, 5)
+    coupled_white = ((proi_g >= 205) & (pdist_to_core <= 5.5)).astype(np.uint8) * 255
+    base = cv2.bitwise_or(pcore_dark, coupled_white)
+
+    # 3. Fill only small enclosed glyph counters inside pcore_dark (e.g. A, B, P, R, O)
+    inv = cv2.bitwise_not(pcore_dark)
+    num_h, labels_h, stats_h, _ = cv2.connectedComponentsWithStats(inv, connectivity=4)
+    for i in range(1, num_h):
+        ha = int(stats_h[i, cv2.CC_STAT_AREA])
+        hx = int(stats_h[i, cv2.CC_STAT_LEFT])
+        hy = int(stats_h[i, cv2.CC_STAT_TOP])
+        hw = int(stats_h[i, cv2.CC_STAT_WIDTH])
+        hh = int(stats_h[i, cv2.CC_STAT_HEIGHT])
+        if hx > 1 and hy > 1 and hx + hw < prw - 1 and hy + hh < prh - 1 and ha < int(0.025 * rw * rh):
+            base[labels_h == i] = 255
+
+    # 4. Tight proportional anti-alias halo (5x5 for verifier, 9x9 for cleanup)
+    ksize = 5 if erode_outer else 9
+    k_halo = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (ksize, ksize))
+    roi_mask = cv2.dilate(base, k_halo)
+
+    full_mask = np.zeros((h_img, w_img), dtype=np.uint8)
+    full_mask[py1:py2, px1:px2] = roi_mask
+    if maximum_mask is not None:
+        full_mask = cv2.bitwise_and(full_mask, maximum_mask)
+    return full_mask, {
+        "text_component_pixels": max(1, int(np.count_nonzero(base))),
+        "accepted_text_components": max(1, int(num_d - 1)),
+        "component_based": True,
+        "sfx_glyph_halo_mask": True,
+        "lettering_stroke_width": int(stroke_w),
+    }
+
+
+def _caption_overlay_mask(img_bgr, group, maximum_mask):
+    """Build a tight glyph mask for captions over artwork.
+
+    The former implementation used each OCR polygon as an opaque backing.  That
+    made a fallback intended for difficult lettering paint dark rectangles over
+    the illustration.  Caption cleanup now uses the same component-level
+    foreground detector as the normal textured-art path; if no glyph evidence is
+    available, returning an empty mask fails closed and lets the caller preserve
+    the original for review.
+    """
+    result, component_metrics = _component_text_mask(
+        img_bgr,
+        group,
+        maximum_mask=maximum_mask,
+        strategy="conservative",
+    )
+    line_areas = []
+    for line in _cleanup_lines_for_group(group):
+        polygon = np.asarray(line.polygon, dtype=np.int32)
+        if polygon.shape[0] < 3:
+            continue
+        line_mask = np.zeros_like(maximum_mask)
+        cv2.fillPoly(line_mask, [polygon], 255)
+        line_mask = cv2.bitwise_and(line_mask, maximum_mask)
+        if np.any(result & line_mask):
+            line_areas.append(int(np.count_nonzero(result & line_mask)))
+    pixels = int(np.count_nonzero(result))
+    return result, {
+        **component_metrics,
+        "text_component_pixels": pixels,
+        "accepted_text_components": len(line_areas),
+        "component_based": True,
+        "caption_overlay_mask": True,
+        "caption_overlay_line_count": len(line_areas),
+        "caption_overlay_largest_line_area": max(line_areas, default=0),
+    }
+
+
+def _proven_uniform_dark_region(metrics):
+    """Uniform dark backdrop proven by the ring around the group or by its interior.
+
+    ``dark_context`` only samples the surrounding ring, which adjacent bright
+    artwork contaminates.  ``uniform_dark_interior`` proves the same property on
+    the region itself and is accepted as equivalent evidence.
+    """
+
+    metrics = metrics or {}
+    return bool(
+        metrics.get("dark_context")
+        or metrics.get("uniform_dark_interior")
+        or (
+            float(metrics.get("brightness_mean", 255.0)) <= 35.0
+            and float(metrics.get("dark_pixel_ratio", 0.0)) >= 0.95
+            and float(metrics.get("interior_dark_std", 255.0)) <= 18.0
+            and float(metrics.get("interior_value_span", 255.0)) <= 45.0
+            and float(metrics.get("interior_dark_texture", 255.0)) <= 6.0
+            and float(metrics.get("interior_dark_gradient", 255.0)) <= 30.0
+        )
+        or (
+            float(metrics.get("context_dark_pixel_ratio", 0.0)) >= 0.90
+            and float(metrics.get("context_saturation_mean", 255.0)) <= 18.0
+        )
+    )
+
+
+def _proven_light_cleanup_region(metrics):
+    """Light backdrop proven by region metrics, even if conservatively typed.
+
+    Some real speech regions sit in a white/enclosed panel whose surrounding art
+    keeps the coarse background type at ``textured_art``.  A source-scoped mask
+    pinned to owned OCR geometry may safely restore that proven light backdrop;
+    the white-patch guard remains active for speed-lines/textured art without
+    this positive evidence.
+    """
+
+    metrics = metrics or {}
+    return bool(
+        (
+            metrics.get("strict_uniform_light")
+            and metrics.get("uniform_light")
+            and (
+                metrics.get("dominant_white_enclosure")
+                or metrics.get("stylized_white_enclosure")
+                or metrics.get("strongly_uniform_white")
+            )
+        )
+        or (
+            metrics.get("open_light_art_caption")
+            and float(metrics.get("brightness_mean", 0.0)) >= 170.0
+            and float(metrics.get("dark_pixel_ratio", 1.0)) <= 0.08
+        )
+        or (
+            # Large display letters can dominate the measured interior and make
+            # an otherwise white page look like textured art.  Source-scoped
+            # cleanup is allowed to trust the immediate context ring here: it is
+            # restoring the surrounding page/panel, not authoring a synthetic
+            # white patch over illustration.
+            metrics.get("relaxed_white_context")
+            and float(metrics.get("context_brightness_mean", 0.0)) >= 248.0
+            and float(metrics.get("context_white_pixel_ratio", 0.0)) >= 0.975
+            and float(metrics.get("context_dark_pixel_ratio", 1.0)) <= 0.015
+            and float(metrics.get("context_saturation_mean", 255.0)) <= 5.0
+        )
+        or (
+            # Simple white speech balloons can be conservatively typed as
+            # textured_art when the glyphs and border dominate the crop.  The
+            # immediate ring is still the decisive evidence: a mostly-white,
+            # low-saturation context with only a small dark border/antialias
+            # budget is a safe light cleanup target, not a white patch over art.
+            float(metrics.get("context_brightness_mean", 0.0)) >= 242.0
+            and float(metrics.get("context_white_pixel_ratio", 0.0)) >= 0.94
+            and float(metrics.get("context_dark_pixel_ratio", 1.0)) <= 0.045
+            and float(metrics.get("context_saturation_mean", 255.0)) <= 8.0
+            and float(metrics.get("white_pixel_ratio", 0.0)) >= 0.60
+            and float(metrics.get("saturation_mean", 255.0)) <= 12.0
+        )
+    )
+
+
+def _translated_text_occupancy_metrics(cleaned_bgr, rendered_bgr, group):
+    """Measure the physical footprint of the translated text just rendered.
+
+    Cleanup can be very large on display lettering, so occupancy must compare
+    the post-draw image to the cleaned image, not to the original page.  This is
+    telemetry/gating evidence for whether PT-BR actually reached the artifact.
+    """
+
+    empty = {
+        "translated_text_pixels": 0,
+        "translated_text_occupancy_ratio": 0.0,
+        "translated_text_box_occupancy_ratio": 0.0,
+    }
+    if cleaned_bgr is None or rendered_bgr is None or group is None:
+        return empty
+    if np.asarray(cleaned_bgr).shape != np.asarray(rendered_bgr).shape:
+        return empty
+    changed = (
+        np.max(
+            np.abs(
+                np.asarray(rendered_bgr, dtype=np.int16)
+                - np.asarray(cleaned_bgr, dtype=np.int16)
+            ),
+            axis=2,
+        ) > 8
+    )
+    gx, gy, gw, gh = [int(v) for v in group.box]
+    h_img, w_img = changed.shape[:2]
+    gx1, gy1 = max(0, gx), max(0, gy)
+    gx2, gy2 = min(w_img, gx + max(1, gw)), min(h_img, gy + max(1, gh))
+    group_pixels = int(np.count_nonzero(changed[gy1:gy2, gx1:gx2]))
+    group_area = max(1, (gx2 - gx1) * (gy2 - gy1))
+    tx, ty, tw, th = [int(v) for v in (getattr(group, "translation_box", None) or group.box)]
+    tx1, ty1 = max(0, tx), max(0, ty)
+    tx2, ty2 = min(w_img, tx + max(1, tw)), min(h_img, ty + max(1, th))
+    box_pixels = int(np.count_nonzero(changed[ty1:ty2, tx1:tx2]))
+    box_area = max(1, (tx2 - tx1) * (ty2 - ty1))
+    return {
+        "translated_text_pixels": group_pixels,
+        "translated_text_occupancy_ratio": round(float(group_pixels / group_area), 6),
+        "translated_text_box_occupancy_ratio": round(float(box_pixels / box_area), 6),
+    }
+
+
+def _local_background_flatness(img_bgr, mask, *, ring_radius=None):
+    """Measure whether the artwork around ``mask`` is one flat tone.
+
+    ``_classify_background_region`` only measures high-frequency texture, so a
+    smooth gradient (smoke, shading, fabric falloff) reads as "flat" there and
+    used to authorise a single-colour fill that lands as a visible rectangle.
+    The evidence that actually matters is how much the luminance of the clean
+    ring immediately around the cleanup mask varies: a genuine white balloon or
+    narration box is uniform, illustration is not.
+    """
+
+    empty = {
+        "flat_fill_ring_pixels": 0,
+        "flat_fill_ring_luminance_spread": None,
+        "flat_fill_supported": False,
+    }
+    if mask is None or not np.any(mask):
+        return empty
+    mask_u8 = (np.asarray(mask) > 0).astype(np.uint8) * 255
+    radius = int(ring_radius or config.FLAT_FILL_RING_RADIUS)
+    kernel = cv2.getStructuringElement(
+        cv2.MORPH_ELLIPSE,
+        (radius * 2 + 1, radius * 2 + 1),
+    )
+    ring = (cv2.dilate(mask_u8, kernel, iterations=1) > 0) & (mask_u8 == 0)
+    gray = (
+        cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
+        if np.asarray(img_bgr).ndim == 3
+        else np.asarray(img_bgr)
+    )
+    values = gray[ring].astype(np.float32)
+    if values.size < int(config.MIN_FLAT_FILL_RING_PIXELS):
+        return {**empty, "flat_fill_ring_pixels": int(values.size)}
+    low, high = np.percentile(values, [5.0, 95.0])
+    spread = float(high - low)
+    return {
+        "flat_fill_ring_pixels": int(values.size),
+        "flat_fill_ring_luminance_spread": round(spread, 3),
+        "flat_fill_supported": bool(spread <= config.MAX_FLAT_FILL_RING_SPREAD),
+    }
+
+
+def _detached_light_text_components_mask(img_bgr, group, source_mask):
+    """Recover isolated bright glyphs beside OCR lines on a uniform dark region."""
+    metrics = getattr(group, "background_metrics", {}) or {}
+    dark_context = _proven_uniform_dark_region(metrics)
+    empty = np.zeros(source_mask.shape, dtype=np.uint8)
+    if not dark_context or not np.any(source_mask):
+        return empty, {
+            "detached_text_components": 0,
+            "detached_text_pixels": 0,
+        }
+
+    line_heights = [line.box[3] for line in group.lines if line.box[3] > 0]
+    median_height = float(np.median(line_heights)) if line_heights else group.box[3]
+    horizontal_radius = max(16, min(64, int(median_height * 1.25)))
+    vertical_radius = max(3, min(10, int(median_height * 0.18)))
+    near = cv2.dilate(
+        source_mask,
+        np.ones(
+            (vertical_radius * 2 + 1, horizontal_radius * 2 + 1),
+            np.uint8,
+        ),
+        iterations=1,
+    )
+
+    x, y, w, h = _safe_draw_box(group.box, img_bgr.shape, group)
+    gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
+    bright = np.zeros_like(source_mask)
+    bright[y : y + h, x : x + w] = (
+        gray[y : y + h, x : x + w] >= 178
+    ).astype(np.uint8) * 255
+    count, labels, stats, _ = cv2.connectedComponentsWithStats(bright, 8)
+    selected = np.zeros_like(source_mask)
+    components = 0
+    for label in range(1, count):
+        area = int(stats[label, cv2.CC_STAT_AREA])
+        width = int(stats[label, cv2.CC_STAT_WIDTH])
+        height = int(stats[label, cv2.CC_STAT_HEIGHT])
+        component = labels == label
+        if not np.any(component & (near > 0)):
+            continue
+        missing_component = component & (source_mask == 0)
+        if not np.any(missing_component):
+            continue
+        if not (
+            2 <= area <= max(1600, int(group.box[2] * group.box[3] * 0.08))
+            and 1 <= width <= max(18, int(median_height * 1.2))
+            and 3 <= height <= max(24, int(median_height * 1.35))
+        ):
+            continue
+        # A bright art line clipped by the box looks like a detached glyph; on the
+        # full page it keeps going (a white "/" beside "*ding*").
+        reach = int(2 * median_height)
+        wy1, wy2 = max(0, y - reach), min(gray.shape[0], y + h + reach)
+        wx1, wx2 = max(0, x - reach), min(gray.shape[1], x + w + reach)
+        wide_count, wide_labels = cv2.connectedComponents((gray[wy1:wy2, wx1:wx2] >= 178).astype(np.uint8), connectivity=8)
+        cys, cxs = np.nonzero(component)
+        seeds = np.unique(wide_labels[cys - wy1, cxs - wx1])
+        seeds = seeds[seeds > 0]
+        if seeds.size:
+            connected = np.isin(wide_labels, seeds)
+            in_box = np.zeros(connected.shape, dtype=bool)
+            in_box[y - wy1:y + h - wy1, x - wx1:x + w - wx1] = True
+            if np.count_nonzero(connected & ~in_box) >= 0.3 * np.count_nonzero(connected):
+                continue
+        selected[missing_component] = 255
+        components += 1
+    if np.any(selected):
+        selected = cv2.dilate(selected, np.ones((3, 3), np.uint8), iterations=1)
+    return selected, {
+        "detached_text_components": int(components),
+        "detached_text_pixels": int(np.count_nonzero(selected)),
+    }
+
+
+def _uniform_dark_line_text_mask(img_bgr, group):
+    """Cover each OCR line polygon on a proven uniform dark region."""
+    metrics = getattr(group, "background_metrics", {}) or {}
+    dark_context = _proven_uniform_dark_region(metrics)
+    result = np.zeros(img_bgr.shape[:2], dtype=np.uint8)
+    if not dark_context:
+        return result, {
+            "uniform_dark_line_pixels": 0,
+            "uniform_dark_line_count": 0,
+        }
+
+    line_count = 0
+    for line in _cleanup_lines_for_group(group):
+        polygon = np.asarray(line.polygon, dtype=np.int32)
+        if polygon.shape[0] < 3:
+            continue
+        line_limit = np.zeros_like(result)
+        cv2.fillPoly(line_limit, [polygon], 255)
+        # Filling one OCR-line quadrilateral is safe here because the sampled
+        # context is almost entirely dark and low-saturation.  It also covers
+        # anti-alias pixels that threshold-based masks can leave behind.
+        selected = cv2.dilate(
+            line_limit,
+            np.ones((3, 3), np.uint8),
+            iterations=1,
+        )
+        result = cv2.bitwise_or(result, selected)
+        line_count += 1
+    flatness = _local_background_flatness(img_bgr, result)
+    spread = {
+        "uniform_dark_line_ring_luminance_spread":
+            flatness["flat_fill_ring_luminance_spread"],
+    }
+    if not flatness["flat_fill_supported"]:
+        return np.zeros_like(result), {
+            "uniform_dark_line_pixels": 0,
+            "uniform_dark_line_count": 0,
+            "uniform_dark_line_rejected": True,
+            **spread,
+        }
+    return result, {
+        "uniform_dark_line_pixels": int(np.count_nonzero(result)),
+        "uniform_dark_line_count": int(line_count),
+        **spread,
+    }
+
+
+def _uniform_light_line_text_mask(img_bgr, group):
+    """Cover each OCR line polygon only on a proven uniform light region."""
+    metrics = getattr(group, "background_metrics", {}) or {}
+    proven_light = _proven_light_cleanup_region(metrics)
+    uniform_light = bool(
+        metrics.get("strongly_uniform_white")
+        or proven_light
+        or (
+            metrics.get("uniform_light")
+            and float(metrics.get("white_pixel_ratio", 0.0)) >= 0.88
+            and float(metrics.get("saturation_mean", 255.0)) <= 14.0
+        )
+    )
+    result = np.zeros(img_bgr.shape[:2], dtype=np.uint8)
+    if (
+        not uniform_light
+        or (
+            getattr(group, "background_type", "")
+            not in {"white_balloon", "narration_box"}
+            and not proven_light
+        )
+    ):
+        return result, {
+            "uniform_light_line_pixels": 0,
+            "uniform_light_line_count": 0,
+        }
+
+    line_count = 0
+    for line in _cleanup_lines_for_group(group):
+        polygon = np.asarray(line.polygon, dtype=np.int32)
+        if polygon.shape[0] < 3:
+            continue
+        line_mask = np.zeros_like(result)
+        cv2.fillPoly(line_mask, [polygon], 255)
+        line_mask = cv2.dilate(line_mask, np.ones((3, 3), np.uint8), iterations=1)
+        result = cv2.bitwise_or(result, line_mask)
+        line_count += 1
+    flatness = _local_background_flatness(img_bgr, result)
+    if not flatness["flat_fill_supported"]:
+        # Replacing a whole OCR quadrilateral is a rectangle, not a glyph mask.
+        # It is only safe where the surrounding artwork is provably one tone;
+        # otherwise the glyph-level mask has to carry the cleanup.
+        return np.zeros_like(result), {
+            "uniform_light_line_pixels": 0,
+            "uniform_light_line_count": 0,
+            "uniform_light_line_rejected": True,
+            **flatness,
+        }
+    return result, {
+        "uniform_light_line_pixels": int(np.count_nonzero(result)),
+        "uniform_light_line_count": int(line_count),
+        **flatness,
+    }
+
+
+def _detached_dark_text_components_mask(img_bgr, group, source_mask):
+    """Recover dark glyph edges omitted by OCR polygons on uniform white regions."""
+    metrics = getattr(group, "background_metrics", {}) or {}
+    uniform_light = bool(
+        metrics.get("strongly_uniform_white")
+        or _proven_light_cleanup_region(metrics)
+    )
+    empty = np.zeros(source_mask.shape, dtype=np.uint8)
+    if not uniform_light or not np.any(source_mask):
+        return empty, {
+            "detached_dark_text_components": 0,
+            "detached_dark_text_pixels": 0,
+        }
+
+    line_heights = [line.box[3] for line in group.lines if line.box[3] > 0]
+    median_height = float(np.median(line_heights)) if line_heights else group.box[3]
+    horizontal_radius = max(12, min(48, int(median_height * 0.8)))
+    vertical_radius = max(3, min(12, int(median_height * 0.22)))
+    near = cv2.dilate(
+        source_mask,
+        np.ones(
+            (vertical_radius * 2 + 1, horizontal_radius * 2 + 1),
+            np.uint8,
+        ),
+        iterations=1,
+    )
+    x, y, w, h = _safe_draw_box(group.box, img_bgr.shape, group)
+    gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
+    hsv = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2HSV)
+    dark = np.zeros_like(source_mask)
+    dark[y : y + h, x : x + w] = (
+        (gray[y : y + h, x : x + w] <= 190)
+        & (hsv[y : y + h, x : x + w, 1] <= 80)
+    ).astype(np.uint8) * 255
+    count, labels, stats, _ = cv2.connectedComponentsWithStats(dark, 8)
+    selected = np.zeros_like(source_mask)
+    max_area = max(1800, int(group.box[2] * group.box[3] * 0.08))
+    missing = source_mask == 0
+    # Components with a missing pixel near the source mask, counted in one pass
+    # (a per-label full-page comparison cost seconds on tall pages).
+    touches = np.bincount(labels[missing & (near > 0)], minlength=count) > 0
+    area = stats[:, cv2.CC_STAT_AREA]
+    width = stats[:, cv2.CC_STAT_WIDTH]
+    height = stats[:, cv2.CC_STAT_HEIGHT]
+    keep = (touches & (area >= 2) & (area <= max_area)
+            & (width >= 1) & (width <= max(24, int(median_height * 1.6)))
+            & (height >= 3) & (height <= max(28, int(median_height * 1.5))))
+    keep[0] = False
+    components = int(np.count_nonzero(keep))
+    if components:
+        selected[keep[labels] & missing] = 255
+    if np.any(selected):
+        selected = cv2.dilate(selected, np.ones((3, 3), np.uint8), iterations=1)
+    return selected, {
+        "detached_dark_text_components": int(components),
+        "detached_dark_text_pixels": int(np.count_nonzero(selected)),
+    }
+
+
+def _measure_structure_continuations(original_bgr, group, cleanup_mask):
+    """Straight art lines crossing ``cleanup_mask``: protected and redrawn like the mask builder does."""
+    group.structure_continuations = []
+    group.structure_protect_mask = None
+    if not config.CLEAN_STRUCTURE_CONTINUATION or cleanup_mask is None or not np.any(cleanup_mask):
+        return
+    conflict = detect_linear_boundary_conflict(
+        original_bgr, cleanup_mask,
+        [tuple(int(value) for value in line.box) for line in _cleanup_lines_for_group(group)])
+    if conflict.get("candidate_curved_segment_count") or not conflict.get("candidate_segments"):
+        return
+    continuations = [_straight_structure_continuation(original_bgr, cleanup_mask, segment)
+                     for segment in _distinct_segments(conflict["candidate_segments"])]
+    continuations = [item for item in continuations if item]
+    if not continuations:
+        return
+    protect = np.zeros(np.asarray(cleanup_mask).shape, dtype=bool)
+    for item in continuations:
+        protect |= item.pop("protect")
+    group.structure_protect_mask = protect
+    group.structure_continuations = continuations
+
+
+def _apply_cleanup_mask(current_bgr, original_bgr, group, cleanup_mask, strategy="primary",
+                        accepted_candidate=None):
+    group.fill_alternatives = []
+    group._fill_source_bgr = original_bgr
+    if (isinstance(accepted_candidate, np.ndarray)
+            and accepted_candidate.shape == current_bgr.shape
+            and accepted_candidate.dtype == current_bgr.dtype):
+        # Final CLEAN composition must preserve the candidate that passed the
+        # reconstruction/source-removal gates. Re-running a fill here both costs
+        # another inference and would commit pixels that those gates never saw.
+        result = current_bgr.copy()
+        inside = np.asarray(cleanup_mask) > 0
+        result[inside] = accepted_candidate[inside]
+        return result
+    if strategy == "caption_effect":
+        return _apply_cleanup_mask_fill(current_bgr, original_bgr, group,
+                                        cleanup_mask, strategy=strategy)
+    if (not hasattr(group, "structure_continuations") and strategy != "lama_large"
+            and getattr(group, "lines", None)):
+        # A mask handed in ready-made (not built by _remove_text_for_group) never
+        # had its crossing art lines measured: the compositor still keeps them.
+        _measure_structure_continuations(original_bgr, group, cleanup_mask)
+    protect = getattr(group, "structure_protect_mask", None)
+    if isinstance(protect, np.ndarray) and protect.shape == np.asarray(cleanup_mask).shape and np.any(protect):
+        cleanup_mask = np.asarray(cleanup_mask).copy()
+        cleanup_mask[protect] = 0
+    learned = _learned_texture_fill(current_bgr, group, cleanup_mask, strategy)
+    classic = None
+    if learned is None or (config.CLEAN_COMPARE_FILLS and strategy != "lama_large"):
+        classic = _apply_cleanup_mask_fill(
+            current_bgr, original_bgr, group, cleanup_mask, strategy=strategy,
+            accepted_candidate=accepted_candidate)
+    if learned is None and classic is not None and config.CLEAN_COMPARE_FILLS and strategy != "lama_large" \
+            and not _inside_white_enclosure(current_bgr, group, cleanup_mask):
+        learned = _learned_texture_fill(current_bgr, group, cleanup_mask, strategy, force=True)
+    result = learned if classic is None else classic
+    surface = None
+    if config.CLEAN_SURFACE_FILL and strategy != "lama_large":
+        surface, surface_metrics = _surface_fill(current_bgr, cleanup_mask, group)
+        group.surface_fill = surface_metrics
+    options = {name: candidate for name, candidate in
+               (("classic", classic), ("learned", learned), ("surface", surface)) if candidate is not None}
+    if len(options) > 1:
+        # Try them all, keep the one the surroundings agree with (what an editor
+        # does when stamp and fill disagree); the rest stay as fallbacks the
+        # reconstruction gate tries in order before giving up on the region.
+        parts = {name: _fill_consistency_parts(current_bgr, candidate, cleanup_mask)
+                 for name, candidate in options.items()}
+        # The edge step is reported, not scored: the outside band it reads is the
+        # same for every candidate and still holds the lettering's halo, so it
+        # rewarded copying that halo inward (measured on a translucent balloon).
+        scores = {name: sum(v for k, v in terms.items() if k != "step") for name, terms in parts.items()}
+        # The learned fill is the stronger prior on textured art; the classic one
+        # replaces it only when clearly (>20 %) more consistent with the ring, and
+        # a fitted surface only when clearly (>10 %) more consistent than both.
+        if "learned" in scores and "classic" in scores:
+            chosen = "classic" if scores["classic"] < 0.8 * scores["learned"] else "learned"
+        else:
+            chosen = "classic" if "classic" in scores else "learned"
+        if "surface" in scores and scores["surface"] <= 0.9 * min(v for k, v in scores.items() if k != "surface"):
+            chosen = "surface"
+        order = [chosen] + sorted((name for name in scores if name != chosen), key=scores.get)
+        result = options[chosen]
+        group.fill_alternatives = [
+            (name, _draw_structure_continuations(options[name], group, cleanup_mask)) for name in order[1:]
+        ]
+        group.fill_choice = {"chosen": chosen, **{k: round(v, 2) for k, v in scores.items()},
+                             "terms": {name: {k: round(v, 2) for k, v in terms.items()} for name, terms in parts.items()}}
+        # The spatial-gate refusal is a verdict on the classic candidate only.
+        group.fill_choice["classic_spatial_gate_rejected"] = bool(
+            getattr(group, "spatial_harmonic_gate_rejected", False))
+        if chosen != "classic":
+            group.spatial_harmonic_gate_rejected = False
+        if isinstance(getattr(group, "background_metrics", None), dict) and chosen == "classic":
+            group.background_metrics["cleanup_fill_source"] = group.background_metrics.get(
+                "cleanup_fill_source_classic", group.background_metrics.get("cleanup_fill_source"))
+    # Whichever candidate won (the learned fill often does: it scores better on texture), glow
+    # residue on a flat near-black backdrop goes back to black, inside the authorised mask only.
+    result = _flatten_dark_backdrop_residue(
+        result.copy(), original_bgr, cleanup_mask, getattr(group, "background_metrics", None))
+    return _draw_structure_continuations(result, group, cleanup_mask)
+
+
+# A smooth gradient behind lettering (a purple glow, a blue sky) is a surface,
+# not a texture: fitted to the ring around the mask it can be filled exactly,
+# where a learned fill invents blotches and a stamp copies the glyph halo.
+SURFACE_FILL_MAX_RMSE = 9.0
+SURFACE_FILL_MAX_PIXELS = 450_000
+SURFACE_FILL_MIN_RING_KEPT = 0.93
+SURFACE_FILL_MIN_SPAN = 12.0
+
+
+def _surface_fill(current_bgr, cleanup_mask, group=None):
+    """``(filled, metrics)`` from a robust quadratic fit to the ring, or ``(None, metrics)``."""
+    mask = (_grown_fill_mask(group, cleanup_mask) if group is not None else np.asarray(cleanup_mask)) > 0
+    area = int(mask.sum())
+    metrics = {"surface_fill_pixels": area}
+    if area < 30 or area > SURFACE_FILL_MAX_PIXELS:
+        return None, {**metrics, "surface_fill_reason": "mask_size"}
+    ys, xs = np.nonzero(mask)
+    h_img, w_img = mask.shape
+    x0, x1 = max(0, xs.min() - 24), min(w_img, xs.max() + 25)
+    y0, y1 = max(0, ys.min() - 24), min(h_img, ys.max() + 25)
+    local = mask[y0:y1, x0:x1].astype(np.uint8)
+    near = cv2.dilate(local, np.ones((5, 5), np.uint8)) > 0
+    far = cv2.dilate(local, np.ones((25, 25), np.uint8)) > 0
+    ring = far & ~near
+    roi = current_bgr[y0:y1, x0:x1].astype(np.float32)
+    ry, rx = np.nonzero(ring)
+    if ry.size < 60:
+        return None, {**metrics, "surface_fill_reason": "ring_too_small"}
+    hh, ww = local.shape
+    def design(yv, xv):
+        u = (xv / max(1, ww - 1)) * 2 - 1
+        v = (yv / max(1, hh - 1)) * 2 - 1
+        return np.stack([np.ones_like(u), u, v, u * u, u * v, v * v], axis=1)
+    A = design(ry.astype(np.float32), rx.astype(np.float32))
+    values = roi[ry, rx]
+    keep = np.ones(len(values), bool)
+    coef = None
+    for _ in range(3):
+        if keep.sum() < 40:
+            return None, {**metrics, "surface_fill_reason": "ring_not_background"}
+        coef, *_ = np.linalg.lstsq(A[keep], values[keep], rcond=None)
+        residual = np.abs(values - A @ coef).max(axis=1)
+        sigma = float(np.median(residual[keep])) * 1.4826 + 1.0
+        keep = residual <= max(6.0, 3.0 * sigma)
+    rmse = float(np.sqrt(np.mean((values[keep] - A[keep] @ coef) ** 2)))
+    metrics.update({"surface_fill_rmse": round(rmse, 2),
+                    "surface_fill_ring_kept": round(float(keep.mean()), 3)})
+    # Art crossing the ring (a door frame behind the balloon) shows up as the
+    # outliers the fit dropped: 16 % on a wall, under 3 % on real gradients.
+    if rmse > SURFACE_FILL_MAX_RMSE or keep.mean() < SURFACE_FILL_MIN_RING_KEPT:
+        return None, {**metrics, "surface_fill_reason": "not_a_smooth_surface"}
+    # Art entering the mask (a line, a frame edge) is what the fit dropped next
+    # to the mask: a diffused fill would smear it, so the other fills decide.
+    dropped = np.zeros(local.shape, np.uint8)
+    dropped[ry[~keep], rx[~keep]] = 1
+    # It crosses the whole ring; a glyph's leftover glow only hugs the mask.
+    entry = cv2.dilate(near.astype(np.uint8), np.ones((3, 3), np.uint8)) > 0
+    exit_edge = ring & ~cv2.erode(far.astype(np.uint8), np.ones((3, 3), np.uint8)).astype(bool)
+    count, labels, stats, _ = cv2.connectedComponentsWithStats(dropped, connectivity=8)
+    for label in range(1, count):
+        component = labels == label
+        if stats[label, cv2.CC_STAT_AREA] >= 20 and np.any(entry & component) and np.any(exit_edge & component):
+            return None, {**metrics, "surface_fill_reason": "structure_enters_mask"}
+    # A uniform backdrop is not a gradient: the plain fills are exact there.
+    fitted = A[keep] @ coef
+    span = float((fitted.max(axis=0) - fitted.min(axis=0)).max())
+    metrics["surface_fill_span"] = round(span, 1)
+    my, mx = np.nonzero(local > 0)
+    filled = current_bgr.copy()
+    if span < SURFACE_FILL_MIN_SPAN:
+        # A uniform backdrop: its own colour, exactly, over the grown mask (which
+        # also takes the outline's faint outer edge that a plain fill leaves).
+        # Without such an edge the plain fills are already exact.
+        residue = _outline_residue_mask(group, (np.asarray(cleanup_mask) > 0).astype(np.uint8))             if group is not None else None
+        if residue is None or not np.any(residue):
+            return None, {**metrics, "surface_fill_reason": "uniform_backdrop"}
+        filled[y0 + my, x0 + mx] = np.clip(np.median(values[keep], axis=0), 0, 255).astype(np.uint8)
+        return filled, {**metrics, "surface_fill_reason": "uniform_backdrop"}
+    # The fit only proves the backdrop is a smooth surface; the fill itself is
+    # diffused from the mask boundary, so it meets the surroundings exactly even
+    # where one global quadratic cannot follow them (a light arc through a sky).
+    diffused = cv2.inpaint(current_bgr[y0:y1, x0:x1], local * 255, 3, cv2.INPAINT_NS).astype(np.float32)
+    grain = np.random.default_rng(area).normal(0.0, min(rmse, 4.0) * 0.6, (my.size, 3))
+    filled[y0 + my, x0 + mx] = np.clip(diffused[my, mx] + grain, 0, 255).astype(np.uint8)
+    return filled, {**metrics, "surface_fill_reason": "fitted"}
+
+
+# Widest window the score reads around the mask: the 481 px membrane blur over a
+# ring that ends 8 px out. Inside a crop this far from the mask every value is
+# what the full page gives (the ring is zero beyond it, so border handling of the
+# crop never reaches it); on tall webtoon pages it is the difference between
+# blurring 800x7500 and 800x600 pixels, five scales per candidate.
+_FILL_SCORE_MARGIN = 260
+
+
+def _mask_roi(mask, margin):
+    """Slices of the mask's bounding box grown by ``margin`` (None for an empty mask).
+
+    The gates only look a bounded distance past the mask, so running them on this
+    crop gives the same numbers as the full page at a fraction of the cost.
+    """
+    ys, xs = np.nonzero(mask)
+    if not ys.size:
+        return None
+    return (slice(max(0, ys.min() - margin), min(mask.shape[0], ys.max() + margin + 1)),
+            slice(max(0, xs.min() - margin), min(mask.shape[1], xs.max() + margin + 1)))
+
+
+def _fill_consistency_parts(source_bgr, candidate_bgr, cleanup_mask):
+    mask = np.asarray(cleanup_mask)
+    roi = _mask_roi(mask, _FILL_SCORE_MARGIN)
+    if roi is None:
+        return {}
+    return _fill_consistency_parts_full(source_bgr[roi], candidate_bgr[roi], mask[roi])
+
+
+def _fill_consistency_parts_full(source_bgr, candidate_bgr, cleanup_mask):
+    """How much a reconstruction disagrees with the art around it, per term (lower is better).
+
+    Sum of: the local tone mismatch (each masked pixel against the ring 2-8 px
+    around it averaged at the finest scale reaching it, beyond the ring's own spread
+    about that local average - so a gradient balloon is judged locally, not by one
+    global median); the mean step across the mask edge (inner 3 px vs outer 3 px band,
+    compared locally); the share of masked pixels that are islands darker or
+    lighter than anything common in the ring (5-95 % range widened by 8 levels)
+    and not connected to such pixels just outside the mask;
+    and the fine-detail (|Laplacian|) energy ratio inside vs ring, log-scaled.
+    """
+    mask = (np.asarray(cleanup_mask) > 0).astype(np.uint8)
+    if not np.any(mask):
+        return {}
+    gray = cv2.cvtColor(candidate_bgr, cv2.COLOR_BGR2GRAY).astype(np.float32)
+    source = cv2.cvtColor(source_bgr, cv2.COLOR_BGR2GRAY).astype(np.float32)
+    inside = mask > 0
+    ring = (cv2.dilate(mask, np.ones((17, 17), np.uint8)) > 0) & ~(cv2.dilate(mask, np.ones((5, 5), np.uint8)) > 0)
+    if np.count_nonzero(ring) < 30:
+        return {}
+    ring_values = source[ring]
+    q = np.percentile(ring_values, [5, 25, 50, 75, 95])
+    # Expected tone everywhere in the mask: the ring averaged at the finest scale
+    # that reaches each pixel (31 px, doubling) - a smooth membrane, so a patch
+    # copied from a white region into grey art deep inside a wide mask counts.
+    ring_f = ring.astype(np.float32)
+    expected = np.zeros_like(gray)
+    filled = np.zeros(gray.shape, dtype=bool)
+    spread = None
+    uniform = np.zeros(gray.shape, dtype=bool)
+    for size in (31, 61, 121, 241, 481):
+        support = cv2.blur(ring_f, (size, size))
+        local = cv2.blur(source * ring_f, (size, size)) / np.maximum(support, 1e-3)
+        local_sq = cv2.blur(source * source * ring_f, (size, size)) / np.maximum(support, 1e-3)
+        local_std = np.sqrt(np.maximum(local_sq - local * local, 0.0))
+        if spread is None:
+            spread = float(np.median(np.abs(source[ring] - local[ring])))
+            # Where the ring around a pixel spans an art edge (white sleeve next to
+            # grey coat) its average is no reference: a fill that carries the
+            # edge on would be penalised and one that smears it rewarded.
+            uniform_limit = max(8.0, float(np.median(local_std[ring])))
+        new = inside & ~filled & (support > 0.02)
+        expected[new] = local[new]
+        uniform[new] = local_std[new] <= uniform_limit
+        filled |= new
+        if np.all(filled[inside]):
+            break
+    judged_tone = filled & inside & uniform
+    if np.count_nonzero(judged_tone) >= max(30, 0.1 * np.count_nonzero(inside)):
+        residual = gray[judged_tone] - expected[judged_tone]
+        # Medians: thin art lines carried through are a minority of the pixels
+        # and must not count; a wrong patch or blotch covers most of them.
+        tone = abs(float(np.median(residual))) + max(0.0, float(np.median(np.abs(residual))) - spread)
+    else:
+        tone = abs(float(np.median(gray[inside])) - q[2])
+    inner_band = inside & ~(cv2.erode(mask, np.ones((7, 7), np.uint8)) > 0)
+    outer_band = (cv2.dilate(mask, np.ones((7, 7), np.uint8)) > 0) & ~inside
+    k = (15, 15)
+    inner_mean = cv2.blur(gray * inner_band, k) / np.maximum(cv2.blur(inner_band.astype(np.float32), k), 1e-3)
+    outer_mean = cv2.blur(source * outer_band, k) / np.maximum(cv2.blur(outer_band.astype(np.float32), k), 1e-3)
+    edge = inner_band
+    step = float(np.mean(np.abs(inner_mean[edge] - outer_mean[edge]))) if np.any(edge) else 0.0
+    # Islands: masked pixels darker/lighter than anything common in the ring that
+    # are not connected to the same kind of pixel in the ring. A white speed line
+    # carried through the mask joins its ring part and is continuation, not a blob.
+    near = (cv2.dilate(mask, np.ones((5, 5), np.uint8)) > 0) & ~inside
+    composite = np.where(inside, gray, source)
+    island_pixels = 0
+    for extreme in (composite < q[0] - 8, composite > q[4] + 8):
+        region = extreme & (inside | near)
+        if not np.any(region & inside):
+            continue
+        count, labels = cv2.connectedComponents(region.astype(np.uint8), connectivity=8)
+        anchored = np.unique(labels[region & near])
+        island_pixels += int(np.count_nonzero(region & inside & ~np.isin(labels, anchored[anchored > 0])))
+    islands = 100.0 * float(island_pixels) / max(1, np.count_nonzero(inside))
+    # Texture continuity: fine-detail energy inside vs the ring (a smooth patch in
+    # striped or hatched art is wrong even when its tone matches).
+    hf_in = float(np.mean(np.abs(cv2.Laplacian(gray, cv2.CV_32F))[cv2.erode(mask, np.ones((5, 5), np.uint8)) > 0]))         if np.any(cv2.erode(mask, np.ones((5, 5), np.uint8))) else 0.0
+    hf_ring = float(np.mean(np.abs(cv2.Laplacian(source, cv2.CV_32F))[ring]))
+    texture = 10.0 * abs(float(np.log((hf_in + 1.0) / (hf_ring + 1.0))))
+    return {"tone": float(tone), "step": float(step), "islands": float(islands), "texture": float(texture)}
+
+
+
+def _screentone_lattice(gray, valid, min_period=3, max_period=24):
+    """Lattice vectors of a periodic halftone in ``gray`` (only ``valid`` pixels count).
+
+    Autocorrelation of the high-passed visible pixels, normalised by the
+    autocorrelation of the visibility mask so the hole left by the lettering does
+    not bias it. Returns two non-collinear translation vectors, or ``None`` when
+    no off-centre peak is clearly periodic (normalised < 0.4).
+    """
+    g = gray.astype(np.float32)
+    hp = (g - cv2.GaussianBlur(g, (0, 0), 3.0)) * valid
+    weight = valid.astype(np.float32)
+    if np.count_nonzero(valid) < 400 or float(np.std(hp[valid])) < 4.0:
+        return None
+
+    def autocorr(a):
+        f = np.fft.rfft2(a, s=(2 * a.shape[0], 2 * a.shape[1]))
+        return np.fft.irfft2(f * np.conj(f))[:a.shape[0], :a.shape[1]]
+
+    num, den = autocorr(hp), autocorr(weight)
+    shape = num.shape
+    corr = np.zeros(shape, np.float32)
+    ok = den > 0.3 * den[0, 0]
+    corr[ok] = num[ok] / den[ok]
+    corr /= max(1e-6, float(corr[0, 0]))
+    peaks = []
+    for dy in range(-max_period, max_period + 1):
+        for dx in range(0, max_period + 1):
+            r = (dy * dy + dx * dx) ** 0.5
+            if r < min_period or r > max_period or (dx == 0 and dy <= 0):
+                continue
+            value = corr[dy % shape[0], dx % shape[1]]
+            neighbours = [corr[(dy + a) % shape[0], (dx + b) % shape[1]]
+                          for a in (-1, 0, 1) for b in (-1, 0, 1) if a or b]
+            if value >= 0.25 and value >= max(neighbours):
+                peaks.append((r, -float(value), dy, dx))
+    # The primary screen direction must be clearly periodic (>= 0.4); the second
+    # may be weaker (anisotropic screens) but must still repeat (>= 0.25).
+    if not any(-v >= 0.4 for _r, v, _dy, _dx in peaks):
+        return None
+    peaks.sort(key=lambda p: (p[1] > -0.4, p[0]))
+
+    def refine(dy, dx):
+        # Sub-pixel peak: a rotated screen's lattice step is not a whole pixel.
+        ys, xs, ws = [], [], []
+        for a in (-1, 0, 1):
+            for b in (-1, 0, 1):
+                value = max(0.0, float(corr[(dy + a) % shape[0], (dx + b) % shape[1]]))
+                ys.append(dy + a); xs.append(dx + b); ws.append(value)
+        total = sum(ws) or 1.0
+        return (sum(y * w for y, w in zip(ys, ws)) / total, sum(x * w for x, w in zip(xs, ws)) / total)
+
+    t1 = refine(peaks[0][2], peaks[0][3])
+    for _r, _v, dy, dx in peaks[1:]:
+        cross = peaks[0][2] * dx - peaks[0][3] * dy
+        if abs(cross) >= 0.5 * peaks[0][0] * (dy * dy + dx * dx) ** 0.5:
+            return t1, refine(dy, dx)
+    return None
+
+
+def _screentone_around(current_bgr, cleanup_mask, region=None, boxes=()):
+    """Whether the art around the mask is a periodic halftone screen."""
+    mask = np.asarray(cleanup_mask) > 0
+    if not np.any(mask):
+        return False
+    height, width = mask.shape
+    ys, xs = np.nonzero(mask)
+    pad = 48
+    y1, y2 = max(0, ys.min() - pad), min(height, ys.max() + pad + 1)
+    x1, x2 = max(0, xs.min() - pad), min(width, xs.max() + pad + 1)
+    # Measure the screen outside the whole text block: the gaps between letters hold
+    # anti-alias remnants that would break the periodicity.
+    valid = ~(cv2.dilate(mask[y1:y2, x1:x2].astype(np.uint8), np.ones((15, 15), np.uint8)) > 0)
+    for bx, by, bw, bh in boxes:  # the lettering's own outline/glow is not the screen
+        margin = max(3, int(round(0.3 * bh)))
+        valid[max(0, by - margin - y1):max(0, by + bh + margin - y1),
+              max(0, bx - margin - x1):max(0, bx + bw + margin - x1)] = False
+    if region is not None:
+        valid &= np.asarray(region)[y1:y2, x1:x2]
+    gray = cv2.cvtColor(current_bgr[y1:y2, x1:x2], cv2.COLOR_BGR2GRAY)
+    return _screentone_lattice(gray, valid) is not None
+
+
+
+def _inside_white_enclosure(image_bgr, group, cleanup_mask):
+    """Whether the mask sits in a closed balloon whose visible interior is plain white."""
+    enclosure = getattr(group, "light_enclosure_interior", None)
+    mask = np.asarray(cleanup_mask) > 0
+    if not isinstance(enclosure, np.ndarray) or enclosure.shape != mask.shape:
+        return False
+    if np.count_nonzero(mask & ~enclosure) > 0.05 * max(1, np.count_nonzero(mask)):
+        return False
+    gray = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2GRAY)
+    visible = gray[enclosure & ~(cv2.dilate(mask.astype(np.uint8), np.ones((5, 5), np.uint8)) > 0)]
+    return bool(visible.size and np.median(visible) >= 240 and np.percentile(visible, 10) >= 225)
+
+_LEARNED_FILL_CACHE = {}
+_LEARNED_FILL_CACHE_LOCK = threading.Lock()
+
+
+def _learned_texture_fill(current_bgr, group, cleanup_mask, strategy, force=False):
+    """Local LaMa reconstruction for textured backgrounds, or ``None`` to fall back.
+
+    Telea and the constant/harmonic fills only diffuse the boundary, so on
+    hatching, halftone or photo texture they leave a smooth word-shaped patch
+    (texture ratio ~0.3 of the true background on 269 real-background cases;
+    LaMa ~0.9, lower error in 2 of 3). The same verified local model as the
+    translated-page fallback is used, composited only inside the mask; every
+    existing gate still judges the result. Unavailable/integrity failures fall
+    back to the classic fill and are recorded on the group.
+    """
+    if (not config.CLEAN_LEARNED_TEXTURE_FILL or not config.ADVANCED_ART_INPAINTING
+            or strategy == "lama_large" or cleanup_mask is None or not np.any(cleanup_mask)):
+        return None
+    metrics = getattr(group, "background_metrics", {}) or {}
+    if not force and _inside_white_enclosure(current_bgr, group, cleanup_mask):
+        # A plain white balloon wants plain white; the model invents letter-like
+        # strokes there (it read a dotted border as texture and redrew "I D D").
+        return None
+    spatial = metrics.get("local_background_spatial_class")
+    # The spatial evidence wins over tone statistics: a smooth field (noisy dark
+    # backdrop) is rebuilt by boundary interpolation; the model invented a darker
+    # word-shaped blob there.
+    textured = spatial == "STRUCTURED_OR_TEXTURED" or (
+        metrics.get("local_background_class") == "textured_art"
+        and spatial not in {"SMOOTH_NONUNIFORM", "PROVEN_UNIFORM"})
+    # A light halftone balloon reads as "solid_light" by its tone statistics, and a
+    # flat fill then erases its dots; a measured periodic screen goes to the model.
+    if not textured and config.CLEAN_SCREENTONE_DETECTION:
+        textured = _screentone_around(
+            current_bgr, cleanup_mask, getattr(group, "light_enclosure_interior", None),
+            [tuple(int(v) for v in line.box) for line in _cleanup_lines_for_group(group)])
+        if textured:
+            group.screentone_detected = True
+    if not textured and not force:
+        return None
+    return _learned_inpaint(current_bgr, group, cleanup_mask)
+
+
+def _outline_residue_mask(group, mask_u8, band=6):
+    """The outline's soft outer edge left just outside the mask, or ``None``.
+
+    Thick dark outlines fade into the backdrop over a few pixels; the mask stops
+    before that fade, and every fill diffuses its dark values back in as ghost
+    letters. Pixels within ``band`` px of the mask that stand clearly off the
+    backdrop measured further out, and touch the mask, join the fill - only
+    inside the group's own box, where the render may change pixels anyway.
+    """
+    source = getattr(group, "_fill_source_bgr", None)
+    if source is None or not np.any(mask_u8):
+        return None
+    x, y, w, h = [int(v) for v in group.box]
+    pad = band + 2
+    y0, y1 = max(0, y - pad), min(mask_u8.shape[0], y + h + pad)
+    x0, x1 = max(0, x - pad), min(mask_u8.shape[1], x + w + pad)
+    local = mask_u8[y0:y1, x0:x1]
+    gray = cv2.cvtColor(source[y0:y1, x0:x1], cv2.COLOR_BGR2GRAY).astype(np.float32)
+    distance = cv2.distanceTransform((local == 0).astype(np.uint8), cv2.DIST_L2, 3)
+    near = (distance > 0) & (distance <= band)
+    far = (distance > band + 2) & (distance <= band + 14)
+    if np.count_nonzero(far) < 40:
+        return None
+    backdrop = float(np.median(gray[far]))
+    spread = float(np.median(np.abs(gray[far] - backdrop))) * 1.4826
+    off = near & (np.abs(gray - backdrop) > max(14.0, 3.0 * spread))
+    count, labels = cv2.connectedComponents((off | (local > 0)).astype(np.uint8), connectivity=8)
+    touching = np.unique(labels[local > 0])
+    residue_local = off & np.isin(labels, touching[touching > 0])
+    residue = np.zeros(mask_u8.shape, dtype=bool)
+    residue[y0:y1, x0:x1] = residue_local
+    return residue
+
+
+def _record_fill_extension(group, grown, mask_u8):
+    """Remember the ring a fill was allowed to work in beyond the text mask.
+
+    The page-level "nothing changed outside the authorized mask" proof has to count this ring
+    as authorized, or every fill that legitimately reaches the halo is reported as a violation.
+    """
+    if group is None:
+        return
+    extra = (np.asarray(grown) > 0) & (np.asarray(mask_u8) == 0)
+    previous = getattr(group, "authorized_fill_extension", None)
+    if isinstance(previous, np.ndarray) and previous.shape == extra.shape:
+        extra = extra | previous
+    group.authorized_fill_extension = extra
+
+
+def _grown_fill_mask(group, cleanup_mask):
+    """The mask a fill works on: ``cleanup_mask`` grown by 2 px.
+
+    A mask that hugs each letter, with the faint halo just outside, lets a fill
+    redraw the letters' shapes as ghosts (measured on 3 cases; 4-6 px added
+    nothing). Protected structure and the outside of a known balloon are never
+    grown into.
+    """
+    layers = getattr(group, "_caption_effect_layers", None)
+    if layers is not None and np.array_equal(np.asarray(cleanup_mask), layers.authorized):
+        return (layers.authorized > 0).astype(np.uint8)
+    mask_u8 = (np.asarray(cleanup_mask) > 0).astype(np.uint8)
+    grown = cv2.dilate(mask_u8, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5)))
+    residue = _outline_residue_mask(group, mask_u8)
+    if residue is not None:
+        grown[residue] = 1
+    protect = getattr(group, "structure_protect_mask", None)
+    if isinstance(protect, np.ndarray) and protect.shape == grown.shape:
+        grown[(protect > 0) & (mask_u8 == 0)] = 0
+    enclosure = getattr(group, "light_enclosure_interior", None)
+    if isinstance(enclosure, np.ndarray) and enclosure.shape == grown.shape:
+        grown[~enclosure.astype(bool) & (mask_u8 == 0)] = 0
+    _record_fill_extension(group, grown, mask_u8)
+    return grown
+
+
+def _mask_with_lettering_residue(group, original_bgr, cleanup_mask):
+    """``cleanup_mask`` plus the soft halo just outside it, as a uint8 mask.
+
+    Glowing or outlined lettering fades into the backdrop over a few pixels and the mask
+    stops before that fade; a fill that only covers the mask then interpolates from (or
+    leaves behind) the halo, which shows as faint ghost bars where the lines were. The
+    halo is the one ``_outline_residue_mask`` already measures; it never grows into
+    protected structure or out of a known balloon, like ``_grown_fill_mask``.
+    """
+    mask_u8 = (np.asarray(cleanup_mask) > 0).astype(np.uint8)
+    if group is None or original_bgr is None:
+        return mask_u8
+    group._fill_source_bgr = original_bgr
+    residue = _outline_residue_mask(group, mask_u8)
+    if residue is None or not np.any(residue):
+        return mask_u8
+    grown = mask_u8.copy()
+    grown[residue] = 1
+    protect = getattr(group, "structure_protect_mask", None)
+    if isinstance(protect, np.ndarray) and protect.shape == grown.shape:
+        grown[(protect > 0) & (mask_u8 == 0)] = 0
+    enclosure = getattr(group, "light_enclosure_interior", None)
+    if isinstance(enclosure, np.ndarray) and enclosure.shape == grown.shape:
+        grown[~enclosure.astype(bool) & (mask_u8 == 0)] = 0
+    _record_fill_extension(group, grown, mask_u8)
+    return grown
+
+
+def _flatten_dark_backdrop_residue(result, original_bgr, fill_mask, profile):
+    """Inside the fill mask only: glow residue on a near-black backdrop goes back to black.
+
+    Light lettering with a glow on a flat near-black backdrop is filled by interpolation, and
+    the fill can keep faint intermediate values (measured: up to 44/255 where the surround is
+    0) that show as ghost bars where the lines were. A pixel of the fill that is still above
+    the backdrop but under a quarter of the lettering's own contrast is that residue, never
+    content. Only the authorised mask is touched, so the outside-mask evidence is unaffected.
+    """
+    median = profile.get("local_background_median_bgr") if isinstance(profile, dict) else None
+    if str(profile.get("local_background_polarity") if isinstance(profile, dict) else "") != "light_text_on_dark_bg":
+        return result
+    if not (isinstance(median, (list, tuple)) and len(median) == 3):
+        return result
+    backdrop = np.asarray(median, dtype=np.float32)
+    backdrop_luma = float(backdrop @ np.array([0.114, 0.587, 0.299], dtype=np.float32))
+    if backdrop_luma > 16.0 or float(profile.get("local_background_luminance_std") or 99.0) > 10.0:
+        return result
+    inside = np.asarray(fill_mask) > 0
+    if not inside.any():
+        return result
+    original_luma = cv2.cvtColor(original_bgr, cv2.COLOR_BGR2GRAY).astype(np.float32)
+    contrast = float(np.percentile(original_luma[inside], 95)) - backdrop_luma
+    if contrast < 80.0:
+        return result
+    result_luma = cv2.cvtColor(result, cv2.COLOR_BGR2GRAY).astype(np.float32)
+    residue = inside & (result_luma <= backdrop_luma + 0.25 * contrast)
+    result[residue] = np.clip(backdrop, 0, 255).astype(np.uint8)
+    return result
+
+
+def _learned_inpaint(current_bgr, group, cleanup_mask):
+    """The verified local model's reconstruction of ``cleanup_mask``, or ``None``.
+
+    Shared by the texture fill and the last resort so both get the same margin,
+    tone correction and cache; an unavailable model is recorded on the group.
+    """
+    mask_u8 = _grown_fill_mask(group, cleanup_mask)
+    ys, xs = np.nonzero(mask_u8)
+    pad = 32
+    y1, y2 = max(0, ys.min() - pad), min(mask_u8.shape[0], ys.max() + pad + 1)
+    x1, x2 = max(0, xs.min() - pad), min(mask_u8.shape[1], xs.max() + pad + 1)
+    key = hashlib.sha1(mask_u8.tobytes() + current_bgr[y1:y2, x1:x2].tobytes()).hexdigest()
+    inside = mask_u8 > 0
+    cached = _LEARNED_FILL_CACHE.get(key)
+    if cached is not None:
+        # Only the reconstructed pixels are cached: the rest of the page may have
+        # changed since (other groups cleaned), and must never be rolled back.
+        group.texture_synthesized = False
+        result = current_bgr.copy()
+        result[inside] = cached
+        return result
+    try:
+        inpainter = advanced_art_inpainting.get_default_inpainter()
+        with _LAMA_INFERENCE_LOCK:
+            cleaned, _telemetry = inpainter.reconstruct(current_bgr, mask_u8 * 255)
+    except Exception as exc:  # noqa: BLE001 - unavailable model: classic fill, recorded
+        group.learned_texture_fill = {"status": "unavailable", "reason": type(exc).__name__}
+        return None
+    # The model returns the filled area a few levels off the surroundings (measured
+    # ~3-5 darker on 5 of 6 cases); with the mask edge following the lettering,
+    # that offset alone draws the letters' outline as a ghost on smooth art. One
+    # per-channel offset removes it without touching the reconstructed structure.
+    # It is the median of *local* differences along the mask edge (15 px window,
+    # 3 px just outside vs 3 px just inside): a mask spanning a white shirt and
+    # grey hatching must not be shifted by the difference between the two.
+    roi = _mask_roi(mask_u8, 24)  # widest reach: 3 px band + 15 px means
+    roi_mask, roi_inside = mask_u8[roi], inside[roi]
+    outer = (cv2.dilate(roi_mask, np.ones((7, 7), np.uint8)) > 0) & ~roi_inside
+    inner = roi_inside & ~(cv2.erode(roi_mask, np.ones((7, 7), np.uint8)) > 0)
+    tone_offset = [0.0, 0.0, 0.0]
+    outer_f, inner_f = outer.astype(np.float32), inner.astype(np.float32)
+    outer_support = cv2.blur(outer_f, (15, 15))
+    paired = inner & (outer_support > 0.05)
+    if np.count_nonzero(paired) >= 30:
+        inner_support = np.maximum(cv2.blur(inner_f, (15, 15)), 1e-3)
+        differences = []
+        for channel in range(3):
+            outside_mean = cv2.blur(current_bgr[roi][..., channel].astype(np.float32) * outer_f, (15, 15)) / np.maximum(outer_support, 1e-3)
+            inside_mean = cv2.blur(cleaned[roi][..., channel].astype(np.float32) * inner_f, (15, 15)) / inner_support
+            differences.append(float(np.median((outside_mean - inside_mean)[paired])))
+        offset = np.asarray(differences, dtype=np.float32)
+        cleaned = cleaned.copy()
+        cleaned[inside] = np.clip(np.rint(cleaned[inside].astype(np.float32) + offset), 0, 255).astype(np.uint8)
+        tone_offset = [round(float(v), 1) for v in offset]
+    group.learned_texture_fill = {"status": "applied", "tone_offset_bgr": tone_offset}
+    group.texture_synthesized = False
+    if isinstance(getattr(group, "background_metrics", None), dict):
+        group.background_metrics["cleanup_fill_source"] = "learned_texture_fill"
+    # Sized for 4 page workers each re-filling a group across strategies and the
+    # CLEAN-artifact pass; the lock keeps the eviction safe between them.
+    with _LEARNED_FILL_CACHE_LOCK:
+        while len(_LEARNED_FILL_CACHE) >= 64:
+            _LEARNED_FILL_CACHE.pop(next(iter(_LEARNED_FILL_CACHE)))
+        _LEARNED_FILL_CACHE[key] = cleaned[inside].copy()
+    result = current_bgr.copy()
+    result[inside] = cleaned[inside]
+    return result
+
+
+def _draw_structure_continuations(result_bgr, group, cleanup_mask):
+    """Redraw straight art lines through the cleaned area, inside the mask only."""
+    continuations = getattr(group, "structure_continuations", None) or []
+    if not continuations or cleanup_mask is None or not np.any(cleanup_mask):
+        return result_bgr
+    drawn = result_bgr.copy()
+    for item in continuations:
+        if not item.get("segment"):
+            continue
+        ax, ay, bx, by = item["segment"]
+        cv2.line(drawn, (int(ax), int(ay)), (int(bx), int(by)),
+                 tuple(int(v) for v in item["color_bgr"]),
+                 max(1, int(item["thickness"])), cv2.LINE_AA)
+    inside = np.asarray(cleanup_mask) > 0
+    out = result_bgr.copy()
+    out[inside] = drawn[inside]
+    return out
+
+
+def _distinct_segments(segments, tolerance=3.0):
+    """Drop Hough duplicates: near-parallel segments lying within a few px of a longer one."""
+    kept = []
+    for segment in sorted(segments, key=lambda s: -np.hypot(s[2] - s[0], s[3] - s[1])):
+        ax, ay, bx, by = [float(v) for v in segment]
+        length = max(1.0, float(np.hypot(bx - ax, by - ay)))
+        duplicate = False
+        for other in kept:
+            ox, oy, qx, qy = [float(v) for v in other]
+            olen = max(1.0, float(np.hypot(qx - ox, qy - oy)))
+            cos = abs((bx - ax) * (qx - ox) + (by - ay) * (qy - oy)) / (length * olen)
+            # distance of this segment's midpoint from the other's line
+            mx, my = (ax + bx) / 2, (ay + by) / 2
+            dist = abs((qx - ox) * (oy - my) - (ox - mx) * (qy - oy)) / olen
+            if cos >= 0.995 and dist <= tolerance:
+                duplicate = True
+                break
+        if not duplicate:
+            kept.append(segment)
+    return kept
+
+
+def _straight_structure_continuation(original_bgr, cleanup_mask, segment):
+    """Protect a straight art line inside the mask and say where to redraw it.
+
+    The detector clips segments to its search window, so the segment is extended
+    by half its length each way. The line's colour and thickness are measured
+    outside the dilated mask, on samples that are a line (centre differs from both
+    profile ends by >= 16 and the ends agree - the edge of a dark area is not a line).
+    Inside a band of that thickness, pixels that still have the line's colour are
+    the line itself and are protected (``protect``: removed from the mask); band
+    pixels of another colour are lettering drawn over the line, stay in the mask
+    and get the line redrawn. The redraw runs only between the first and last
+    place the line is actually seen - an interpolation, never an extension past
+    what the page shows. Returns ``None`` when the line is not seen at least
+    four times along the segment, or when there is neither a stretch to bridge
+    nor a line pixel to protect.
+    """
+    ax, ay, bx, by = [float(v) for v in segment]
+    length = float(np.hypot(bx - ax, by - ay))
+    if length < 8:
+        return None
+    ux, uy = (bx - ax) / length, (by - ay) / length
+    extend = 0.5 * length
+    ax, ay, bx, by = ax - ux * extend, ay - uy * extend, bx + ux * extend, by + uy * extend
+    gray = cv2.cvtColor(original_bgr, cv2.COLOR_BGR2GRAY).astype(np.float32)
+    height, width = gray.shape
+    mask = np.asarray(cleanup_mask) > 0
+    near_mask = cv2.dilate(mask.astype(np.uint8), np.ones((5, 5), np.uint8)) > 0
+    t = np.linspace(0.0, 1.0, int(2 * length) + 1)
+    px, py = ax + t * (bx - ax), ay + t * (by - ay)
+    on_page = (px >= 0) & (px <= width - 1) & (py >= 0) & (py <= height - 1)
+    ix = np.clip(np.rint(px).astype(int), 0, width - 1)
+    iy = np.clip(np.rint(py).astype(int), 0, height - 1)
+    offsets = np.arange(-6, 7)
+    thickness, colors, contrasts, shifts = [], [], [], []
+    for index in np.flatnonzero(on_page & ~near_mask[iy, ix]):
+        sx = np.clip(np.rint(px[index] - offsets * uy).astype(int), 0, width - 1)
+        sy = np.clip(np.rint(py[index] + offsets * ux).astype(int), 0, height - 1)
+        profile = gray[sy, sx]
+        side_a, side_b = float(np.median(profile[:3])), float(np.median(profile[-3:]))
+        background = 0.5 * (side_a + side_b)
+        # Hough snaps to wherever the binary evidence is densest (a row of letter
+        # feet beside a border), so the line's real centre is searched +/-3 px.
+        centre = 3 + int(np.argmax(np.abs(profile[3:10] - background)))
+        contrast = abs(float(profile[centre]) - background)
+        # A line has background on both sides; the edge of a dark area does not,
+        # and measuring one would make the protected band swallow the lettering.
+        if contrast < 16 or abs(side_a - side_b) > contrast / 2:
+            continue
+        thickness.append(int(np.count_nonzero(np.abs(profile - background) > contrast / 2)))
+        colors.append(original_bgr[sy[centre], sx[centre]].astype(np.float32))
+        contrasts.append(contrast)
+        shifts.append(centre - 6)
+    if len(colors) < 6:
+        return None
+    shift = float(np.median(shifts))
+    ax, ay, bx, by = ax - shift * uy, ay + shift * ux, bx - shift * uy, by + shift * ux
+    px, py = px - shift * uy, py + shift * ux
+    ix = np.clip(np.rint(px).astype(int), 0, width - 1)
+    iy = np.clip(np.rint(py).astype(int), 0, height - 1)
+    color = np.median(np.asarray(colors), axis=0)
+    line_gray = float(cv2.cvtColor(color.reshape(1, 1, 3).astype(np.uint8), cv2.COLOR_BGR2GRAY)[0, 0])
+    tolerance = 0.5 * float(np.median(contrasts))
+    width_px = int(max(1, min(8, round(float(np.median(thickness))))))
+    band = np.zeros(mask.shape, np.uint8)
+    cv2.line(band, (int(round(ax)), int(round(ay))), (int(round(bx)), int(round(by))),
+             255, width_px, cv2.LINE_8)
+    line_colored = np.abs(gray - line_gray) < tolerance
+    protect = (band > 0) & mask & line_colored
+    seen = on_page & line_colored[iy, ix]
+    if np.count_nonzero(seen) < 4:
+        return None
+    first, last = int(np.argmax(seen)), int(len(seen) - 1 - np.argmax(seen[::-1]))
+    masked = mask[iy, ix] & ~protect[iy, ix]
+    # Something to interpolate over: a masked stretch with the line seen on both sides.
+    inner = masked.copy()
+    inner[:first] = False
+    inner[last + 1:] = False
+    if not np.any(inner) and not np.any(protect):
+        return None
+    return {
+        # No masked stretch to bridge: the line is fully visible, protecting it is
+        # enough (lettering of the same colour touching it stays with the line, and
+        # the residual check judges whether that is acceptable).
+        "segment": None if not np.any(inner) else [
+            int(round(px[first])), int(round(py[first])),
+            int(round(px[last])), int(round(py[last]))],
+        "color_bgr": [int(v) for v in color],
+        "thickness": width_px,
+        "protect": protect,
+        "line_seen_samples": int(np.count_nonzero(seen)),
+    }
+
+
+def _apply_cleanup_mask_fill(current_bgr, original_bgr, group, cleanup_mask, strategy="primary",
+                             accepted_candidate=None):
+    # Attempt-scoped: several strategies may run for one group, each calling
+    # this function once, so start clean rather than carrying a flag set by an
+    # earlier attempt that did not end up shipping.
+    group.texture_synthesized = False
+    result = current_bgr.copy()
+    if cleanup_mask is None or not np.any(cleanup_mask):
+        return result
+    if strategy == "caption_effect":
+        cached = getattr(group, "_caption_effect_result", None)
+        if not cached or not cached.get("accepted") or not np.array_equal(cleanup_mask, cached["mask"]):
+            raise ValueError("caption_effect_candidate_missing_or_changed")
+        result[cleanup_mask > 0] = cached["pixels"]
+        return result
+    if strategy == "lama_large":
+        if (isinstance(accepted_candidate, np.ndarray)
+                and accepted_candidate.shape == current_bgr.shape
+                and accepted_candidate.dtype == current_bgr.dtype):
+            # The candidate was produced from page context and can carry pixels
+            # from earlier translated groups.  Only the authorized cleanup
+            # region may cross into CLEAN/PSD; retain the accumulated CLEAN
+            # buffer everywhere else.
+            result[cleanup_mask > 0] = accepted_candidate[cleanup_mask > 0]
+        return result
+    local_profile = getattr(group, "background_metrics", {}) or {}
+    local_background_class = str(
+        local_profile.get("local_background_class") or "unknown"
+    )
+    spatial_class = str(local_profile.get("local_background_spatial_class") or "INSUFFICIENT_EVIDENCE")
+    constant_fill_class = local_background_class in {
+        "solid_light", "solid_dark", "solid_colored", "solid_midtone",
+    }
+    # Deny the constant fill only on positive evidence of non-uniformity. Too few
+    # ring tiles (INSUFFICIENT_EVIDENCE) is not such evidence; the aggregate solid_*
+    # test that selected this branch then stands, as before the spatial gate.
+    spatial_gate_denies_constant = bool(
+        config.CLEAN_HARMONIC_FILL
+        and constant_fill_class
+        and spatial_class in {"SMOOTH_NONUNIFORM", "STRUCTURED_OR_TEXTURED"}
+    )
+    fill_mask = (
+        _mask_with_lettering_residue(group, original_bgr, cleanup_mask)
+        if strategy != "caption_overlay" else (np.asarray(cleanup_mask) > 0).astype(np.uint8)
+    )
+    if spatial_gate_denies_constant and strategy != "caption_overlay":
+        harmonic = _try_harmonic_boundary_fill(
+            original_bgr, fill_mask, local_profile, spatial_class, group,
+        )
+        if harmonic is not None:
+            # A constant fill would paint letter silhouettes onto a smooth but
+            # non-uniform backdrop; the accepted harmonic candidate is the
+            # boundary-continuous reconstruction for exactly this class.
+            result[fill_mask > 0] = harmonic[fill_mask > 0]
+            result = _flatten_dark_backdrop_residue(result, original_bgr, fill_mask, local_profile)
+            group.background_metrics["cleanup_fill_source"] = "harmonic_boundary_fill"
+            return result
+    if spatial_gate_denies_constant:
+        # Keep downstream fallbacks available for visual diagnosis, but a
+        # removal-only pass cannot certify their output as CLEAN without an
+        # accepted harmonic candidate for this rejected spatial class.
+        group.spatial_harmonic_gate_rejected = True
+    if strategy == "caption_overlay":
+        return _apply_textured_caption_overlay(
+            result, cleanup_mask, original_bgr=original_bgr, group=group,
+        )
+    draw_box = _safe_draw_box(group.box, original_bgr.shape, group)
+    local_color = local_profile.get("local_background_median_bgr")
+    if (
+        local_background_class in {
+            "solid_light",
+            "solid_dark",
+            "solid_colored",
+            "solid_midtone",
+        }
+        and isinstance(local_color, (list, tuple))
+        and len(local_color) == 3
+        and int(local_profile.get("local_background_sample_count") or 0) >= 12
+        and not spatial_gate_denies_constant
+    ):
+        # The colour is sampled from the immediate, non-glyph ring.  This is
+        # the generic path for grey/coloured/neon enclosures; it never uses a
+        # product/page colour or an absolute black/white fallback.
+        result[fill_mask > 0] = np.clip(
+            np.asarray(local_color, dtype=np.float32), 0, 255
+        ).astype(np.uint8)
+        group.background_metrics["cleanup_fill_source"] = "local_ring_median"
+        return result
+    if local_background_class == "gradient":
+        # Spatial evidence distinguishes a smooth gradient from laser/speed-line
+        # artwork with a gradient. Reuse LaMa for the latter, with the same gates.
+        if spatial_class == "STRUCTURED_OR_TEXTURED":
+            learned = _learned_texture_fill(current_bgr, group, cleanup_mask, strategy)
+            if learned is not None:
+                group.background_metrics["cleanup_fill_source"] = "learned_textured_gradient"
+                return learned
+        # Preserve a spatially varying backdrop with bounded local inpainting.
+        # A gradient is intentionally not flattened to its ring median.
+        repaired = cv2.inpaint(
+            original_bgr,
+            cleanup_mask.astype(np.uint8),
+            3,
+            cv2.INPAINT_TELEA,
+        )
+        result[cleanup_mask > 0] = repaired[cleanup_mask > 0]
+        group.background_metrics["cleanup_fill_source"] = "local_gradient_inpaint"
+        return result
+    white_region = (
+        config.WHITE_BALLOON_FLAT_FILL
+        and (
+            (
+                group.background_type in {"white_balloon", "narration_box"}
+                and bool(group.background_metrics.get("uniform_light"))
+            )
+            or (
+                strategy == "source_scoped"
+                and _proven_light_cleanup_region(group.background_metrics)
+            )
+        )
+    )
+    dark_region = bool(
+        group.background_type in {"dark_balloon", "narration_box"}
+        and (
+            group.background_metrics.get("open_dark_narration")
+            or group.background_metrics.get("dark_context")
+        )
+    ) or bool(
+        # A proven uniform dark backdrop reconstructs exactly, so the narrow
+        # source-scoped cleanup restores it instead of leaving inpainting ghosts.
+        strategy == "source_scoped"
+        and _proven_uniform_dark_region(group.background_metrics)
+    )
+    relaxed_source_scoped_light = bool(
+        strategy == "source_scoped"
+        and _proven_light_cleanup_region(group.background_metrics)
+        and (group.background_metrics or {}).get("relaxed_white_context")
+    )
+    if spatial_gate_denies_constant:
+        white_region = False
+        dark_region = False
+    if (
+        (white_region or dark_region)
+        and not spatial_gate_denies_constant
+        and not relaxed_source_scoped_light
+        and not _local_background_flatness(
+            original_bgr,
+            cleanup_mask,
+        )["flat_fill_supported"]
+    ):
+        # The coarse background type proved the region is not *noisy*; it never
+        # proved it is one tone.  Without that proof a single colour lands as a
+        # visible patch, so reconstruct from the surrounding artwork instead.
+        white_region = False
+        dark_region = False
+    if white_region:
+        fill_color = _estimated_white_region_fill_color(
+            original_bgr,
+            cleanup_mask,
+            draw_box,
+        )
+        result[cleanup_mask > 0] = fill_color
+    elif dark_region:
+        fill_color = _estimated_background_color(
+            original_bgr,
+            cleanup_mask,
+            draw_box,
+        )
+        result[cleanup_mask > 0] = fill_color
+    elif strategy == "source_scoped":
+        source_display = _source_scoped_display_footprint_required(original_bgr, group)
+        source_display_dark_context = bool(
+            source_display
+            and float((group.background_metrics or {}).get("context_dark_pixel_ratio", 0.0))
+            >= 0.90
+            and float((group.background_metrics or {}).get("context_white_pixel_ratio", 1.0))
+            <= 0.01
+        )
+        radius = 7 if source_display_dark_context else 1
+        return _apply_textured_caption_overlay(
+            result, cleanup_mask, radius=radius, original_bgr=original_bgr, group=group,
+        )
+    else:
+        radius = 1 if strategy in {"conservative", "source_scoped"} else 2
+        local = cv2.inpaint(
+            _telea_source_without_fringe(result, cleanup_mask), cleanup_mask,
+            radius, cv2.INPAINT_TELEA)
+        result[cleanup_mask > 0] = local[cleanup_mask > 0]
+    return result
+
+
+def _restore_lost_local_texture(result_bgr, source_bgr, mask, *, ring_radius=None, group=None):
+    """Reinject grain Telea inpainting removed from a genuinely textured area.
+
+    Telea (and any small-radius diffusion inpaint) reconstructs a hole by
+    propagating smooth colour inward from its boundary.  Over a large mask this
+    is well-proven to erase real per-pixel grain/dust texture even though the
+    *large-scale* colour it produces is reasonable - the result reads as a flat
+    rectangular patch precisely where the source was noisy artwork (P002: a
+    speckled starfield behind display lettering).  This measures the same
+    Laplacian-texture signal already used to *detect* that defect
+    (``_flat_patch_artifact_metrics``) and, only when the surrounding proven
+    context is itself textured, adds matched-magnitude luminance noise back
+    into the reconstruction so it does not read as an invented flat block. A
+    genuinely flat/uniform surrounding area (low source ring texture) is left
+    untouched, so real uniform balloons/boxes are never grained artificially.
+
+    This is a *cosmetic* repair, not a fidelity claim: the injected grain is
+    statistically matched, not recovered, so it must never silently clear
+    ``art_fidelity_uncertain`` on its own (ART-RECON-001).  When it fires,
+    ``group.texture_synthesized`` is set so the caller can keep reporting the
+    honest "review" disposition even though the ugly flat block is gone.
+    """
+    mask_u8 = (np.asarray(mask) > 0).astype(np.uint8) * 255
+    if not np.any(mask_u8):
+        return result_bgr
+    radius = int(ring_radius or config.FLAT_FILL_RING_RADIUS)
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (radius * 2 + 1, radius * 2 + 1))
+    ring = (cv2.dilate(mask_u8, kernel, iterations=1) > 0) & (mask_u8 == 0)
+    if not np.any(ring):
+        return result_bgr
+    interior = cv2.erode(
+        mask_u8, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7)), iterations=1,
+    ) > 0
+    if not np.any(interior):
+        interior = mask_u8 > 0
+    source_gray = cv2.cvtColor(source_bgr, cv2.COLOR_BGR2GRAY)
+    result_gray = cv2.cvtColor(result_bgr, cv2.COLOR_BGR2GRAY)
+    ring_laplacian = np.abs(cv2.Laplacian(source_gray, cv2.CV_32F))[ring]
+    source_texture = float(ring_laplacian.mean())
+    if source_texture <= 1e-3:
+        # Surrounding art is itself flat - nothing lost to restore.
+        return result_bgr
+    # Grain is a per-pixel property: most ring pixels carry it. A smooth ring with a
+    # few strong edges has a high mean but a ~0 median, and grain injected there is
+    # invented noise (page 03: ring median |Laplacian| 0, injected result median 3).
+    if float(np.median(ring_laplacian)) <= 1.0:
+        return result_bgr
+    # A single mask-wide average hides a *localised* flat patch: several OCR
+    # lines share one merged mask (P005: three balloon lines over sky/cloud/
+    # building art), and a sub-region that lost its texture can still average
+    # out fine against a nearby sub-region that reconstructed well.  Measure a
+    # spatially-varying "expected local texture" field instead: the real
+    # Laplacian magnitude survives untouched in the ring, and is extended
+    # across the masked interior with the same inpainting algorithm already
+    # used for colour, so a locally busy neighbour (building edges) or locally
+    # calm one (open sky) informs its own patch rather than one page-wide mean.
+    lap_src_u8 = np.clip(np.abs(cv2.Laplacian(source_gray, cv2.CV_32F)), 0, 255).astype(np.uint8)
+    expected_field = cv2.inpaint(lap_src_u8, mask_u8, radius, cv2.INPAINT_TELEA).astype(np.float32)
+    expected_field = cv2.GaussianBlur(expected_field, (0, 0), 3.0)
+    actual_field = cv2.GaussianBlur(
+        np.abs(cv2.Laplacian(result_gray, cv2.CV_32F)), (0, 0), 3.0,
+    )
+    deficit_field = expected_field * config.MIN_ART_FIDELITY_TEXTURE_RATIO - actual_field
+    deficit_field = np.clip(deficit_field, 0.0, None)
+    if float(deficit_field[interior].max(initial=0.0)) < 0.5:
+        # Locally, every patch already clears the same bar
+        # ``art_fidelity_uncertain`` uses - already good enough.
+        return result_bgr
+    # The Laplacian magnitude of Gaussian noise with stdev sigma scales
+    # roughly linearly with sigma, so this closes the measured deficit without
+    # having to invert the full convolution.
+    sigma_field = np.clip(deficit_field * 0.6, 0.0, 22.0)
+    rng = np.random.default_rng(0)
+    noise = rng.normal(0.0, 1.0, size=result_gray.shape).astype(np.float32) * sigma_field
+    noisy = result_bgr.astype(np.float32) + noise[..., None]
+    result = result_bgr.copy()
+    result[interior] = np.clip(noisy[interior], 0, 255).astype(np.uint8)
+    if group is not None:
+        group.texture_synthesized = True
+    return result
+
+
+def _telea_source_without_fringe(img_bgr, mask):
+    """Telea input whose 2-px boundary ring has leftover lettering neutralised.
+
+    Telea propagates the ring just outside the mask inward, so an outline or
+    anti-alias pixel the mask missed is smeared through the whole word as a light
+    or dark silhouette. Ring pixels that are outliers against the band 3-6 px out
+    (> max(16, 3 sigma)) are replaced by that band's median in a copy used only as
+    the inpainting source, unless they continue into that band (crossing art);
+    pixels outside the mask are never written.
+    """
+    # ponytail: one median per mask; a per-glyph local median if texture varies a lot.
+    selected = (np.asarray(mask) > 0).astype(np.uint8)
+    kernel = np.ones((3, 3), np.uint8)
+    near = (cv2.dilate(selected, kernel, iterations=2) > 0) & (selected == 0)
+    far = (cv2.dilate(selected, kernel, iterations=6) > 0) & ~(
+        cv2.dilate(selected, kernel, iterations=3) > 0)
+    if np.count_nonzero(far) < 30:
+        return img_bgr
+    gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY).astype(np.float32)
+    median = float(np.median(gray[far]))
+    mad = float(np.median(np.abs(gray[far] - median)))
+    reach = (cv2.dilate(selected, kernel, iterations=6) > 0) & (selected == 0)
+    outlier = reach & (np.abs(gray - median) > max(16.0, 3.0 * 1.4826 * mad))
+    # An outlier run that continues into the far band is art crossing the mask
+    # (a line Telea must carry through), not lettering left behind.
+    structure = outlier & far
+    for _ in range(8):
+        structure |= (cv2.dilate(structure.astype(np.uint8), kernel) > 0) & outlier
+    leftovers = near & outlier & ~structure
+    if not np.any(leftovers):
+        return img_bgr
+    source = img_bgr.copy()
+    source[leftovers] = np.median(img_bgr[far], axis=0).astype(img_bgr.dtype)
+    return source
+
+
+def _apply_textured_caption_overlay(img_bgr, mask, *, radius=3, original_bgr=None, group=None):
+    """Remove caption glyphs while retaining the local artwork texture.
+
+    This function deliberately never creates a synthetic dark backing.  A small
+    dilation closes antialiased edges and Telea inpainting reconstructs pixels
+    from the surrounding illustration.  If the mask is empty the input is
+    returned unchanged, allowing the caller to preserve the source safely.
+    """
+    if (not isinstance(mask, np.ndarray) or mask.ndim != 2
+            or mask.shape != img_bgr.shape[:2] or not np.any(mask)):
+        return img_bgr.copy()
+    effective_mask = mask > 0
+    inpaint_mask = effective_mask.astype(np.uint8) * 255
+    repaired = cv2.inpaint(
+        _telea_source_without_fringe(img_bgr, inpaint_mask), inpaint_mask,
+        int(radius), cv2.INPAINT_TELEA)
+    result = img_bgr.copy()
+    result[effective_mask] = repaired[effective_mask]
+    result = _restore_lost_local_texture(
+        result, original_bgr if original_bgr is not None else img_bgr,
+        inpaint_mask, group=group,
+    )
+    return result
+
+
+def _estimated_background_color(img_bgr, mask, box):
+    x, y, w, h = box
+    h_img, w_img = img_bgr.shape[:2]
+    x1 = max(0, x)
+    y1 = max(0, y)
+    x2 = min(w_img, x + w)
+    y2 = min(h_img, y + h)
+    roi = img_bgr[y1:y2, x1:x2]
+    roi_mask = mask[y1:y2, x1:x2]
+    if roi.size == 0:
+        return np.array([245, 245, 245], dtype=np.uint8)
+    samples = roi[roi_mask == 0]
+    if samples.size == 0:
+        samples = roi.reshape(-1, 3)
+    color = np.median(samples, axis=0)
+    return np.clip(color, 0, 255).astype(np.uint8)
+
+
+def _estimated_white_region_fill_color(img_bgr, mask, box):
+    x, y, w, h = box
+    h_img, w_img = img_bgr.shape[:2]
+    x1 = max(0, x)
+    y1 = max(0, y)
+    x2 = min(w_img, x + w)
+    y2 = min(h_img, y + h)
+    if x2 <= x1 or y2 <= y1:
+        return np.array([255, 255, 255], dtype=np.uint8)
+
+    roi = img_bgr[y1:y2, x1:x2]
+    roi_mask = mask[y1:y2, x1:x2]
+    hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
+    gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
+    bright_selected = (roi_mask == 0) & (gray >= 170) & (hsv[:, :, 1] <= 90)
+    samples = roi[bright_selected]
+    if samples.size == 0:
+        ring = cv2.dilate(roi_mask, np.ones((7, 7), np.uint8), iterations=1)
+        ring = (ring > 0) & (roi_mask == 0)
+        samples = roi[ring]
+    if samples.size == 0:
+        return np.array([255, 255, 255], dtype=np.uint8)
+    # A dark ring median means the surround is not white; forcing (245,245,245)
+    # here painted a white patch into grey/tinted regions. Use the measured colour.
+    color = np.median(samples, axis=0)
+    return np.clip(color, 0, 255).astype(np.uint8)
+
+
+# TDD #84F32R - per-line hierarchy. Source lettering can give one line of a
+# group (an intro clause, a trailing emphasis) a deliberately different visual
+# weight than its neighbours (e.g. a small "BEFORE" versus a large "OUR
+# NIGHTMARES BECAME REALITY."). Nothing upstream of the draw call ever
+# recorded that per-line signal - ``typography_profile_for_region`` only ever
+# saw the group's *union* box - so every line was always rendered at the same
+# font size. The source OCR line boxes already carry per-line height, which is
+# a generic, source-derived hierarchy signal with no text/page/region literal
+# involved.
+def _line_ink_height(source_bgr, box):
+    """Height of the ink rows inside an OCR line box, or ``None``."""
+    mask, _gray = _glyph_ink_mask(source_bgr, box)
+    if mask is None:
+        return None
+    # The letters' band: the longest run of rows holding at least a quarter of
+    # the densest row. A box also clips a neighbouring line's descenders and a
+    # balloon's spikes, which a plain "any ink" row count includes.
+    profile = mask.sum(axis=1).astype(np.float32)
+    if not profile.size or profile.max() <= 0:
+        return None
+    dense = profile >= 0.25 * profile.max()
+    best = run = 0
+    for flag in dense:
+        run = run + 1 if flag else 0
+        best = max(best, run)
+    return float(best) if best else None
+
+
+def _source_line_scale_ratios(group, source_bgr=None):
+    """Relative per-line size ratios derived only from source line heights.
+
+    Returns ``None`` when there is no real hierarchy signal to preserve: fewer
+    than two source lines, or a height spread too small to be a deliberate
+    hierarchy rather than normal OCR box jitter. The same font role/family is
+    still used for every line - only the size differs.
+
+    With the source pixels the height is the line's ink, not its OCR box: box
+    heights of one uniform serif narration ran 29-37 px (punctuation, a bold
+    word) while its ink was 27-28 px on every line, and the jitter was drawn as
+    a size hierarchy.
+    """
+    lines = [line for line in getattr(group, "lines", []) or [] if line.box[3] > 0]
+    heights = [float(line.box[3]) for line in lines]
+    if source_bgr is not None and lines:
+        inked = [_line_ink_height(source_bgr, line.box) for line in lines]
+        if all(inked):
+            heights = inked
+    if len(heights) < 2:
+        return None
+    median = float(np.median(heights))
+    if median <= 0:
+        return None
+    ratios = [h / median for h in heights]
+    spread = max(ratios) / max(1e-6, min(ratios))
+    if spread < 1.25:
+        return None
+    return [max(0.62, min(1.35, r)) for r in ratios]
+
+
+def _per_line_metrics(draw, lines, fonts, stroke_width):
+    widths = []
+    heights = []
+    tops = []
+    lefts = []
+    for line, font in zip(lines, fonts):
+        bbox = draw.textbbox((0, 0), line, font=font, stroke_width=stroke_width)
+        lefts.append(bbox[0])
+        tops.append(bbox[1])
+        widths.append(bbox[2] - bbox[0])
+        heights.append(bbox[3] - bbox[1])
+    return widths, heights, lefts, tops
+
+
+def _build_per_line_plan(draw, lines, ratios, base_font_size, *, font_role, font_path,
+                         prefer_role, text, style, content_w, content_h, spacing):
+    """Size/measure one font per target line and shrink the whole block, as a
+    unit, if the per-line sizes would overflow the already-fitted uniform
+    bound. Returns ``None`` if measurement fails for any reason - the caller
+    then falls back to the existing single-font render path untouched."""
+    if len(lines) != len(ratios):
+        return None
+    try:
+        sizes = [max(config.MIN_FONT_SIZE, int(round(base_font_size * r))) for r in ratios]
+        fonts = [get_font(font_path, size, role=font_role, prefer_role=prefer_role, text=text)
+                 for size in sizes]
+        widths, heights, lefts, tops = _per_line_metrics(draw, lines, fonts, style.stroke_width)
+        block_w = max(widths) if widths else 0
+        block_h = int(sum(heights) + spacing * max(0, len(lines) - 1))
+        if block_w <= 0 or block_h <= 0:
+            return None
+        shrink = min(1.0, content_w / max(1, block_w), content_h / max(1, block_h))
+        if shrink < 1.0:
+            sizes = [max(config.MIN_FONT_SIZE, int(round(size * shrink))) for size in sizes]
+            fonts = [get_font(font_path, size, role=font_role, prefer_role=prefer_role, text=text)
+                     for size in sizes]
+            widths, heights, lefts, tops = _per_line_metrics(draw, lines, fonts, style.stroke_width)
+            block_w = max(widths) if widths else 0
+            block_h = int(sum(heights) + spacing * max(0, len(lines) - 1))
+        return {
+            "fonts": fonts,
+            "sizes": sizes,
+            "widths": widths,
+            "heights": heights,
+            "lefts": lefts,
+            "tops": tops,
+            "width": block_w,
+            "height": block_h,
+        }
+    except Exception:
+        return None
+
+
+def _draw_multiline_per_font(draw, origin, lines, plan, *, fill, spacing, stroke_width=0, stroke_fill=None):
+    x0, y0 = origin
+    y = y0
+    for line, font, w, h, left, top in zip(
+        lines, plan["fonts"], plan["widths"], plan["heights"], plan["lefts"], plan["tops"],
+    ):
+        x = x0 + (plan["width"] - w) / 2.0 - left
+        draw.text((x, y - top), line, font=font, fill=fill,
+                  stroke_width=stroke_width, stroke_fill=stroke_fill)
+        y += h + spacing
+
+
+def _balloon_text_area(group, image_shape):
+    """Where translated text may sit inside a closed balloon/box, or ``None``.
+
+    The interior measured during cleanup (``light_enclosure_interior``), inset by
+    the letterer's own margin - the closest the source text came to the border -
+    kept between 3 px and 10 % of the balloon's smaller side. ``None`` for open
+    text on art: the rectangle fit is kept there.
+    """
+    interior = getattr(group, "light_enclosure_interior", None)
+    if not isinstance(interior, np.ndarray) or interior.shape != tuple(image_shape[:2]) or not np.any(interior):
+        return None
+    ys, xs = np.nonzero(interior)
+    limit = 0.1 * min(xs.max() - xs.min() + 1, ys.max() - ys.min() + 1)
+    distance = cv2.distanceTransform(interior.astype(np.uint8), cv2.DIST_L2, 3)
+    source = np.zeros(interior.shape, dtype=bool)
+    for line in _cleanup_lines_for_group(group):
+        lx, ly, lw, lh = (int(v) for v in line.box)
+        source[max(0, ly):ly + lh, max(0, lx):lx + lw] = True
+    source &= interior
+    letterer = float(distance[source].min()) if np.any(source) else limit
+    margin = int(round(max(3.0, min(limit, letterer))))
+    area = cv2.erode(interior.astype(np.uint8), np.ones((2 * margin + 1, 2 * margin + 1), np.uint8)) > 0
+    for nx, ny, nw, nh in getattr(group, "neighbor_text_boxes", None) or []:
+        area[max(0, ny - margin):ny + nh + margin, max(0, nx - margin):nx + nw + margin] = False
+    return area if np.any(area) else None
+
+
+def _balloon_shape_layout(draw, text, font, area, center, spacing, stroke_width):
+    """Wrap ``text`` into the balloon's shape: each line as wide as the balloon is there.
+
+    Lines are stacked around ``center`` (the source text's centre); a line's width
+    is the run of ``area`` holding the centre column, narrowed to its tightest row
+    within the line's band - wide in the middle of an oval, narrow at top and
+    bottom, as a letterer sets it. The fewest lines that hold every word win.
+    Returns [(line, x, y)] (draw origin of each line) or ``None``.
+    """
+    words = str(text or "").split()
+    if not words:
+        return None
+    height, width = area.shape
+    cx, cy = (int(round(v)) for v in center)
+    if not (0 <= cx < width and 0 <= cy < height) or not area[cy, cx]:
+        ys, xs = np.nonzero(area)
+        cx, cy = int(np.median(xs)), int(np.median(ys))
+    # Line box from the tallest marks Portuguese uses (accents above capitals,
+    # cedilla and descenders below), so no line pokes out of its band.
+    probe = draw.textbbox((0, 0), "ÉÂÃÇÁGgjpq|", font=font, stroke_width=stroke_width)
+    line_h = probe[3] - probe[1]
+    pitch = line_h + spacing
+    rows = np.flatnonzero(area[:, cx])
+    if not rows.size:
+        return None
+    max_lines = max(1, int((rows.max() - rows.min() + 1 + spacing) // max(1, pitch)))
+
+    def span(row):
+        line = area[row]
+        if not line[cx]:
+            return 0, -1
+        gaps = np.flatnonzero(~line)
+        left = gaps[gaps < cx]
+        right = gaps[gaps > cx]
+        return (int(left[-1]) + 1 if left.size else 0), (int(right[0]) - 1 if right.size else width - 1)
+
+    def measure(words_):
+        return draw.textlength(" ".join(words_), font=font) + 2 * stroke_width
+
+    for count in range(1, max_lines + 1):
+        top = cy - (count * pitch - spacing) / 2.0
+        bands = []
+        for index in range(count):
+            y1 = int(round(top + index * pitch))
+            y2 = y1 + line_h
+            if y1 < 0 or y2 >= height:
+                bands = None
+                break
+            left, right = 0, width - 1
+            for row in range(y1, y2 + 1):
+                a, b = span(row)
+                left, right = max(left, a), min(right, b)
+            if right - left < 4:
+                bands = None
+                break
+            bands.append((y1, left, right))
+        if not bands:
+            continue
+        placed, cursor = [], 0
+        for y1, left, right in bands:
+            line_words = []
+            while cursor < len(words) and measure(line_words + [words[cursor]]) <= right - left + 1:
+                line_words.append(words[cursor])
+                cursor += 1
+            placed.append((line_words, y1, left, right))
+        if cursor < len(words) or any(not item[0] for item in placed):
+            continue
+        layout = []
+        inside = True
+        for line_words, y1, left, right in placed:
+            line = " ".join(line_words)
+            box = draw.textbbox((0, 0), line, font=font, stroke_width=stroke_width)
+            line_w = box[2] - box[0]
+            line_cx = (left + right) / 2.0
+            lx, ly = line_cx - line_w / 2.0 - box[0], y1 - probe[1]
+            # The real ink box of the line must lie inside the area.
+            ink = draw.textbbox((lx, ly), line, font=font, stroke_width=stroke_width)
+            x1, y1i = max(0, int(np.floor(ink[0]))), max(0, int(np.floor(ink[1])))
+            x2, y2i = min(width - 1, int(np.ceil(ink[2]))), min(height - 1, int(np.ceil(ink[3])))
+            if not (area[y1i, x1] and area[y1i, x2] and area[y2i, x1] and area[y2i, x2]):
+                inside = False
+                break
+            layout.append((line, lx, ly))
+        if inside:
+            return layout
+    return None
+
+
+def _draw_group_translation(img_bgr, group, font_path, strategy="primary", source_bgr=None):
+    text = group.translation or group.text
+    if not text:
+        return img_bgr
+    if strategy == "caption_overlay":
+        return _draw_rotated_caption_translation(img_bgr, group, font_path, text)
+
+    draw_box = _safe_draw_box(group.box, img_bgr.shape, group)
+    group.safe_area = tuple(draw_box)
+    style = (
+        _caption_overlay_text_style(img_bgr, draw_box)
+        if strategy == "caption_overlay"
+        else _text_style_for_region(img_bgr, draw_box)
+    )
+    typography_source = source_bgr if source_bgr is not None else img_bgr
+    typography_profile = typography_profile_for_region(
+        typography_source, group, draw_box, style=style)
+    style = _text_style_from_typography_profile(style, typography_profile)
+    if typography_profile.get("case_style") == "uppercase":
+        text = str(text).upper()
+    group.color_name = style.name
+    group.region_brightness = style.brightness
+    group.region_saturation = style.saturation
+    group.region_hue = style.hue
+    group.typography_profile = dict(typography_profile)
+
+    pil_img = Image.fromarray(cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB))
+    draw = ImageDraw.Draw(pil_img)
+    x, y, w, h = draw_box
+
+    safe_padding = config.TEXT_SAFE_PADDING
+    inset_x = max(4, min(safe_padding, int(w * 0.11)))
+    inset_y = max(4, min(safe_padding, int(h * 0.14)))
+    if w <= 100:
+        inset_x = max(4, min(inset_x, int(w * 0.06)))
+    content_x = x + inset_x
+    content_y = y + inset_y
+    content_w = max(12, w - inset_x * 2)
+    content_h = max(12, h - inset_y * 2)
+
+    source_line_heights = [line.box[3] for line in group.lines if line.box[3] > 0]
+    source_height = float(np.median(source_line_heights)) if source_line_heights else h
+    # The smallest size this balloon may use: the global floor, unless the page's own
+    # lettering is smaller (manga scans at ~960 px wide letter at ~15 px). There the
+    # floor follows the source, down to 42 % of its OCR line box (the box carries
+    # padding: a 24 px box holds ~15 px lettering) and never below 8 px; Portuguese
+    # runs longer than English and did not fit the narrow balloons at 12.
+    min_font = max(8, min(int(config.MIN_FONT_SIZE), int(round(source_height * 0.42))))
+    group.min_font_size = int(min_font)
+    size_scale = float(typography_profile.get("font_size_scale") or (
+        0.72 if style.name == "decorative_purple" else 0.78))
+    is_sfx = str(getattr(group, "classification", "") or "").lower() == "sfx"
+    # A translated sound effect replaces display lettering: it takes the size of
+    # the drawn sound, not of dialogue.
+    display_lettering = bool(
+        is_sfx or (
+            typography_profile.get("style_source") == "original_pixels"
+            and typography_profile.get("font_class") in {"condensed_display", "tall_display"})
+    )
+    font_cap = int(config.MAX_FONT_SIZE)
+    if display_lettering:
+        tallest_source_line = max(source_line_heights) if source_line_heights else h
+        font_cap = max(
+            font_cap,
+            int(max(1, tallest_source_line) * 0.72),
+            int(max(1, h) * 0.42),
+        )
+        typography_profile["display_font_cap"] = int(font_cap)
+    font_size = min(font_cap, max(min_font, int(source_height * size_scale)))
+    # The cleanup measured the source outline's real width (``_group_stroke_band``);
+    # an outline the colour sampler read thinner is drawn at that width, capped at
+    # 15 % of the line height.
+    measured_stroke = int((getattr(group, "mask_metrics", None) or {}).get("lettering_stroke_width") or 0)
+    if measured_stroke > style.stroke_width and typography_profile.get("source_stroke_confident"):
+        style = replace(style, stroke_width=int(min(measured_stroke, max(2, round(0.15 * source_height)))))
+    if len(text) > max(1, len(group.text)) * 1.2:
+        font_size = max(min_font, int(font_size * 0.92))
+
+    preview_font_role = ""
+    preview_font_path = ""
+    for line in getattr(group, "lines", []) or []:
+        metadata = getattr(line, "metadata", None) or {}
+        candidate_role = str(metadata.get("preview_font_role") or "").strip().lower()
+        if candidate_role in {"regular", "bold", "shout", "decorative"}:
+            preview_font_role = candidate_role
+            preview_font_path = str(metadata.get("preview_font_path") or "").strip()
+            break
+
+    glyph_style = typography_profile.get("glyph_style") or {}
+    glyph_aware_role = str(typography_profile.get("font_role_glyph_aware") or "")
+    glyph_confident = (
+        float(glyph_style.get("confidence") or 0.0) >= _GLYPH_RENDER_MIN_CONFIDENCE
+        and glyph_aware_role
+        and str(typography_profile.get("font_role_glyph_aware_source") or "").startswith("glyph_style")
+    )
+    if preview_font_role:
+        font_role = preview_font_role
+    elif is_sfx:
+        # Hand-drawn sound lettering reads as "serif italic" to the glyph classifier;
+        # a sound effect is set in the display (shout) face.
+        font_role = "shout"
+    elif glyph_confident:
+        # The source glyph SHAPE (serif/italic/display/condensed), detected
+        # independently of colour, drives the font when the detector is confident.
+        # A low-confidence read falls through to the semantic role below and never
+        # blocks rendering.
+        font_role = glyph_aware_role
+    elif typography_profile.get("font_role"):
+        # Semantic, source-derived role (TDD #84F32): balloon_dialogue,
+        # thought_dialogue, narration_box, story_caption, display,
+        # dramatic_display, system_text, location_label. Resolved generically
+        # in typography_profile_for_region from visual_class/text_role only.
+        font_role = str(typography_profile.get("font_role"))
+    elif typography_profile.get("selected_font_role"):
+        font_role = str(typography_profile.get("selected_font_role"))
+    elif typography_profile.get("font_class") in {"condensed_display", "tall_display"}:
+        font_role = "shout"
+    elif style.name == "decorative_purple":
+        font_role = "decorative"
+    elif "!" in group.text:
+        font_role = "shout"
+    else:
+        font_role = "regular"
+
+    # The starting size follows the source's real letter height, not a fixed share of the OCR
+    # line box (which carries padding): measured on the reference chapter, 0.78 x box left the
+    # translated lettering ~14 % smaller than the original. The fit loop below still shrinks the
+    # size until the text fits, so a larger start can only reach a size the old start could not.
+    if not display_lettering and not is_sfx:
+        source_cap = _source_ink_cap_height(typography_source, group)
+        if source_cap:
+            probe = get_font(preview_font_path or font_path, 100, role=font_role,
+                             prefer_role=bool(preview_font_role and not preview_font_path), text=text)
+            cap_ratio = _font_cap_ratio(probe)
+            if cap_ratio:
+                matched = int(round(source_cap / cap_ratio))
+                if matched > font_size:
+                    font_size = min(font_cap, matched)
+                    typography_profile["font_size_from_source_ink"] = {
+                        "source_cap_px": round(float(source_cap), 1), "font_cap_ratio": round(cap_ratio, 3),
+                        "size": int(font_size)}
+
+    text_align = _source_text_alignment(group)
+    typography_profile["alignment"] = text_align
+    lines = []
+    spacing = 2
+    text_bbox = (0, 0, 0, 0)
+
+    overflow_ratio = 1.0
+    prefer_preview_role = bool(preview_font_role and not preview_font_path)
+    # Computed once, up front: a real per-line hierarchy signal doesn't depend
+    # on font_size, and the wrap below needs it as a target line count so the
+    # translated text has an unambiguous line to land each source ratio on.
+    line_scales = _source_line_scale_ratios(group, typography_source)
+    start_font_size = font_size
+    while font_size >= min_font:
+        font = get_font(preview_font_path or font_path, font_size, role=font_role,
+                        prefer_role=prefer_preview_role, text=text)
+        spacing = max(1, int(font_size * 0.1 * float(
+            typography_profile.get("line_height_scale") or 1.0)))
+        wrap_width = int(content_w * float(
+            typography_profile.get("content_width_ratio") or (
+                0.8 if style.name == "decorative_purple" else 1.0)))
+        if config.AUTO_LINE_WRAP and typography_profile.get("font_class") in {
+            "condensed_display", "tall_display",
+        }:
+            max_chars = max(8, int(max(12, wrap_width) / max(1, font_size * 0.58)))
+            lines = typographic_wrap_lines(
+                text,
+                max_chars=max_chars,
+                profile=typography_profile,
+                target_line_count=len(group.lines) if line_scales else None,
+            )
+        else:
+            lines = (
+                _wrap_text(
+                draw,
+                text,
+                font,
+                max_width=max(12, wrap_width),
+                split_long_words=font_size <= min_font,
+                )
+                if config.AUTO_LINE_WRAP
+                else [text]
+            )
+        text_block = "\n".join(lines)
+        text_bbox = draw.multiline_textbbox(
+            (0, 0),
+            text_block,
+            font=font,
+            spacing=spacing,
+            align=text_align,
+            stroke_width=style.stroke_width,
+        )
+        # A glyph whose real ink dips below the font's nominal descent (a
+        # deep comma/tail on one wrapped line, widened further by the
+        # stroke outline) can eat into the gap this ``spacing`` assumed was
+        # there, packing that line's ink close enough to the next line's
+        # cap-height that post-render OCR's line detector fuses the two
+        # rows and fabricates a boundary character (#84F43, P26: "NO" ->
+        # "RNO", "MONSTROS" -> "SMONSTROS"). Detect that overshoot from the
+        # actual rendered ink of this text - not a page- or phrase-specific
+        # guess - and grow spacing to cover it before the fit check below,
+        # so a size that needs more room to stay legible shrinks the same
+        # way it already does for plain overflow, instead of shipping a
+        # cramped, OCR-ambiguous render at the original size.
+        if len(lines) > 1:
+            line_bottoms = [
+                draw.textbbox((0, 0), ln, font=font, stroke_width=style.stroke_width)[3]
+                for ln in lines[:-1]
+            ]
+            descender_overshoot = (
+                max(line_bottoms) - min(line_bottoms) if line_bottoms else 0
+            )
+            if descender_overshoot > 0:
+                spacing = spacing + descender_overshoot + max(2, style.stroke_width)
+                text_bbox = draw.multiline_textbbox(
+                    (0, 0),
+                    text_block,
+                    font=font,
+                    spacing=spacing,
+                    align=text_align,
+                    stroke_width=style.stroke_width,
+                )
+        text_w = text_bbox[2] - text_bbox[0]
+        text_h = text_bbox[3] - text_bbox[1]
+        overflow_ratio = max(
+            0.0,
+            max(text_w - content_w, text_h - content_h) / max(1, max(content_w, content_h)),
+        )
+        if text_h <= content_h and text_w <= content_w:
+            break
+        if not config.AUTO_FONT_SHRINK:
+            break
+        font_size -= 1
+
+    font_size = max(min_font, font_size)
+    # Inside a closed balloon the text follows the balloon's shape instead of the
+    # source text's rectangle (the source width made "VENHA NOS / VISITAR / COMO"
+    # columns in a wide balloon), at one uniform size up to the same cap. The area
+    # is kept to the source text's region grown by 25 %, so two touching balloons
+    # (one white region) do not share text.
+    shape_layout = None
+    balloon_area = None
+    if config.RENDER_FIT_BALLOON_SHAPE and config.AUTO_LINE_WRAP:
+        balloon_area = _balloon_text_area(group, img_bgr.shape)
+    if balloon_area is not None:
+        gx, gy, gw, gh = (int(v) for v in group.box)
+        reach_x, reach_y = int(round(0.25 * gw)), int(round(0.25 * gh))
+        own_region = np.zeros(balloon_area.shape, dtype=bool)
+        own_region[max(0, gy - reach_y):gy + gh + reach_y, max(0, gx - reach_x):gx + gw + reach_x] = True
+        balloon_area = balloon_area & own_region
+        if not np.any(balloon_area):
+            balloon_area = None
+    if balloon_area is not None:
+        center = (x + w / 2.0, y + h / 2.0)
+        # Never below the size the rectangle reached (when it fit): the shape is
+        # chosen for its lines, not paid for with smaller text.
+        lowest = font_size if overflow_ratio <= 0.0 else min_font
+        for candidate_size in range(start_font_size, lowest - 1, -1):
+            candidate_font = get_font(preview_font_path or font_path, candidate_size, role=font_role,
+                                      prefer_role=prefer_preview_role, text=text)
+            candidate_spacing = max(1, int(candidate_size * 0.1 * float(
+                typography_profile.get("line_height_scale") or 1.0)))
+            layout = _balloon_shape_layout(draw, text, candidate_font, balloon_area, center,
+                                           candidate_spacing, style.stroke_width)
+            if layout:
+                shape_layout = layout
+                font_size, spacing = candidate_size, candidate_spacing
+                lines = [item[0] for item in layout]
+                overflow_ratio = 0.0
+                break
+    font = get_font(preview_font_path or font_path, font_size, role=font_role,
+                    prefer_role=prefer_preview_role, text=text)
+    group.font_runtime_validation = dict(getattr(font, "komyst_font_runtime", {}) or {})
+    group.font_runtime_validation["typography_profile"] = dict(typography_profile)
+    group.font_size = font_size
+    group.text_overflow_ratio = float(overflow_ratio)
+    group.typography_profile = dict(typography_profile)  # now carries alignment and ink-derived size
+    group.draw_box = tuple(draw_box)
+    group.rendered_lines = list(lines)  # renderer's final wrapping (source of truth for PSD)
+    text_block = "\n".join(lines)
+    text_w = text_bbox[2] - text_bbox[0]
+    text_h = text_bbox[3] - text_bbox[1]
+    draw_x = content_x + (content_w - text_w) / 2 - text_bbox[0]
+    draw_y = content_y + (content_h - text_h) / 2 - text_bbox[1]
+
+    # Per-line hierarchy (TDD #84F32R): only engages when the target wrapped
+    # 1:1 onto the same number of lines the source had (so each target line
+    # has an unambiguous source line to inherit a scale from) and the source
+    # actually shows a real size hierarchy. The uniform block above already
+    # proved a same-size render fits the safe area, so this can only ever
+    # shrink further from that already-accepted bound, never grow past it.
+    if shape_layout:
+        boxes = [draw.textbbox((lx, ly), line, font=font, stroke_width=style.stroke_width)
+                 for line, lx, ly in shape_layout]
+        text_bbox = (min(b[0] for b in boxes), min(b[1] for b in boxes),
+                     max(b[2] for b in boxes), max(b[3] for b in boxes))
+        draw_x = draw_y = 0.0
+        ys_area, xs_area = np.nonzero(balloon_area)
+        # Plus the stroke pad the overflow gate adds round the ink (the layout
+        # already proved the ink itself lies inside the inset interior).
+        pad = max(style.stroke_width, 1) + 1
+        ax1, ay1 = int(xs_area.min()) - pad, int(ys_area.min()) - pad
+        ax2, ay2 = int(xs_area.max()) + 1 + pad, int(ys_area.max()) + 1 + pad
+        # The balloon interior is the safe area for this text, not the source box.
+        bx1, by1 = min(draw_box[0], ax1), min(draw_box[1], ay1)
+        bx2, by2 = max(draw_box[0] + draw_box[2], ax2), max(draw_box[1] + draw_box[3], ay2)
+        draw_box = (bx1, by1, bx2 - bx1, by2 - by1)
+        group.draw_box = tuple(draw_box)
+        group.safe_area = tuple(draw_box)
+        group.shape_fit = {"lines": len(shape_layout), "font_size": int(font_size)}
+    line_plan = None
+    if line_scales and len(lines) == len(group.lines) and not shape_layout:
+        line_plan = _build_per_line_plan(
+                draw, lines, line_scales, font_size,
+                font_role=font_role, font_path=preview_font_path or font_path,
+                prefer_role=prefer_preview_role, text=text, style=style,
+                content_w=content_w, content_h=content_h, spacing=spacing,
+            )
+    if line_plan:
+        text_w = line_plan["width"]
+        text_h = line_plan["height"]
+        draw_x = content_x + (content_w - text_w) / 2
+        draw_y = content_y + (content_h - text_h) / 2
+        text_bbox = (0, 0, text_w, text_h)
+        group.line_font_sizes = list(line_plan["sizes"])
+
+    if group.text_overflow_ratio > config.MAX_TEXT_OVERFLOW_RATIO:
+        group.translation_valid = False
+        group.translation_validation_reason = "text_does_not_fit_region"
+        group.translation_box = None
+        return img_bgr
+
+    stroke_pad = max(style.stroke_width, 1)
+    tx1 = int(np.floor(draw_x + text_bbox[0] - stroke_pad))
+    ty1 = int(np.floor(draw_y + text_bbox[1] - stroke_pad))
+    tx2 = int(np.ceil(draw_x + text_bbox[2] + stroke_pad))
+    ty2 = int(np.ceil(draw_y + text_bbox[3] + stroke_pad))
+    translation_box = (tx1, ty1, max(1, tx2 - tx1), max(1, ty2 - ty1))
+    # Fit must include the rendered *effect* footprint, not just the raw
+    # glyph+stroke box: a glow (Gaussian-blurred halo) or a shadow offset both
+    # push visible ink beyond ``translation_box`` before this gate ever sees
+    # it, which let a target that "fit" on paper still bleed past the safe
+    # area once the glow/shadow was actually painted. Reuse the same additive
+    # padding ``_draw_allowed_group_mask`` already trusts for the allowed
+    # modification mask, so the two agree on what "fits" means.
+    effect_pad = int(round(
+        stroke_pad
+        + float(style.glow_radius or 0)
+        + (max(abs(style.shadow_offset[0]), abs(style.shadow_offset[1]))
+           if style.shadow_fill else 0)
+    ))
+    ex1 = int(np.floor(draw_x + text_bbox[0] - effect_pad))
+    ey1 = int(np.floor(draw_y + text_bbox[1] - effect_pad))
+    ex2 = int(np.ceil(draw_x + text_bbox[2] + effect_pad))
+    ey2 = int(np.ceil(draw_y + text_bbox[3] + effect_pad))
+    effect_box = (ex1, ey1, max(1, ex2 - ex1), max(1, ey2 - ey1))
+    overflow = _box_overflow_ratio(translation_box, draw_box)
+    effect_overflow = _box_overflow_ratio(effect_box, draw_box)
+    # ``text_overflow_ratio`` intentionally stays scoped to the raw
+    # glyph+stroke box only - it feeds the strict ``MAX_TEXT_OVERFLOW_RATIO``
+    # gate elsewhere in the pipeline (the post-render visual acceptance
+    # loop), which must keep its existing, already-tuned behaviour. The
+    # effect footprint gets its own field and its own, more lenient gate
+    # right below.
+    group.text_overflow_ratio = max(group.text_overflow_ratio, overflow)
+    group.translation_box = translation_box
+    group.effect_box = effect_box
+    group.effect_overflow_ratio = effect_overflow
+    if config.REJECT_TEXT_OVERFLOW and overflow > config.MAX_TEXT_OVERFLOW_RATIO:
+        group.translation_valid = False
+        group.translation_validation_reason = "translation_box_outside_safe_area"
+        return img_bgr
+    # A glow/shadow footprint is allowed to graze past the raw glyph+stroke
+    # box a little (that already happens for plenty of accepted balloon
+    # styles) - what it must never do is bleed *severely* past the safe area
+    # the way an unrelated-panel spill would (mission #13/#14). This is a
+    # separate, more lenient hard gate from ``MAX_TEXT_OVERFLOW_RATIO`` above
+    # precisely so it does not reject the many small, already-accepted
+    # glow/shadow styles that only graze the edge by a pixel or two.
+    if config.REJECT_TEXT_OVERFLOW and effect_overflow > config.MAX_EFFECT_OVERFLOW_RATIO:
+        group.translation_valid = False
+        group.translation_validation_reason = "translation_effect_outside_safe_area"
+        return img_bgr
+
+    if style.glow_fill and style.glow_radius > 0:
+        glow = Image.new("RGBA", pil_img.size, (0, 0, 0, 0))
+        glow_draw = ImageDraw.Draw(glow)
+        if shape_layout:
+            for line, lx, ly in shape_layout:
+                glow_draw.text((lx, ly), line, font=font, fill=style.glow_fill + (190,),
+                               stroke_width=max(style.stroke_width + 1, 2), stroke_fill=style.glow_fill + (210,))
+        elif line_plan:
+            _draw_multiline_per_font(
+                glow_draw, (draw_x, draw_y), lines, line_plan,
+                fill=style.glow_fill + (190,), spacing=spacing,
+                stroke_width=max(style.stroke_width + 1, 2), stroke_fill=style.glow_fill + (210,),
+            )
+        else:
+            glow_draw.multiline_text(
+                (draw_x, draw_y),
+                text_block,
+                font=font,
+                fill=style.glow_fill + (190,),
+                spacing=spacing,
+                align=text_align,
+                stroke_width=max(style.stroke_width + 1, 2),
+                stroke_fill=style.glow_fill + (210,),
+            )
+        glow = glow.filter(ImageFilter.GaussianBlur(radius=style.glow_radius))
+        pil_img = Image.alpha_composite(pil_img.convert("RGBA"), glow).convert("RGB")
+        draw = ImageDraw.Draw(pil_img)
+
+    if style.shadow_fill:
+        shadow_x = draw_x + style.shadow_offset[0]
+        shadow_y = draw_y + style.shadow_offset[1]
+        if shape_layout:
+            for line, lx, ly in shape_layout:
+                draw.text((lx + style.shadow_offset[0], ly + style.shadow_offset[1]), line,
+                          font=font, fill=style.shadow_fill)
+        elif line_plan:
+            _draw_multiline_per_font(
+                draw, (shadow_x, shadow_y), lines, line_plan,
+                fill=style.shadow_fill, spacing=spacing,
+            )
+        else:
+            draw.multiline_text(
+                (shadow_x, shadow_y),
+                text_block,
+                font=font,
+                fill=style.shadow_fill,
+                spacing=spacing,
+                align=text_align,
+            )
+
+    if shape_layout:
+        for line, lx, ly in shape_layout:
+            draw.text((lx, ly), line, font=font, fill=style.fill,
+                      stroke_width=style.stroke_width, stroke_fill=style.stroke_fill)
+    elif line_plan:
+        _draw_multiline_per_font(
+            draw, (draw_x, draw_y), lines, line_plan,
+            fill=style.fill, spacing=spacing,
+            stroke_width=style.stroke_width, stroke_fill=style.stroke_fill,
+        )
+    else:
+        draw.multiline_text(
+            (draw_x, draw_y),
+            text_block,
+            font=font,
+            fill=style.fill,
+            spacing=spacing,
+            align=text_align,
+            stroke_width=style.stroke_width,
+            stroke_fill=style.stroke_fill,
+        )
+
+    rendered_bgr = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
+    return _match_source_slant(img_bgr, rendered_bgr, group, typography_profile, draw_box)
+
+
+def _match_source_slant(base_bgr, rendered_bgr, group, profile, draw_box):
+    """Lean the drawn translation like the source lettering when the font did not.
+
+    The source slant is measured on the original glyphs (``glyph_style``); the
+    same measure on the drawn text says what the chosen font gave. When they
+    differ by >= 4 degrees the drawn pixels (text, outline, glow - everything
+    that changed) are sheared about their centre to the source slant. Skipped if
+    the sheared text would leave the safe area.
+    """
+    glyph_style = (profile or {}).get("glyph_style") or {}
+    if not config.RENDER_MATCH_SOURCE_SLANT or float(glyph_style.get("confidence") or 0.0) < _GLYPH_RENDER_MIN_CONFIDENCE:
+        return rendered_bgr
+    source_deg = float(glyph_style.get("slant_degrees") or 0.0)
+    # Only a source the glyph classifier calls italic is leaned towards; an
+    # upright source never gets a shear (a 4-degree reading is measurement noise).
+    if str(glyph_style.get("slant") or "normal") != "italic":
+        return rendered_bgr
+    changed = np.any(rendered_bgr != base_bgr, axis=2)
+    if not np.any(changed):
+        return rendered_bgr
+    ys, xs = np.nonzero(changed)
+    x1, y1, x2, y2 = int(xs.min()), int(ys.min()), int(xs.max()) + 1, int(ys.max()) + 1
+    ink = (cv2.cvtColor(rendered_bgr[y1:y2, x1:x2], cv2.COLOR_BGR2GRAY).astype(np.int16)
+           - cv2.cvtColor(base_bgr[y1:y2, x1:x2], cv2.COLOR_BGR2GRAY).astype(np.int16))
+    glyphs = (np.abs(ink) >= 60).astype(np.uint8)
+    # Per line, median: a block of centred lines of different widths fools a
+    # whole-block projection (an upright block read -24 degrees).
+    rows = glyphs.any(axis=1)
+    edges = np.flatnonzero(np.diff(np.concatenate([[0], rows.astype(np.int8), [0]])))
+    readings = [_text_slant_degrees(glyphs[a:b]) for a, b in zip(edges[::2], edges[1::2]) if b - a >= 6]
+    if not readings:
+        return rendered_bgr
+    rendered_deg = float(np.median(readings))
+    if abs(source_deg - rendered_deg) < 4.0:
+        return rendered_bgr
+    shear = float(np.tan(np.deg2rad(rendered_deg)) - np.tan(np.deg2rad(source_deg)))
+    height, width = changed.shape
+    cy = (y1 + y2) / 2.0
+    dx_top, dx_bottom = shear * (y1 - cy), shear * (y2 - cy)
+    nx1, nx2 = x1 + min(dx_top, dx_bottom, 0.0), x2 + max(dx_top, dx_bottom, 0.0)
+    bx, by, bw, bh = draw_box
+    if nx1 < max(0, bx) or nx2 > min(width, bx + bw):
+        group.slant_match = {"applied": False, "reason": "outside_safe_area",
+                             "source_degrees": source_deg, "rendered_degrees": rendered_deg}
+        return rendered_bgr
+    matrix = np.float32([[1, shear, -shear * cy], [0, 1, 0]])
+    warped = cv2.warpAffine(rendered_bgr, matrix, (width, height), flags=cv2.INTER_LINEAR,
+                            borderMode=cv2.BORDER_REPLICATE)
+    alpha = cv2.warpAffine(changed.astype(np.float32), matrix, (width, height), flags=cv2.INTER_LINEAR)
+    out = base_bgr.astype(np.float32) * (1.0 - alpha[..., None]) + warped.astype(np.float32) * alpha[..., None]
+    out = np.clip(np.rint(out), 0, 255).astype(np.uint8)
+    # The validator's allowed area is built from the translation/effect boxes:
+    # they must describe the sheared ink, not the upright one.
+    moved = np.any(out != base_bgr, axis=2)
+    if np.any(moved):
+        mys, mxs = np.nonzero(moved)
+        sheared_box = (int(mxs.min()), int(mys.min()),
+                       int(mxs.max()) - int(mxs.min()) + 1, int(mys.max()) - int(mys.min()) + 1)
+        for attr in ("translation_box", "effect_box"):
+            old_box = getattr(group, attr, None)
+            if old_box:
+                ox, oy, ow, oh = (int(v) for v in old_box)
+                x1u, y1u = min(ox, sheared_box[0]), min(oy, sheared_box[1])
+                x2u = max(ox + ow, sheared_box[0] + sheared_box[2])
+                y2u = max(oy + oh, sheared_box[1] + sheared_box[3])
+                setattr(group, attr, (x1u, y1u, x2u - x1u, y2u - y1u))
+    group.slant_match = {"applied": True, "source_degrees": source_deg, "rendered_degrees": rendered_deg}
+    return out
+
+
+def _draw_rotated_caption_translation(img_bgr, group, font_path, text):
+    """Render translated caption lines along the original OCR line geometry."""
+    source_lines = sorted(
+        group.lines,
+        key=lambda line: float(np.mean(np.asarray(line.polygon)[:, 1])),
+    )
+    words = str(text).split()
+    if not source_lines or not words:
+        group.text_overflow_ratio = 1.0
+        group.translation_box = None
+        return img_bgr
+
+    region_count = min(len(source_lines), len(words))
+    source_lines = source_lines[:region_count]
+    geometries = [_caption_line_geometry(line) for line in source_lines]
+    role = "shout" if "!" in group.text or "?" in group.text else "regular"
+    fitted = _fit_caption_lines(words, geometries, font_path, role)
+    if not fitted:
+        group.text_overflow_ratio = 1.0
+        group.translation_box = None
+        return img_bgr
+
+    caption_lines, font, font_size = fitted
+    canvas = Image.fromarray(cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)).convert("RGBA")
+    paste_boxes = []
+    for caption, geometry in zip(caption_lines, geometries):
+        probe = Image.new("RGBA", (8, 8), (0, 0, 0, 0))
+        probe_draw = ImageDraw.Draw(probe)
+        bbox = probe_draw.textbbox(
+            (0, 0),
+            caption,
+            font=font,
+            stroke_width=2,
+        )
+        tw = max(1, bbox[2] - bbox[0])
+        th = max(1, bbox[3] - bbox[1])
+        pad = 4
+        tile = Image.new("RGBA", (tw + pad * 2, th + pad * 2), (0, 0, 0, 0))
+        tile_draw = ImageDraw.Draw(tile)
+        tile_draw.text(
+            (pad - bbox[0], pad - bbox[1]),
+            caption,
+            font=font,
+            fill=(255, 255, 255, 255),
+            stroke_width=2,
+            stroke_fill=(10, 10, 16, 255),
+        )
+        rotated = tile.rotate(
+            geometry["pillow_angle"],
+            resample=Image.Resampling.BICUBIC,
+            expand=True,
+        )
+        cx, cy = geometry["center"]
+        px = int(round(cx - rotated.width / 2))
+        py = int(round(cy - rotated.height / 2))
+        canvas.alpha_composite(rotated, (px, py))
+        paste_boxes.append((px, py, rotated.width, rotated.height))
+
+    translation_box = _union_boxes(paste_boxes)
+    safe_area = _safe_draw_box(group.box, img_bgr.shape, group)
+    overflow = _box_overflow_ratio(translation_box, safe_area)
+    group.safe_area = tuple(safe_area)
+    group.draw_box = tuple(safe_area)
+    group.translation_box = tuple(translation_box)
+    group.font_size = int(font_size)
+    group.text_overflow_ratio = float(overflow)
+    group.color_name = "caption_overlay"
+    group.region_brightness = float(np.mean(cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)))
+    group.region_saturation = 0.0
+    group.region_hue = 0.0
+    if config.REJECT_TEXT_OVERFLOW and overflow > config.MAX_TEXT_OVERFLOW_RATIO:
+        group.translation_valid = False
+        group.translation_validation_reason = "caption_translation_outside_safe_area"
+        return img_bgr
+    return cv2.cvtColor(np.asarray(canvas.convert("RGB")), cv2.COLOR_RGB2BGR)
+
+
+def _caption_line_geometry(line):
+    polygon = np.asarray(line.polygon, dtype=np.float32)
+    center = tuple(np.mean(polygon, axis=0).tolist())
+    if polygon.shape[0] >= 4:
+        top = float(np.linalg.norm(polygon[1] - polygon[0]))
+        bottom = float(np.linalg.norm(polygon[2] - polygon[3]))
+        left = float(np.linalg.norm(polygon[3] - polygon[0]))
+        right = float(np.linalg.norm(polygon[2] - polygon[1]))
+        width = max(top, bottom)
+        height = max(left, right)
+        dx, dy = polygon[1] - polygon[0]
+        pillow_angle = -math.degrees(math.atan2(float(dy), float(dx)))
+    else:
+        _, _, width, height = line.box
+        pillow_angle = 0.0
+    return {
+        "center": center,
+        "width": max(12.0, width - 8.0),
+        "height": max(10.0, height - 6.0),
+        "pillow_angle": pillow_angle,
+    }
+
+
+def _fit_caption_lines(words, geometries, font_path, role):
+    line_count = min(len(words), len(geometries))
+    geometries = geometries[:line_count]
+    max_size = min(
+        config.MAX_FONT_SIZE,
+        max(
+            config.MIN_FONT_SIZE,
+            int(np.median([item["height"] for item in geometries]) * 0.72),
+        ),
+    )
+    probe = ImageDraw.Draw(Image.new("RGB", (8, 8), "white"))
+    for size in range(max_size, config.MIN_FONT_SIZE - 1, -1):
+        font = get_font(font_path, size, role=role)
+        partition = _partition_caption_words(
+            probe,
+            words,
+            font,
+            [item["width"] for item in geometries],
+        )
+        if not partition:
+            continue
+        fits = True
+        for caption, geometry in zip(partition, geometries):
+            bbox = probe.textbbox((0, 0), caption, font=font, stroke_width=2)
+            if (
+                bbox[2] - bbox[0] > geometry["width"]
+                or bbox[3] - bbox[1] > geometry["height"]
+            ):
+                fits = False
+                break
+        if fits:
+            return partition, font, size
+    return None
+
+
+def _partition_caption_words(draw, words, font, widths):
+    line_count = min(len(words), len(widths))
+    if line_count <= 0:
+        return None
+    states = {(0, 0): (0.0, [])}
+    for line_index in range(line_count):
+        next_states = {}
+        remaining_lines = line_count - line_index - 1
+        for (used_lines, start), (score, parts) in states.items():
+            if used_lines != line_index:
+                continue
+            max_end = len(words) - remaining_lines
+            for end in range(start + 1, max_end + 1):
+                caption = " ".join(words[start:end])
+                measured = _text_width(draw, caption, font)
+                ratio = measured / max(1.0, widths[line_index])
+                overflow_penalty = max(0.0, ratio - 1.0) * 100.0
+                candidate_score = score + (ratio - 0.82) ** 2 + overflow_penalty
+                key = (line_index + 1, end)
+                existing = next_states.get(key)
+                if existing is None or candidate_score < existing[0]:
+                    next_states[key] = (candidate_score, parts + [caption])
+        states = next_states
+    final = states.get((line_count, len(words)))
+    return final[1] if final else None
+
+
+def _expanded_draw_box(box, image_shape):
+    x, y, w, h = box
+    h_img, w_img = image_shape[:2]
+    pad_x = max(6, min(32, int(w * 0.15)))
+    pad_y = max(4, min(18, int(h * 0.22)))
+    x1 = max(0, x - pad_x)
+    y1 = max(0, y - pad_y)
+    x2 = min(w_img, x + w + pad_x)
+    y2 = min(h_img, y + h + pad_y)
+    return x1, y1, max(1, x2 - x1), max(1, y2 - y1)
+
+
+def _safe_draw_box(box, image_shape, group=None):
+    x, y, w, h = box
+    h_img, w_img = image_shape[:2]
+    background_metrics = (
+        getattr(group, "background_metrics", {}) or {}
+        if group is not None
+        else {}
+    )
+    dark_context = bool(
+        background_metrics.get("dark_context")
+        or (
+            float(background_metrics.get("context_dark_pixel_ratio", 0.0)) >= 0.90
+            and float(background_metrics.get("context_saturation_mean", 255.0)) <= 18.0
+        )
+    )
+    uniform_light = bool(
+        background_metrics.get("strongly_uniform_white")
+        or (
+            background_metrics.get("uniform_light")
+            and float(background_metrics.get("white_pixel_ratio", 0.0)) >= 0.88
+            and float(background_metrics.get("saturation_mean", 255.0)) <= 14.0
+        )
+    )
+    if group and dark_context:
+        # A detector can omit a narrow detached glyph (for example a leading
+        # pronoun) while still locating the rest of a light-on-dark line.  The
+        # larger horizontal search window is used only to find components; the
+        # cleanup mask remains component-based and tightly bounded.
+        pad_x = max(12, min(28, int(w * 0.12)))
+        pad_y = max(4, min(10, int(h * 0.08)))
+    elif group and uniform_light:
+        pad_x = max(12, min(28, int(w * 0.12)))
+        pad_y = max(4, min(10, int(h * 0.08)))
+    elif group and group.inside_balloon_like_region:
+        pad_x = max(3, min(8, int(w * 0.08)))
+        pad_y = max(2, min(6, int(h * 0.1)))
+    elif group and group.inside_narration_box_like_region:
+        pad_x = max(4, min(10, int(w * 0.07)))
+        pad_y = max(3, min(7, int(h * 0.1)))
+    else:
+        pad_x = max(2, min(5, int(w * 0.05)))
+        pad_y = max(1, min(4, int(h * 0.07)))
+    x1 = max(0, x - pad_x)
+    y1 = max(0, y - pad_y)
+    x2 = min(w_img, x + w + pad_x)
+    y2 = min(h_img, y + h + pad_y)
+    return x1, y1, max(1, x2 - x1), max(1, y2 - y1)
+
+
+def _boxes_overlap(a, b):
+    ax, ay, aw, ah = a
+    bx, by, bw, bh = b
+    return ax < bx + bw and bx < ax + aw and ay < by + bh and by < ay + ah
+
+
+def _translation_label_eligible(group):
+    """A translation the validators accepted (or one refused only because it did not
+    fit), still waiting for a place on the page. Rejected translations stay review."""
+    if not str(group.translation or group.translation_candidate or "").strip():
+        return False
+    if group.translation_valid:
+        return True
+    return str(group.translation_validation_reason or "") in {
+        "text_does_not_fit_region", "translation_box_outside_safe_area"}
+
+
+def _render_translation_label(page_bgr, original_bgr, group, font_path, occupied_boxes=()):
+    """Place a translation without reconstructing the art under the source text.
+
+    The last resort when every cleanup strategy was refused because rebuilding the
+    art there was unsafe: the English used to stay on the page. Scanlation practice
+    instead leaves the art alone - a sound effect keeps its drawn lettering with
+    the Portuguese set beside it, and dialogue over art goes in an opaque caption
+    box laid over the source text, grown until the translation fits (which also
+    covers text that did not fit its narrow region). Returns ``(page, allowed
+    mask, label box, mode)`` or ``None`` when there is nothing to place.
+    """
+    text = str(group.translation or group.translation_candidate or "").strip()
+    if not text or text.casefold() == str(group.text or "").strip().casefold():
+        return None
+    page_h, page_w = page_bgr.shape[:2]
+    gx, gy, gw, gh = (int(v) for v in group.box)
+    if gw <= 0 or gh <= 0:
+        return None
+    gray = cv2.cvtColor(original_bgr, cv2.COLOR_BGR2GRAY)
+    ring = np.zeros(gray.shape, np.uint8)
+    cv2.rectangle(ring, (max(0, gx - 12), max(0, gy - 12)),
+                  (min(page_w - 1, gx + gw + 12), min(page_h - 1, gy + gh + 12)), 255, -1)
+    cv2.rectangle(ring, (gx, gy), (gx + gw, gy + gh), 0, -1)
+    surround = gray[ring > 0]
+    light = float(np.median(surround)) >= 128 if surround.size else True
+    image = Image.fromarray(cv2.cvtColor(page_bgr, cv2.COLOR_BGR2RGB))
+    draw = ImageDraw.Draw(image)
+    line_heights = [line.box[3] for line in group.lines if line.box[3] > 0]
+    source_line = float(np.median(line_heights)) if line_heights else gh
+    pad = 4
+
+    def text_block(font, width, split_long_words=True):
+        lines = _wrap_text(draw, text, font, max_width=max(12, width), split_long_words=split_long_words)
+        block = "\n".join(lines)
+        box = draw.multiline_textbbox((0, 0), block, font=font, spacing=2, align="center", stroke_width=2)
+        return lines, block, box[2] - box[0], box[3] - box[1], box
+
+    if group.classification == "sfx":
+        size = int(min(36, max(12, gh * 0.35)))
+        font = get_font(font_path, size, role="shout", text=text)
+        lines, block, tw, th, tb = text_block(font, max(gw * 1.4, size * 4))
+        candidates = [
+            (gx + (gw - tw) // 2, gy + gh + pad), (gx + (gw - tw) // 2, gy - th - pad),
+            (gx + gw + pad, gy + (gh - th) // 2), (gx - tw - pad, gy + (gh - th) // 2),
+        ]
+        chosen = None
+        for x, y in candidates:
+            box = (int(x), int(y), int(tw), int(th))
+            if x < 0 or y < 0 or x + tw > page_w or y + th > page_h:
+                continue
+            if any(_boxes_overlap(box, other) for other in occupied_boxes):
+                continue
+            chosen = box
+            break
+        if chosen is None:
+            # Nowhere free: over the lower part of the drawn sound itself.
+            chosen = (int(min(max(0, gx + (gw - tw) // 2), max(0, page_w - tw))),
+                      int(min(max(0, gy + gh - th), max(0, page_h - th))), int(tw), int(th))
+        x, y, tw, th = chosen
+        draw.multiline_text((x - tb[0], y - tb[1]), block, font=font, fill=(255, 255, 255),
+                            spacing=2, align="center", stroke_width=2, stroke_fill=(0, 0, 0))
+        label = chosen
+        mode = "sfx_subtitle"
+    else:
+        fill, ink = ((255, 255, 255), (20, 20, 20)) if light else ((24, 24, 24), (245, 245, 245))
+        chosen = fallback = None
+        for size in range(int(min(40, max(10, source_line * 0.78))), 7, -1):
+            font = get_font(font_path, size, role="bold_dialogue", text=text)
+            # The box widens to the longest word: "NECE/SSID/ADE" is unreadable.
+            longest = max(draw.textlength(word, font=font) for word in text.split()) + 4
+            for grow in (1.0, 1.25, 1.5):
+                width = int(min(page_w - 2 * pad, max(gw * grow, longest + 2 * pad)))
+                lines, block, tw, th, tb = text_block(font, width - 2 * pad, split_long_words=False)
+                box_w = max(gw, tw + 2 * pad)
+                box_h = max(gh, th + 2 * pad)
+                if box_w > page_w or box_h > page_h:
+                    continue
+                # Smallest font that fits the page is the fallback; a box no taller
+                # than ~2x the source keeps the panel readable around it.
+                fallback = (font, block, tw, th, tb, box_w, box_h)
+                if box_h <= gh * 2.2:
+                    chosen = fallback
+                    break
+            if chosen:
+                break
+        chosen = chosen or fallback
+        if chosen is None:
+            return None
+        font, block, tw, th, tb, box_w, box_h = chosen
+        x1 = int(min(max(0, gx + (gw - box_w) // 2), max(0, page_w - box_w)))
+        y1 = int(min(max(0, gy + (gh - box_h) // 2), max(0, page_h - box_h)))
+        radius = max(4, int(min(box_w, box_h) * 0.18))
+        draw.rounded_rectangle((x1, y1, x1 + box_w, y1 + box_h), radius=radius, fill=fill,
+                               outline=ink, width=2)
+        draw.multiline_text((x1 + (box_w - tw) / 2 - tb[0], y1 + (box_h - th) / 2 - tb[1]), block,
+                            font=font, fill=ink, spacing=2, align="center")
+        label = (x1, y1, int(box_w), int(box_h))
+        mode = "caption_box"
+    allowed = np.zeros(page_bgr.shape[:2], np.uint8)
+    lx, ly, lw, lh = label
+    cv2.rectangle(allowed, (max(0, lx - 3), max(0, ly - 3)),
+                  (min(page_w - 1, lx + lw + 3), min(page_h - 1, ly + lh + 3)), 255, -1)
+    group.translation_box = tuple(label)
+    group.rendered_lines = block.split("\n")
+    return cv2.cvtColor(np.asarray(image), cv2.COLOR_RGB2BGR), allowed, label, mode
+
+
+def _draw_allowed_group_mask(image_shape, group, cleanup_mask=None):
+    mask = (
+        cleanup_mask.copy()
+        if cleanup_mask is not None
+        else _build_text_mask(image_shape, [group], padding=0)
+    )
+    if group.translation_box:
+        x, y, w, h = group.translation_box
+        profile = getattr(group, "typography_profile", {}) or {}
+        effect_pad = (
+            int(profile.get("stroke_width") or 0)
+            + int(profile.get("glow_strength") or 0)
+            + max(0, int(round(float(getattr(group, "font_size", 0) or 0) * 0.04)))
+        )
+        pad = min(max(2, effect_pad), max(2, int(config.MAX_MASK_EXPANSION)))
+        x1 = max(0, int(x) - pad)
+        y1 = max(0, int(y) - pad)
+        x2 = min(image_shape[1], int(x + w) + pad)
+        y2 = min(image_shape[0], int(y + h) + pad)
+        cv2.rectangle(mask, (x1, y1), (x2, y2), 255, -1)
+        group.allowed_modification_box = (x1, y1, max(1, x2 - x1), max(1, y2 - y1))
+    return mask
+
+
+def _box_overflow_ratio(inner, outer):
+    ix, iy, iw, ih = inner
+    ox, oy, ow, oh = outer
+    x1 = max(ix, ox)
+    y1 = max(iy, oy)
+    x2 = min(ix + iw, ox + ow)
+    y2 = min(iy + ih, oy + oh)
+    intersection = max(0, x2 - x1) * max(0, y2 - y1)
+    return max(0.0, 1.0 - intersection / max(1, iw * ih))
+
+
+def _ascii_folded_tokens(text):
+    """Accent-folded upper-case word tokens, in reading order."""
+    return re.findall(r"[A-Z']+", _ascii_fold(text or "").upper())
+
+
+def _ocr_shape_similarity(observed_joined, reference_joined):
+    """Similarity of two accent-folded, space-free renderings of a text.
+
+    Dropping whitespace absorbs the space insertions and merges that this OCR
+    pass produces; accent folding absorbs lost diacritics; the ratio absorbs
+    the remaining character-level noise.
+    """
+
+    if not observed_joined or not reference_joined:
+        return 0.0
+    return difflib.SequenceMatcher(
+        None,
+        observed_joined,
+        reference_joined,
+    ).ratio()
+
+
+def _uncovered_source_text_evidence(original_bgr, rendered_bgr, group, cleanup_mask):
+    """Source glyph pixels the cleanup never touched and the render left intact.
+
+    This is the positive half of the physical proof.  It reads the *boxes* the
+    group's OCR lines own - not their polygons - because a polygon is exactly
+    what a stale recovery geometry gets wrong, and a gate that trusts the same
+    geometry the mask was built from cannot catch the mask being wrong.
+
+    A pixel counts as surviving source only when all three hold: it looks like
+    source text in the original, the cleaning mask never covered it, and the
+    render left it unchanged.  Anything the mask covered was flattened, so a
+    bright pixel there is the new translation rather than the old source.
+    """
+
+    empty = {
+        "source_text_pixels": 0,
+        "source_owned_geometry_uncovered_pixels": 0,
+        "largest_unmasked_source_component": 0,
+        "source_owned_geometry_coverage": 1.0,
+        "source_geometry_uncovered_line_ids": [],
+        "uncovered_source_text_pixels": 0,
+        "largest_uncovered_source_component": 0,
+        "source_text_coverage": 1.0,
+        "uncovered_source_line_ids": [],
+        "unchanged_foreground_inside_cleanup_pixels": 0,
+        "largest_unchanged_foreground_inside_cleanup_component": 0,
+        "inside_mask_similarity_mode": "shadow_only",
+        "measured": False,
+    }
+    if original_bgr is None or cleanup_mask is None:
+        return empty
+    if original_bgr.shape[:2] != rendered_bgr.shape[:2]:
+        return empty
+    if original_bgr.shape[:2] != cleanup_mask.shape[:2]:
+        return empty
+
+    original_gray = cv2.cvtColor(original_bgr, cv2.COLOR_BGR2GRAY).astype(np.int16)
+    rendered_gray = cv2.cvtColor(rendered_bgr, cv2.COLOR_BGR2GRAY).astype(np.int16)
+    height, width = original_gray.shape
+    total = 0
+    unmasked_total = 0
+    uncovered_total = 0
+    inside_unchanged_total = 0
+    largest_unmasked = 0
+    largest = 0
+    largest_inside_unchanged = 0
+    unmasked_lines = []
+    uncovered_lines = []
+    unmeasured_lines = []
+    measured = False
+    sfx_ref_mask = None
+    if str(getattr(group, "classification", "") or "").lower() == "sfx":
+        try:
+            sfx_ref_mask, _ = _sfx_glyph_halo_mask(original_bgr, group, erode_outer=True)
+        except Exception:
+            sfx_ref_mask = None
+    for line in _cleanup_lines_for_group(group):
+        line_id = str((getattr(line, "metadata", None) or {}).get("ocr_line_id") or "")
+        x, y, w, h = [int(value) for value in line.box]
+        x1 = max(0, x)
+        y1 = max(0, y)
+        x2 = min(width, x + max(1, w))
+        y2 = min(height, y + max(1, h))
+        if x2 - x1 < 4 or y2 - y1 < 4:
+            unmeasured_lines.append(line_id)
+            continue
+        roi = original_gray[y1:y2, x1:x2]
+        # Same foreground rule the component mask uses, so "source text" means
+        # the same thing to the gate and to the cleanup it is judging.
+        median = _line_polarity_level(original_gray, line, float(np.median(roi)))
+        contrast = max(
+            8.0,
+            float(np.percentile(roi, 80)) - float(np.percentile(roi, 20)),
+        )
+        if median >= 138:
+            foreground = roi <= max(25.0, min(205.0, median - max(16.0, contrast * 0.28)))
+        elif median <= 118:
+            foreground = roi >= min(235.0, max(48.0, median + max(16.0, contrast * 0.28)))
+        else:
+            # Mid-tone backgrounds use the same hat rule as _component_text_mask, so
+            # they are measured instead of being forced to review as "unmeasured".
+            roi_u8 = np.clip(roi, 0, 255).astype(np.uint8)
+            blackhat, tophat = _midtone_hats(roi_u8, h)
+            foreground = (blackhat >= 12) | (tophat >= 12)
+        foreground &= ~_box_crossing_foreground(
+            original_gray, (x1, y1, x2, y2), median, contrast)
+        if sfx_ref_mask is not None and np.any(sfx_ref_mask[y1:y2, x1:x2]):
+            foreground = sfx_ref_mask[y1:y2, x1:x2] > 0
+        protected = getattr(group, "structure_protect_mask", None)
+        if isinstance(protected, np.ndarray) and protected.shape == original_gray.shape:
+            # Art deliberately kept through the lettering is not leftover source.
+            foreground &= ~protected[y1:y2, x1:x2]
+        line_total = int(np.count_nonzero(foreground))
+        # Punctuation-sized lines ("!", "...") legitimately own few glyph pixels.
+        if line_total < max(8, min(24, int(round(0.03 * (x2 - x1) * (y2 - y1))))):
+            unmeasured_lines.append(line_id)
+            continue
+        measured = True
+        unchanged = (
+            np.abs(roi - rendered_gray[y1:y2, x1:x2]) <= config.VISUAL_DIFF_THRESHOLD
+        )
+        line_cleanup_mask = cleanup_mask[y1:y2, x1:x2] > 0
+        unmasked = (foreground & ~line_cleanup_mask).astype(np.uint8) * 255
+        unmasked_count, _unmasked_labels, unmasked_stats, _unmasked_centroids = (
+            cv2.connectedComponentsWithStats(unmasked, 8)
+        )
+        line_largest_unmasked = max(
+            (
+                int(unmasked_stats[label, cv2.CC_STAT_AREA])
+                for label in range(1, unmasked_count)
+            ),
+            default=0,
+        )
+        surviving = (
+            foreground & unchanged & (cleanup_mask[y1:y2, x1:x2] == 0)
+        ).astype(np.uint8) * 255
+        count, _labels, stats, _centroids = cv2.connectedComponentsWithStats(
+            surviving, 8
+        )
+        line_largest = max(
+            (int(stats[label, cv2.CC_STAT_AREA]) for label in range(1, count)),
+            default=0,
+        )
+        inside_unchanged = (
+            foreground & unchanged & line_cleanup_mask
+        ).astype(np.uint8) * 255
+        inside_count, _inside_labels, inside_stats, _inside_centroids = (
+            cv2.connectedComponentsWithStats(inside_unchanged, 8)
+        )
+        line_largest_inside_unchanged = max(
+            (int(inside_stats[label, cv2.CC_STAT_AREA])
+             for label in range(1, inside_count)),
+            default=0,
+        )
+        total += line_total
+        unmasked_total += int(np.count_nonzero(unmasked))
+        uncovered_total += int(np.count_nonzero(surviving))
+        inside_unchanged_total += int(np.count_nonzero(inside_unchanged))
+        largest_unmasked = max(largest_unmasked, line_largest_unmasked)
+        largest = max(largest, line_largest)
+        largest_inside_unchanged = max(
+            largest_inside_unchanged, line_largest_inside_unchanged
+        )
+        if line_largest_unmasked >= _glyph_scale_component_area(h):
+            unmasked_lines.append(line_id)
+        if line_largest >= _glyph_scale_component_area(h):
+            uncovered_lines.append(
+                line_id
+            )
+    if not measured:
+        return empty
+    return {
+        "source_text_pixels": int(total),
+        "source_owned_geometry_uncovered_pixels": int(unmasked_total),
+        "largest_unmasked_source_component": int(largest_unmasked),
+        "source_owned_geometry_coverage": round(
+            float(1.0 - unmasked_total / max(1, total)), 4
+        ),
+        "source_geometry_uncovered_line_ids": unmasked_lines,
+        "uncovered_source_text_pixels": int(uncovered_total),
+        "largest_uncovered_source_component": int(largest),
+        "source_text_coverage": round(
+            float(1.0 - uncovered_total / max(1, total)), 4
+        ),
+        "uncovered_source_line_ids": uncovered_lines,
+        # This overlap can be retained source, valid line art, or coincident
+        # replacement pixels. Keep it diagnostic until page-level calibration;
+        # it never changes source-removal status by itself.
+        "unchanged_foreground_inside_cleanup_pixels": int(inside_unchanged_total),
+        "largest_unchanged_foreground_inside_cleanup_component": int(
+            largest_inside_unchanged
+        ),
+        "inside_mask_similarity_mode": "shadow_only",
+        "unmeasured_source_line_ids": unmeasured_lines,
+        "measured": not unmeasured_lines,
+    }
+
+
+def _box_crossing_foreground(gray, box, median, contrast):
+    """Foreground inside an OCR box that belongs to something extending past it.
+
+    The verifier reads the box, so line art, a panel border or a dark region that
+    runs through it used to count as "source text left behind" and capped coverage
+    below 0.98. A component with >= 30 % of its pixels outside the box is not a
+    glyph the box owns. Only the light/dark rules are judged (mid-tone hats are
+    local by construction).
+    """
+    x1, y1, x2, y2 = box
+    inside_empty = np.zeros((y2 - y1, x2 - x1), dtype=bool)
+    if 118 < median < 138:
+        return inside_empty
+    height, width = gray.shape[:2]
+    pad = max(8, y2 - y1)  # one line height: enough to see art continue
+    px1, py1 = max(0, x1 - pad), max(0, y1 - pad)
+    px2, py2 = min(width, x2 + pad), min(height, y2 + pad)
+    roi = gray[py1:py2, px1:px2]
+    if median >= 138:
+        wide = roi <= max(25.0, min(205.0, median - max(16.0, contrast * 0.28)))
+    else:
+        wide = roi >= min(235.0, max(48.0, median + max(16.0, contrast * 0.28)))
+    count, labels, stats, _ = cv2.connectedComponentsWithStats(wide.astype(np.uint8), 8)
+    if count <= 1:
+        return inside_empty
+    inside = np.zeros(wide.shape, dtype=bool)
+    inside[y1 - py1:y2 - py1, x1 - px1:x2 - px1] = True
+    inside_counts = np.bincount(labels[inside].ravel(), minlength=count)
+    totals = stats[:, cv2.CC_STAT_AREA]
+    crossing = (totals - inside_counts) >= 0.30 * np.maximum(1, totals)
+    crossing[0] = False
+    return crossing[labels][y1 - py1:y2 - py1, x1 - px1:x2 - px1]
+
+
+def _glyph_scale_component_area(line_height):
+    """Smallest surviving blob that is a glyph rather than anti-alias debris.
+
+    Scaled to the line, because "a letter" is a fraction of the line box on any
+    page.  Below it lives the speckle a correct cleanup always leaves where the
+    new text happens to land on old strokes; above it lives a readable word.
+    """
+
+    return max(24, int(round(max(1.0, float(line_height)) ** 2 * 0.05)))
+
+
+SOURCE_REMOVAL_VERIFIED = "VERIFIED"
+SOURCE_REMOVAL_REJECTED = "REJECTED"
+SOURCE_REMOVAL_NOT_VERIFIED = "NOT_VERIFIED"
+_MIN_SOURCE_REMOVAL_COVERAGE = 0.98
+
+
+def _source_removal_status(group, removal):
+    """Return verified, rejected, or inconclusive physical source-removal evidence."""
+
+    if not isinstance(removal, dict) or removal.get("measured") is not True:
+        return SOURCE_REMOVAL_NOT_VERIFIED
+    source_pixels = removal.get("source_text_pixels")
+    coverage = removal.get("source_owned_geometry_coverage")
+    source_coverage = removal.get("source_text_coverage")
+    largest_uncovered = removal.get("largest_uncovered_source_component")
+    largest_unmasked = removal.get("largest_unmasked_source_component")
+    if (isinstance(source_pixels, bool) or not isinstance(source_pixels, int)
+            or source_pixels < 24 or isinstance(coverage, bool)
+            or not isinstance(coverage, (int, float))
+            or not np.isfinite(coverage) or not 0.0 <= float(coverage) <= 1.0
+            or isinstance(source_coverage, bool)
+            or not isinstance(source_coverage, (int, float))
+            or not np.isfinite(source_coverage)
+            or not 0.0 <= float(source_coverage) <= 1.0
+            or isinstance(largest_uncovered, bool) or not isinstance(largest_uncovered, int)
+            or largest_uncovered < 0 or isinstance(largest_unmasked, bool)
+            or not isinstance(largest_unmasked, int) or largest_unmasked < 0
+            or removal.get("unmeasured_source_line_ids")):
+        return SOURCE_REMOVAL_NOT_VERIFIED
+    if (float(coverage) < _MIN_SOURCE_REMOVAL_COVERAGE
+            or float(source_coverage) < _MIN_SOURCE_REMOVAL_COVERAGE):
+        return SOURCE_REMOVAL_REJECTED
+    if group.translation_final_reason == OCR_UNINTELLIGIBLE_SOURCE_REASON:
+        return SOURCE_REMOVAL_NOT_VERIFIED
+    line_height = max(
+        (line.box[3] for line in _cleanup_lines_for_group(group)),
+        default=0,
+    )
+    threshold = _glyph_scale_component_area(line_height)
+    if largest_uncovered >= threshold or largest_unmasked >= threshold:
+        return SOURCE_REMOVAL_REJECTED
+    return SOURCE_REMOVAL_VERIFIED
+
+
+def _source_removal_incomplete(group, removal):
+    """Compatibility boolean: anything short of measured verification is incomplete.
+
+    Ordinary source dialogue whose glyphs the cleaning mask never reached is
+    still on the page, whatever any OCR pass managed to read back.  Unreadable
+    source held for manual review keeps its own taxonomy and is not judged here.
+    """
+
+    return _source_removal_status(group, removal) != SOURCE_REMOVAL_VERIFIED
+
+
+def _post_render_source_text_check(
+    rendered_bgr,
+    group,
+    page_index=None,
+    original_bgr=None,
+    cleanup_mask=None,
+    removal=None,
+    rendered_occupancy=None,
+):
+    """Decide whether source text is still physically visible after cleanup.
+
+    Two independent kinds of evidence answer that, and only one of them used to
+    exist.  The post-render OCR pass is *positive* evidence: a token it reads
+    back is residual.  Its silence is not proof of absence - it merges glyphs
+    into neighbouring words and misses what it cannot segment - so absence has
+    to be carried by the cleanup itself: the mask covered the source text, so
+    the source text is gone.  When neither holds the answer is inconclusive,
+    and inconclusive is never collapsed into a pass.
+    """
+
+    preserved_names = {
+        token
+        for name in group.detected_proper_names
+        for token in re.findall(r"[A-Z']+", _ascii_fold(name).upper())
+    }
+    intended_translation_tokens = set(
+        re.findall(
+            r"[A-Z']+",
+            _ascii_fold(group.translation or "").upper(),
+        )
+    )
+    # ``group.text`` is the representation that may already have lost part of the
+    # source, so it cannot be the only expectation: a token dropped upstream would
+    # be excused precisely because it went missing.  The immutable OCR provenance
+    # the group owns is the source of truth; the group text only adds to it.
+    provenance_tokens, completeness = source_completeness.expected_physical_tokens(
+        group
+    )
+    # Unreadable source held for manual review is not ordinary English residual and
+    # must keep its own taxonomy, so it never enters the expectation here.
+    if group.translation_final_reason == OCR_UNINTELLIGIBLE_SOURCE_REASON:
+        provenance_tokens = set(_ascii_folded_tokens(group.text))
+    excluded_preserved = sorted(
+        token
+        for token in provenance_tokens
+        if token in preserved_names or token in SFX_WORDS
+    )
+    source_tokens = {
+        token
+        for token in provenance_tokens
+        if len(token) >= 3
+        and token not in preserved_names
+        and token not in SFX_WORDS
+        and token not in intended_translation_tokens
+    }
+    # The source geometry the provenance recorded can extend past a region that was
+    # itself truncated.  Searching only the truncated region is how source pixels
+    # stayed invisible to this pass; the union stays group-owned, so a neighbouring
+    # balloon never widens it.
+    region = source_completeness.union_box(
+        [
+            group.safe_area or group.draw_box or group.box,
+            completeness.get("source_bbox"),
+        ]
+    ) or tuple(group.safe_area or group.draw_box or group.box)
+    x, y, w, h = region
+    pad = min(8, config.MAX_MASK_EXPANSION + 2)
+    x1 = max(0, int(x) - pad)
+    y1 = max(0, int(y) - pad)
+    x2 = min(rendered_bgr.shape[1], int(x + w) + pad)
+    y2 = min(rendered_bgr.shape[0], int(y + h) + pad)
+    crop = rendered_bgr[y1:y2, x1:x2]
+    if crop.size == 0:
+        return {
+            "checked": False,
+            "passed": False,
+            "reason": "empty_post_render_crop",
+        }
+
+    try:
+        engine = OCREngine("en", engine="rapidocr", fallback_engine="")
+        lines = engine._detect_with_rapidocr(crop)
+    except Exception as exc:
+        return {
+            "checked": False,
+            "passed": False,
+            "reason": f"post_render_ocr_unavailable:{type(exc).__name__}",
+        }
+
+    # RapidOCR's detection order is not guaranteed to be reading order (top to
+    # bottom, left to right) - a multi-line balloon crop can come back with its
+    # lines out of sequence. Joining them in detection order then glues one
+    # line's tail directly against a different line's head with no separating
+    # space, which reads back as a fabricated extra glyph ("NO" -> "RNO",
+    # "MONSTROS" -> "SMONSTROS") that belongs to neither line. Sorting by
+    # position first - the same fix already applied to the RapidOCR recovery
+    # read elsewhere - joins the lines in the order they were actually drawn.
+    def _reading_order_key(line):
+        box = getattr(line, "box", None)
+        return (box[1], box[0]) if box else (0, 0)
+
+    lines = sorted(lines, key=_reading_order_key)
+    final_text = clean_ocr_text(" ".join(line.text for line in lines))
+    final_tokens = set(
+        re.findall(r"[A-Z']+", _ascii_fold(final_text).upper())
+    )
+    residual = set(source_tokens & final_tokens)
+
+    # The wide union crop above exists so a source glyph sitting outside the
+    # newly drawn text (a bigger source font, a different wrap) still gets
+    # searched for residue - that coverage must not shrink. But the same wide
+    # crop is what this checker used to validate "does the render match the
+    # expected translation", and that padded region can include art or a
+    # neighbouring line the target text was never drawn into. A second,
+    # independent read scoped to only the box the renderer actually drew the
+    # target text into is the authoritative region for that comparison - the
+    # same "segunda leitura" pattern already used for suspicious source OCR.
+    # A read that fails or comes back empty falls back to the wide-crop text,
+    # which only restores the previous (already-safe) behaviour.
+    match_text = final_text
+    draw_region = tuple(group.safe_area or group.draw_box or group.box)
+    if draw_region != tuple(region):
+        dx, dy, dw, dh = draw_region
+        dx1 = max(0, int(dx))
+        dy1 = max(0, int(dy))
+        dx2 = min(rendered_bgr.shape[1], int(dx + dw))
+        dy2 = min(rendered_bgr.shape[0], int(dy + dh))
+        draw_crop = rendered_bgr[dy1:dy2, dx1:dx2]
+        if draw_crop.size:
+            try:
+                draw_lines = engine._detect_with_rapidocr(draw_crop)
+            except Exception:  # noqa: BLE001 - fall back to the wide-crop read.
+                draw_lines = None
+            if draw_lines:
+                draw_lines = sorted(draw_lines, key=_reading_order_key)
+                draw_text = clean_ocr_text(
+                    " ".join(line.text for line in draw_lines)
+                )
+                if draw_text:
+                    match_text = draw_text
+
+    language_valid, language_reason = validate_translation_text(
+        "",
+        final_text,
+        classification=group.classification,
+        allowed_proper_names=group.detected_proper_names,
+    )
+    source_language_detected = not language_valid and language_reason.startswith(
+        (
+            "mixed_language_tokens:",
+            "residual_english_token:",
+            "residual_inflected_english:",
+            "untranslated_english_text",
+            "untranslated_single_english_token",
+        )
+    )
+    # Three-way evidence: the source text, the translation that was rendered and
+    # the text this independent pass observed.  A token the language validator
+    # flags is only forgiven when the *expected* translation explains it as OCR
+    # noise (lost accent, inserted or dropped space) and the source text does
+    # not.  The observed output is never replaced by the expected string: it
+    # still has to carry evidence of the translation, and any token the
+    # expectation cannot explain keeps failing.
+    expected_sequence = _ascii_folded_tokens(group.translation)
+    expected_joined = "".join(expected_sequence)
+    # The shape comparison against the expected translation is scoped to the
+    # tight ``match_text`` read (the box actually drawn into), not the wide
+    # union crop: art or a neighbouring line inside that wider padding can
+    # read back as a stray extra glyph (e.g. "NO" -> "RNO") that drags a
+    # correct render's similarity below the bar for no reason connected to
+    # the translation itself.
+    observed_tokens = _ascii_folded_tokens(match_text)
+    observed_joined = "".join(observed_tokens)
+    source_tokens_folded = _ascii_folded_tokens(group.text)
+    source_joined = "".join(source_tokens_folded)
+    expected_similarity = _ocr_shape_similarity(observed_joined, expected_joined)
+    source_similarity = _ocr_shape_similarity(observed_joined, source_joined)
+    # A multi-line balloon's lines are detected independently, and RapidOCR's
+    # detection order does not always match reading order - two lines can come
+    # back swapped even though every word was read correctly.  That is word-order
+    # noise, not a language signal, so it must not sink a correct render below the
+    # match bar.  A sorted, order-independent comparison of the same tokens
+    # recovers the evidence the ordered ratio throws away.
+    expected_similarity = max(
+        expected_similarity,
+        _ocr_shape_similarity(
+            "".join(sorted(observed_tokens)), "".join(sorted(expected_sequence))
+        ),
+    )
+    source_similarity = max(
+        source_similarity,
+        _ocr_shape_similarity(
+            "".join(sorted(observed_tokens)), "".join(sorted(source_tokens_folded))
+        ),
+    )
+    # The observed output as a whole reads as the expected translation, and
+    # reads less like the source than like the translation.  That is what makes
+    # the flagged tokens OCR noise rather than surviving source text.
+    flagged_tokens = {
+        token
+        for token in language_reason.partition(":")[2].split(",")
+        if token
+    }
+    # Forgiveness needs a positive reason, not just the absence of one.  A token
+    # is OCR noise when the expected translation itself contains those letters -
+    # which is what a mid-word split such as ANDANDO -> "AND ANDO" produces.  A
+    # token the source provenance expected is never noise, however short it is,
+    # however uncertain the read was, and however well the line as a whole
+    # matches the translation.  ``CONTROL`` sits inside ``CONTROLE``; only the
+    # provenance can tell the surviving source word from the rendered one.
+    #
+    # ``source_tokens``, not the raw provenance: a token can belong to the source
+    # *and* to the intended Portuguese, and then the provenance proves nothing
+    # about which of the two the camera saw.  "SE VOCE FOR BEM-SUCEDIDO" puts
+    # ``FOR`` on the page as the future subjunctive of *ser*, while the source
+    # spells the English preposition in "BE WAITING FOR YOU" - reading that back
+    # is the translation doing its job.  The rest of this function already draws
+    # the line there (``intended_translation_tokens`` below, and the filter that
+    # builds ``source_tokens``); only this test still used the unfiltered set,
+    # so the collision was the one thing it could never forgive.  Subtracting the
+    # intended tokens, not switching to ``source_tokens``, keeps every other
+    # exclusion that set applies (length, names, SFX) out of the decision.
+    forgiven_ocr_noise = sorted(
+        token
+        for token in flagged_tokens
+        if token not in (provenance_tokens - intended_translation_tokens)
+        and token in expected_joined
+    )
+    rendered_matches_expected = bool(
+        expected_joined
+        and expected_similarity >= (0.95 if len(expected_joined) < 4 else 0.90)
+        and expected_similarity > source_similarity
+        and (
+            len(expected_joined) >= 4
+            or (
+                forgiven_ocr_noise
+                and len(forgiven_ocr_noise) == len(flagged_tokens)
+                and observed_joined == expected_joined
+            )
+        )
+    )
+    if (
+        source_language_detected
+        and rendered_matches_expected
+        and flagged_tokens
+        and len(forgiven_ocr_noise) == len(flagged_tokens)
+    ):
+        source_language_detected = False
+
+    if source_language_detected:
+        for info in _translation_token_infos(final_text):
+            token = info["token"]
+            if (
+                len(token) >= 2
+                and token not in preserved_names
+                and token not in intended_translation_tokens
+                and token not in PORTUGUESE_MARKERS
+                and token not in SFX_WORDS
+            ):
+                residual.add(token)
+    residual = sorted(residual)
+
+    # The rendered translation must actually be visible.  Correct text in memory
+    # is not evidence that it reached the page.
+    expected_evidence = [token for token in expected_sequence if len(token) >= 3]
+    target_text_found = not expected_evidence or any(
+        token in final_tokens or token in observed_joined
+        for token in expected_evidence
+    )
+    occupancy_ratio = float(
+        (rendered_occupancy or {}).get("translated_text_box_occupancy_ratio", 0.0)
+        or 0.0
+    )
+    if expected_evidence and not target_text_found and occupancy_ratio >= 0.002:
+        target_text_found = True
+        render_evidence = "render_layer_pixel_delta"
+    else:
+        render_evidence = "ocr_target_token" if target_text_found else "none"
+
+    if removal is None:
+        removal = _uncovered_source_text_evidence(
+            original_bgr,
+            rendered_bgr,
+            group,
+            cleanup_mask,
+        )
+    removal_status = _source_removal_status(group, removal)
+    removal_incomplete = removal_status != SOURCE_REMOVAL_VERIFIED
+
+    if (
+        (source_language_detected or residual)
+        and not removal_incomplete
+        and selective_review_retry.render_residual_forgivable(
+            flagged_tokens=residual,
+            forgiven_ocr_noise_tokens=forgiven_ocr_noise,
+            source_text_coverage=removal.get("source_text_coverage", 0.0),
+        )
+    ):
+        # Every flagged token already individually cleared the same
+        # provenance-based noise test the whole-string ``rendered_matches_
+        # expected`` gate uses (explainable by the expected translation, not
+        # the source) and the mask proved the source was fully removed. The
+        # only thing this closes is the case where *unrelated* noise
+        # elsewhere in a long line kept the whole-string shape match from
+        # passing even though every flagged token was already safe on its
+        # own. Never a second render or translation attempt, and never
+        # forgiveness for a token the per-token check did not already grant.
+        source_language_detected = False
+        residual = []
+
+    passed = (
+        not residual
+        and not source_language_detected
+        and target_text_found
+        and not removal_incomplete
+    )
+    if passed:
+        reason = "ok"
+    elif residual or source_language_detected:
+        reason = (
+            "source_language_detected_after_render"
+            if source_language_detected
+            else "source_tokens_detected_after_render"
+        )
+    elif removal_incomplete:
+        reason = (
+            "uncovered_source_text_evidence"
+            if removal_status == SOURCE_REMOVAL_REJECTED
+            else "source_removal_unverified"
+        )
+    elif not observed_joined:
+        reason = "translated_text_missing_after_render"
+    else:
+        # Something was rendered, but it matches neither the expected
+        # translation nor the source text.  Fail closed for manual review
+        # instead of guessing which of the two it is.
+        reason = "post_render_ocr_inconclusive"
+    if residual or source_language_detected:
+        physical_decision = "residual_detected"
+    elif passed:
+        physical_decision = "pass"
+    else:
+        physical_decision = "review"
+    return {
+        "checked": True,
+        "passed": passed,
+        "reason": reason,
+        "physical_decision": physical_decision,
+        "source_removal_status": removal_status,
+        # Why absence is believed, in the gate's own words: either the cleanup
+        # provably covered the owned source text, or it did not and this is not
+        # a pass.  ``post_render_ocr_only`` is the historical weak state and is
+        # never enough on its own to clear ordinary dialogue.
+        "removal_evidence": (
+            "source_text_coverage_complete"
+            if removal["measured"] and not removal_incomplete
+            else "source_text_coverage_incomplete"
+            if removal["measured"]
+            else "not_verified"
+        ),
+        **{key: value for key, value in removal.items() if key != "measured"},
+        "validator_reason": language_reason,
+        "source_tokens_checked": sorted(source_tokens),
+        "detected_text": final_text,
+        "residual_source_tokens": residual,
+        "expected_translation_tokens": expected_sequence,
+        "expected_shape_similarity": round(expected_similarity, 4),
+        "source_shape_similarity": round(source_similarity, 4),
+        "rendered_matches_expected": bool(rendered_matches_expected),
+        "forgiven_ocr_noise_tokens": (
+            forgiven_ocr_noise if rendered_matches_expected else []
+        ),
+        "target_text_found": bool(target_text_found),
+        "render_evidence": render_evidence,
+        "translated_text_box_occupancy_ratio": round(occupancy_ratio, 6),
+        # Why each token was expected: the basis, the exact source lines behind it
+        # and the region actually searched.  Without this a residual result cannot
+        # be argued with, only believed.
+        "expected_source_basis": completeness.get(
+            "expected_source_basis", source_completeness.EXPECTED_SOURCE_BASIS
+        ),
+        "source_completeness_status": completeness.get("status", ""),
+        "source_line_ids": completeness.get("source_line_ids", []),
+        "expected_tokens": sorted(source_tokens),
+        "detected_residual_tokens": residual,
+        "excluded_preserved_tokens": excluded_preserved,
+        "searched_region": [int(part) for part in region],
+        "page": page_index,
+    }
+
+
+def _broad_mask_reconstructed(group, metrics):
+    """A broad mask is only a problem for a fill that cannot rebuild what it covers.
+
+    The veto exists because a stamp/flat fill over a broad mask on textured art
+    leaves a block. A learned or fitted fill that already passed every
+    reconstruction gate on that mask (blotch, seam, flat patch, ghost) rebuilt
+    the art - door frames included - and the narrow fallback would only trade it
+    for the stamp.
+    """
+    chosen = str(((getattr(group, "fill_choice", None) or {}) if group is not None else {}).get("chosen") or "")
+    return chosen in {"learned", "surface"} and metrics.get("mask_valid") is True
+
+
+def _enforce_visual_bounds(
+    original_bgr,
+    final_bgr,
+    allowed_mask,
+    group=None,
+    mask_metrics=None,
+):
+    if final_bgr.shape != original_bgr.shape:
+        return final_bgr, {
+            "visual_validation_passed": False,
+            "reason": "shape_mismatch",
+        }
+    gray_diff = cv2.absdiff(
+        cv2.cvtColor(original_bgr, cv2.COLOR_BGR2GRAY),
+        cv2.cvtColor(final_bgr, cv2.COLOR_BGR2GRAY),
+    )
+    changed = gray_diff > config.VISUAL_DIFF_THRESHOLD
+    allowed = allowed_mask > 0
+    outside = changed & ~allowed
+    inside = changed & allowed
+    outside_ratio = float(np.mean(outside))
+    outside_u8 = outside.astype(np.uint8) * 255
+    count, _, stats, _ = cv2.connectedComponentsWithStats(outside_u8, 8)
+    outside_components = [
+        {
+            "area": int(stats[label, cv2.CC_STAT_AREA]),
+            "width": int(stats[label, cv2.CC_STAT_WIDTH]),
+            "height": int(stats[label, cv2.CC_STAT_HEIGHT]),
+        }
+        for label in range(1, count)
+    ]
+    largest_component = max((item["area"] for item in outside_components), default=0)
+    unexpected_streak = any(
+        item["area"] > config.MAX_OUTSIDE_COMPONENT_AREA
+        and max(item["width"], item["height"]) / max(1, min(item["width"], item["height"])) >= 8.0
+        for item in outside_components
+    )
+    distance_to_allowed = None
+    if np.any(outside) and np.any(allowed):
+        distance = cv2.distanceTransform((~allowed).astype(np.uint8), cv2.DIST_L2, 3)
+        distance_to_allowed = round(float(np.max(distance[outside])), 3)
+
+    border_change_ratio = 0.0
+    largest_changed_border_component = 0
+    if group is not None and group.safe_area:
+        original_gray = cv2.cvtColor(original_bgr, cv2.COLOR_BGR2GRAY)
+        original_edges = cv2.Canny(original_gray, 55, 155) > 0
+        text_exclusion = _build_text_mask(
+            original_bgr.shape,
+            [group],
+            padding=max(
+                6,
+                min(
+                    12,
+                    int(config.MAX_MASK_EXPANSION) + 2,
+                ),
+            ),
+        ) > 0
+        # A text safe-area is not a balloon contour.  Protect real structural
+        # edges that were changed inside the allowed mask, excluding source
+        # glyphs and their anti-alias halo.  Only the perimeter band of the
+        # safe area is treated as balloon/box border; large hand-drawn letters
+        # or tiny character icons inside a balloon must not be mistaken for the
+        # outer contour.
+        sx, sy, sw, sh = [int(value) for value in group.safe_area]
+        safe_band = np.zeros(original_bgr.shape[:2], dtype=np.uint8)
+        sx1 = max(0, sx)
+        sy1 = max(0, sy)
+        sx2 = min(original_bgr.shape[1], sx + max(1, sw))
+        sy2 = min(original_bgr.shape[0], sy + max(1, sh))
+        if sx2 > sx1 and sy2 > sy1:
+            safe_band[sy1:sy2, sx1:sx2] = 255
+            band_width = max(8, min(18, int(min(sw, sh) * 0.06)))
+            kernel_size = max(3, band_width * 2 + 1)
+            inner = cv2.erode(
+                safe_band,
+                np.ones((kernel_size, kernel_size), dtype=np.uint8),
+                iterations=1,
+            )
+            perimeter_band = (safe_band > 0) & ~(inner > 0)
+        else:
+            perimeter_band = allowed
+        protected_border_edges = (
+            allowed & perimeter_band & original_edges & ~text_exclusion
+        )
+        if np.any(protected_border_edges):
+            border_change_ratio = float(np.mean(changed[protected_border_edges]))
+            changed_border = (
+                protected_border_edges & changed
+            ).astype(np.uint8) * 255
+            border_count, _, border_stats, _ = cv2.connectedComponentsWithStats(
+                changed_border,
+                8,
+            )
+            largest_changed_border_component = max(
+                (
+                    int(border_stats[label, cv2.CC_STAT_AREA])
+                    for label in range(1, border_count)
+                ),
+                default=0,
+            )
+
+    metrics = mask_metrics or {}
+    mask_ratio = float(metrics.get("mask_to_text_area_ratio", 0.0) or 0.0)
+    overflow_ratio = float(group.text_overflow_ratio if group is not None else 0.0)
+    reasons = []
+    if outside_ratio > config.MAX_OUTSIDE_CHANGE_RATIO:
+        reasons.append("outside_change_ratio_exceeded")
+    if largest_component > config.MAX_OUTSIDE_COMPONENT_AREA:
+        reasons.append("outside_component_too_large")
+    if unexpected_streak:
+        reasons.append("unexpected_vertical_or_horizontal_streak")
+    if mask_ratio > config.MAX_MASK_TO_TEXT_AREA_RATIO:
+        reasons.append("mask_area_exceeds_text_area_limit")
+    if (
+        metrics.get("broad_rectangular_mask")
+        # ``broad_rectangular_mask`` is measured against the source text bbox, so
+        # a mask pinned to the owned source lines is always "broad" by that
+        # metric.  The collateral-damage reasons above still police this path.
+        and metrics.get("strategy") != "source_scoped"
+        and metrics.get("background_type")
+        not in {"white_balloon", "dark_balloon", "narration_box"}
+        and not _broad_mask_reconstructed(group, metrics)
+    ):
+        reasons.append("broad_rectangular_or_polygonal_mask")
+    if metrics.get("white_patch_rejected"):
+        reasons.append("large_white_patch_on_nonwhite_background")
+    if config.REJECT_TEXT_OVERFLOW and overflow_ratio > config.MAX_TEXT_OVERFLOW_RATIO:
+        reasons.append("translation_outside_safe_area")
+    structural_border_threshold = max(
+        72,
+        int(min(group.box[2], group.box[3]) * 0.35) if group is not None else 72,
+    )
+    if (
+        config.REJECT_BALLOON_BORDER_DAMAGE
+        and border_change_ratio > 0.12
+        and largest_changed_border_component > structural_border_threshold
+        and not (
+            metrics.get("strategy") == "source_scoped"
+            and metrics.get("source_scoped_display_footprint_required")
+            and metrics.get("light_page_restoration")
+        )
+    ):
+        reasons.append("possible_balloon_border_damage")
+    passed = not reasons
+
+    summary = {
+        "changed_pixels_inside_mask": int(np.count_nonzero(inside)),
+        "changed_pixels_outside_mask": int(np.count_nonzero(outside)),
+        "outside_change_ratio": round(outside_ratio, 8),
+        "largest_outside_component_area": int(largest_component),
+        "max_outside_distance_from_allowed_mask": distance_to_allowed,
+        "unexpected_streak": bool(unexpected_streak),
+        "balloon_border_change_ratio": round(border_change_ratio, 6),
+        "largest_changed_balloon_border_component_area": int(
+            largest_changed_border_component
+        ),
+        "mask_to_text_area_ratio": round(mask_ratio, 4),
+        "text_overflow_ratio": round(overflow_ratio, 6),
+        "visual_validation_passed": bool(passed),
+        "reason": ";".join(reasons),
+    }
+    return (final_bgr if passed else original_bgr.copy()), summary
+
+
+def _region_background_stats(img_bgr, box):
+    x, y, w, h = [int(v) for v in box]
+    roi = img_bgr[y : y + h, x : x + w]
+    if roi.size == 0:
+        return {"brightness": 255.0, "saturation": 0.0, "hue": 0.0,
+                "blue_ratio": 0.0, "red_ratio": 0.0}
+    gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
+    hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
+    sat = hsv[:, :, 1]
+    hue = hsv[:, :, 0]
+    val = hsv[:, :, 2]
+    saturated = sat >= 36
+    blue = (hue >= 86) & (hue <= 138) & saturated & (val >= 40)
+    red = ((hue <= 12) | (hue >= 168)) & saturated & (val >= 50)
+    return {
+        "brightness": float(np.mean(gray)),
+        "saturation": float(np.mean(sat)),
+        "hue": float(np.median(hue[saturated])) if np.any(saturated) else 0.0,
+        "blue_ratio": float(np.mean(blue)),
+        "red_ratio": float(np.mean(red)),
+    }
+
+
+def _expanded_box(box, shape, margin):
+    x, y, w, h = [int(v) for v in box]
+    ih, iw = shape[:2]
+    x1 = max(0, x - margin)
+    y1 = max(0, y - margin)
+    x2 = min(iw, x + w + margin)
+    y2 = min(ih, y + h + margin)
+    return x1, y1, max(1, x2 - x1), max(1, y2 - y1)
+
+
+def extract_original_lettering_profile(img_bgr, group, box):
+    """Infer style from the source lettering pixels owned by this region.
+
+    It is intentionally approximate: enough to preserve colour family, outline,
+    glow and visual weight without pretending to identify the exact commercial
+    font. No text literal, page id or chapter id participates in this decision.
+    """
+    x, y, w, h = _expanded_box(box, img_bgr.shape, 8)
+    roi = img_bgr[y : y + h, x : x + w]
+    if roi.size == 0:
+        return {"confidence": 0.0, "source": "insufficient_pixels"}
+    hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
+    gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
+    border = np.concatenate([
+        roi[: max(1, min(4, roi.shape[0]))].reshape(-1, 3),
+        roi[-max(1, min(4, roi.shape[0])) :].reshape(-1, 3),
+        roi[:, : max(1, min(4, roi.shape[1]))].reshape(-1, 3),
+        roi[:, -max(1, min(4, roi.shape[1])) :].reshape(-1, 3),
+    ])
+    border_hsv = cv2.cvtColor(border.reshape(1, -1, 3), cv2.COLOR_BGR2HSV)[0]
+    bg_gray = float(np.median(cv2.cvtColor(
+        border.reshape(1, -1, 3), cv2.COLOR_BGR2GRAY)))
+    bg_sat = float(np.median(border_hsv[:, 1]))
+    contrast = np.abs(gray.astype(np.float32) - bg_gray)
+    sat = hsv[:, :, 1].astype(np.float32)
+    val = hsv[:, :, 2].astype(np.float32)
+    hue = hsv[:, :, 0]
+    glyph_mask = (
+        (contrast >= 28)
+        | ((sat - bg_sat) >= 34)
+        | ((val >= 190) & (bg_gray <= 115))
+    )
+    glyph_ratio = float(np.mean(glyph_mask))
+    if glyph_ratio < 0.006:
+        return {"confidence": 0.0, "source": "insufficient_pixels"}
+    glyph_hsv = hsv[glyph_mask]
+    glyph_bgr = roi[glyph_mask]
+    saturated = glyph_hsv[:, 1] >= 45
+    bright = glyph_hsv[:, 2] >= 185
+    red_mask = ((glyph_hsv[:, 0] <= 12) | (glyph_hsv[:, 0] >= 168)) & saturated
+    blue_mask = (glyph_hsv[:, 0] >= 82) & (glyph_hsv[:, 0] <= 138) & saturated
+    white_mask = (glyph_hsv[:, 1] <= 75) & bright
+    dark_mask = glyph_hsv[:, 2] <= 70
+    red_ratio = float(np.mean(red_mask)) if len(glyph_hsv) else 0.0
+    blue_ratio = float(np.mean(blue_mask)) if len(glyph_hsv) else 0.0
+    white_ratio = float(np.mean(white_mask)) if len(glyph_hsv) else 0.0
+    dark_ratio = float(np.mean(dark_mask)) if len(glyph_hsv) else 0.0
+    # Pick whichever family actually dominates the glyph pixels, not merely the
+    # first one to clear its own floor. A colored-glow family (red/blue) is a
+    # rare, visually loud signal so it still needs a floor to qualify at all,
+    # but a broad source bbox spanning several lines (or textured art bleeding
+    # into the loose contrast mask) can push a *minority* blue/red sliver over
+    # that low floor while black/white ink is still the true majority - that
+    # false minority must not outrank the real majority ink color.
+    family_candidates = {
+        "red": (red_ratio if red_ratio >= 0.10 else 0.0, red_mask),
+        "blue": (blue_ratio if blue_ratio >= 0.10 else 0.0, blue_mask),
+        # Ink cannot be black on a black backdrop: there the dark pixels of the footprint are the
+        # fall-off of a glow, not the lettering (neon-purple white text read as "black").
+        "black": (dark_ratio if dark_ratio >= 0.30 and bg_gray > 90 else 0.0, dark_mask),
+        "white": (white_ratio if white_ratio >= 0.25 else 0.0, white_mask),
+    }
+    color_family, (best_ratio, best_mask) = max(
+        family_candidates.items(), key=lambda item: item[1][0]
+    )
+    if best_ratio > 0.0:
+        dominant_bgr = np.median(glyph_bgr[best_mask], axis=0)
+    else:
+        dominant_bgr = np.median(glyph_bgr, axis=0)
+        color_family = "colored" if float(np.median(glyph_hsv[:, 1])) >= 45 else "neutral"
+    # Estimate outline/glow from how much the visible glyph footprint expands
+    # beyond the high-confidence core. This is a structural signal, not a font id.
+    core = contrast >= max(38.0, float(np.percentile(contrast[glyph_mask], 65)))
+    expanded = cv2.dilate(core.astype(np.uint8), np.ones((5, 5), np.uint8), iterations=1) > 0
+    halo = glyph_mask & ~core
+    halo_hsv = hsv[halo] if np.any(halo) else np.empty((0, 3), dtype=np.uint8)
+    halo_blue = (
+        float(np.mean((halo_hsv[:, 0] >= 82) & (halo_hsv[:, 0] <= 138) & (halo_hsv[:, 1] >= 35)))
+        if len(halo_hsv) else 0.0
+    )
+    halo_red = (
+        float(np.mean(((halo_hsv[:, 0] <= 12) | (halo_hsv[:, 0] >= 168)) & (halo_hsv[:, 1] >= 35)))
+        if len(halo_hsv) else 0.0
+    )
+    stroke_width = 2 if float(np.mean(expanded)) > glyph_ratio * 1.15 or max(white_ratio, dark_ratio) > 0.25 else 1
+    # --- outline COLOUR (distinct from fill and background, not anti-aliasing) ----
+    # A real outline is a solid band around the fill whose colour differs from BOTH
+    # the fill core and the background; anti-aliasing is a 1-2px gradient with high
+    # colour variance, so a low-variance, doubly-distinct halo marks a true stroke.
+    # An outlined glyph has two solid colours inside its footprint: the fill in the
+    # eroded interior and the outline in the perimeter ring.  A plain glyph's ring is
+    # just anti-aliasing (high colour variance), so a low-variance ring whose colour
+    # is far from the interior fill marks a true outline.
+    stroke_present = False
+    stroke_color = None
+    stroke_confidence = 0.0
+    glyph_u8 = glyph_mask.astype(np.uint8)
+    # Split the glyph footprint into its two dominant solid colours; a genuine
+    # outline is the cluster that hugs the outer boundary (fill is enclosed).
+    glyph_px = roi[glyph_mask].astype(np.float32)
+    if glyph_px.shape[0] >= 200:
+        boundary = glyph_mask & (cv2.dilate((~glyph_mask).astype(np.uint8),
+                                            np.ones((3, 3), np.uint8)) > 0)
+        crit = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 10, 1.0)
+        _, labels, centers = cv2.kmeans(glyph_px, 2, None, crit, 3, cv2.KMEANS_PP_CENTERS)
+        labels = labels.ravel()
+        pop = [int(np.sum(labels == k)) for k in (0, 1)]
+        total = labels.shape[0]
+        cluster_dist = float(np.max(np.abs(centers[0] - centers[1])))
+        if min(pop) >= 0.08 * total and cluster_dist >= 60:
+            # Which cluster sits on the outer boundary? Map boundary pixels to labels.
+            full = np.full(glyph_mask.shape, -1, dtype=np.int16)
+            full[glyph_mask] = labels
+            bnd_labels = full[boundary]
+            bnd_labels = bnd_labels[bnd_labels >= 0]
+            if bnd_labels.size:
+                frac0 = float(np.mean(bnd_labels == 0))
+                outline_k = 0 if frac0 >= 0.5 else 1
+                fill_k = 1 - outline_k
+                std_outline = float(np.mean(np.std(glyph_px[labels == outline_k], axis=0)))
+                outline_band = (full == outline_k).astype(np.uint8)
+                band_depth = float(cv2.distanceTransform(outline_band, cv2.DIST_L2, 5).max())
+                fill_band = (full == fill_k).astype(np.uint8)
+                fill_depth = float(cv2.distanceTransform(fill_band, cv2.DIST_L2, 5).max())
+                # A solid outline has measurable interior thickness. The
+                # antialiased fringe around plain text is only a one-pixel
+                # boundary cluster even when its colour is uniform. The fill
+                # needs the same: black ink with a grey antialiased fringe is not
+                # grey text outlined in black.
+                if std_outline <= 55 and band_depth >= 2.0 and fill_depth >= 2.0:
+                    stroke_present = True
+                    stroke_color = tuple(int(v) for v in centers[outline_k].tolist())
+                    # White (or black) ink with a coloured glow splits into "core" and "glow"
+                    # clusters; the glow's mid-tone is not the ink. When a neutral family clearly
+                    # dominates the glyph pixels, the cluster centre only replaces its median if
+                    # it agrees with it (it exists to separate an outline, not to recolour).
+                    if color_family in {"white", "black"} and best_ratio > 0.0:
+                        agrees = float(np.max(np.abs(centers[fill_k] - dominant_bgr))) <= 45.0
+                        if agrees:
+                            dominant_bgr = centers[fill_k]
+                    else:
+                        dominant_bgr = centers[fill_k]
+                    stroke_confidence = round(min(1.0, 0.4 + min(cluster_dist, 200) / 400
+                                                  + abs(frac0 - 0.5) * 0.6), 4)
+    glow_strength = 0
+    glow_color = None
+    # A glow must reinforce the ink's own already-established dominant color
+    # (color_family above), not be inferred independently from the noisier
+    # halo signal alone: a halo/edge ring can pick up blue/red hue from a
+    # textured art background bleeding through gaps between glyphs (e.g. a sky
+    # showing between lines of white/black comic lettering), which is
+    # background contamination, not a real colored glow around white or black
+    # ink.
+    if color_family == "blue" and (halo_blue >= 0.12 or bg_gray < 130):
+        glow_strength = 5
+        glow_color = (58, 160, 255)
+    elif color_family == "red" and (halo_red >= 0.08 or red_ratio >= 0.10):
+        glow_strength = 4
+        glow_color = (146, 22, 32)
+    measured_neutral_glow = False
+    if color_family == "white" and float(np.percentile(border, 95)) <= 20:
+        # A uniformly black surround excludes coloured scenery. Measure only
+        # the chromatic ring coupled to bright glyph cores, including purple.
+        core = ((gray >= 190) & (val >= 220)).astype(np.uint8)
+        outer = (cv2.dilate(core, np.ones((13, 13), np.uint8)) > 0) & ~(core > 0)
+        colored = outer & (sat >= 65) & (val >= 45) & (val <= 230)
+        if (np.count_nonzero(core) >= 80 and np.count_nonzero(colored) >= 80
+                and np.count_nonzero(colored) / max(1, np.count_nonzero(outer)) >= .30):
+            bgr = np.median(roi[colored], axis=0)
+            glow_color = tuple(int(v) for v in bgr[::-1])
+            line_heights = [line.box[3] for line in (getattr(group, "lines", None) or [])]
+            glow_strength = max(2, min(6, round(float(np.median(line_heights or [h])) * .10)))
+            measured_neutral_glow = True
+    confidence = min(1.0, 0.45 + glyph_ratio * 8.0 + max(red_ratio, blue_ratio, white_ratio, dark_ratio) * 0.35)
+    return {
+        "confidence": round(float(confidence), 4),
+        "source": "original_pixels",
+        "color_family": color_family,
+        "dominant_bgr": tuple(int(v) for v in dominant_bgr.tolist()),
+        "red_ratio": round(red_ratio, 4),
+        "blue_ratio": round(blue_ratio, 4),
+        "white_ratio": round(white_ratio, 4),
+        "dark_ratio": round(dark_ratio, 4),
+        "glyph_occupancy": round(glyph_ratio, 4),
+        "stroke_width": int(stroke_width),
+        "stroke_present": bool(stroke_present),
+        "stroke_color": stroke_color,
+        "stroke_confidence": float(stroke_confidence),
+        "glow_strength": int(glow_strength),
+        "glow_color": glow_color,
+        "measured_neutral_glow": measured_neutral_glow,
+        "background_brightness": round(bg_gray, 3),
+    }
+
+
+def _shift_mask(mask, dx, dy):
+    shifted = np.roll(np.roll(mask, dy, axis=0), dx, axis=1)
+    if dy > 0:
+        shifted[:dy, :] = False
+    elif dy < 0:
+        shifted[dy:, :] = False
+    if dx > 0:
+        shifted[:, :dx] = False
+    elif dx < 0:
+        shifted[:, dx:] = False
+    return shifted
+
+
+def extract_drop_shadow_profile(img_bgr, box):
+    """Conservative offset drop-shadow detector, separate from outline and glow.
+
+    A drop shadow is an offset copy of the glyph that is darker than the local
+    background but not as dark as the ink itself (semi-transparent), sitting off to
+    one consistent direction.  Plain ink on a clean balloon has no such offset band
+    (negative control), and anti-aliasing lives at 1px, below the tested offsets.
+    """
+    empty = {
+        "shadow_present": False, "shadow_color": None, "shadow_offset": (0, 0),
+        "shadow_opacity": 0.0, "shadow_blur": 0, "confidence": 0.0,
+    }
+    mask, gray = _glyph_ink_mask(img_bgr, box)
+    if mask is None:
+        return empty
+    ex, ey, ew, eh = _expanded_box(box, img_bgr.shape, 6)
+    roi = img_bgr[ey : ey + eh, ex : ex + ew]
+    if roi.shape[:2] != gray.shape:
+        return empty
+    grayf = gray.astype(np.float32)
+    ink = mask.astype(bool)
+    if int(ink.sum()) < 120 or not (~ink).any():
+        return empty
+    bg_val = float(np.median(grayf[~ink]))
+    ink_val = float(np.median(grayf[ink]))
+    span = abs(ink_val - bg_val)
+    if span < 40:
+        return empty
+    # High-contrast text vs the semi-transparent, mid-tone offset shadow band.
+    contrast = np.abs(grayf - bg_val)
+    text_mask = contrast >= 0.55 * span
+    mid_mask = (contrast >= 0.20 * span) & (contrast < 0.55 * span)
+    if int(text_mask.sum()) < 100 or int(mid_mask.sum()) < 60:
+        return empty
+    best = None
+    # Anti-aliased edges form a mid-tone fringe immediately adjacent to the
+    # high-contrast glyph. Exclude that narrow fringe before correlating
+    # translated masks; a genuine offset shadow remains separated from the
+    # glyph and can be found at its actual displacement.
+    aa_fringe = cv2.dilate(text_mask.astype(np.uint8), np.ones((3, 3), np.uint8)) > 0
+    mid_mask &= ~aa_fringe
+    for dy in range(2, 9):
+        for dx in range(-8, 9):
+            if dx == 0 and dy == 0:
+                continue
+            zone = _shift_mask(text_mask, dx, dy) & mid_mask
+            zone_n = int(zone.sum())
+            if zone_n < max(50, int(text_mask.sum() * 0.10)):
+                continue
+            score = zone_n / max(1, int(text_mask.sum()))
+            if best is None or score > best[0]:
+                best = (score, (dx, dy), zone)
+    if best is None:
+        return empty
+    share, (dx, dy), zone = best
+    zone_val = float(np.median(grayf[zone]))
+    darkness = bg_val - zone_val
+    confidence = round(min(1.0, 0.3 + share + abs(darkness) / 160.0), 4)
+    if confidence < 0.5 or share < 0.12:
+        return empty
+    ys, xs = np.where(zone)
+    shadow_bgr = np.median(roi[ys, xs], axis=0)
+    opacity = round(min(1.0, abs(darkness) / max(1.0, span)), 3)
+    return {
+        "shadow_present": True,
+        "shadow_color": tuple(int(v) for v in shadow_bgr.tolist()),
+        "shadow_offset": (int(dx), int(dy)),
+        "shadow_opacity": opacity,
+        "shadow_blur": 1,
+        "confidence": confidence,
+    }
+
+
+GLYPH_STYLE_FAMILY_CLASSES = (
+    "sans", "serif", "comic", "handwritten", "condensed", "display", "dramatic",
+    "mechanical", "decorative", "unknown",
+)
+
+
+def _font_cap_ratio(font):
+    """Height of a capital 'H' as a share of the font size, or 0.0 when it cannot be measured."""
+    try:
+        left, top, right, bottom = font.getbbox("H")
+        size = float(getattr(font, "size", 0) or 0)
+    except Exception:  # noqa: BLE001 - a bitmap/default font has no usable metrics
+        return 0.0
+    return float(bottom - top) / size if size > 0 and bottom > top else 0.0
+
+
+def _source_ink_cap_height(img_bgr, group):
+    """Median ink height of the source's text lines in pixels, or 0 when it is not trustworthy.
+
+    Comic lettering is all caps, so a line's ink height is its cap height. A line whose ink is
+    taller than its own box (a balloon outline swept in by the margin) is ignored.
+    """
+    heights = []
+    for line in getattr(group, "lines", None) or []:
+        box_height = float(line.box[3])
+        mask, _ = _glyph_ink_mask(img_bgr, line.box)
+        if mask is None or box_height <= 0:
+            continue
+        rows = np.where(mask.any(axis=1))[0]
+        if not rows.size:
+            continue
+        ink = float(rows.max() - rows.min() + 1)
+        if 6.0 <= ink <= box_height * 1.15:
+            heights.append(ink)
+    return float(np.median(heights)) if heights else 0.0
+
+
+def _glyph_ink_mask(img_bgr, box, *, padding=6, dark_core=False):
+    """Binary ink mask for one region, polarity-robust (dark-on-light or light-on-dark)."""
+    x, y, w, h = _expanded_box(box, img_bgr.shape, padding)
+    roi = img_bgr[y : y + h, x : x + w]
+    if roi.size == 0 or roi.shape[0] < 6 or roi.shape[1] < 6:
+        return None, None
+    gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
+    border = np.concatenate([
+        gray[: max(1, min(3, gray.shape[0]))].ravel(),
+        gray[-max(1, min(3, gray.shape[0])) :].ravel(),
+        gray[:, : max(1, min(3, gray.shape[1]))].ravel(),
+        gray[:, -max(1, min(3, gray.shape[1])) :].ravel(),
+    ])
+    bg = float(np.median(border))
+    # Keep glyph cores separate from glow and the opposite side of a coloured
+    # background. Absolute contrast mixed purple glow with black serif strokes.
+    candidates = []
+    thresholds = [gray <= min(bg - 20.0, float(np.percentile(gray, 2)) + (12.0 if dark_core else 18.0))]
+    if not dark_core:
+        thresholds.append(gray >= max(bg + 30.0, float(np.percentile(gray, 98)) * 0.60))
+    for threshold_mask in thresholds:
+        count, labels, stats, _ = cv2.connectedComponentsWithStats(threshold_mask.astype(np.uint8), 8)
+        ids = [i for i in range(1, count)
+               if stats[i, cv2.CC_STAT_AREA] >= max(6, box[3] * 0.25)
+               and box[3] * 0.35 <= stats[i, cv2.CC_STAT_HEIGHT] <= box[3] * 1.10
+               and stats[i, cv2.CC_STAT_WIDTH] <= box[3] * 1.7
+               and stats[i, cv2.CC_STAT_LEFT] > 0
+               and stats[i, cv2.CC_STAT_TOP] > 0
+               and stats[i, cv2.CC_STAT_LEFT] + stats[i, cv2.CC_STAT_WIDTH] < w
+               and stats[i, cv2.CC_STAT_TOP] + stats[i, cv2.CC_STAT_HEIGHT] < h]
+        if len(ids) >= 2:
+            core = np.isin(labels, ids).astype(np.uint8)
+            candidates.append((int(core.sum()), core))
+    if candidates:
+        return max(candidates, key=lambda item: item[0])[1], gray
+    if dark_core:
+        return None, gray
+    ink = (np.abs(gray.astype(np.float32) - bg) >= 40).astype(np.uint8)
+    if float(ink.mean()) > 0.5:  # ink should be the minority foreground
+        ink = 1 - ink
+    return ink, gray
+
+
+def _text_slant_degrees(mask):
+    """Dominant glyph slant via the shear that maximises vertical-projection variance.
+
+    Upright type peaks at 0; italic/oblique peaks around its true slant angle.
+    """
+    h, w = mask.shape
+    if h < 6 or w < 6:
+        return 0.0
+    best_deg, best_var = 0, -1.0
+    for deg in range(-28, 29, 2):
+        shear = float(np.tan(np.deg2rad(deg)))
+        matrix = np.float32([[1, shear, 0], [0, 1, 0]])
+        out_w = int(w + abs(shear) * h) + 2
+        warped = cv2.warpAffine(mask, matrix, (out_w, h), flags=cv2.INTER_NEAREST)
+        variance = float(np.var(warped.sum(axis=0).astype(np.float32)))
+        if variance > best_var:
+            best_deg, best_var = deg, variance
+    return float(best_deg)
+
+
+def _ink_run_lengths(mask, axis):
+    """Lengths of the ink runs along rows (axis=1) or columns (axis=0)."""
+    lanes = mask if axis == 1 else mask.T
+    padded = np.pad(lanes.astype(np.int8), ((0, 0), (1, 1)))
+    edges = np.diff(padded, axis=1)
+    starts = np.where(edges == 1)
+    ends = np.where(edges == -1)
+    return ends[1] - starts[1]
+
+
+# Serif type has thick stems and thin bars; comic lettering is monoline. Measured
+# on A Wimp's Tower Strategy Guide ep. 33: serif narration 0.58-0.67, comic
+# lettering 1.0-1.5.
+SERIF_STROKE_CONTRAST_MAX = 0.8
+
+
+def _per_line_glyph_measures(img_bgr, group):
+    """``(slants, stroke contrasts, stroke weights)``, one per OCR line of ``group``.
+
+    Both are line properties. Measured over a whole balloon, centred lines of
+    different lengths shift apart under the shear and fake a slant (upright text
+    read as -28 degrees), and the block height swamps every stroke ratio.
+    """
+    slants, contrasts, weights = [], [], []
+    for line in getattr(group, "lines", None) or []:
+        mask, _gray = _glyph_ink_mask(img_bgr, line.box)
+        if mask is None or int(mask.sum()) < 30:
+            continue
+        rows = np.where(mask.any(axis=1))[0]
+        cols = np.where(mask.any(axis=0))[0]
+        mask = mask[rows.min() : rows.max() + 1, cols.min() : cols.max() + 1]
+        height = mask.shape[0]
+        slants.append(_text_slant_degrees(mask))
+        dist = cv2.distanceTransform(mask, cv2.DIST_L2, 3)
+        weights.append(float(np.median(dist[mask > 0])) * 2.0 / max(1.0, float(height)))
+        stems = _ink_run_lengths(mask, 1)
+        bars = _ink_run_lengths(mask, 0)
+        stems = stems[(stems >= 2) & (stems <= height * 0.4)]
+        bars = bars[(bars >= 2) & (bars <= height * 0.4)]
+        if len(stems) >= 10 and len(bars) >= 10:
+            contrasts.append(float(np.percentile(bars, 30)) / max(1e-6, float(np.percentile(stems, 30))))
+    return slants, contrasts, weights
+
+
+def _consensus_slant(slants):
+    """The lines' common slant, or 0 when they do not agree on one."""
+    italic = [value for value in slants if abs(value) >= 8]
+    if not slants or len(italic) * 3 < len(slants) * 2:
+        return 0.0
+    if len({value > 0 for value in italic}) > 1:
+        return 0.0
+    return float(np.median(italic))
+
+
+def extract_glyph_style_profile(img_bgr, group, box):
+    """Classify the *shape* of the source lettering, independent of its colour.
+
+    Colour family, outline and glow come from
+    :func:`extract_original_lettering_profile`; this answers a different question -
+    serif vs sans vs comic, weight, slant and width - so a black serif narration
+    is not treated the same as a black comic shout merely because both are dark.
+    It is approximate and reports ``confidence``; a low-confidence result must fall
+    back to the semantic role rather than force a wrong visual style.
+    """
+    empty = {
+        "family_class": "unknown", "weight": "regular", "slant": "normal",
+        "width": "normal", "slant_degrees": 0.0, "weight_ratio": 0.0,
+        "aspect": 0.0, "serif_ratio": 0.0, "fill_ratio": 0.0,
+        "confidence": 0.0, "source": "insufficient_pixels",
+    }
+    mask, gray = _glyph_ink_mask(img_bgr, box)
+    if mask is None:
+        return empty
+    ink_count = int(mask.sum())
+    if ink_count < 40 or float(mask.mean()) < 0.01:
+        return empty
+    # Tighten to the ink's own bounding box so padding in ``box`` never dilutes the
+    # fill/height/weight measurements (a padded region must read the same as a snug one).
+    rows = np.where(mask.any(axis=1))[0]
+    cols = np.where(mask.any(axis=0))[0]
+    mask = mask[rows.min() : rows.max() + 1, cols.min() : cols.max() + 1]
+    gray = gray[rows.min() : rows.max() + 1, cols.min() : cols.max() + 1]
+    height = float(mask.shape[0])
+    dist = cv2.distanceTransform(mask, cv2.DIST_L2, 3)
+    stroke = dist[mask > 0] * 2.0
+    stroke_med = float(np.median(stroke)) if stroke.size else 0.0
+    weight_ratio = stroke_med / max(1.0, height)
+    fill_ratio = float(mask.mean())
+    # Per-glyph aspect (width/height) from connected components of a plausible size.
+    _, _, stats, _ = cv2.connectedComponentsWithStats(mask, 8)
+    comps = [s for s in stats[1:] if s[4] >= height * height * 0.01 and s[3] >= height * 0.25]
+    if len(getattr(group, "lines", None) or []) > 1:
+        line_comps, line_fills = [], []
+        for line in group.lines:
+            line_mask, _ = _glyph_ink_mask(img_bgr, line.box)
+            if line_mask is None or not line_mask.any():
+                continue
+            ys, xs = np.nonzero(line_mask)
+            line_mask = line_mask[ys.min():ys.max()+1, xs.min():xs.max()+1]
+            lh = line_mask.shape[0]
+            line_fills.append(float(line_mask.mean()))
+            _, _, line_stats, _ = cv2.connectedComponentsWithStats(line_mask, 8)
+            line_comps.extend(s for s in line_stats[1:] if s[4] >= lh*lh*0.01 and s[3] >= lh*0.25)
+        if line_comps:
+            comps = line_comps
+            fill_ratio = float(np.median(line_fills))
+    aspect = float(np.median([s[2] / max(1, s[3]) for s in comps])) if comps else 0.0
+    line_slants, line_contrasts, line_weights = _per_line_glyph_measures(img_bgr, group)
+    if line_weights:
+        weight_ratio = float(np.median(line_weights))
+    slant = _consensus_slant(line_slants) if line_slants else _text_slant_degrees(mask)
+    stroke_contrast = float(np.median(line_contrasts)) if line_contrasts else None
+    grad_x = cv2.Sobel(gray.astype(np.float32), cv2.CV_32F, 1, 0, ksize=3)
+    grad_y = cv2.Sobel(gray.astype(np.float32), cv2.CV_32F, 0, 1, ksize=3)
+    serif_ratio = float(np.sum(np.abs(grad_y)) / (np.sum(np.abs(grad_x)) + 1e-6))
+
+    # --- weight (thin < regular < medium < bold < extra_bold) --------------------
+    if weight_ratio >= 0.095:
+        weight = "extra_bold"
+    elif weight_ratio >= 0.074:
+        weight = "bold"
+    elif weight_ratio >= 0.066:
+        weight = "medium"
+    elif weight_ratio >= 0.050:
+        weight = "regular"
+    else:
+        weight = "thin"
+    slant_class = "italic" if abs(slant) >= 8 else "normal"
+
+    # --- width: per-component advance normalized by component height --------------
+    comp_aspects = [s[2] / max(1, s[3]) for s in comps]
+    med_aspect = float(np.median(comp_aspects)) if comp_aspects else aspect
+    width_agree = (
+        float(np.mean([1.0 if a < 0.58 else 0.0 for a in comp_aspects]))
+        if comp_aspects else 0.0
+    )
+    if med_aspect < 0.58 and (width_agree >= 0.5 or len(comp_aspects) <= 2):
+        width_class = "condensed"
+    elif med_aspect > 0.98:
+        width_class = "expanded"
+    else:
+        width_class = "normal"
+    width_confidence = round(min(1.0, 0.3 + abs(med_aspect - 0.72) * 2.0), 4) if comp_aspects else 0.0
+
+    # --- comic/handwritten signals (conservative telemetry, not forced) ----------
+    stroke_cv = float(np.std(stroke) / (np.mean(stroke) + 1e-6)) if stroke.size else 0.0
+    bottoms = [s[1] + s[3] for s in comps]
+    baseline_std = float(np.std(bottoms) / max(1.0, height)) if len(bottoms) >= 3 else 0.0
+    if baseline_std >= 0.12 and stroke_cv >= 0.55:
+        character, character_confidence = "handwritten", round(min(1.0, baseline_std * 3), 4)
+    elif stroke_cv >= 0.50 and baseline_std >= 0.06:
+        character, character_confidence = "comic", round(min(1.0, stroke_cv), 4)
+    else:
+        character, character_confidence = "mechanical", round(min(1.0, 0.4 + (0.5 - min(stroke_cv, 0.5))), 4)
+
+    # --- family: display and serif are the confidently separable shapes ----------
+    if fill_ratio >= 0.42 and weight_ratio >= 0.090:
+        family = "display"
+    elif stroke_contrast is not None:
+        family = "serif" if stroke_contrast <= SERIF_STROKE_CONTRAST_MAX else "sans"
+    elif serif_ratio >= 0.79 and fill_ratio < 0.42:
+        family = "serif"
+    else:
+        family = "sans"
+
+    # Confidence: enough ink, and the family signal clear of its threshold.
+    ink_conf = min(1.0, ink_count / 900.0)
+    if family != "display" and stroke_contrast is not None:
+        margin = min(1.0, abs(stroke_contrast - SERIF_STROKE_CONTRAST_MAX) / 0.2)
+    elif family == "serif":
+        margin = min(1.0, max(0.0, (serif_ratio - 0.79) / 0.10))
+    elif family == "display":
+        margin = min(1.0, max(0.0, (fill_ratio - 0.42) / 0.15))
+    else:  # sans is the residual bucket: least certain about family
+        margin = min(1.0, max(0.0, (0.79 - serif_ratio) / 0.12))
+    confidence = round(min(1.0, 0.35 + 0.4 * ink_conf + 0.25 * margin), 4)
+    return {
+        "family_class": family, "weight": weight, "slant": slant_class,
+        "width": width_class, "width_confidence": width_confidence,
+        "character": character, "character_confidence": character_confidence,
+        "slant_degrees": round(slant, 1), "weight_ratio": round(weight_ratio, 4),
+        "aspect": round(aspect, 3), "serif_ratio": round(serif_ratio, 4),
+        "stroke_contrast": None if stroke_contrast is None else round(stroke_contrast, 3),
+        "line_slants": [round(float(value), 1) for value in line_slants],
+        "fill_ratio": round(fill_ratio, 4), "stroke_cv": round(stroke_cv, 4),
+        "baseline_std": round(baseline_std, 4),
+        "confidence": confidence, "source": "original_glyph_pixels",
+    }
+
+
+def _case_style(text):
+    letters = re.findall(r"[^\W\d_]", str(text or ""), flags=re.UNICODE)
+    if not letters:
+        return "uppercase"
+    upper = sum(1 for char in letters if char.upper() == char)
+    lower = sum(1 for char in letters if char.lower() == char and char.upper() != char)
+    if upper >= max(1, int(len(letters) * 0.82)):
+        return "uppercase"
+    if lower >= max(1, int(len(letters) * 0.82)):
+        return "lowercase"
+    return "mixed"
+
+
+# TDD #84F32 - semantic font-role taxonomy. Maps the already-computed,
+# source-pixel-derived visual_class to a distinct font candidate bucket in
+# font_fidelity.ROLE_FONT_FILES, instead of every display-like visual_class
+# collapsing onto the single "shout" bucket. Generic: keyed only on the
+# classifier output, never on page/region/text literals.
+# Strong signals: these visual_class values come from actual source-pixel
+# color/geometry detection (glow, ink, dramatic red, etc - the #84F31 fix) and
+# always win, regardless of the region's semantic classification.
+_STRONG_VISUAL_CLASS_ROLES = {
+    "dramatic_red_display": "dramatic_display",
+    "mystic_blue_system": "system_text",
+    "ink_display": "display",
+    "high_contrast_display": "display",
+}
+
+# Weak/default signal: "balloon_dialogue" is itself just a "not heavy display"
+# fallback appearance, not a strong pixel signal - a known semantic role
+# (narration/caption/system/location/thought) should still take it over.
+_FONT_ROLE_BY_TEXT_ROLE = {
+    "thought": "thought_dialogue",
+    "narration": "narration_box",
+    "caption": "story_caption",
+    "system": "system_text",
+    "location": "location_label",
+    "speech": "balloon_dialogue",
+    "dialogue": "balloon_dialogue",
+}
+
+
+# ``ink_display``/``high_contrast_display`` are shape-agnostic: they mean "high
+# contrast lettering", not a specific styled intent (unlike the colour-coded
+# ``dramatic_red_display``/``mystic_blue_system``).  A structural story role must
+# therefore keep its own semantic font instead of being flattened into the
+# dramatic impact/bahnschrift ``display`` bucket - e.g. a plain/serif narration
+# box read as black ink on art must stay ``narration_box``, not ``display``.
+_SHAPE_ONLY_VISUAL_CLASSES = frozenset({"ink_display", "high_contrast_display"})
+_SEMANTIC_ROLES_OVER_SHAPE_VISUAL = frozenset(
+    {"narration", "caption", "thought", "system", "location"}
+)
+
+
+def _resolve_font_role(text_role, visual_class, font_class):
+    """Pick a semantic font role from classifier output alone (no hardcode)."""
+    visual = str(visual_class or "")
+    text = str(text_role or "")
+    role = _STRONG_VISUAL_CLASS_ROLES.get(visual)
+    if role:
+        if visual in _SHAPE_ONLY_VISUAL_CLASSES and text in _SEMANTIC_ROLES_OVER_SHAPE_VISUAL:
+            semantic_role = _FONT_ROLE_BY_TEXT_ROLE.get(text)
+            if semantic_role:
+                return semantic_role, "semantic_role_over_shape_visual_class"
+        return role, "visual_class_mapping"
+    role = _FONT_ROLE_BY_TEXT_ROLE.get(str(text_role or ""))
+    if role:
+        return role, "text_role_mapping"
+    if str(visual_class or "") == "balloon_dialogue":
+        return "balloon_dialogue", "visual_class_mapping"
+    if str(font_class or "") in {"condensed_display", "tall_display"}:
+        return "display", "font_class_mapping"
+    # Ordinary comic dialogue is the safe default: source webtoon lettering is
+    # far more often organic/handwritten than a heavy geometric display block,
+    # so an unclassified region should not silently fall back to "regular"
+    # (arial/calibri/segoeui) - see mission #8.
+    return "balloon_dialogue", "generic_fallback"
+
+
+_GLYPH_STYLE_MIN_CONFIDENCE = 0.55
+# Stricter bar before the glyph shape may override the semantic role/colour in the
+# actual render, so a marginal read never changes the page.
+_GLYPH_RENDER_MIN_CONFIDENCE = 0.62
+_SOURCE_COLOR_MIN_CONFIDENCE = 0.55
+
+
+def select_font_role_with_glyph_style(base_role, text_role, glyph_style):
+    """Refine a semantic font role with the source glyph *shape*, colour-independent.
+
+    Colour never enters here: the same colour with different glyph shapes must be
+    able to resolve to different roles, and the same shape in different colours to
+    the same role.  When the shape detector is not confident the semantic
+    ``base_role`` is kept unchanged (mission fallback #14).
+    """
+    style = glyph_style or {}
+    if float(style.get("confidence") or 0.0) < _GLYPH_STYLE_MIN_CONFIDENCE:
+        return base_role, "semantic_role_fallback"
+    family = str(style.get("family_class") or "")
+    slant = str(style.get("slant") or "normal")
+    width = str(style.get("width") or "normal")
+    role = str(base_role or "regular")
+    if family == "serif":
+        if slant == "italic":
+            return "serif_italic", "glyph_style_serif_italic"
+        if str(text_role or "") in {"narration", "caption"} or role in {"narration_box", "story_caption"}:
+            return "serif_narration", "glyph_style_serif"
+        return "serif_regular", "glyph_style_serif"
+    if family == "display":
+        # Keep an existing dramatic intent; otherwise a plain display shape.
+        return (role if role in {"display", "dramatic_display"} else "display"), "glyph_style_display"
+    if slant == "italic" and role not in {"thought_dialogue", "system_text"}:
+        return "italic_dialogue", "glyph_style_italic"
+    if (
+        family == "sans"
+        and str(style.get("weight") or "") in {"bold", "extra_bold"}
+        and role == "balloon_dialogue"
+    ):
+        return "bold_dialogue", "glyph_style_bold"
+    if slant == "normal" and role == "system_text":
+        # The system chain is all italic faces; upright source lettering keeps
+        # the system colours but takes the upright caption faces.
+        return "story_caption", "glyph_style_upright_system"
+    if width == "condensed" and family != "serif":
+        return "condensed", "glyph_style_condensed"
+    return base_role, "semantic_role_kept"
+
+
+def typography_profile_for_region(img_bgr, group, box, *, style=None):
+    profile = _typography_profile_for_region(img_bgr, group, box, style=style)
+    font_role, font_role_source = _resolve_font_role(
+        profile.get("text_role"), profile.get("visual_class"), profile.get("font_class"),
+    )
+    profile["font_role"] = font_role
+    profile["font_role_source"] = font_role_source
+    profile["font_role_fallback"] = font_role_source == "generic_fallback"
+    # Decoupled telemetry: GLYPH shape and COLOUR are separate signals from the
+    # SEMANTIC role.  ``font_role`` above stays the current render contract; the
+    # glyph-aware role and source colour are additive so the pipeline can adopt
+    # them after review without changing existing behaviour here.
+    glyph_style = extract_glyph_style_profile(img_bgr, group, box)
+    lettering = extract_original_lettering_profile(img_bgr, group, box)
+    profile["glyph_style"] = glyph_style
+    profile["color_style"] = {
+        "color_family": lettering.get("color_family", ""),
+        "source_text_color_bgr": lettering.get("dominant_bgr"),
+        "source_stroke_width": lettering.get("stroke_width"),
+        "glow_color": lettering.get("glow_color"),
+    }
+    glyph_role, glyph_role_source = select_font_role_with_glyph_style(
+        font_role, profile.get("text_role"), glyph_style,
+    )
+    profile["font_role_glyph_aware"] = glyph_role
+    profile["font_role_glyph_aware_source"] = glyph_role_source
+    # Top-3 metadata-scored candidates within the chosen role's chain (debug/telemetry);
+    # the renderer still applies its own fit check as the hard constraint.
+    try:
+        profile["font_candidates"] = font_fidelity.rank_fonts_by_glyph_style(
+            glyph_style, role=glyph_role, top_n=3)
+    except Exception:  # noqa: BLE001 - telemetry must never break rendering
+        profile["font_candidates"] = []
+
+    # Apply the measured source glyph colour to the render fill when it was read
+    # confidently AND keeps enough contrast with the balloon background (never
+    # trade a legible original combination for an isolated colour).  Otherwise the
+    # existing family preset stays.  Colour is independent of the role above.
+    profile["source_text_color_confident"] = False
+    source_bgr = lettering.get("dominant_bgr")
+    source_conf = float(lettering.get("confidence") or 0.0)
+    # The curated stylized-display classes already carry an intentional, same-family
+    # fill/stroke/glow pair (a light-blue magical caption, a dark-red dramatic
+    # shout); the raw measured ink colour must not overwrite that art direction.
+    # Ordinary classes, which previously fell back to a generic dark preset, do
+    # adopt the measured colour.
+    _stylized = str(profile.get("visual_class") or "") in {
+        "dramatic_red_display", "mystic_blue_system", "ink_display",
+    }
+    # Fidelity wins over the preset fill: a purple caption classified as the blue
+    # "system" family was drawn light blue. The preset keeps its glow/outline.
+    if source_bgr and source_conf >= _SOURCE_COLOR_MIN_CONFIDENCE:
+        source_rgb = (int(source_bgr[2]), int(source_bgr[1]), int(source_bgr[0]))
+        bg_brightness = float(lettering.get("background_brightness") or 255.0)
+        luminance = 0.299 * source_rgb[0] + 0.587 * source_rgb[1] + 0.114 * source_rgb[2]
+        # Legible either by luminance contrast (neutral ink) or by chroma (a
+        # saturated colour reads against the balloon even at similar brightness).
+        chromatic = (max(source_rgb) - min(source_rgb)) >= 45
+        # The measured fill must agree with the measured colour family: white ink
+        # outlined in black on busy art can median to the outline's dark grey.
+        family = str(lettering.get("color_family") or "")
+        # A saturated fill is its own evidence (pink ink, white outline).
+        consistent = chromatic or not (
+            (family == "white" and luminance < 150)
+            or (family == "black" and luminance > 105)
+        )
+        if consistent and (chromatic or abs(luminance - bg_brightness) >= 45.0):
+            profile["fill_color"] = source_rgb
+            profile["source_text_color_confident"] = True
+            # Apply the measured outline without ever weakening an intentional
+            # preset outline (never remove an outline that mattered).
+            stroke_w = lettering.get("stroke_width")
+            if stroke_w:
+                profile["stroke_width"] = max(int(profile.get("stroke_width") or 1), int(stroke_w))
+
+    # --- STROKE_STYLE: measured outline colour, independent of fill/role ----------
+    profile["source_stroke_confident"] = False
+    stroke_bgr = lettering.get("stroke_color")
+    # A "stroke" whose tone lies between the ink and the background is the
+    # anti-aliased edge of plain lettering on a low-resolution scan (black text on
+    # a white manga balloon came back with a 4 px grey outline), not an outline.
+    stroke_is_blend = False
+    if stroke_bgr:
+        fill_rgb = profile.get("fill_color") or (0, 0, 0)
+        fill_lum = 0.299 * fill_rgb[0] + 0.587 * fill_rgb[1] + 0.114 * fill_rgb[2]
+        stroke_lum = 0.114 * stroke_bgr[0] + 0.587 * stroke_bgr[1] + 0.299 * stroke_bgr[2]
+        bg_lum = float(lettering.get("background_brightness") or 255.0)
+        low, high = min(fill_lum, bg_lum), max(fill_lum, bg_lum)
+        stroke_is_blend = (high - low) >= 60 and low + 15 < stroke_lum < high - 15
+    profile["stroke_is_antialias_blend"] = bool(stroke_is_blend)
+    if stroke_is_blend and not _stylized:
+        profile["stroke_width"] = 0
+    # Only as a pair with the measured fill: when the fill was refused the
+    # fill/outline split itself is suspect (it can come out inverted).
+    if (
+        lettering.get("stroke_present")
+        and stroke_bgr
+        and not stroke_is_blend
+        and float(lettering.get("stroke_confidence") or 0.0) >= 0.55
+        and (profile["source_text_color_confident"] or not _stylized)
+    ):
+        profile["stroke_color"] = (int(stroke_bgr[2]), int(stroke_bgr[1]), int(stroke_bgr[0]))
+        profile["stroke_width"] = max(2, int(profile.get("stroke_width") or 1))
+        profile["source_stroke_confident"] = True
+        if _stylized and profile.get("glow_color") is not None:
+            # The preset glow belongs to the preset palette; follow the outline.
+            profile["glow_color"] = profile["stroke_color"]
+
+    if lettering.get("measured_neutral_glow"):
+        profile["glow_color"] = tuple(lettering["glow_color"])
+        profile["glow_strength"] = int(lettering["glow_strength"])
+        profile["source_glow_confident"] = True
+        profile["stroke_color"] = tuple(profile["fill_color"])
+        profile["stroke_width"] = 0
+        profile["shadow_color"] = None
+
+    # --- MIXED_STYLE: divergent per-line source styles (detection + telemetry) -----
+    # Only real, already-segmented OCR lines are used - never invented word spans.
+    # The translated string is a single reflow that does not align 1:1 to source
+    # spans, so the renderer keeps the dominant region style (documented fallback);
+    # this records the evidence so a future per-span renderer can consume it.
+    profile["mixed_style_present"] = False
+    profile["style_spans"] = []
+    lines = [ln for ln in (getattr(group, "lines", []) or []) if getattr(ln, "box", None)]
+    if len(lines) >= 2:
+        spans = []
+        for ln in lines:
+            lx, ly, lw, lh = ln.box
+            gstyle = extract_glyph_style_profile(img_bgr, group, (lx, ly, lw, lh))
+            if float(gstyle.get("confidence") or 0.0) >= _GLYPH_STYLE_MIN_CONFIDENCE:
+                spans.append({
+                    "text": getattr(ln, "text", ""),
+                    "family": gstyle.get("family_class"),
+                    "weight": gstyle.get("weight"),
+                    "slant": gstyle.get("slant"),
+                })
+        if len(spans) >= 2:
+            families = {s["family"] for s in spans}
+            slants = {s["slant"] for s in spans}
+            weights = {s["weight"] for s in spans}
+            if len(families) > 1 or len(slants) > 1 or ("bold" in weights and "regular" in weights):
+                profile["mixed_style_present"] = True
+                profile["style_spans"] = spans
+
+    # --- SHADOW_STYLE: conservative measured drop shadow, independent signal -------
+    shadow = extract_drop_shadow_profile(img_bgr, box)
+    profile["shadow_profile"] = shadow
+    if shadow.get("shadow_present") and float(shadow.get("confidence") or 0.0) >= 0.55 and not _stylized:
+        sc = shadow.get("shadow_color") or (60, 60, 60)
+        profile["shadow_color"] = (int(sc[2]), int(sc[1]), int(sc[0]))
+        profile["shadow_offset"] = tuple(shadow.get("shadow_offset") or (2, 2))
+        profile["shadow_blur"] = int(shadow.get("shadow_blur") or 1)
+    return profile
+
+
+def _typography_profile_for_region(img_bgr, group, box, *, style=None):
+    """Return the reusable visual lettering contract for one region.
+
+    This deliberately uses only local pixels, geometry and classification. It
+    never keys on page id, region id, chapter title or phrase literal.
+    """
+    stats = _region_background_stats(img_bgr, box)
+    x, y, w, h = [int(v) for v in box]
+    text = str(getattr(group, "translation", "") or getattr(group, "text", "") or "")
+    classification = str(getattr(group, "classification", "") or "").lower()
+    case_style = _case_style(text)
+    aspect = float(w) / max(1.0, float(h))
+    source_line_count = len(getattr(group, "lines", []) or [])
+    compact_letters = re.sub(r"[^A-Z]", "", _ascii_fold(text).upper())
+    display_geometry = (
+        h >= 120
+        and len(compact_letters) >= 10
+        and (
+            source_line_count >= 2
+            or classification in {"unknown", "speech"}
+            or aspect >= 1.6
+        )
+    )
+    open_caption = (
+        classification in {"narration", "caption", "system", "thought"}
+        or aspect >= 3.2
+        or display_geometry
+    )
+    emphatic = "!" in text or "..." in text or len(text.split()) <= 6
+
+    base = {
+        "text_role": classification or "unknown",
+        "font_class": "unknown_fallback",
+        "case_style": case_style,
+        "style_source": "fallback_context",
+        "style_confidence": 0.0,
+        "weight": "bold",
+        "fill_color": tuple((style.fill if style else (43, 36, 52))),
+        "stroke_color": tuple((style.stroke_fill if style else (246, 243, 249))),
+        "stroke_width": int(style.stroke_width if style else 1),
+        "glow_color": None,
+        "glow_strength": 0,
+        "shadow_color": tuple(style.shadow_fill) if style and style.shadow_fill else None,
+        "shadow_offset": tuple(style.shadow_offset) if style else (0, 0),
+        "shadow_blur": 0,
+        "letter_spacing": 0.0,
+        "line_height": 1.0,
+        "alignment": "center",
+        "text_box_margin": 0.11,
+        "rotation": 0,
+        "fit_mode": "balanced",
+        "visual_class": "generic",
+        "background_brightness": round(stats["brightness"], 3),
+        "background_saturation": round(stats["saturation"], 3),
+        "background_hue": round(stats["hue"], 3),
+        "background_blue_ratio": round(stats["blue_ratio"], 4),
+        "background_red_ratio": round(stats["red_ratio"], 4),
+        "content_width_ratio": 1.0,
+        "font_size_scale": 0.78,
+        "line_height_scale": 1.0,
+        "font_match_method": "visual_class_mapping",
+        "font_match_score": 0.0,
+        "font_match_confidence": 0.0,
+        "fallback_reason": "",
+    }
+    lettering = extract_original_lettering_profile(img_bgr, group, box)
+    if float(lettering.get("confidence") or 0.0) >= 0.42:
+        base["style_source"] = "original_pixels"
+        base["style_confidence"] = float(lettering.get("confidence") or 0.0)
+        base["original_lettering"] = dict(lettering)
+        base["font_match_score"] = float(lettering.get("confidence") or 0.0)
+        base["font_match_confidence"] = float(lettering.get("confidence") or 0.0)
+        base["stroke_width"] = max(
+            int(base["stroke_width"]),
+            int(lettering.get("stroke_width") or 1),
+        )
+        if lettering.get("glow_color"):
+            base["glow_color"] = tuple(lettering["glow_color"])
+            base["glow_strength"] = int(lettering.get("glow_strength") or 0)
+        color_family = str(lettering.get("color_family") or "")
+        if color_family == "red" and open_caption:
+            base.update({
+                "visual_class": "dramatic_red_display",
+                "font_class": "tall_display",
+                "fill_color": (118, 8, 10),
+                "stroke_color": (255, 250, 250),
+                "stroke_width": max(int(base["stroke_width"]), 2),
+                "glow_color": tuple(lettering.get("glow_color") or (146, 22, 32)),
+                "glow_strength": max(int(lettering.get("glow_strength") or 0), 4),
+                "shadow_color": (48, 8, 12),
+                "shadow_offset": (2, 2),
+                "shadow_blur": 2,
+                "font_size_scale": 0.98,
+                "content_width_ratio": 0.88,
+                "line_height_scale": 0.9,
+                "selected_font_role": "shout",
+            })
+            return base
+        if color_family == "blue" and open_caption:
+            base.update({
+                "visual_class": "mystic_blue_system",
+                "font_class": "condensed_display",
+                "fill_color": (226, 245, 255),
+                "stroke_color": (26, 86, 160),
+                "stroke_width": max(int(base["stroke_width"]), 2),
+                "glow_color": tuple(lettering.get("glow_color") or (58, 160, 255)),
+                "glow_strength": max(int(lettering.get("glow_strength") or 0), 4),
+                "shadow_color": (3, 15, 36),
+                "shadow_offset": (2, 2),
+                "shadow_blur": 2,
+                "font_size_scale": 0.94,
+                "content_width_ratio": 0.9,
+                "line_height_scale": 0.9,
+                "selected_font_role": "shout",
+            })
+            return base
+        if (
+            open_caption
+            and color_family in {"black", "white"}
+            and not lettering.get("measured_neutral_glow")
+            and float(lettering.get("glyph_occupancy") or 0.0) >= 0.08
+        ):
+            # High-contrast display lettering directly over art: comic ink in
+            # black-on-white or white-on-black, no colored glow. Which side is
+            # the fill vs the outline follows the majority ink color detected
+            # above, not a fixed preset.
+            is_black_ink = color_family == "black"
+            base.update({
+                "visual_class": "ink_display",
+                "font_class": "tall_display",
+                "fill_color": (18, 16, 22) if is_black_ink else (248, 247, 250),
+                "stroke_color": (250, 250, 252) if is_black_ink else (18, 16, 22),
+                "stroke_width": max(int(base["stroke_width"]), 1),
+                "glow_color": None,
+                "glow_strength": 0,
+                "shadow_color": None,
+                "shadow_offset": (0, 0),
+                "font_size_scale": 1.04,
+                "content_width_ratio": 0.92,
+                "line_height_scale": 0.9,
+                "selected_font_role": "shout",
+            })
+            return base
+        if (
+            color_family in {"black", "neutral", "white"}
+            and not open_caption
+            and (classification in {"speech", "dialogue"} or stats["brightness"] >= 170)
+        ):
+            base.update({
+                "visual_class": "balloon_dialogue",
+                "font_class": "comic_sans_style",
+                "fill_color": (32, 28, 38),
+                "stroke_color": (250, 250, 252),
+                "stroke_width": 1,
+                "glow_color": None,
+                "glow_strength": 0,
+                "shadow_color": None,
+                "shadow_offset": (0, 0),
+                "font_size_scale": 0.78,
+            })
+            return base
+
+    if open_caption and stats["brightness"] >= 172 and emphatic:
+        base.update({
+            "visual_class": "dramatic_red_display",
+            "font_class": "tall_display",
+            "fill_color": (118, 8, 10),
+            "stroke_color": (255, 250, 250),
+            "stroke_width": 2,
+            "glow_color": (146, 22, 32),
+            "glow_strength": 4,
+            "shadow_color": (48, 8, 12),
+            "shadow_offset": (2, 2),
+            "shadow_blur": 2,
+            "letter_spacing": 0.02,
+            "line_height": 0.94,
+            "content_width_ratio": 0.88,
+            "font_size_scale": 0.98,
+            "line_height_scale": 0.9,
+            "selected_font_role": "shout",
+            "fallback_reason": "source_pixels_low_confidence_but_display_geometry",
+        })
+    elif classification in {"speech", "dialogue"} or stats["brightness"] >= 180:
+        base.update({
+            "visual_class": "balloon_dialogue",
+            "font_class": "comic_sans_style",
+            "fill_color": (32, 28, 38),
+            "stroke_color": (250, 250, 252),
+            "stroke_width": 1,
+            "glow_color": None,
+            "glow_strength": 0,
+            "shadow_color": None,
+            "shadow_offset": (0, 0),
+            "font_size_scale": 0.78,
+        })
+    elif open_caption and stats["brightness"] < 118 and (
+        stats["blue_ratio"] >= 0.05 or stats["saturation"] >= 42
+    ):
+        base.update({
+            "visual_class": "mystic_blue_system",
+            "font_class": "condensed_display",
+            "fill_color": (226, 245, 255),
+            "stroke_color": (26, 86, 160),
+            "stroke_width": 2,
+            "glow_color": (58, 160, 255),
+            "glow_strength": 5,
+            "shadow_color": (3, 15, 36),
+            "shadow_offset": (2, 2),
+            "shadow_blur": 2,
+            "letter_spacing": 0.03,
+            "line_height": 0.93,
+            "content_width_ratio": 0.9,
+            "font_size_scale": 0.94,
+            "line_height_scale": 0.9,
+        })
+    elif open_caption:
+        base.update({
+            "visual_class": "high_contrast_display",
+            "font_class": "condensed_display",
+            "fill_color": (248, 247, 252),
+            "stroke_color": (18, 18, 24),
+            "stroke_width": 2,
+            "glow_color": (220, 232, 255) if stats["saturation"] >= 32 else None,
+            "glow_strength": 3 if stats["saturation"] >= 32 else 0,
+            "shadow_color": (8, 8, 14),
+            "shadow_offset": (2, 2),
+            "font_size_scale": 0.9,
+            "content_width_ratio": 0.92,
+        })
+    return base
+
+
+def _text_style_from_typography_profile(style, profile):
+    return replace(
+        style,
+        fill=tuple(profile.get("fill_color") or style.fill),
+        stroke_fill=tuple(profile.get("stroke_color") or style.stroke_fill),
+        stroke_width=int(profile.get("stroke_width", style.stroke_width)),
+        shadow_fill=(
+            tuple(profile.get("shadow_color"))
+            if profile.get("shadow_color") is not None
+            else None
+        ),
+        shadow_offset=tuple(profile.get("shadow_offset") or style.shadow_offset),
+        glow_fill=(
+            tuple(profile.get("glow_color"))
+            if profile.get("glow_color") is not None
+            else None
+        ),
+        glow_radius=int(profile.get("glow_strength") or 0),
+        font_class=str(profile.get("font_class") or style.font_class),
+        visual_class=str(profile.get("visual_class") or style.visual_class),
+        letter_spacing=float(profile.get("letter_spacing") or 0.0),
+        line_height_scale=float(profile.get("line_height_scale") or 1.0),
+        content_width_ratio=float(profile.get("content_width_ratio") or 1.0),
+        font_size_scale=float(profile.get("font_size_scale") or style.font_size_scale),
+    )
+
+
+def typographic_wrap_lines(text, *, max_chars, profile=None, target_line_count=None):
+    """Balanced word wrapping for display lettering.
+
+    The normal pixel fitter still verifies the final render. This pre-wrap keeps
+    display narration from becoming one weak line or one word per line.
+
+    ``target_line_count``, when given, forces the wrap onto that exact number
+    of lines instead of the char-count balance below - used so a source
+    per-line hierarchy (TDD #84F32R) has an unambiguous target line to land
+    on, rather than depending on the translated text happening to balance
+    onto the same count by chance.
+    """
+    words = str(text or "").split()
+    if not words:
+        return []
+    max_chars = max(4, int(max_chars or 24))
+    if target_line_count:
+        target_lines = max(1, min(int(target_line_count), len(words)))
+    else:
+        target_lines = max(1, int(math.ceil(len(" ".join(words)) / max_chars)))
+        if profile and profile.get("font_class") in {"condensed_display", "tall_display"}:
+            target_lines = max(target_lines, 2 if len(words) >= 4 else 1)
+    target_lines = min(max(target_lines, 1), max(1, len(words)))
+    target = max(4, int(math.ceil(len(" ".join(words)) / target_lines)))
+    lines: list[str] = []
+    current: list[str] = []
+    for word in words:
+        candidate = " ".join(current + [word])
+        if current and len(candidate) > max_chars and len(lines) < target_lines - 1:
+            lines.append(" ".join(current))
+            current = [word]
+        elif current and len(candidate) > target * 1.25 and len(lines) < target_lines - 1:
+            lines.append(" ".join(current))
+            current = [word]
+        else:
+            current.append(word)
+    if current:
+        lines.append(" ".join(current))
+    while len(lines) > 1 and len(lines[-1]) < target * 0.45:
+        tail = lines.pop().split()
+        prev = lines.pop().split()
+        merged = prev + tail
+        midpoint = max(1, len(merged) // 2)
+        lines.extend([" ".join(merged[:midpoint]), " ".join(merged[midpoint:])])
+        break
+    return lines
+
+
+def _relative_luminance(rgb):
+    r, g, b = [float(v) / 255.0 for v in rgb]
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b
+
+
+def validate_visual_text_profile(profile):
+    """Heuristic final-text visual gate for audit telemetry and tests."""
+    reasons: list[str] = []
+    font_class = str(profile.get("font_class") or "")
+    if font_class in {"", "unknown_fallback"}:
+        reasons.append("font_class_unknown")
+    fill = tuple(profile.get("fill_color") or (0, 0, 0))
+    bg = float(profile.get("background_brightness") or 0.0) / 255.0
+    contrast = abs(_relative_luminance(fill) - bg)
+    if contrast < 0.32 and int(profile.get("stroke_width") or 0) <= 0:
+        reasons.append("contrast_too_low")
+    occupancy = float(profile.get("occupancy_ratio") or 0.0)
+    if str(profile.get("visual_class") or "").endswith("_system") or font_class.endswith("display"):
+        if occupancy and occupancy < 0.18:
+            reasons.append("weak_visual_presence")
+        if int(profile.get("stroke_width") or 0) <= 0:
+            reasons.append("outline_missing")
+        if (
+            str(profile.get("visual_class")) == "mystic_blue_system"
+            and int(profile.get("glow_strength") or 0) <= 0
+        ):
+            reasons.append("glow_missing")
+    return {
+        "passed": not reasons,
+        "reasons": reasons,
+        "visual_validation_version": "84f22-typography-profile-v1",
+        "contrast": round(contrast, 4),
+    }
+
+
+def _text_style_for_region(img_bgr, box):
+    x, y, w, h = box
+    roi = img_bgr[y : y + h, x : x + w]
+    if roi.size == 0:
+        return TextStyle(
+            name="light",
+            fill=(40, 35, 48),
+            stroke_fill=(245, 242, 248),
+            stroke_width=1,
+            shadow_fill=None,
+            shadow_offset=(0, 0),
+            brightness=255.0,
+            saturation=0.0,
+            hue=0.0,
+        )
+
+    gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
+    brightness = float(np.mean(gray))
+    hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
+    saturation = float(np.mean(hsv[:, :, 1]))
+    saturated_pixels = hsv[:, :, 1] >= 24
+    hue = float(np.median(hsv[:, :, 0][saturated_pixels])) if np.any(saturated_pixels) else 0.0
+    purple_pixels = (
+        (hsv[:, :, 0] >= 105)
+        & (hsv[:, :, 0] <= 165)
+        & (hsv[:, :, 1] >= 24)
+        & (hsv[:, :, 2] >= 90)
+    )
+    purple_ratio = float(np.mean(purple_pixels))
+
+    if brightness < 128:
+        return TextStyle(
+            name="dark",
+            fill=(248, 247, 252),
+            stroke_fill=(20, 17, 29),
+            stroke_width=1,
+            shadow_fill=(24, 18, 36),
+            shadow_offset=(2, 2),
+            brightness=brightness,
+            saturation=saturation,
+            hue=hue,
+        )
+
+    if brightness >= 145 and purple_ratio >= 0.24:
+        return TextStyle(
+            name="decorative_purple",
+            fill=(78, 57, 112),
+            stroke_fill=(240, 234, 250),
+            stroke_width=1,
+            shadow_fill=(207, 194, 229),
+            shadow_offset=(1, 1),
+            brightness=brightness,
+            saturation=saturation,
+            hue=hue,
+        )
+
+    return TextStyle(
+        name="light_colored" if saturation >= 42 else "light",
+        fill=(43, 36, 52),
+        stroke_fill=(246, 243, 249),
+        stroke_width=1,
+        shadow_fill=(220, 215, 226) if saturation >= 42 else None,
+        shadow_offset=(1, 1) if saturation >= 42 else (0, 0),
+        brightness=brightness,
+        saturation=saturation,
+        hue=hue,
+    )
+
+
+def _caption_overlay_text_style(img_bgr, box):
+    """High-contrast style used only on the non-destructive artwork overlay."""
+    x, y, w, h = box
+    roi = img_bgr[y : y + h, x : x + w]
+    if roi.size:
+        gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
+        hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
+        brightness = float(np.mean(gray))
+        saturation = float(np.mean(hsv[:, :, 1]))
+        hue = float(np.median(hsv[:, :, 0]))
+    else:
+        brightness, saturation, hue = 0.0, 0.0, 0.0
+    return TextStyle(
+        name="caption_overlay",
+        fill=(255, 255, 255),
+        stroke_fill=(12, 12, 18),
+        stroke_width=2,
+        shadow_fill=(10, 10, 16),
+        shadow_offset=(2, 2),
+        brightness=brightness,
+        saturation=saturation,
+        hue=hue,
+    )
+
+
+# pt-BR function words that must not be orphaned at a line edge: breaking so
+# that "DO / DA / QUE / COM ..." starts or ends a line reads like a translation
+# artifact. Penalised by the semantic wrapper (idea from the manga-translator
+# UI ecosystem's semantic line breaking, reimplemented clean for Portuguese).
+_PT_BREAK_ORPHAN_WORDS = frozenset({
+    "DE", "DA", "DO", "DAS", "DOS", "EM", "NO", "NA", "NOS", "NAS", "NUMA",
+    "NUM", "UM", "UMA", "UNS", "UMAS", "E", "OU", "QUE", "SE", "POR", "PRA",
+    "PARA", "COM", "SEM", "AO", "AOS", "À", "ÀS", "O", "A", "OS", "AS",
+    "MEU", "MINHA", "SEU", "SUA", "TEU", "TUA", "ISSO", "ISTO", "ELE", "ELA",
+    "ELES", "ELAS", "NÓS", "VOCE", "VOCÊ", "LHE", "LHES", "JÁ", "TAMBÉM",
+})
+
+
+def _semantic_wrap_lines(words, measure, max_width):
+    """DP line wrapping that avoids orphaning pt-BR function words.
+
+    ``measure`` returns the pixel width of a string. Same contract as the
+    greedy wrap (lines of joined words, none exceeding ``max_width`` unless a
+    single word does), but breaks are chosen to: keep function words attached
+    to their neighbour (+2.5 penalty when one is orphaned at a line edge),
+    and prefer clause boundaries (a small discount after , ; :). Falls back
+    to the greedy result when the DP cannot help (no orphan in the greedy
+    output) so behaviour only changes where it visibly improves.
+    """
+    n = len(words)
+    if n < 3 or n > 80:
+        return None
+    try:
+        widths = [float(measure(word)) for word in words]
+        space_w = float(measure(" "))
+    except Exception:  # noqa: BLE001 - measurement failure: keep greedy
+        return None
+    prefix = [0.0]
+    for width in widths:
+        prefix.append(prefix[-1] + width)
+    line_width = lambda i, j: (prefix[j] - prefix[i]) + space_w * max(0, j - i - 1)
+
+    INF = float("inf")
+    dp = [INF] * (n + 1)
+    nxt = [-1] * n
+    dp[n] = 0.0
+    for i in range(n - 1, -1, -1):
+        for j in range(i + 1, n + 1):
+            if line_width(i, j) > max_width and j > i + 1:
+                break
+            cost = 1.0
+            if j < n:
+                last = words[j - 1].strip(",.;:!?").upper()
+                first_next = words[j].strip(",.;:!?").upper()
+                if last in _PT_BREAK_ORPHAN_WORDS or first_next in _PT_BREAK_ORPHAN_WORDS:
+                    cost += 2.5
+                if words[j - 1].endswith((",", ";", ":")):
+                    cost -= 0.4
+            total = cost + dp[j]
+            if total < dp[i]:
+                dp[i] = total
+                nxt[i] = j
+    if nxt[0] < 0:
+        return None
+    lines = []
+    i = 0
+    while i < n:
+        j = nxt[i]
+        if j <= i:
+            return None
+        lines.append(" ".join(words[i:j]))
+        i = j
+    return lines
+
+
+def _wrap_text(draw, text, font, max_width, split_long_words=True):
+    words = str(text).split()
+    if not words:
+        return []
+
+    semantic = _semantic_wrap_lines(words, lambda value: _text_width(draw, value, font), max_width)
+    if semantic is not None:
+        # Only adopt the DP result when it actually removes orphans the greedy
+        # wrap would produce; otherwise keep the historical lineation.
+        greedy = _greedy_wrap_lines(draw, words, font, max_width, split_long_words)
+        orphan = lambda lines: sum(
+            1 for k, line in enumerate(lines)
+            for edge in (line.split()[0], line.split()[-1])
+            if edge.strip(",.;:!?").upper() in _PT_BREAK_ORPHAN_WORDS
+            and not (k == len(lines) - 1 and edge == line.split()[-1] and len(line.split()) > 2)
+        )
+        if orphan(semantic) < orphan(greedy):
+            return semantic
+        return greedy
+    return _greedy_wrap_lines(draw, words, font, max_width, split_long_words)
+
+
+def _greedy_wrap_lines(draw, words, font, max_width, split_long_words=True):
+    lines = []
+    current = ""
+
+    for word in words:
+        if _text_width(draw, word, font) > max_width:
+            if current:
+                lines.append(current)
+                current = ""
+            if split_long_words:
+                chunks = _split_long_word(draw, word, font, max_width)
+                lines.extend(chunks[:-1])
+                current = chunks[-1]
+            else:
+                current = word
+            continue
+
+        test = f"{current} {word}".strip()
+        if _text_width(draw, test, font) <= max_width or not current:
+            current = test
+        else:
+            lines.append(current)
+            current = word
+
+    if current:
+        lines.append(current)
+
+    return lines
+
+
+def _split_long_word(draw, word, font, max_width):
+    chunks = []
+    current = ""
+
+    for char in word:
+        test = current + char
+        if current and _text_width(draw, test, font) > max_width:
+            chunks.append(current)
+            current = char
+        else:
+            current = test
+
+    if current:
+        chunks.append(current)
+
+    return chunks or [word]
+
+
+def _text_width(draw, text, font):
+    bbox = draw.textbbox((0, 0), text, font=font)
+    return bbox[2] - bbox[0]
+
+
+def _lines_height(draw, lines, font, stroke_width=0):
+    if not lines:
+        return 0
+    total = 0
+    for line in lines:
+        bbox = draw.textbbox((0, 0), line, font=font, stroke_width=stroke_width)
+        total += bbox[3] - bbox[1] + 3
+    return total
+
+
+def _widest_line(draw, lines, font, stroke_width=0):
+    if not lines:
+        return 0
+    return max(
+        draw.textbbox((0, 0), line, font=font, stroke_width=stroke_width)[2]
+        - draw.textbbox((0, 0), line, font=font, stroke_width=stroke_width)[0]
+        for line in lines
+    )
+
+
+def _write_debug_images(
+    debug_folder,
+    page_index,
+    original,
+    final,
+    raw_lines,
+    candidates,
+    groups,
+    text_mask,
+    inpainted,
+    debug_data,
+    allowed_mask=None,
+):
+    os.makedirs(debug_folder, exist_ok=True)
+    prefix = os.path.join(debug_folder, f"page_{page_index:03}")
+
+    cv2.imwrite(prefix + "_original.png", original)
+    cv2.imwrite(prefix + "_ocr_boxes.png", _draw_ocr_debug(original, raw_lines, candidates, groups))
+    cv2.imwrite(prefix + "_classified_boxes.png", _draw_classified_debug(original, groups))
+    cv2.imwrite(prefix + "_text_mask.png", text_mask)
+    cv2.imwrite(prefix + "_mask_initial.png", text_mask)
+    cv2.imwrite(prefix + "_inpainted.png", inpainted)
+    cv2.imwrite(prefix + "_cleaned_before_text.png", inpainted)
+    cv2.imwrite(prefix + "_safe_areas.png", _draw_safe_area_debug(original, groups))
+    cv2.imwrite(prefix + "_final.png", final)
+    gray_diff = cv2.absdiff(
+        cv2.cvtColor(original, cv2.COLOR_BGR2GRAY),
+        cv2.cvtColor(final, cv2.COLOR_BGR2GRAY),
+    )
+    diff_map = cv2.applyColorMap(gray_diff, cv2.COLORMAP_TURBO)
+    cv2.imwrite(prefix + "_difference_map.png", diff_map)
+    if allowed_mask is None:
+        allowed_mask = text_mask
+    outside = (gray_diff > config.VISUAL_DIFF_THRESHOLD) & (allowed_mask == 0)
+    outside_visual = original.copy()
+    outside_visual[outside] = (0, 0, 255)
+    cv2.imwrite(prefix + "_outside_changes.png", outside_visual)
+    cv2.imwrite(prefix + "_compare.png", _compare_image(original, final))
+
+    with open(prefix + "_ocr.json", "w", encoding="utf-8") as file:
+        dump_json(debug_data, file, ensure_ascii=False, indent=2)
+
+
+def _draw_ocr_debug(original, raw_lines, candidates, groups):
+    img = original.copy()
+
+    for candidate in candidates:
+        color = (0, 0, 255) if candidate.ignored else (0, 180, 0)
+        cv2.polylines(img, [candidate.line.polygon.astype(np.int32)], True, color, 2)
+
+    for group in groups:
+        if group.ignored:
+            color = (0, 140, 255)
+        else:
+            color = (255, 0, 0)
+        x, y, w, h = group.box
+        cv2.rectangle(img, (x, y), (x + w, y + h), color, 2)
+        cv2.putText(
+            img,
+            group.group_id,
+            (x, max(12, y - 5)),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.45,
+            color,
+            1,
+            cv2.LINE_AA,
+        )
+
+    return img
+
+
+def _draw_classified_debug(original, groups):
+    img = original.copy()
+    colors = {
+        "speech": (40, 180, 60),
+        "narration": (220, 100, 20),
+        "sfx": (0, 210, 255),
+        "decorative": (30, 30, 220),
+        "unknown": (30, 30, 220),
+    }
+
+    for group in groups:
+        color = colors.get(group.classification, (30, 30, 220))
+        if group.ignored and group.classification != "sfx":
+            color = (30, 30, 220)
+
+        x, y, w, h = group.box
+        cv2.rectangle(img, (x, y), (x + w, y + h), color, 3)
+        status = "OK" if group.sent_to_translation else "SKIP"
+        label = f"{group.group_id} {group.classification.upper()} {status}"
+        label_y = max(22, y - 8)
+        cv2.putText(
+            img,
+            label,
+            (x, label_y),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.52,
+            (0, 0, 0),
+            3,
+            cv2.LINE_AA,
+        )
+        cv2.putText(
+            img,
+            label,
+            (x, label_y),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.52,
+            color,
+            1,
+            cv2.LINE_AA,
+        )
+
+    return img
+
+
+def _draw_safe_area_debug(original, groups):
+    img = original.copy()
+    for group in groups:
+        if not group.safe_area:
+            continue
+        x, y, w, h = group.safe_area
+        color = (30, 210, 30) if group.redrawn else (0, 80, 255)
+        cv2.rectangle(img, (x, y), (x + w, y + h), color, 2)
+        if group.translation_box:
+            tx, ty, tw, th = group.translation_box
+            cv2.rectangle(img, (tx, ty), (tx + tw, ty + th), (255, 180, 0), 1)
+        cv2.putText(
+            img,
+            group.group_id,
+            (x, max(12, y - 4)),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.42,
+            color,
+            1,
+            cv2.LINE_AA,
+        )
+    return img
+
+
+def _compare_image(original, final):
+    h = max(original.shape[0], final.shape[0])
+    w = original.shape[1] + final.shape[1]
+    canvas = np.full((h, w, 3), 255, dtype=np.uint8)
+    canvas[: original.shape[0], : original.shape[1]] = original
+    canvas[: final.shape[0], original.shape[1] : original.shape[1] + final.shape[1]] = final
+    return canvas
+
+
+def _debug_payload(image_path, raw_lines, candidates, groups):
+    ignored_lines = [
+        {
+            "id": f"LINE_{idx:03}",
+            "raw_text": candidate.line.raw_text,
+            "clean_text": candidate.line.text,
+            "translation": "",
+            "bounding_box": list(candidate.line.box),
+                "confidence": candidate.line.confidence,
+                "engine": candidate.line.engine,
+                "source_engine": candidate.line.engine,
+                "page": candidate.line.page,
+                "metadata": candidate.line.metadata or {},
+            "original_text": candidate.line.original_text or candidate.line.raw_text,
+            "repaired_text": candidate.line.repaired_text or candidate.line.text,
+            "repair_reason": candidate.line.repair_reason,
+                "text_color": "",
+                "classification": "unknown",
+                "classification_reason": "line_ignored_before_grouping",
+                "classification_confidence": 0.0,
+                "classification_evidence": {},
+                "region_id": "",
+                "region_type": "unknown",
+                "parent_balloon_id": "",
+                "inside_balloon_like_region": False,
+                "inside_narration_box_like_region": False,
+                "quality_score": 0.0,
+                "quality_reasons": [],
+                "fallback_used": False,
+                "fallback_reason": "",
+                "translation_valid": False,
+                "translation_retry_count": 0,
+                "translation_validation_reason": "",
+                "translated": False,
+            "ignored": True,
+            "ignore_reason": candidate.ignore_reason,
+            "sent_to_nvidia": False,
+            "redrawn": False,
+        }
+        for idx, candidate in enumerate(candidates, start=1)
+        if candidate.ignored
+    ]
+
+    group_records = []
+    for group in groups:
+        _ensure_translation_terminal_state(group)
+        group_records.append(
+            {
+                "id": group.group_id,
+                "raw_text": " ".join(line.raw_text for line in group.lines),
+                "clean_text": group.text,
+                "translation": group.translation,
+                "bounding_box": list(group.box),
+                "confidence": group.confidence,
+                "engine": _group_engine(group),
+                "source_engine": group.source_engine or _group_engine(group),
+                "page": next(
+                    (line.page for line in group.lines if line.page is not None),
+                    None,
+                ),
+                "metadata": _group_ocr_metadata(group),
+                # Diagnostics correlation (translation_item_id=id, region=region_id,
+                # page=above): initial/recovery engine provenance without the
+                # full source/translation text this record already carries above.
+                "ocr_provenance_engines": list(
+                    group.ocr_provenance_engines or _group_ocr_provenance_engines(group)
+                ),
+                "mixed_ocr_provenance": bool(group.mixed_ocr_provenance),
+                "recovery_engine": next(
+                    (
+                        (line.metadata or {}).get("recovery_engine")
+                        for line in group.lines
+                        if (line.metadata or {}).get("recovery_engine")
+                    ),
+                    None,
+                ),
+                "recovered": any(
+                    (line.metadata or {}).get("recovered") for line in group.lines
+                ),
+                "original_text": group.original_text or " ".join(
+                    line.original_text or line.raw_text for line in group.lines
+                ),
+                "repaired_text": group.repaired_text or group.text,
+                "repair_reason": group.repair_reason or ";".join(
+                    dict.fromkeys(
+                        line.repair_reason for line in group.lines if line.repair_reason
+                    )
+                ),
+                "text_color": group.color_name,
+                "font_size": group.font_size,
+                "font_runtime_validation": dict(group.font_runtime_validation),
+                "region_brightness": round(group.region_brightness, 2),
+                "region_saturation": round(group.region_saturation, 2),
+                "region_hue": round(group.region_hue, 2),
+                "background_type": group.background_type,
+                "background_metrics": dict(group.background_metrics),
+                "classification": group.classification,
+                "classification_reason": group.classification_reason,
+                "story_display_promoted": bool(group.story_display_promoted),
+                "classification_confidence": round(
+                    group.classification_confidence,
+                    4,
+                ),
+                "classification_evidence": dict(group.classification_evidence),
+                "region_id": group.region_id,
+                "region_type": group.region_type,
+                "parent_balloon_id": group.parent_balloon_id,
+                "inside_balloon_like_region": group.inside_balloon_like_region,
+                "inside_narration_box_like_region": group.inside_narration_box_like_region,
+                "main_text_score": round(group.main_text_score, 3),
+                "quality_score": round(group.quality_score, 4),
+                "quality_reasons": list(group.quality_reasons),
+                "fallback_used": bool(group.fallback_used or _group_ocr_metadata(group).get("selective_fallback_used")),
+                "fallback_reason": group.fallback_reason
+                or _group_ocr_metadata(group).get("fallback_reason", ""),
+                "fallback_chain": list(group.fallback_chain),
+                "angle_degrees": round(group.angle_degrees, 2),
+                "near_image_edge": group.near_image_edge,
+                "alignment_score": round(group.alignment_score, 3),
+                "render_font_size": getattr(group, "font_size", None),
+                "render_font_class": (getattr(group, "typography_profile", None) or {}).get("font_class"),
+                "render_alignment": (getattr(group, "typography_profile", None) or {}).get("alignment"),
+                "font_size_from_source_ink": (getattr(group, "typography_profile", None) or {}).get("font_size_from_source_ink"),
+                "source_line_height_px": float(np.median([ln.box[3] for ln in group.lines])) if group.lines else None,
+                "canonical_source_text": str(group.canonical_source_text),
+                "source_repairs": list(group.source_repairs),
+                "source_recovery": dict(getattr(group, "source_recovery", {}) or {}),
+                "translation_valid": group.translation_valid,
+                "translation_retry_count": group.translation_retry_count,
+                "translation_validation_reason": group.translation_validation_reason,
+                "rejected_translation": group.rejected_translation,
+                "raw_provider_candidate": group.raw_provider_candidate,
+                "raw_provider_candidate_class": group.raw_provider_candidate_class,
+                "retry_candidate": group.retry_candidate,
+                "retry_candidate_class": group.retry_candidate_class,
+                "translation_candidate": group.translation_candidate,
+                "translation_final_state": group.translation_final_state,
+                "translation_final_reason": group.translation_final_reason,
+                "translation_quality_impact": group.translation_quality_impact,
+                "translation_unresolved": bool(group.translation_unresolved),
+                "translation_attempts_exhausted": bool(
+                    group.translation_attempts_exhausted
+                ),
+                "trusted_translation_missing": bool(group.trusted_translation_missing),
+                "source_fallback_prevented": bool(group.source_fallback_prevented),
+                "preserved_original": bool(group.preserved_original),
+                "text_overflow_ratio": round(group.text_overflow_ratio, 6),
+                "draw_box": list(group.draw_box) if group.draw_box else None,
+                "rendered_lines": list(group.rendered_lines) if group.rendered_lines else None,
+                "safe_area": list(group.safe_area) if group.safe_area else None,
+                "translation_box": (
+                    list(group.translation_box) if group.translation_box else None
+                ),
+                "allowed_modification_box": (
+                    list(group.allowed_modification_box)
+                    if group.allowed_modification_box
+                    else None
+                ),
+                "source_completeness": dict(group.source_completeness),
+                "source_completeness_status": str(
+                    group.source_completeness.get("status", "")
+                ),
+                "visual_validation": group.visual_validation,
+                "visual_attempts": list(group.visual_attempts),
+                "mask_metrics": dict(group.mask_metrics),
+                "clean_artifact_validation": dict(
+                    getattr(group, "clean_artifact_validation", {}) or {}
+                ),
+                "clean_disposition": str(getattr(group, "clean_disposition", "") or ""),
+                "clean_disposition_reason": str(getattr(group, "clean_disposition_reason", "") or ""),
+                "clean_disposition_confidence": round(float(getattr(group, "clean_disposition_confidence", 0.0) or 0.0), 6),
+                "clean_local_attempted": bool(getattr(group, "clean_local_attempted", False)),
+                "clean_remote_attempted": bool(getattr(group, "clean_remote_attempted", False)),
+                "clean_remote_result": str(getattr(group, "clean_remote_result", "") or ""),
+                "clean_remote_text_observations": list(getattr(group, "clean_remote_text_observations", []) or [])[:20],
+                "manual_review_required": bool(group.manual_review_required),
+                "semantic_review_reason": str(group.semantic_review_reason),
+                "art_reconstruction_status": str(group.art_reconstruction_status),
+                "art_reconstruction_reason": str(group.art_reconstruction_reason),
+                "render_disposition": str(group.render_disposition),
+                "render_disposition_reason": str(group.render_disposition_reason),
+                "detected_proper_names": list(group.detected_proper_names),
+                "preserve_as_name": bool(group.preserve_as_name),
+                "quality_evidence": dict(group.quality_evidence),
+                "naturalization": {
+                    "eligible": bool(group.naturalization_eligible),
+                    "attempted": bool(group.naturalization_attempted),
+                    "accepted": bool(group.naturalization_accepted),
+                    "status": group.naturalization_status,
+                    "candidate": group.naturalization_candidate,
+                    "rejected_reason": group.naturalization_rejected_reason,
+                    "selected_version": group.naturalization_selected_version,
+                    "context": dict(group.naturalization_context),
+                },
+                "translation_fallback_status": str(
+                    getattr(group, "translation_fallback_status", "")
+                ),
+                "translation_fallback_reason": str(
+                    getattr(group, "translation_fallback_reason", "")
+                ),
+                "translated": group.translation_final_state == "translated",
+                "ignored": group.ignored,
+                "ignore_reason": group.ignore_reason,
+                "sent_to_nvidia": group.sent_to_translation,
+                "redrawn": group.redrawn,
+                "line_count": len(group.lines),
+                "cleanup_line_count": len(group.cleanup_lines),
+                "cleanup_line_boxes": [
+                    list(line.box) for line in group.cleanup_lines
+                ],
+                "quality_trace": {
+                    "schema_version": "1",
+                    "ocr": {
+                        "engine": group.source_engine or _group_engine(group),
+                        "confidence": round(group.confidence, 6),
+                        "raw_text": " ".join(line.raw_text for line in group.lines),
+                        "normalized_text": group.text,
+                        "line_ids": [getattr(line, "line_id", "") for line in group.lines if getattr(line, "line_id", "")],
+                        "boxes": [list(line.box) for line in group.lines],
+                        "source_completeness": dict(group.source_completeness),
+                        "source_recovery": dict(getattr(group, "source_recovery", {}) or {}),
+                        "repair_reason": group.repair_reason,
+                    },
+                    "source_transformations": {
+                        "original_text": group.original_text,
+                        "repaired_text": group.repaired_text,
+                        "grouped_text": group.text,
+                        "repair_reason": group.repair_reason,
+                    },
+                    "translation_attempts": [{
+                        "attempt_number": int(group.translation_retry_count or 0) + 1,
+                        "source_text": group.text,
+                        "initial_candidate": group.raw_provider_candidate,
+                        "retry_candidate": group.retry_candidate,
+                        "selected_candidate": group.translation_candidate,
+                        "validation_reason": group.translation_validation_reason,
+                        "fallback_status": str(
+                            getattr(group, "translation_fallback_status", "")
+                        ),
+                    }] if group.sent_to_translation else [],
+                    "entity": {
+                        "detected_proper_names": list(group.detected_proper_names),
+                        "preserve_as_name": bool(group.preserve_as_name),
+                    },
+                    "validators": {
+                        "semantic_review_reason": str(group.semantic_review_reason),
+                        "quality_reasons": list(group.quality_reasons),
+                        "source_completeness_status": str(group.source_completeness.get("status", "")),
+                    },
+                    "render": {
+                        "disposition": str(group.render_disposition),
+                        "visual_validation": group.visual_validation,
+                        "physical_residual_checked": bool(
+                            isinstance(group.visual_validation, dict)
+                            and group.visual_validation.get("post_render_ocr")
+                        ),
+                    },
+                    "final_decision": {
+                        "translation_final_state": group.translation_final_state,
+                        "translation_final_reason": group.translation_final_reason,
+                        "manual_review_required": bool(group.manual_review_required),
+                        "release_relevant_render": str(group.render_disposition),
+                    },
+                },
+            }
+        )
+
+    classification_counts = {
+        name: sum(1 for group in groups if group.classification == name)
+        for name in ("speech", "narration", "sfx", "decorative", "unknown")
+    }
+
+    initial_engines = [
+        (line.metadata or {}).get("initial_ocr_engine")
+        for line in raw_lines
+        if (line.metadata or {}).get("initial_ocr_engine")
+    ]
+    recovered_lines = [line for line in raw_lines if (line.metadata or {}).get("recovered")]
+    recovery_engines = [
+        (line.metadata or {}).get("recovery_engine") for line in recovered_lines
+    ]
+
+    return {
+        "image_path": image_path,
+        "ocr_line_count": len(raw_lines),
+        "ignored_line_count": len(ignored_lines),
+        "ignored_group_count": sum(1 for group in groups if group.ignored),
+        "group_count": len(groups),
+        "translated_group_count": sum(
+            1
+            for group in groups
+            if group.translation_final_state == "translated"
+        ),
+        "redrawn_group_count": sum(1 for group in groups if group.redrawn),
+        "classification_counts": classification_counts,
+        "items": group_records + ignored_lines,
+        # Per-page OCR provenance (mission: hybrid OCR provenance/telemetry).
+        "initial_full_page_engine": (
+            initial_engines[0] if initial_engines and len(set(initial_engines)) == 1 else (
+                "mixed" if len(set(initial_engines)) > 1 else None
+            )
+        ),
+        "regional_recovery_calls": len(recovered_lines),
+        "regional_recovery_engine": (
+            recovery_engines[0] if recovery_engines and len(set(recovery_engines)) == 1 else (
+                "mixed" if len(set(recovery_engines)) > 1 else None
+            )
+        ),
+        "recovered_region_count": len(recovered_lines),
+    }
+
+
+def _group_engine(group):
+    engines = [
+        line.engine
+        for line in group.lines
+        if line.engine
+    ]
+    return engines[0] if engines and len(set(engines)) == 1 else "mixed"
+
+
+def _group_ocr_metadata(group):
+    for line in group.lines:
+        if line.metadata:
+            return line.metadata
+    return {}
+
+
+def _union_boxes(boxes):
+    if not boxes:
+        return 0, 0, 1, 1
+    x1 = min(box[0] for box in boxes)
+    y1 = min(box[1] for box in boxes)
+    x2 = max(box[0] + box[2] for box in boxes)
+    y2 = max(box[1] + box[3] for box in boxes)
+    return x1, y1, max(1, x2 - x1), max(1, y2 - y1)
+
+
+def _box_from_poly(poly):
+    xs = poly[:, 0]
+    ys = poly[:, 1]
+    x1 = int(xs.min())
+    y1 = int(ys.min())
+    x2 = int(xs.max())
+    y2 = int(ys.max())
+    return x1, y1, max(1, x2 - x1), max(1, y2 - y1)
+
+
+def _output_path_for(image_path):
+    normalized = os.path.normpath(image_path)
+    temp_folder = os.path.normpath(TEMP_FOLDER)
+
+    if temp_folder in normalized:
+        return normalized.replace(temp_folder, os.path.normpath(TEMP_OUT), 1)
+
+    return os.path.join(TEMP_OUT, os.path.basename(image_path))
+
+
+def _page_index_from_path(image_path):
+    match = re.search(r"(\d+)", os.path.basename(image_path))
+    return int(match.group(1)) if match else 1

@@ -1,7 +1,5 @@
 # Plano de execução — Komyst (tempo, memória, qualidade, disco, nome)
 
-> **Criado em:** 2026-11-10 · **Base auditada:** branch `claude/inpaint-auto-repair-20261107` @ `cda3f90` (com alterações não commitadas)
-> **Estado:** PLANEJADO. Nada deste documento está implementado.
 > **Para quem é:** qualquer agente de código (ou pessoa) que vá implementar. Leia a seção 1 inteira antes de tocar em qualquer arquivo.
 
 ---
@@ -10,12 +8,12 @@
 
 ### 1.1 Onde trabalhar
 
-- Repositório local: `C:\Projetos\Yomu-Sekai` (o nome da pasta ainda é o antigo; não renomeie a pasta).
-- Remoto novo: `https://github.com/HenriquePvAr/Komyst.git`.
+- Checkout: use a worktree da fase em andamento; confirme a raiz com `git rev-parse --show-toplevel`.
+- Remoto novo: `https://github.com/HenriquePvAr/komyst.git`.
 - Abreviações usadas neste plano:
-  - `bp` = `yomu/pipeline/benchmark_pipeline.py`
-  - `ob` = `yomu/ocr/ocr_balloon.py`
-  - `settings` = `yomu/config/settings.py`
+  - `bp` = `komyst/pipeline/benchmark_pipeline.py`
+  - `ob` = `komyst/ocr/ocr_balloon.py`
+  - `settings` = `komyst/config/settings.py`
 
 ### 1.2 Regras que nunca mudam
 
@@ -24,7 +22,7 @@
 3. **Segredos:** nunca leia `.env` ou `.env.local` por inteiro; nunca escreva chave, token, senha ou cookie em código, log, doc ou commit.
 4. **Testes:** a suíte é hermética. Teste não pode tocar o banco de jobs real, o worker real nem provedor real. Não contorne o guard (`test_support/`).
 5. **Sem hardcode:** nenhuma correção pode citar texto, página, capítulo ou série específica. A regra tem que ser estrutural.
-6. **Identificadores internos proibidos de renomear** (quebram instalações existentes): pastas `%LOCALAPPDATA%\TradutorIA` e `%LOCALAPPDATA%\YomuSekai`, `YomuSekai.exe`, `APP_ID = "tradutor-ia"`, `AppId` do instalador, strings de entropia DPAPI, variáveis `TRADUTOR_*` / `YOMU_*`, pacote Python `yomu`, namespace UUID `"tradutor-ia:"`.
+6. **Identidade aplicada:** pasta de dados `%LOCALAPPDATA%\Komyst`, executável `Komyst.exe`, `APP_ID = "komyst"`, variáveis `KOMYST_*`, pacote Python `komyst/` e namespace UUID `"komyst:"`. O dono aprovou a renomeação sem camada de compatibilidade ou migração.
 7. **Não mexa fora do escopo da tarefa.** Se achar outro defeito, anote na seção "Achados" do relatório da fase; não corrija junto.
 
 ### 1.3 Como localizar código
@@ -121,18 +119,18 @@ Objetivo: deixar o repositório e o disco num estado conhecido. **Nenhuma mudan�
 ### P.1 Apontar o remoto para o repositório novo
 
 ```bash
-git -C /c/Projetos/Yomu-Sekai remote set-url origin https://github.com/HenriquePvAr/Komyst.git
+git -C /c/Projetos/Komyst remote set-url origin https://github.com/HenriquePvAr/komyst.git
 ```
 
 ```bash
-git -C /c/Projetos/Yomu-Sekai fetch origin
+git -C /c/Projetos/Komyst fetch origin
 ```
 
-Aceite: `git remote -v` mostra `Komyst.git`; `git fetch` funciona; `origin/dev` e `origin/main` existem.
+Aceite: `git remote -v` mostra `komyst.git`; `git fetch` funciona; `origin/dev` e `origin/main` existem.
 
 ### P.2 Inventariar a árvore de trabalho (NÃO commitar ainda)
 
-A branch atual tem ~116 arquivos alterados sem commit: uma renomeação para "Komyst" pela metade **misturada** com código novo (`yomu/clean/inpainting/flux_edit.py`, `yomu/ocr/residual_sweep.py`, `yomu/ocr/subprocess_ocr*.py`, testes).
+A branch atual tem ~116 arquivos alterados sem commit: uma renomeação para "Komyst" pela metade **misturada** com código novo (`komyst/clean/inpainting/flux_edit.py`, `komyst/ocr/residual_sweep.py`, `komyst/ocr/subprocess_ocr*.py`, testes).
 
 Como fazer:
 
@@ -142,7 +140,7 @@ Como fazer:
 
 ### P.3 Liberar disco (autorizado pelo dono)
 
-Regra: em `%LOCALAPPDATA%\TradutorIA\output\<capítulo>\`, manter as **3 execuções mais recentes** de cada capítulo e **sempre** manter estas, que são a linha de base: `f181a17e-281d-40a8-bd7e-41b4bbdcdca1`, `2054d996-7785-40cb-a428-5d266d8ffed8`, `278c2486-02ae-4103-8a15-6f5ece95e26b`.
+Regra: em `%LOCALAPPDATA%\Komyst\output\<capítulo>\`, manter as **3 execuções mais recentes** de cada capítulo e **sempre** manter estas, que são a linha de base: `f181a17e-281d-40a8-bd7e-41b4bbdcdca1`, `2054d996-7785-40cb-a428-5d266d8ffed8`, `278c2486-02ae-4103-8a15-6f5ece95e26b`.
 
 Como fazer:
 
@@ -154,7 +152,7 @@ Aceite: pelo menos 40 GB livres a mais; as três execuções de base ainda exist
 
 ### P.4 Criar o medidor de jobs
 
-Arquivo novo: `tools/audit/job_metrics.py`. É só leitura; não importa nada de `yomu`.
+Arquivo novo: `tools/audit/job_metrics.py`. É só leitura; não importa nada de `Komyst`.
 
 Entrada: caminho de uma pasta de execução. Saída: um JSON e uma tabela em texto com:
 
@@ -187,7 +185,7 @@ Objetivo: nenhum job morre por causa de disco, de uma regra de SFX ou de um subp
 
 **Problema.** REF-B terminou `failed` com PDF e PSD prontos. Com "traduzir SFX" desligado, o portão exige que todo item `sfx` esteja `ignored`. Um item ("RUSTLE...", p52) estava `sfx`, não ignorado e **não enviado** ao provedor; isso reprovou o capítulo.
 
-**Onde.** `bp`, função que monta o dicionário com a chave `"sfx_policy_valid"` (procure `sfx_policy_ok`; ~linha 8143). Consumidor: `yomu/ui/ui_helpers.py`, onde `sfx_policy_valid is False` vira `translation_policy_violation` (~linha 533).
+**Onde.** `bp`, função que monta o dicionário com a chave `"sfx_policy_valid"` (procure `sfx_policy_ok`; ~linha 8143). Consumidor: `komyst/ui/ui_helpers.py`, onde `sfx_policy_valid is False` vira `translation_policy_violation` (~linha 533).
 
 **Como fazer.**
 
@@ -215,11 +213,11 @@ Objetivo: nenhum job morre por causa de disco, de uma regra de SFX ou de um subp
 
 **Problema.** Dois jobs foram interrompidos por `OSError: [Errno 28] No space left on device`; um ficou 64 minutos preso.
 
-**Onde.** `yomu/runtime/job_runner.py`, função `run_job` (~linha 852), antes de lançar o pipeline. Segundo ponto: `bp`, logo depois que o download termina e o número de páginas é conhecido (procure `DOWNLOAD_STAGE_RESULT`).
+**Onde.** `komyst/runtime/job_runner.py`, função `run_job` (~linha 852), antes de lançar o pipeline. Segundo ponto: `bp`, logo depois que o download termina e o número de páginas é conhecido (procure `DOWNLOAD_STAGE_RESULT`).
 
 **Como fazer.**
 
-1. Novo módulo `yomu/runtime/disk_budget.py` com:
+1. Novo módulo `komyst/runtime/disk_budget.py` com:
    - `MB_PER_PAGE = {"profissional": 60, "apenas_clean": 8, "default": 15}` (medido: 37 / 4,7 / 9,1 MB por página, com ~60% de margem);
    - `MIN_FREE_MB_AT_START = {"profissional": 3000, "default": 1000}`;
    - `required_mb(output_plan, page_count=None) -> int`;
@@ -228,7 +226,7 @@ Objetivo: nenhum job morre por causa de disco, de uma regra de SFX ou de um subp
 2. Em `run_job`: se `check` falhar, encerre o job com `status="failed"`, `reason_code="insufficient_disk_space"`, mensagem com MB livres e MB necessários. Não lance o pipeline.
 3. Em `bp`, depois do download: chame `check` de novo com o número real de páginas. Se falhar, levante um erro próprio (`InsufficientDiskSpace`) que o runner traduz para o mesmo `reason_code`.
 4. Qualquer `OSError` com `errno == 28` capturado no laço de páginas deve encerrar o job imediatamente com esse `reason_code` (hoje o job continua tentando gravar).
-5. Mensagem para o usuário: acrescente a chave `insufficient_disk_space` no mapa de mensagens de erro de `static/tradutor_ui.js` (procure a entrada `transport_error:`) e nos arquivos `static/i18n/*.js`. Texto pt-BR: "Espaço em disco insuficiente para gerar este capítulo. Libere espaço e tente de novo."
+5. Mensagem para o usuário: acrescente a chave `insufficient_disk_space` no mapa de mensagens de erro de `static/komyst_ui.js` (procure a entrada `transport_error:`) e nos arquivos `static/i18n/*.js`. Texto pt-BR: "Espaço em disco insuficiente para gerar este capítulo. Libere espaço e tente de novo."
 
 **Teste.** `tests/test_disk_budget.py`: `required_mb` por plano; `check` com `shutil.disk_usage` simulado; `run_job` com disco simulado cheio termina com `insufficient_disk_space` sem lançar o pipeline (use os fakes já existentes dos testes de `job_runner`).
 
@@ -238,14 +236,14 @@ Objetivo: nenhum job morre por causa de disco, de uma regra de SFX ou de um subp
 
 **Problema.** 38 execuções de um mesmo capítulo ocupavam 30 GB.
 
-**Onde.** Novo módulo `yomu/runtime/output_retention.py`. Chamada: no ponto do runner onde o job é marcado como terminal com sucesso (`completed` ou `review_required`).
+**Onde.** Novo módulo `komyst/runtime/output_retention.py`. Chamada: no ponto do runner onde o job é marcado como terminal com sucesso (`completed` ou `review_required`).
 
 **Como fazer.**
 
 1. Nova configuração em `settings`: `OUTPUT_KEEP_RUNS_PER_CHAPTER = _env_int("OUTPUT_KEEP_RUNS_PER_CHAPTER", 3)` (0 = nunca apagar). Documente em `.env.example` e `docs/CONFIGURATION.md`.
 2. `prune_chapter_runs(chapter_dir, keep, protected_run_ids)`: ordena as subpastas com nome UUID por data de modificação e apaga as mais antigas além de `keep`.
 3. **Nunca apagar:** a execução do job atual; execuções de jobs com status não terminal ou `interrupted`; execuções publicadas na comunidade.
-4. **Antes de implementar a exclusão**, leia como a exclusão manual já funciona (procure `shutil.rmtree(folder` em `yomu/ui/ui_bridge.py`, ~linha 4734, e o botão "Excluir capítulo"). A retenção deve **reutilizar a mesma função**, para que o histórico e o banco fiquem coerentes. Se essa função não puder ser reutilizada sem refatorar, PARE e reporte.
+4. **Antes de implementar a exclusão**, leia como a exclusão manual já funciona (procure `shutil.rmtree(folder` em `komyst/ui/ui_bridge.py`, ~linha 4734, e o botão "Excluir capítulo"). A retenção deve **reutilizar a mesma função**, para que o histórico e o banco fiquem coerentes. Se essa função não puder ser reutilizada sem refatorar, PARE e reporte.
 5. Falha na retenção nunca derruba o job: capture, registre no log e siga.
 
 **Teste.** `tests/test_output_retention.py` com `tmp_path`: mantém as N mais novas; respeita protegidas; `keep=0` não apaga; erro de permissão não propaga.
@@ -266,9 +264,9 @@ Objetivo: nenhum job morre por causa de disco, de uma regra de SFX ou de um subp
 
 ### F0.5 Timeout real no subprocesso do Paddle
 
-**Problema.** `_REQUEST_TIMEOUT_SECONDS = 45.0` existe em `yomu/ocr/subprocess_ocr.py` mas nunca é usado. `self._process.stdout.readline()` bloqueia sem limite, com o lock do gateway preso.
+**Problema.** `_REQUEST_TIMEOUT_SECONDS = 45.0` existe em `komyst/ocr/subprocess_ocr.py` mas nunca é usado. `self._process.stdout.readline()` bloqueia sem limite, com o lock do gateway preso.
 
-**Onde.** `yomu/ocr/subprocess_ocr.py`, método que escreve o payload e lê a resposta (laço `for _ in range(500)`).
+**Onde.** `komyst/ocr/subprocess_ocr.py`, método que escreve o payload e lê a resposta (laço `for _ in range(500)`).
 
 **Como fazer.**
 
@@ -284,7 +282,7 @@ Objetivo: nenhum job morre por causa de disco, de uma regra de SFX ou de um subp
 
 **Problema.** Nenhum job registra RAM. `psutil` está instalado (7.2.2).
 
-**Onde.** `settings`: `RESOURCE_MONITORING` (~linha 323). Uso em `bp` (~linha 2793) e `yomu/runtime/resource_monitor.py`.
+**Onde.** `settings`: `RESOURCE_MONITORING` (~linha 323). Uso em `bp` (~linha 2793) e `komyst/runtime/resource_monitor.py`.
 
 **Como fazer.**
 
@@ -386,7 +384,7 @@ Objetivo: o uso de RAM deixa de crescer com o número de páginas. Medição: pi
 
 ### F1.4 PDF sem carregar todas as páginas na memória
 
-**Problema.** `yomu/export/pdf.py` (~linhas 150–159) abre todas as páginas em PIL RGB, guarda numa lista e só então chama `save(..., save_all=True, append_images=rest)`.
+**Problema.** `komyst/export/pdf.py` (~linhas 150–159) abre todas as páginas em PIL RGB, guarda numa lista e só então chama `save(..., save_all=True, append_images=rest)`.
 
 **Como fazer.**
 
@@ -400,11 +398,11 @@ Objetivo: o uso de RAM deixa de crescer com o número de páginas. Medição: pi
 
 **Problema.** Nenhum código checa RAM ou VRAM antes de carregar modelos. LaMa não limita o tamanho do recorte.
 
-**Onde.** `yomu/clean/inpainting/advanced_art_inpainting.py` (carga do LaMa, recorte com margem ≤ 256 px), `yomu/clean/inpainting/flux_edit.py` (`available()`), `yomu/core/gpu.py`.
+**Onde.** `komyst/clean/inpainting/advanced_art_inpainting.py` (carga do LaMa, recorte com margem ≤ 256 px), `komyst/clean/inpainting/flux_edit.py` (`available()`), `komyst/core/gpu.py`.
 
 **Como fazer.**
 
-1. Novo módulo `yomu/runtime/memory_guard.py`: `available_ram_mb()` (psutil; sem psutil devolve `None`) e `allow(feature, need_mb) -> bool` (se não souber medir, permite).
+1. Novo módulo `komyst/runtime/memory_guard.py`: `available_ram_mb()` (psutil; sem psutil devolve `None`) e `allow(feature, need_mb) -> bool` (se não souber medir, permite).
 2. Novas configurações em `settings`: `LAMA_MIN_FREE_RAM_MB = 1500`, `FLUX_MIN_FREE_RAM_MB = 6000`, `LAMA_MAX_CROP_PIXELS = 4_000_000`.
 3. LaMa: se o recorte passar de `LAMA_MAX_CROP_PIXELS` ou a guarda negar, o caminho devolve "não disponível" exatamente como já faz quando o modelo falta. A região segue a escada normal e pode acabar em revisão.
 4. FLUX: `available()` passa a consultar a guarda.
@@ -430,12 +428,12 @@ Objetivo: REF-A em Tradução pronta ≤ 300 s, sem perder nenhuma métrica de q
 
 ### F2.1 Varredura de resíduo (Paddle) só onde há evidência
 
-**Problema.** `OCR_RESIDUAL_SWEEP=True` roda uma varredura Paddle de página inteira em **toda** página (`yomu/ocr/residual_sweep.py`, chamada em `bp` por `sweep_page_residuals`, ~linha 274). Custo observado em REF-A saudável: 98,03 s; poderá variar por capítulo e máquina.
+**Problema.** `OCR_RESIDUAL_SWEEP=True` roda uma varredura Paddle de página inteira em **toda** página (`komyst/ocr/residual_sweep.py`, chamada em `bp` por `sweep_page_residuals`, ~linha 274). Custo observado em REF-A saudável: 98,03 s; poderá variar por capítulo e máquina.
 
 **Como fazer.**
 
 1. Leia `sweep_page_residuals` e `_residual_sweep_known_boxes` inteiros.
-2. Antes de chamar o Paddle, calcule um pré-filtro barato **sem modelo**: a página só é varrida se existir região "parecida com texto" **fora** das caixas já conhecidas. Use o estimador que o motor de OCR já tem (`_estimate_text_regions` / `_detect_story_text_region_boxes` em `yomu/ocr/ocr_engine.py`): se o número de regiões de história não cobertas por linhas conhecidas for zero, **pule** a varredura dessa página.
+2. Antes de chamar o Paddle, calcule um pré-filtro barato **sem modelo**: a página só é varrida se existir região "parecida com texto" **fora** das caixas já conhecidas. Use o estimador que o motor de OCR já tem (`_estimate_text_regions` / `_detect_story_text_region_boxes` em `komyst/ocr/ocr_engine.py`): se o número de regiões de história não cobertas por linhas conhecidas for zero, **pule** a varredura dessa página.
 3. Nova configuração `OCR_RESIDUAL_SWEEP_MODE = "evidence"` (valores: `"always"`, `"evidence"`, `"off"`). Padrão `"evidence"`.
 4. Conte `residual_sweep_pages_swept` e `residual_sweep_pages_skipped` no relatório de tempo.
 
@@ -478,7 +476,7 @@ Três correções independentes, um commit cada:
 
 **Problema.** Durante os ~130 s do pré-render de layout a tela mostra "tradução".
 
-**Onde.** Onde o progresso é emitido durante o pré-render (`bp`, procure `layout_preflight`) e onde a etapa vira texto (`yomu/ui/ui_bridge.py` e `static/tradutor_ui.js`; procure os rótulos de etapa existentes como "Baixando imagens").
+**Onde.** Onde o progresso é emitido durante o pré-render (`bp`, procure `layout_preflight`) e onde a etapa vira texto (`komyst/ui/ui_bridge.py` e `static/komyst_ui.js`; procure os rótulos de etapa existentes como "Baixando imagens").
 
 **Como fazer.** Emita uma etapa própria (`layout`) com contador de páginas. Rótulo pt-BR: "Montando as páginas". Acrescente nas traduções `static/i18n/*.js`. Atualize o guia do usuário.
 
@@ -490,7 +488,7 @@ Três correções independentes, um commit cada:
 
 **Como fazer.**
 
-1. Leia `yomu/core/gpu.py` e `flux_edit.py`. O `sd-cli` usa Vulkan, não DirectML. Dê ao FLUX um lock próprio (`FLUX_LOCK`) em vez do `DIRECTML_LOCK`. A Fase 1 agora vem antes da Fase 2, então a guarda da F1.5 já deverá estar integrada; confirme-a antes de alterar o lock.
+1. Leia `komyst/core/gpu.py` e `flux_edit.py`. O `sd-cli` usa Vulkan, não DirectML. Dê ao FLUX um lock próprio (`FLUX_LOCK`) em vez do `DIRECTML_LOCK`. A Fase 1 agora vem antes da Fase 2, então a guarda da F1.5 já deverá estar integrada; confirme-a antes de alterar o lock.
 2. Nova configuração `GENERATIVE_INPAINT_TIMEOUT_SECONDS = 120` (era 240 fixo) e `GENERATIVE_INPAINT_MAX_CALLS_PER_JOB = 12`. Ao atingir o teto, as regiões seguintes seguem a escada sem FLUX e vão para revisão.
 3. Não tente manter o `sd-cli` residente nesta fase (é mudança grande; fica registrado como melhoria futura).
 
@@ -498,7 +496,7 @@ Três correções independentes, um commit cada:
 
 ### F2.6 (Opcional, só com aprovação na PAUSA 2B) Sobrepor download e OCR
 
-`YOMU_PIPELINE_STREAMING` já existe (padrão desligado) e sobrepõe corte com OCR. Tarefa: medir REF-A com `YOMU_PIPELINE_STREAMING=1` e relatar tempo e qualidade. **Não mude o padrão** sem aprovação.
+`KOMYST_PIPELINE_STREAMING` já existe (padrão desligado) e sobrepõe corte com OCR. Tarefa: medir REF-A com `KOMYST_PIPELINE_STREAMING=1` e relatar tempo e qualidade. **Não mude o padrão** sem aprovação.
 
 ### F2.7 (Opcional, só com aprovação na PAUSA 2B) Unificar pré-render e render final
 
@@ -535,7 +533,7 @@ Para cada um dos três testes dependentes do OpenCV:
 
 **Problema.** Texto de história fica em inglês porque foi classificado `decorative` ou `unknown` e ignorado: "PFFT. HOW CUTE,", "CALLING THE CEO", "LOL! GOOD LUCK.".
 
-**Onde.** `ob`: `_decorative_textured_story_promotion_allowed`, `_decorative_short_display_story_promotion_allowed`, `_apply_classification_policy`; `yomu/review/region_taxonomy.py`: `weak_label_semantic_promotion_allowed`.
+**Onde.** `ob`: `_decorative_textured_story_promotion_allowed`, `_decorative_short_display_story_promotion_allowed`, `_apply_classification_policy`; `komyst/review/region_taxonomy.py`: `weak_label_semantic_promotion_allowed`.
 
 **Como fazer.**
 
@@ -558,7 +556,7 @@ Para cada um dos três testes dependentes do OpenCV:
 
 1. Leia como `split_glued_source_words` decide separar e por que esses quatro casos não foram separados (rode a função neles num script de rascunho, fora do repositório).
 2. Corrija a causa encontrada. Restrições: só separar quando **todas** as partes resultantes forem palavras do dicionário; nunca separar um token que já é palavra do dicionário; nunca separar nome detectado do capítulo (`protected`).
-3. A prova de completude (`source_completeness`, `missing_tokens`) deve comparar pelo texto **compactado** (sem espaços), para que "WITH ME IF YOU STILL" cubra "WITHMEIFYOUSTILL". Localize onde `missing_tokens` é calculado (`yomu/ocr/source_completeness.py`).
+3. A prova de completude (`source_completeness`, `missing_tokens`) deve comparar pelo texto **compactado** (sem espaços), para que "WITH ME IF YOU STILL" cubra "WITHMEIFYOUSTILL". Localize onde `missing_tokens` é calculado (`komyst/ocr/source_completeness.py`).
 
 **Teste.** Casos acima em `tests/test_region_taxonomy.py` e um teste de completude com token colado.
 
@@ -570,7 +568,7 @@ Entregar: lista, para REF-A e REF-B, de **toda** região que mudou de "ignorada"
 
 **Problema.** "SLIP", "WAAAH" em balão terminaram `preserved_original / proper_name_only`.
 
-**Como fazer.** Em `ob`, onde `PROPER_NAME_ONLY_REASON` é aplicado (`_finalize_proper_name_only` e chamadores): antes de concluir "é só nome próprio", se o texto for uma única palavra que (a) existe no glossário de SFX (`assets/lexicon/sfx_en_pt.json`, via `yomu/translation/sfx_glossary.py`) ou (b) é palavra do dicionário inglês e **não** está em `detected_proper_names`, então não é nome: siga a política de SFX (glossário quando "traduzir SFX" está ligado; preservar como SFX quando desligado, com disposição `PRESERVE_SFX`).
+**Como fazer.** Em `ob`, onde `PROPER_NAME_ONLY_REASON` é aplicado (`_finalize_proper_name_only` e chamadores): antes de concluir "é só nome próprio", se o texto for uma única palavra que (a) existe no glossário de SFX (`assets/lexicon/sfx_en_pt.json`, via `komyst/translation/sfx_glossary.py`) ou (b) é palavra do dicionário inglês e **não** está em `detected_proper_names`, então não é nome: siga a política de SFX (glossário quando "traduzir SFX" está ligado; preservar como SFX quando desligado, com disposição `PRESERVE_SFX`).
 
 **Teste.** Palavra de glossário em balão → não vira `proper_name_only`; nome detectado do capítulo → continua `proper_name_only`.
 
@@ -607,7 +605,7 @@ Objetivo: depois que o job termina com sucesso, a pasta do usuário contém só 
 
 ### F4.1 Mapa de entregáveis
 
-Use `plan_artifact_types` (`yomu/runtime/output_plan.py`), que já mapeia operações → artefatos.
+Use `plan_artifact_types` (`komyst/runtime/output_plan.py`), que já mapeia operações → artefatos.
 
 | Modo | Fica na pasta |
 |---|---|
@@ -620,9 +618,9 @@ Use `plan_artifact_types` (`yomu/runtime/output_plan.py`), que já mapeia opera�
 
 ### F4.2 Implementação
 
-1. Novo módulo `yomu/runtime/delivery.py` com `finalize_delivery(output_dir, plan, job_status)`.
+1. Novo módulo `komyst/runtime/delivery.py` com `finalize_delivery(output_dir, plan, job_status)`.
 2. **Só roda** quando o status final é `completed`. Em `review_required`, `failed`, `interrupted` ou cancelado, **não apaga nada** (é o que permite revisar, reexportar e retomar).
-3. Os arquivos de controle de crédito (`translation_ready.json`, `yk_reservation.json`) **não podem ser apagados** enquanto o runner ainda os consulta. Antes de implementar, liste quem lê cada um (`grep -rn "translation_ready\|yk_reservation" yomu`). Mova-os para `%LOCALAPPDATA%\TradutorIA\runtime\job_state\<job_id>\` e ajuste os leitores. Se o ajuste tocar mais de três funções, PARE e reporte.
+3. Os arquivos de controle de crédito (`translation_ready.json`, `yk_reservation.json`) **não podem ser apagados** enquanto o runner ainda os consulta. Antes de implementar, liste quem lê cada um (`grep -rn "translation_ready\|yk_reservation" Komyst`). Mova-os para `%LOCALAPPDATA%\Komyst\runtime\job_state\<job_id>\` e ajuste os leitores. Se o ajuste tocar mais de três funções, PARE e reporte.
 4. Configuração `KEEP_WORK_FILES = _env_bool("KEEP_WORK_FILES", False)` e uma caixa "Manter arquivos de trabalho" na tela (desmarcada por padrão).
 5. `traducao.txt`: uma região por bloco — página, original, tradução. Gerado a partir do mesmo dado de `_build_translation_only_manifest` (`bp`).
 6. Atualize o guia do usuário (local e nome dos arquivos de saída) e a doc técnica.
@@ -642,7 +640,7 @@ Use `plan_artifact_types` (`yomu/runtime/output_plan.py`), que já mapeia opera�
 
 ### F5.1 Três perfis
 
-Novo módulo `yomu/runtime/hardware_profile.py`: `detect() -> dict` (RAM total e livre via psutil; GPU e VRAM via o diagnóstico que já existe em `resource_monitor.detect_gpu_basic`) e `select_profile(detected, override) -> str`.
+Novo módulo `komyst/runtime/hardware_profile.py`: `detect() -> dict` (RAM total e livre via psutil; GPU e VRAM via o diagnóstico que já existe em `resource_monitor.detect_gpu_basic`) e `select_profile(detected, override) -> str`.
 
 | Configuração | Leve | Equilibrado | Qualidade |
 |---|---|---|---|
@@ -678,48 +676,31 @@ Rodar REF-A e REF-B **forçando** cada perfil (`HARDWARE_PROFILE=leve` etc.) na 
 
 ## FASE 6 — Nome "Komyst" e documentação legada
 
-### F6.1 Desfazer a troca excessiva
+### F6.1 Auditoria da identidade interna
 
-A renomeação em andamento trocou a palavra "Yomu" sozinha. Reverta onde é nome próprio de outra coisa ou registro histórico:
+Pacote Python, variáveis de ambiente, identidade de atualização, namespace de UUID e pasta de dados usam a identidade Komyst aprovada pelo dono, sem camada de compatibilidade ou migração. Verifique imports, chamadas de módulo, testes, configuração, instalador e updater; preserve somente integrações externas reais documentadas em `docs/BRANDING.md`.
 
-- nomes de modelo (exemplo: `docs/research/colab-clean-models/REPRODUCIBILITY.md`, "… Anime-Manga Big-LaMa");
-- títulos e conteúdo de `docs/consolidation/*`, `docs/research/*` e relatórios datados: são registros históricos e ficam com o nome da época.
+### F6.2 Identidade visível ao usuário
 
-Como fazer: `git diff -- docs/consolidation docs/research reports` e reverta esses caminhos para o conteúdo do `HEAD` (`git checkout HEAD -- <caminho>`), **depois** de confirmar na PAUSA P que não há conteúdo novo ali.
+README, callbacks, títulos de janela, relatórios, mensagens e instalador devem exibir Komyst. Os nomes existentes dos arquivos de entrada técnica podem permanecer quando forem dependências internas ainda usadas; não os apresente como nome do produto.
 
-### F6.2 Terminar o que o usuário vê
+### F6.3 Repositório e serviços externos
 
-Trocar para "Komyst" (lista auditada em 2026-11-10; confirme cada linha antes):
+- Instruções de desenvolvimento apontam para `https://github.com/HenriquePvAr/Komyst.git`.
+- Não altere o endpoint de manifesto do canal de atualização nem domínios de serviços externos nesta tarefa.
 
-- `supabase/functions/contact-request/index.ts` (cabeçalho e remetente do e-mail);
-- `yomu/ui/app.py` (página de retorno do login; texto "compatível com o Tradutor IA");
-- `yomu/runtime/update_bootstrap.py` (mensagem "foi atualizado");
-- títulos dos relatórios HTML em `yomu/download/down.py` e `bp`;
-- `yomu/commands/run_webtoon.py`, `tools/reports/generate_manual_review_report.py`, `tools/performance/benchmark_ocr_engines.py`;
-- `THIRD_PARTY_NOTICES.txt`, `README.md`, `CLAUDE.md`, `docs/INSTALLATION.md`, título de `docs/technical/DOCUMENTACAO_TECNICA.md`.
+### F6.4 Documentação e histórico
 
-Não trocar nada da lista 1.2 item 6.
-
-### F6.3 Links e repositório
-
-- Instruções de clone em `README.md`, `docs/INSTALLATION.md`, `docs/DEVELOPMENT.md`, `docs/technical/DOCUMENTACAO_TECNICA.md` → `https://github.com/HenriquePvAr/Komyst.git`.
-- `docs/status/AGENTE.md` e `docs/status/board/board.js` → `HenriquePvAr/Komyst`.
-- **Não altere** `update_bootstrap.DEFAULT_MANIFEST_URL` (repositório de releases separado) sem ordem explícita do dono.
-
-### F6.4 Documentação legada
-
-1. Crie `docs/archive/` e mova para lá (com `git mv`): `docs/consolidation/`, `docs/research/`, `docs/beta_quality_revalidation.md`, `docs/M16_TRANSLATION_QUALITY_REPLAY.md`, `docs/M20_RC_BLOCKER_HOTFIX.md`, `docs/DOCUMENTATION_AUDIT.md`, `docs/REMOTE_SCHEMA_RECONCILIATION.md`, `docs/SUPABASE_SOURCE_RECONCILIATION.md`, `docs/architecture/ROOT_STRUCTURE_AUDIT.md`. Antes de mover, confirme que cada arquivo existe.
-2. Atualize `docs/README.md`: seção "Arquivo histórico" apontando para `docs/archive/`; remova "Estado consolidado" como se fosse atual.
-3. Corrija links quebrados: rode um verificador de links relativos em todos os `.md` (script simples em `tools/audit/check_doc_links.py`) e corrija cada um.
-4. Rastreie no Git `docs/BRANDING.md` e `docs/HARDWARE_PROFILE.md` (hoje linkados e não rastreados).
-5. Metadados: nenhum SHA de "Base verificada" atual existe no clone. Em cada documento **tocado**, troque pela SHA de `dev` no momento da revisão e atualize "Revisado em".
-6. Registre em `docs/BRANDING.md` a decisão: nome público "Komyst"; identificadores internos mantidos (lista 1.2 item 6) e por quê.
+1. Atualize o guia do usuário e a documentação técnica para instalador, licença Beta, instalação limpa e atualização. Para validação do beta tester, use a versão `v0.9.1-beta.18`, a data “não informada” e a formulação **validado por beta tester, informado pelo dono**.
+2. Remova snapshots de estado com SHA/data antigos; use código atual e proveniência de validação.
+3. Remova pelo Git os relatórios históricos de tarefa obsoletos; não apague artefatos não rastreados nem dados fora do repositório.
+4. Corrija links relativos e valide `docs/status/board/board.js` sem duplicar ids nem quebrar referências.
 
 ### ⏸ PAUSA 6 (final)
 
-- [ ] `git grep -i "yomu sekai\|tradutor ia"` em `static/`, `ui/`, `docs/user/`, `README.md` retorna zero ocorrências visíveis ao usuário (ocorrências em `docs/archive/` são permitidas).
+- [ ] Marcas visíveis em `static/`, `ui/`, `docs/user/` e `README.md` usam Komyst; exceções externas estão listadas em `docs/BRANDING.md`.
 - [ ] Verificador de links sem erros.
-- [ ] App abre, login funciona, um job de REF-A completa (prova de que nenhum identificador interno foi quebrado).
+- [ ] Testes de imports, updater, licença e empacotamento passam; qualquer validação física pendente fica marcada como gate externo.
 - [ ] Suíte completa verde.
 
 ---

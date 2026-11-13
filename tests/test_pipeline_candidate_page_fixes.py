@@ -3,9 +3,9 @@ words vs SFX, unread continuation rows, re-OCR crop margin, protected straight a
 import cv2
 import numpy as np
 
-import yomu.ocr.ocr_balloon as ob
-from yomu.ocr.ocr_engine import OCRLine
-from yomu.review import region_taxonomy
+import komyst.ocr.ocr_balloon as ob
+from komyst.ocr.ocr_engine import OCRLine
+from komyst.review import region_taxonomy
 
 
 def _line(text, box, line_id="L1", confidence=0.97):
@@ -249,7 +249,7 @@ def test_white_text_on_a_midtone_surround_is_masked_as_light_text():
 
 
 def test_lexicon_knows_written_words_and_not_romanised_sounds():
-    from yomu.review import region_taxonomy as taxonomy
+    from komyst.review import region_taxonomy as taxonomy
     assert taxonomy.is_english_word("INCREDIBLE")
     assert not taxonomy.is_english_word("PAEHYEOK")
     assert not taxonomy.is_english_word("FWASHAA")
@@ -560,7 +560,7 @@ def test_mostly_digit_lines_with_real_words_are_kept():
 
 
 def test_bounded_edit_distance_matches_the_full_one_within_the_limit():
-    from yomu.ocr import ocr_engine
+    from komyst.ocr import ocr_engine
     for a, b in (("house", "horse"), ("kitten", "sitting"), ("abc", "abc"), ("short", "longerword")):
         full = ocr_engine._edit_distance(a, b)
         bounded = ocr_engine._bounded_edit_distance(a, b, 2)

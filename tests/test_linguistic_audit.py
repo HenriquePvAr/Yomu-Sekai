@@ -10,8 +10,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
-import yomu.translation.linguistic_audit as audit
-import yomu.review.region_taxonomy as tax
+import komyst.translation.linguistic_audit as audit
+import komyst.review.region_taxonomy as tax
 
 
 class LinguisticAuditContracts(unittest.TestCase):

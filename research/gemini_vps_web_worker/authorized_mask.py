@@ -9,11 +9,11 @@ import cv2
 import numpy as np
 
 try:
-    from yomu.ocr import ocr_balloon as yomu_ocr
+    from komyst.ocr import ocr_balloon as komyst_ocr
 except ImportError:  # compatibility with the pre-package research checkout
-    import ocr_balloon as yomu_ocr
+    import ocr_balloon as komyst_ocr
 try:
-    from yomu.ocr.ocr_engine import OCREngine
+    from komyst.ocr.ocr_engine import OCREngine
 except ImportError:  # compatibility with the pre-package research checkout
     from ocr_engine import OCREngine
 
@@ -193,14 +193,14 @@ def generate_authorized_mask(image_path: str | Path, mask_path: str | Path, *, p
         raise ValueError("image_load_failed")
     height, width = image.shape[:2]
     lines = OCREngine("en").detect_lines(image)
-    _, groups = yomu_ocr.analyze_image_array(image, lines)
+    _, groups = komyst_ocr.analyze_image_array(image, lines)
     image_sha = _sha256(image_path)
     selected_group, selection_error = _resolve_target_group(groups, target_group_index)
     page_mask = np.zeros((height, width), dtype=np.uint8)
     sfx_mask = np.zeros_like(page_mask)
     for group in groups:
         if str(getattr(group, "classification", "") or "").lower() in SFX_CLASSES:
-            sfx_mask = cv2.bitwise_or(sfx_mask, yomu_ocr._build_text_mask(image.shape, [group], padding=2))
+            sfx_mask = cv2.bitwise_or(sfx_mask, komyst_ocr._build_text_mask(image.shape, [group], padding=2))
     sources: list[dict[str, Any]] = []
     blocked: list[dict[str, Any]] = []
     coverage_records: list[dict[str, Any]] = []
@@ -218,10 +218,10 @@ def generate_authorized_mask(image_path: str | Path, mask_path: str | Path, *, p
         if classification in SFX_CLASSES or classification not in ELIGIBLE_CLASSES:
             blocked.append({**record, "reason": "SFX_PROTECTED" if classification in SFX_CLASSES else "UNKNOWN_REVIEW"})
             continue
-        # Existing Yomu component segmentation is constrained by this small
+        # Existing Komyst component segmentation is constrained by this small
         # ROI. The OCR polygon/bbox is never used as the final authorization.
-        roi = yomu_ocr._build_text_mask(image.shape, [group], padding=2)
-        refined, refinement = yomu_ocr._component_text_mask(image, group, roi, strategy="conservative")
+        roi = komyst_ocr._build_text_mask(image.shape, [group], padding=2)
+        refined, refinement = komyst_ocr._component_text_mask(image, group, roi, strategy="conservative")
         if not np.any(refined):
             blocked.append({**record, "reason": "EMPTY_REFINED_MASK"})
             continue
@@ -236,7 +236,7 @@ def generate_authorized_mask(image_path: str | Path, mask_path: str | Path, *, p
         sources.append({**record, "refinement": refinement, "mask_coverage": geometry})
 
     # SFX wins over any overlapping eligible region. This is explicit even
-    # though groups are normally disjoint after Yomu grouping.
+    # though groups are normally disjoint after Komyst grouping.
     page_mask[sfx_mask > 0] = 0
     pixels = int(np.count_nonzero(page_mask))
     coverage = pixels / float(width * height)
@@ -259,7 +259,7 @@ def generate_authorized_mask(image_path: str | Path, mask_path: str | Path, *, p
         "status": status,
         "mask_generator_version": version,
         "mask_level": "B" if status == "PASS" else "C",
-        "mask_source": "Yomu OCR geometry + existing _component_text_mask",
+        "mask_source": "Komyst OCR geometry + existing _component_text_mask",
         "image_sha256": image_sha,
         "mask_sha256": _sha256(mask_path) if status == "PASS" else None,
         "mask_path": str(mask_path) if status == "PASS" else None,
@@ -298,7 +298,7 @@ def generate_authorized_mask_v2(image_path: str | Path, mask_path: str | Path, *
         raise ValueError("image_load_failed")
     height, width = image.shape[:2]
     lines = OCREngine("en").detect_lines(image)
-    _, groups = yomu_ocr.analyze_image_array(image, lines)
+    _, groups = komyst_ocr.analyze_image_array(image, lines)
     image_sha = _sha256(image_path)
     selected_group, selection_error = _resolve_target_group(groups, target_group_index)
     page_mask = np.zeros((height, width), dtype=np.uint8)
@@ -306,7 +306,7 @@ def generate_authorized_mask_v2(image_path: str | Path, mask_path: str | Path, *
     sfx_mask = np.zeros_like(page_mask)
     for group in groups:
         if str(getattr(group, "classification", "") or "").lower() in SFX_CLASSES:
-            sfx_mask = cv2.bitwise_or(sfx_mask, yomu_ocr._build_text_mask(image.shape, [group], padding=2))
+            sfx_mask = cv2.bitwise_or(sfx_mask, komyst_ocr._build_text_mask(image.shape, [group], padding=2))
     sources: list[dict[str, Any]] = []
     blocked: list[dict[str, Any]] = []
     coverage_records: list[dict[str, Any]] = []
@@ -319,7 +319,7 @@ def generate_authorized_mask_v2(image_path: str | Path, mask_path: str | Path, *
         classification = str(getattr(group, "classification", "unknown") or "unknown").lower()
         lines_for_group = list(getattr(group, "lines", []) or [])
         ocr_support = min((float(getattr(line, "confidence", 0.0) or 0.0) for line in lines_for_group), default=0.0)
-        roi = yomu_ocr._build_text_mask(image.shape, [group], padding=2)
+        roi = komyst_ocr._build_text_mask(image.shape, [group], padding=2)
         roi_bool = roi > 0
         roi_pixels = max(1, int(roi_bool.sum()))
         reason_codes: list[str] = []
@@ -330,7 +330,7 @@ def generate_authorized_mask_v2(image_path: str | Path, mask_path: str | Path, *
             blocked.append({"text": group.text, "classification": classification, "reason_codes": ["SFX_PROTECTED"]})
             continue
         if classification in ELIGIBLE_CLASSES:
-            selected, refinement = yomu_ocr._component_text_mask(image, group, roi, strategy="conservative")
+            selected, refinement = komyst_ocr._component_text_mask(image, group, roi, strategy="conservative")
             source_kind = "V1_COMPONENT_MASK"
         elif classification == "unknown":
             background = getattr(group, "background_metrics", {}) or {}
@@ -339,7 +339,7 @@ def generate_authorized_mask_v2(image_path: str | Path, mask_path: str | Path, *
             long_line_count = int(background.get("long_line_count") or 0)
             background_edge_density = float(background.get("background_edge_density") or 0.0)
             token_count = len(str(getattr(group, "text", "") or "").split())
-            outlined, outlined_metrics = yomu_ocr._outlined_light_text_mask(image, group, roi)
+            outlined, outlined_metrics = komyst_ocr._outlined_light_text_mask(image, group, roi)
             # Recover saturated fill inside an outlined glyph only when it is
             # spatially supported by the existing outlined evidence. This is
             # local color support, not a global cyan/white threshold.

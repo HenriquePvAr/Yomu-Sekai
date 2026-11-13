@@ -15,12 +15,12 @@ async function test(name, fn) {
 }
 
 const shell = fs.readFileSync(path.join(ROOT, 'ui', 'ui_shell.html'), 'utf8');
-const app = fs.readFileSync(path.join(ROOT, 'static', 'tradutor_ui.js'), 'utf8');
+const app = fs.readFileSync(path.join(ROOT, 'static', 'komyst_ui.js'), 'utf8');
 const community = fs.readFileSync(path.join(ROOT, 'static', 'social_community.js'), 'utf8');
 const api = fs.readFileSync(path.join(ROOT, 'static', 'social_api.js'), 'utf8');
 const authUi = fs.readFileSync(path.join(ROOT, 'static', 'auth_ui.js'), 'utf8');
-const backend = fs.readFileSync(path.join(ROOT, 'yomu', 'ui', 'app.py'), 'utf8');
-const bridge = fs.readFileSync(path.join(ROOT, 'yomu', 'ui', 'ui_bridge.py'), 'utf8');
+const backend = fs.readFileSync(path.join(ROOT, 'komyst', 'ui', 'app.py'), 'utf8');
+const bridge = fs.readFileSync(path.join(ROOT, 'komyst', 'ui', 'ui_bridge.py'), 'utf8');
 
 await test('main shell has no profile view, navigation, edit action, or media upload controls', async () => {
   assert.doesNotMatch(shell, /view-profile|data-tab="profile"|Editar perfil|profile-(?:avatar|banner)-input/i);
@@ -55,7 +55,7 @@ await test('bootstrap does not query or synchronize social profile metadata', as
 
 await test('obsolete main-shell profile navigation falls back to Home', async () => {
   assert.match(app, /function activateTab[\s\S]{0,500}profile[\s\S]{0,200}inicio/);
-  assert.match(app, /tradutor-goto-tab[\s\S]{0,400}profile[\s\S]{0,200}inicio/);
+  assert.match(app, /komyst-goto-tab[\s\S]{0,400}profile[\s\S]{0,200}inicio/);
 });
 
 await test('account identity remains session-based and does not require social profile metadata', async () => {

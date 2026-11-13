@@ -1,4 +1,4 @@
--- Tradutor.Ia social foundation — additive schema, functions, triggers, grants, indexes.
+-- Komyst social foundation — additive schema, functions, triggers, grants, indexes.
 --
 -- This migration is purely additive: it creates a private schema, ten public social
 -- tables and one private table, plus helper functions and triggers. It performs no

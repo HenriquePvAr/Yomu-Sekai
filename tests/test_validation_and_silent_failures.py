@@ -4,9 +4,9 @@ from unittest.mock import patch
 import cv2
 import numpy as np
 
-import yomu.ocr.ocr_balloon as ob
-from yomu.ocr import source_completeness as completeness
-from yomu.ocr.ocr_engine import OCR_INSUFFICIENT, OCR_REVIEW, OCR_SUFFICIENT, OCREngine, OCRLine
+import komyst.ocr.ocr_balloon as ob
+from komyst.ocr import source_completeness as completeness
+from komyst.ocr.ocr_engine import OCR_INSUFFICIENT, OCR_REVIEW, OCR_SUFFICIENT, OCREngine, OCRLine
 
 
 def _group(text, box):

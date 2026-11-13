@@ -3,7 +3,7 @@
   const SUPPORTED = ['pt-BR', 'en-US', 'es-ES', 'fr-FR', 'ja-JP', 'ko-KR'];
   const FALLBACK = 'pt-BR';
   const MAP = {pt: 'pt-BR', en: 'en-US', es: 'es-ES', fr: 'fr-FR', ja: 'ja-JP', ko: 'ko-KR'};
-  const STORAGE_KEY = 'tradutor.interfaceLanguage';
+  const STORAGE_KEY = 'komyst.interfaceLanguage';
 
   function normalize(value) {
     const raw = String(value || '').trim();
@@ -32,7 +32,7 @@
 
   function t(key, params = {}) {
     const language = activeLanguage();
-    const catalogs = window.TradutorI18nCatalogs || {};
+    const catalogs = window.KomystI18nCatalogs || {};
     let text = catalogs[language]?.[key] ?? catalogs[FALLBACK]?.[key] ?? key;
     for (const [name, value] of Object.entries(params || {})) {
       text = text.replaceAll(`{${name}}`, String(value));
@@ -56,7 +56,7 @@
     localStorage.setItem(STORAGE_KEY, normalize(value));
     document.documentElement.lang = activeLanguage();
     apply(document);
-    window.dispatchEvent(new CustomEvent('tradutor:language-changed', {
+    window.dispatchEvent(new CustomEvent('komyst:language-changed', {
       detail: {selected: selectedLanguage(), active: activeLanguage()},
     }));
   }
@@ -69,7 +69,7 @@
     return new Intl.DateTimeFormat(activeLanguage(), options).format(value);
   }
 
-  window.TradutorI18n = {
+  window.KomystI18n = {
     supported: SUPPORTED.slice(),
     fallback: FALLBACK,
     normalize,

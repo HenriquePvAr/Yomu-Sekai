@@ -29,8 +29,8 @@ insert into private.legacy_migration_sources
     (source_instance_id, source_system, source_schema_version, initial_snapshot_sha256,
      initial_logical_fingerprint, registered_by, manifest_id)
 values
-    (:'source_hc_1', 'tradutor_ia_sqlite_test_v1', 3, repeat('b', 64), 'fp-collide', 'test-operator', :'manifest_hc_1'),
-    (:'source_hc_2', 'tradutor_ia_sqlite_test_v1', 3, repeat('b', 64), 'fp-collide', 'test-operator', :'manifest_hc_2');
+    (:'source_hc_1', 'komyst_sqlite_test_v1', 3, repeat('b', 64), 'fp-collide', 'test-operator', :'manifest_hc_1'),
+    (:'source_hc_2', 'komyst_sqlite_test_v1', 3, repeat('b', 64), 'fp-collide', 'test-operator', :'manifest_hc_2');
 select is(
     (select count(*)::int from private.legacy_migration_sources
      where initial_snapshot_sha256 = repeat('b', 64)),
@@ -46,8 +46,8 @@ insert into private.legacy_migration_sources
     (source_instance_id, source_system, source_schema_version, initial_snapshot_sha256,
      initial_logical_fingerprint, registered_by, manifest_id)
 values
-    (:'source_a', 'tradutor_ia_sqlite_test_v1', 3, repeat('a', 64), 'fp-a', 'test-operator', :'manifest_a'),
-    (:'source_b', 'tradutor_ia_sqlite_test_v1', 3, repeat('c', 64), 'fp-b', 'test-operator', :'manifest_b');
+    (:'source_a', 'komyst_sqlite_test_v1', 3, repeat('a', 64), 'fp-a', 'test-operator', :'manifest_a'),
+    (:'source_b', 'komyst_sqlite_test_v1', 3, repeat('c', 64), 'fp-b', 'test-operator', :'manifest_b');
 
 -- 1.3 Same legacy_publication_id in two distinct sources: both allowed.
 select lives_ok(
@@ -55,7 +55,7 @@ select lives_ok(
         (source_system, source_instance_id, source_schema_version, legacy_publication_id,
          source_record_digest, owner_resolution_state, migration_mode, requested_target_status,
          migration_state)
-      values ('tradutor_ia_sqlite_test_v1', 'a1000000-0000-4000-8000-000000000001', 3,
+      values ('komyst_sqlite_test_v1', 'a1000000-0000-4000-8000-000000000001', 3,
               'LEGACY-PUB-TEST-01', 'digest-a-1', 'unresolved', 'published_copy', 'community', 'planned')$$,
     '1.3a LEGACY-PUB-TEST-01 reserved under source A');
 select lives_ok(
@@ -63,7 +63,7 @@ select lives_ok(
         (source_system, source_instance_id, source_schema_version, legacy_publication_id,
          source_record_digest, owner_resolution_state, migration_mode, requested_target_status,
          migration_state)
-      values ('tradutor_ia_sqlite_test_v1', 'a1000000-0000-4000-8000-000000000002', 3,
+      values ('komyst_sqlite_test_v1', 'a1000000-0000-4000-8000-000000000002', 3,
               'LEGACY-PUB-TEST-01', 'digest-b-1', 'unresolved', 'published_copy', 'community', 'planned')$$,
     '1.3b the same legacy_publication_id under source B does not collide with source A');
 
@@ -73,7 +73,7 @@ select throws_ok(
         (source_system, source_instance_id, source_schema_version, legacy_publication_id,
          source_record_digest, owner_resolution_state, migration_mode, requested_target_status,
          migration_state)
-      values ('tradutor_ia_sqlite_test_v1', 'a1000000-0000-4000-8000-000000000001', 3,
+      values ('komyst_sqlite_test_v1', 'a1000000-0000-4000-8000-000000000001', 3,
               'LEGACY-PUB-TEST-01', 'digest-a-1-dup', 'unresolved', 'published_copy', 'community', 'planned')$$,
     '23505',
     NULL,
@@ -85,7 +85,7 @@ select lives_ok(
         (source_system, source_instance_id, source_schema_version, legacy_publication_id,
          source_job_id, source_record_digest, owner_resolution_state, migration_mode,
          requested_target_status, migration_state)
-      values ('tradutor_ia_sqlite_test_v1', 'a1000000-0000-4000-8000-000000000001', 3,
+      values ('komyst_sqlite_test_v1', 'a1000000-0000-4000-8000-000000000001', 3,
               'LEGACY-PUB-TEST-02', 'job-shared-001', 'digest-a-2', 'unresolved', 'published_copy',
               'community', 'planned')$$,
     '1.5a job-shared-001 reserved once under source A');
@@ -94,7 +94,7 @@ select throws_ok(
         (source_system, source_instance_id, source_schema_version, legacy_publication_id,
          source_job_id, source_record_digest, owner_resolution_state, migration_mode,
          requested_target_status, migration_state)
-      values ('tradutor_ia_sqlite_test_v1', 'a1000000-0000-4000-8000-000000000001', 3,
+      values ('komyst_sqlite_test_v1', 'a1000000-0000-4000-8000-000000000001', 3,
               'LEGACY-PUB-TEST-03', 'job-shared-001', 'digest-a-3', 'unresolved', 'published_copy',
               'community', 'planned')$$,
     '23505',
@@ -105,7 +105,7 @@ select lives_ok(
         (source_system, source_instance_id, source_schema_version, legacy_publication_id,
          source_job_id, source_record_digest, owner_resolution_state, migration_mode,
          requested_target_status, migration_state)
-      values ('tradutor_ia_sqlite_test_v1', 'a1000000-0000-4000-8000-000000000002', 3,
+      values ('komyst_sqlite_test_v1', 'a1000000-0000-4000-8000-000000000002', 3,
               'LEGACY-PUB-TEST-02', 'job-shared-001', 'digest-b-2', 'unresolved', 'published_copy',
               'community', 'planned')$$,
     '1.5c job-shared-001 reused under a different source is allowed');
@@ -118,9 +118,9 @@ insert into private.legacy_publication_migrations
      pdf_sha256, source_record_digest, owner_resolution_state, migration_mode,
      requested_target_status, migration_state)
 values
-    ('tradutor_ia_sqlite_test_v1', :'source_a', 3, 'LEGACY-PUB-TEST-04', repeat('d', 64),
+    ('komyst_sqlite_test_v1', :'source_a', 3, 'LEGACY-PUB-TEST-04', repeat('d', 64),
      'digest-a-4', 'unresolved', 'published_copy', 'community', 'planned'),
-    ('tradutor_ia_sqlite_test_v1', :'source_b', 3, 'LEGACY-PUB-TEST-04', repeat('d', 64),
+    ('komyst_sqlite_test_v1', :'source_b', 3, 'LEGACY-PUB-TEST-04', repeat('d', 64),
      'digest-b-4', 'unresolved', 'published_copy', 'community', 'planned');
 select is(
     (select count(*)::int from private.legacy_publication_migrations where pdf_sha256 = repeat('d', 64)),
@@ -149,7 +149,7 @@ select throws_ok(
         (source_system, source_instance_id, source_schema_version, legacy_publication_id,
          source_record_digest, owner_resolution_state, migration_mode, requested_target_status,
          migration_state)
-      values ('tradutor_ia_sqlite_test_v1', '99999999-9999-4999-8999-999999999999', 3,
+      values ('komyst_sqlite_test_v1', '99999999-9999-4999-8999-999999999999', 3,
               'LEGACY-PUB-TEST-06', 'digest-x-6', 'unresolved', 'published_copy', 'community', 'planned')$$,
     '23503',
     NULL,
@@ -159,7 +159,7 @@ select throws_ok(
     $$insert into private.legacy_migration_sources
         (source_system, source_schema_version, initial_snapshot_sha256, initial_logical_fingerprint,
          registered_by, manifest_id)
-      values ('tradutor_ia_sqlite_test_v1', 3, 'not-a-valid-hash', 'fp-bad', 'test-operator',
+      values ('komyst_sqlite_test_v1', 3, 'not-a-valid-hash', 'fp-bad', 'test-operator',
               'c1000000-0000-4000-8000-000000000001')$$,
     NULL,
     NULL,
@@ -170,7 +170,7 @@ select throws_ok(
         (source_system, source_instance_id, source_schema_version, legacy_publication_id,
          pdf_sha256, source_record_digest, owner_resolution_state, migration_mode,
          requested_target_status, migration_state)
-      values ('tradutor_ia_sqlite_test_v1', 'a1000000-0000-4000-8000-000000000001', 3,
+      values ('komyst_sqlite_test_v1', 'a1000000-0000-4000-8000-000000000001', 3,
               'LEGACY-PUB-TEST-07', 'ZZ-not-hex', 'digest-a-7', 'unresolved', 'published_copy',
               'community', 'planned')$$,
     NULL,
@@ -181,7 +181,7 @@ select throws_ok(
     $$insert into private.legacy_migration_sources
         (source_system, source_schema_version, initial_snapshot_sha256, initial_logical_fingerprint,
          registered_by, manifest_id, private_metadata)
-      values ('tradutor_ia_sqlite_test_v1', 3, repeat('e', 64), 'fp-meta', 'test-operator',
+      values ('komyst_sqlite_test_v1', 3, repeat('e', 64), 'fp-meta', 'test-operator',
               'c1000000-0000-4000-8000-000000000002', '["not", "an", "object"]'::jsonb)$$,
     NULL,
     NULL,
@@ -219,7 +219,7 @@ select throws_ok(
         (source_system, source_instance_id, source_schema_version, legacy_publication_id,
          source_record_digest, owner_resolution_state, migration_mode, requested_target_status,
          migration_state, target_work_id, target_chapter_id, completed_at)
-      values ('tradutor_ia_sqlite_test_v1', 'a1000000-0000-4000-8000-000000000001', 3,
+      values ('komyst_sqlite_test_v1', 'a1000000-0000-4000-8000-000000000001', 3,
               'LEGACY-PUB-0001-TEST', 'digest-pub0001', 'resolved_locally_by_uuid_match',
               'published_copy', 'community', 'completed',
               '44444444-4444-4444-8444-444444444401', '55555555-5555-4555-8555-555555555501', now())$$,
@@ -233,7 +233,7 @@ select lives_ok(
         (source_system, source_instance_id, source_schema_version, legacy_publication_id,
          source_record_digest, owner_resolution_state, migration_mode, requested_target_status,
          migration_state, target_work_id, target_chapter_id, target_chapter_asset_id, completed_at)
-      values ('tradutor_ia_sqlite_test_v1', 'a1000000-0000-4000-8000-000000000001', 3,
+      values ('komyst_sqlite_test_v1', 'a1000000-0000-4000-8000-000000000001', 3,
               'LEGACY-PUB-0001-TEST', 'digest-pub0001', 'resolved_locally_by_uuid_match',
               'published_copy', 'community', 'completed',
               '44444444-4444-4444-8444-444444444401', '55555555-5555-4555-8555-555555555501',
@@ -246,7 +246,7 @@ select throws_ok(
         (source_system, source_instance_id, source_schema_version, legacy_publication_id,
          source_record_digest, owner_resolution_state, migration_mode, requested_target_status,
          migration_state, target_work_id)
-      values ('tradutor_ia_sqlite_test_v1', 'a1000000-0000-4000-8000-000000000001', 3,
+      values ('komyst_sqlite_test_v1', 'a1000000-0000-4000-8000-000000000001', 3,
               'LEGACY-PUB-0001-TEST-B', 'digest-pub0001b', 'resolved_locally_by_uuid_match',
               'published_copy', 'community', 'chapter_created',
               '44444444-4444-4444-8444-444444444401')$$,
@@ -265,7 +265,7 @@ select lives_ok(
         (source_system, source_instance_id, source_schema_version, legacy_publication_id,
          source_record_digest, owner_resolution_state, migration_mode, requested_target_status,
          migration_state, target_work_id, target_chapter_id, completed_at)
-      values ('tradutor_ia_sqlite_test_v1', 'a1000000-0000-4000-8000-000000000002', 3,
+      values ('komyst_sqlite_test_v1', 'a1000000-0000-4000-8000-000000000002', 3,
               'LEGACY-PUB-0002-TEST', 'digest-pub0002', 'unresolved', 'draft_recovery', 'draft',
               'recovery_completed', '44444444-4444-4444-8444-444444444401',
               '55555555-5555-4555-8555-555555555502', now())$$,
@@ -277,7 +277,7 @@ select throws_ok(
         (source_system, source_instance_id, source_schema_version, legacy_publication_id,
          source_record_digest, owner_resolution_state, migration_mode, requested_target_status,
          migration_state)
-      values ('tradutor_ia_sqlite_test_v1', 'a1000000-0000-4000-8000-000000000002', 3,
+      values ('komyst_sqlite_test_v1', 'a1000000-0000-4000-8000-000000000002', 3,
               'LEGACY-PUB-0002-TEST-B', 'digest-pub0002b', 'unresolved', 'draft_recovery', 'community',
               'planned')$$,
     NULL,
@@ -290,7 +290,7 @@ select throws_ok(
         (source_system, source_instance_id, source_schema_version, legacy_publication_id,
          source_record_digest, owner_resolution_state, migration_mode, requested_target_status,
          migration_state, target_work_id, target_chapter_id)
-      values ('tradutor_ia_sqlite_test_v1', 'a1000000-0000-4000-8000-000000000002', 3,
+      values ('komyst_sqlite_test_v1', 'a1000000-0000-4000-8000-000000000002', 3,
               'LEGACY-PUB-0002-TEST-C', 'digest-pub0002c', 'unresolved', 'draft_recovery', 'draft',
               'publication_authorized', '44444444-4444-4444-8444-444444444401',
               '55555555-5555-4555-8555-555555555501')$$,
@@ -304,7 +304,7 @@ select throws_ok(
         (source_system, source_instance_id, source_schema_version, legacy_publication_id,
          source_record_digest, owner_resolution_state, migration_mode, requested_target_status,
          migration_state, target_work_id, target_chapter_id, completed_at)
-      values ('tradutor_ia_sqlite_test_v1', 'a1000000-0000-4000-8000-000000000002', 3,
+      values ('komyst_sqlite_test_v1', 'a1000000-0000-4000-8000-000000000002', 3,
               'LEGACY-PUB-0002-TEST-D', 'digest-pub0002d', 'unresolved', 'published_copy', 'community',
               'recovery_completed', '44444444-4444-4444-8444-444444444401',
               '55555555-5555-4555-8555-555555555501', now())$$,
@@ -320,7 +320,7 @@ select throws_ok(
         (source_system, source_instance_id, source_schema_version, legacy_publication_id,
          source_record_digest, owner_resolution_state, migration_mode, requested_target_status,
          migration_state, target_work_id, target_chapter_id, completed_at)
-      values ('tradutor_ia_sqlite_test_v1', 'a1000000-0000-4000-8000-000000000002', 3,
+      values ('komyst_sqlite_test_v1', 'a1000000-0000-4000-8000-000000000002', 3,
               'LEGACY-PUB-0002-TEST-E', 'digest-pub0002e', 'unresolved', 'draft_recovery', 'draft',
               'completed', '44444444-4444-4444-8444-444444444401',
               '55555555-5555-4555-8555-555555555501', now())$$,
@@ -338,7 +338,7 @@ select lives_ok(
          source_record_digest, owner_resolution_state, migration_mode, requested_target_status,
          migration_state, publication_authorization_state,
          target_work_id, target_chapter_id, target_chapter_asset_id, completed_at)
-      values ('tradutor_ia_sqlite_test_v1', 'a1000000-0000-4000-8000-000000000002', 3,
+      values ('komyst_sqlite_test_v1', 'a1000000-0000-4000-8000-000000000002', 3,
               'LEGACY-PUB-0002-TEST-F', 'digest-pub0002f', 'unresolved', 'draft_recovery', 'community',
               'completed', 'published',
               '44444444-4444-4444-8444-444444444401', '55555555-5555-4555-8555-555555555503',
@@ -360,7 +360,7 @@ insert into private.legacy_publication_migrations
     (id, source_system, source_instance_id, source_schema_version, legacy_publication_id,
      source_record_digest, owner_resolution_state, owner_id, migration_mode,
      requested_target_status, migration_state)
-values ('66666666-6666-4666-8666-666666666601', 'tradutor_ia_sqlite_test_v1',
+values ('66666666-6666-4666-8666-666666666601', 'komyst_sqlite_test_v1',
         :'source_a', 3, 'LEGACY-PUB-RET-01', 'digest-ret-01', 'resolved_locally_by_uuid_match',
         :'owner_ret', 'published_copy', 'community', 'planned');
 
@@ -400,7 +400,7 @@ insert into private.legacy_publication_migrations
     (id, source_system, source_instance_id, source_schema_version, legacy_publication_id,
      source_record_digest, owner_resolution_state, migration_mode, requested_target_status,
      migration_state, target_work_id, target_chapter_id)
-values ('66666666-6666-4666-8666-666666666602', 'tradutor_ia_sqlite_test_v1',
+values ('66666666-6666-4666-8666-666666666602', 'komyst_sqlite_test_v1',
         :'source_a', 3, 'LEGACY-PUB-RET-02', 'digest-ret-02', 'unresolved', 'published_copy',
         'community', 'planned', '44444444-4444-4444-8444-444444444401',
         '55555555-5555-4555-8555-555555555504');

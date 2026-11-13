@@ -4,7 +4,7 @@ Status: **research proposal only; no model is approved for product integration**
 
 ## Current boundary
 
-The existing product adapter is `yomu/clean/inpainting/advanced_art_inpainting.py`. It loads the pinned Anime-Manga Big-LaMa TorchScript file only after checking its expected size/hash, uses a `uint8` mask where nonzero means “remove/reconstruct”, and composites the donor only inside that mask. Missing or mismatched weights fail closed. The checkpoint's redistribution/use rights remain unresolved. One private-page T4 inference failed visual review; one separate easy CPU synthetic case was acceptable, but that is not broad validation or a GPU comparison. Neither result makes this adapter/checkpoint a recommended winner or commercial deployment choice.
+The existing product adapter is `komyst/clean/inpainting/advanced_art_inpainting.py`. It loads the pinned Anime-Manga Big-LaMa TorchScript file only after checking its expected size/hash, uses a `uint8` mask where nonzero means “remove/reconstruct”, and composites the donor only inside that mask. Missing or mismatched weights fail closed. The checkpoint's redistribution/use rights remain unresolved. One private-page T4 inference failed visual review; one separate easy CPU synthetic case was acceptable, but that is not broad validation or a GPU comparison. Neither result makes this adapter/checkpoint a recommended winner or commercial deployment choice.
 
 ## Candidate contract (future, gated)
 

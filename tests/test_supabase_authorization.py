@@ -20,12 +20,12 @@ from jwt.algorithms import ECAlgorithm
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from yomu.community.community_api import CommunityApi
-from yomu.community.community_http import CommunityNetworkBoundaryMiddleware, create_community_router
-from yomu.community.community_storage import FilesystemStorageProvider
-from yomu.community.community_store import FileStatus, Moderation, PostStatus, Visibility
-from yomu.runtime.job_store import JobStore
-from yomu.auth.supabase_auth import SupabaseAuthConfig, SupabaseAuthProvider
+from komyst.community.community_api import CommunityApi
+from komyst.community.community_http import CommunityNetworkBoundaryMiddleware, create_community_router
+from komyst.community.community_storage import FilesystemStorageProvider
+from komyst.community.community_store import FileStatus, Moderation, PostStatus, Visibility
+from komyst.runtime.job_store import JobStore
+from komyst.auth.supabase_auth import SupabaseAuthConfig, SupabaseAuthProvider
 from test_support.offline_test_guard import (
     _loopback_test_connect,
     _loopback_test_connect_ex,

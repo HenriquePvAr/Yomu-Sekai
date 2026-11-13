@@ -30,9 +30,9 @@ import unittest
 import cv2
 import numpy as np
 
-import yomu.clean.ownership.font_fidelity as font_fidelity
-import yomu.ocr.ocr_balloon as ob
-from yomu.ocr.ocr_engine import OCRLine
+import komyst.clean.ownership.font_fidelity as font_fidelity
+import komyst.ocr.ocr_balloon as ob
+from komyst.ocr.ocr_engine import OCRLine
 
 _REAL_RUN = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))),

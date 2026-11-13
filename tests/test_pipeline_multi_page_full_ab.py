@@ -5,18 +5,18 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 import cv2, numpy as np
-import yomu.pipeline.benchmark_pipeline as bp
-import yomu.config.settings as config
-import yomu.download.local.local_folder_input as local_folder_input
-from yomu.download.local.local_folder_source import LocalFolderChapterAdapter, LocalFolderPolicy
-from yomu.ocr.ocr_balloon import TextCandidate, TextGroup
-from yomu.ocr.ocr_engine import OCRLine
+import komyst.pipeline.benchmark_pipeline as bp
+import komyst.config.settings as config
+import komyst.download.local.local_folder_input as local_folder_input
+from komyst.download.local.local_folder_source import LocalFolderChapterAdapter, LocalFolderPolicy
+from komyst.ocr.ocr_balloon import TextCandidate, TextGroup
+from komyst.ocr.ocr_engine import OCRLine
 
 class FixtureTranslator:
     model = "offline-fixture"
     def __init__(self):
         self.initial_calls=[]; self.retry_calls=[]; self.force_cache=False
-        self.stats={"api_texts":0,"api_requests":0,"cache_hits":0,"failed_batches":0,"provider_name":"yomu_backend"}
+        self.stats={"api_texts":0,"api_requests":0,"cache_hits":0,"failed_batches":0,"provider_name":"komyst_backend"}
     def translate_many(self, texts, force=False):
         self.initial_calls.extend(texts); self.stats["api_texts"] += len(texts); self.stats["api_requests"] += 1
         # Portuguese markers keep the candidate semantically valid while the
@@ -62,19 +62,19 @@ class MultiPageFullAB(unittest.TestCase):
             return [TextCandidate(line=line)],[group]
         args=SimpleNamespace(url=ref,max_images=3,full=False,debug_folder=str(out/"debug"),keep_debug=False,fast=True,benchmark=True,force=True,force_download=True,page_indices="",output_folder=str(out),ocr_engine="fixture",use_context=False,session_context_path=str(out/"session.json"),source_candidate_ids=[],local_manifest_path=str(snap.manifest_path),translation_provider="deepl")
         tr=FixtureTranslator(); old=local_folder_input.LOCAL_SNAPSHOT_ROOT; local_folder_input.LOCAL_SNAPSHOT_ROOT=snaproot
-        old_marker=os.environ.get("YOMU_CANCEL_TEST_MARKER_DIR"); old_runtime=os.environ.get("TRADUTOR_TEST_RUNTIME_ROOT"); old_output=os.environ.get("TRADUTOR_OUTPUT_ROOT")
-        os.environ["YOMU_CANCEL_TEST_MARKER_DIR"] = str(root/"markers"); os.environ["TRADUTOR_TEST_RUNTIME_ROOT"] = str(root); os.environ["TRADUTOR_OUTPUT_ROOT"] = str(root/"output")
+        old_marker=os.environ.get("KOMYST_CANCEL_TEST_MARKER_DIR"); old_runtime=os.environ.get("KOMYST_TEST_RUNTIME_ROOT"); old_output=os.environ.get("KOMYST_OUTPUT_ROOT")
+        os.environ["KOMYST_CANCEL_TEST_MARKER_DIR"] = str(root/"markers"); os.environ["KOMYST_TEST_RUNTIME_ROOT"] = str(root); os.environ["KOMYST_OUTPUT_ROOT"] = str(root/"output")
         try:
             with mock.patch.object(bp,"_build_translation_provider",return_value=tr), mock.patch.object(bp,"get_translator",return_value=(tr,"eng")), mock.patch.object(bp,"detect_ocr_jobs",side_effect=detect), mock.patch.object(bp,"analyze_image_array",side_effect=analyse), mock.patch.object(bp,"apply_speech_container_reocr",side_effect=lambda a,b,*x,**k:(b,[])), mock.patch.object(bp,"apply_selective_ocr_fallbacks",side_effect=lambda a,b,*x,**k:(b,[])), mock.patch.object(bp,"_grouping_fallback_reason",return_value=""), mock.patch.object(bp,"ResourceMonitor",NoopMonitor), mock.patch.object(bp,"detect_gpu_basic",return_value={}), mock.patch.object(bp,"_git_metadata",return_value={"commit_hash":"fixture","branch":"test"}), mock.patch.multiple(config,OCR_ENGINE="fixture",OCR_FALLBACK_ENGINE="",OCR_HYBRID_FALLBACK=False,SKIP_NO_TEXT_IMAGES=False,ENABLE_DOWNLOAD_CACHE=False,ENABLE_OCR_CACHE=False,ENABLE_IMAGE_PROCESS_CACHE=False,RESOURCE_MONITORING=False,CLASSIFICATION_PROFILING=False,POST_RENDER_OCR_VALIDATION=False,VISUAL_DIFF_VALIDATION=False,TRANSLATION_VALIDATION=True,TRANSLATION_RETRY_ON_MIXED_LANGUAGE=False,TRANSLATE_SFX=False), mock.patch.dict(os.environ,{"PIPELINE_PAGE_WORKERS":str(workers),"TRANSLATION_ENABLED":"true"},clear=False):
                 report=bp.run_benchmark(args)
         finally:
             local_folder_input.LOCAL_SNAPSHOT_ROOT=old
-            if old_marker is None: os.environ.pop("YOMU_CANCEL_TEST_MARKER_DIR",None)
-            else: os.environ["YOMU_CANCEL_TEST_MARKER_DIR"] = old_marker
-            if old_runtime is None: os.environ.pop("TRADUTOR_TEST_RUNTIME_ROOT",None)
-            else: os.environ["TRADUTOR_TEST_RUNTIME_ROOT"] = old_runtime
-            if old_output is None: os.environ.pop("TRADUTOR_OUTPUT_ROOT",None)
-            else: os.environ["TRADUTOR_OUTPUT_ROOT"] = old_output
+            if old_marker is None: os.environ.pop("KOMYST_CANCEL_TEST_MARKER_DIR",None)
+            else: os.environ["KOMYST_CANCEL_TEST_MARKER_DIR"] = old_marker
+            if old_runtime is None: os.environ.pop("KOMYST_TEST_RUNTIME_ROOT",None)
+            else: os.environ["KOMYST_TEST_RUNTIME_ROOT"] = old_runtime
+            if old_output is None: os.environ.pop("KOMYST_OUTPUT_ROOT",None)
+            else: os.environ["KOMYST_OUTPUT_ROOT"] = old_output
         return report,tr
 
     def test_three_page_full_serial_parallel_overflow(self):

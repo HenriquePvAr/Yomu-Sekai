@@ -10,7 +10,7 @@ describe("auth-service config", () => {
 
   test("binds only to loopback", () => {
     vi.stubEnv("BETTER_AUTH_SECRET", "x".repeat(40));
-    vi.stubEnv("TRADUTOR_AUTH_SERVICE_HOST", "0.0.0.0");
+    vi.stubEnv("KOMYST_AUTH_SERVICE_HOST", "0.0.0.0");
     expect(() => loadConfig()).toThrow(/loopback/);
     vi.unstubAllEnvs();
   });

@@ -9,7 +9,7 @@ import time
 
 from PIL import Image
 
-import yomu.download.readers.scrapling_reader_resolver as resolver
+import komyst.download.readers.scrapling_reader_resolver as resolver
 
 
 class _FakePage:
@@ -254,7 +254,7 @@ class ScraplingResolverTests(unittest.TestCase):
     def test_hard_deadline_terminates_and_reaps_child_and_browser_descendant(self):
         import psutil
 
-        with tempfile.TemporaryDirectory(prefix="yomu-resolver-test-") as temp:
+        with tempfile.TemporaryDirectory(prefix="komyst-resolver-test-") as temp:
             marker = os.path.join(temp, "descendant.pid")
             child_code = (
                 "import subprocess,sys,time; sys.stdin.readline(); "
@@ -280,7 +280,7 @@ class ScraplingResolverTests(unittest.TestCase):
     def test_normal_child_exit_reaps_browser_descendant_without_becoming_timeout(self):
         import psutil
 
-        with tempfile.TemporaryDirectory(prefix="yomu-resolver-test-") as temp:
+        with tempfile.TemporaryDirectory(prefix="komyst-resolver-test-") as temp:
             marker = os.path.join(temp, "descendant.pid")
             child_code = (
                 "import subprocess,sys; sys.stdin.readline(); "
@@ -303,7 +303,7 @@ class ScraplingResolverTests(unittest.TestCase):
             self.assertFalse(psutil.pid_exists(descendant_pid))
 
     def test_dynamic_resolver_child_command_is_available_for_dev_and_frozen(self):
-        import yomu.commands.start_tradutor as start_tradutor
+        import komyst.commands.start_tradutor as start_tradutor
 
         dev_command = start_tradutor.build_child_command("dynamic-resolver", frozen=False)
         frozen_command = start_tradutor.build_child_command("dynamic-resolver", frozen=True)

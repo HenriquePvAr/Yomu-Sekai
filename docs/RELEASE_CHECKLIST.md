@@ -1,12 +1,8 @@
 # Release checklist
 
-> **Revisado em:** 2026-10-24 (base `5f482ce1`, branch `main`) — apenas as notas entre parênteses
-> foram reconferidas no código; as caixas continuam históricas.
-
-> Este checklist contém caixas e estados herdados de uma avaliação anterior à Beta 17. Eles
-> não são um retrato atual nem foram revalidados pela M18. Use-o como roteiro para uma futura
-> execução do gate; confirme cada item de novo antes de tratar qualquer marcação/pendência como
-> válida. A M18 não executou auditoria de release.
+> O instalador, a licença Beta e a instalação limpa da `v0.9.1-beta.18` foram **validados por
+> beta tester, informado pelo dono**; data não informada. Esse relato não valida outros builds,
+> assinatura Authenticode ou publicação de um manifesto novo.
 
 ## Pré-RC
 
@@ -19,9 +15,10 @@
 
 - [ ] Canal updater e chave pública *(código: chave `beta-2026-10` em `TRUSTED_PUBLIC_KEYS` e `DEFAULT_MANIFEST_URL` configurada; publicação/validação do manifest no canal pendente)*
 - [ ] Code signing Authenticode
-- [ ] Installer final *(script `packaging/TradutorIA.iss` + `tools/build_installer.py` existem; build final não validada)*
-- [ ] Licensing/device operacional
-- [ ] Clean-VM E2E
+- [x] Installer da `v0.9.1-beta.18` *(validado por beta tester, informado pelo dono; data não informada)*
+- [x] Licença Beta da `v0.9.1-beta.18` *(validada por beta tester, informado pelo dono; data não informada)*
+- [x] Instalação limpa da `v0.9.1-beta.18` *(validada por beta tester, informado pelo dono; data não informada)*
+- [ ] E2E funcional completo em Windows limpo *(não inferir a partir do smoke de instalação)*
 - [ ] Secret/privacy scan final
 
 ## Closed beta

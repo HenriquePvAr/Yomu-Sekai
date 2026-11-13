@@ -11,8 +11,8 @@ from unittest import mock
 
 from PIL import Image
 
-import yomu.download.local.local_folder_source as local_source
-from yomu.download.local.local_folder_source import (
+import komyst.download.local.local_folder_source as local_source
+from komyst.download.local.local_folder_source import (
     HARD_MAX_BYTES_PER_FILE,
     LOCAL_FOLDER_ROOT_NOT_SELECTABLE,
     LOCAL_INPUT_DUPLICATE,

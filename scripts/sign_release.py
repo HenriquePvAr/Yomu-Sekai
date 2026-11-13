@@ -2,24 +2,24 @@
 
 This tool runs in a trusted release process and is the only place a **private** Ed25519 key is
 ever loaded. The key is supplied externally at release time — a path on the release machine or
-``TRADUTOR_IA_RELEASE_KEY_FILE`` — and is never generated, stored or printed here. The
+``KOMYST_RELEASE_KEY_FILE`` — and is never generated, stored or printed here. The
 repository contains no private key material and must never contain any; the client ships only
 the public counterpart in ``update_manifest.TRUSTED_PUBLIC_KEYS``.
 
 Generate a release key **outside this repository**, once, on the release machine::
 
-    openssl genpkey -algorithm ed25519 -out <secure-path>/tradutor-ia-release.pem
+    openssl genpkey -algorithm ed25519 -out <secure-path>/komyst-release.pem
 
 Then publish its public half into the client's trust store::
 
-    python scripts/sign_release.py pubkey --key <secure-path>/tradutor-ia-release.pem
+    python scripts/sign_release.py pubkey --key <secure-path>/komyst-release.pem
 
 And sign a release::
 
-    python scripts/sign_release.py sign --key <secure-path>/tradutor-ia-release.pem \
+    python scripts/sign_release.py sign --key <secure-path>/komyst-release.pem \
         --key-id beta-2026 --version 1.1.0 --minimum-version 1.0.0 \
-        --package dist/tradutor-ia-1.1.0.zip \
-        --url https://<host>/tradutor-ia-1.1.0.zip --out dist/update.json
+        --package dist/komyst-1.1.0.zip \
+        --url https://<host>/komyst-1.1.0.zip --out dist/update.json
 
 ``sha256`` and ``size`` are computed from the real artifact rather than accepted as arguments,
 so the signed metadata cannot describe a package that was never built.
@@ -39,7 +39,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey,
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from yomu.runtime.update_manifest import (  # noqa: E402  (path bootstrap above)
+from komyst.runtime.update_manifest import (  # noqa: E402  (path bootstrap above)
     APP_ID,
     CLIENT_UPDATE_CHANNEL,
     SUPPORTED_SCHEMA_VERSION,

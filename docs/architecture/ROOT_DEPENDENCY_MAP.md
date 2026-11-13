@@ -32,14 +32,14 @@ movido. Atualização de nomes de referência não mudou comportamento.
 
 | Raiz (shim) | Implementação | Consumidores comprovados | Restrições |
 |---|---|---|---|
-| `app_ui.py` | `yomu.ui.app` | README/docs, UI tests, runtime forensics, CI compileall, UI subprocess | Preservar `sys.modules[__name__]` para identidade e monkeypatch/import compatibility |
-| `desktop_app.py` | `yomu.desktop.app` | `packaging/tradutor_ia.spec`, `packaging/tradutor_jwks_diagnostic.spec`, CI compileall e desktop tests | PyInstaller verifica/especifica caminho root; não mover sem novo spec e frozen smoke |
-| `down.py` | `yomu.download.down` | Imports e testes de compatibilidade do downloader | Mesmo objeto de módulo reexportado; consumidores externos desconhecidos |
-| `main.py` | `yomu.commands.legacy_gui` | CLI legado e import compatibility | Preservar nome de comando legado |
-| `run_local_folder.py` | `yomu.commands.run_local_folder` | UI/job commands, worker e local-folder tests | Caminho pode ser persistido em comandos de jobs |
-| `run_webtoon.py` | `yomu.commands.run_webtoon` | CLI, worker subprocess, docs, compileall e testes | API pública de fato; manter caminho estável |
-| `start_tradutor.py` | `yomu.commands.start_tradutor` | `start_tradutor.bat`, docs, launcher/updater/process tests | Usuários chamam comandos `all`, `worker`, `ui`, `status`, `stop` pelo path |
-| `worker_service.py` | `yomu.runtime.worker_service` | Worker subprocess, supervisor/recovery/shutdown tests, compileall e process fingerprints | Nome é contrato de processo e substring de supervisão |
+| `app_ui.py` | `komyst.ui.app` | README/docs, UI tests, runtime forensics, CI compileall, UI subprocess | Preservar `sys.modules[__name__]` para identidade e monkeypatch/import compatibility |
+| `desktop_app.py` | `komyst.desktop.app` | `packaging/komyst.spec`, `packaging/komyst_jwks_diagnostic.spec`, CI compileall e desktop tests | PyInstaller verifica/especifica caminho root; não mover sem novo spec e frozen smoke |
+| `down.py` | `komyst.download.down` | Imports e testes de compatibilidade do downloader | Mesmo objeto de módulo reexportado; consumidores externos desconhecidos |
+| `main.py` | `komyst.commands.legacy_gui` | CLI legado e import compatibility | Preservar nome de comando legado |
+| `run_local_folder.py` | `komyst.commands.run_local_folder` | UI/job commands, worker e local-folder tests | Caminho pode ser persistido em comandos de jobs |
+| `run_webtoon.py` | `komyst.commands.run_webtoon` | CLI, worker subprocess, docs, compileall e testes | API pública de fato; manter caminho estável |
+| `start_tradutor.py` | `komyst.commands.start_tradutor` | `start_tradutor.bat`, docs, launcher/updater/process tests | Usuários chamam comandos `all`, `worker`, `ui`, `status`, `stop` pelo path |
+| `worker_service.py` | `komyst.runtime.worker_service` | Worker subprocess, supervisor/recovery/shutdown tests, compileall e process fingerprints | Nome é contrato de processo e substring de supervisão |
 
 Os oito shims estão listados no allowlist raiz e todos são `KEEP_ROOT_COMPATIBILITY`.
 Não trocar por wrappers diferentes sem cobrir identidade de módulo, monkeypatch, argv,
@@ -68,7 +68,7 @@ subprocessos, cwd e PyInstaller.
 - `start_tradutor.bat` chama `%HERE%start_tradutor.py`; `README.md`, `CLAUDE.md` e docs de fila
   documentam a entrada. `test_support/hermetic_runtime.py` reconhece esse entrypoint para não
   iniciar processos de usuário durante teste.
-- `packaging/tradutor_ia.spec` inclui `desktop_app.py` do root; o spec diagnóstico também
+- `packaging/komyst.spec` inclui `desktop_app.py` do root; o spec diagnóstico também
   valida esse caminho. `.github/workflows/tests.yml` chama `compileall` sobre shims e hooks.
 - `AGENTS.md`/`CLAUDE.md` são descobertos pelas ferramentas; `README.md`, `CHANGELOG.md`,
   `CONTRIBUTING.md` e `THIRD_PARTY_NOTICES.txt` possuem convenções externas usuais.

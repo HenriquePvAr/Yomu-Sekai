@@ -17,8 +17,8 @@ import cv2
 import numpy as np
 from PIL import Image, ImageDraw
 
-import yomu.clean.ownership.font_fidelity as ff
-import yomu.review.human_typography_decisions as htd
+import komyst.clean.ownership.font_fidelity as ff
+import komyst.review.human_typography_decisions as htd
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -112,7 +112,7 @@ class TypographyDecisionStoreTests(unittest.TestCase):
 
 class HumanPreviewUiContractTests(unittest.TestCase):
     def test_dynamic_preview_buttons_are_bound_through_audit_list(self):
-        ui_js = (ROOT / "static" / "tradutor_ui.js").read_text(encoding="utf-8")
+        ui_js = (ROOT / "static" / "komyst_ui.js").read_text(encoding="utf-8")
         self.assertIn("$('#auditList')?.addEventListener('click'", ui_js)
         self.assertIn("event.target.closest('[data-preview-action]')", ui_js)
         self.assertIn("void previewAction(preview.dataset.previewAction", ui_js)
@@ -123,10 +123,10 @@ class HumanPreviewUiContractTests(unittest.TestCase):
         self.assertIn("ESCOLHER TIPOGRAFIA", ui_js)
 
     def test_font_choice_panel_actions_are_visible_and_non_blocking(self):
-        ui_js = (ROOT / "static" / "tradutor_ui.js").read_text(encoding="utf-8")
+        ui_js = (ROOT / "static" / "komyst_ui.js").read_text(encoding="utf-8")
         preview_block = ui_js[ui_js.index("async function previewAction"):
                               ui_js.index("function selectedTriageRegions")]
-        app_py = (ROOT / "yomu/ui/app.py").read_text(encoding="utf-8")
+        app_py = (ROOT / "komyst/ui/app.py").read_text(encoding="utf-8")
         self.assertIn("/api/ui/human-translation/font-candidates", ui_js)
         self.assertIn("/api/ui/human-translation/font-choice", ui_js)
         self.assertIn("font_choice_base_page_unavailable", app_py)
@@ -140,14 +140,14 @@ class HumanPreviewUiContractTests(unittest.TestCase):
         self.assertNotIn("window.prompt(", preview_block)
 
     def test_font_choice_layout_is_responsive(self):
-        ui_css = (ROOT / "static" / "tradutor_ui.css").read_text(encoding="utf-8")
+        ui_css = (ROOT / "static" / "komyst_ui.css").read_text(encoding="utf-8")
         self.assertIn(".font-choice-panel", ui_css)
         self.assertIn(".font-choice-grid", ui_css)
         self.assertIn("repeat(auto-fit,minmax(180px,1fr))", ui_css.replace(" ", ""))
         self.assertIn("overflow-wrap:anywhere", ui_css.replace(" ", ""))
 
     def test_font_context_accepts_existing_page_name_variants(self):
-        bridge_py = (ROOT / "yomu/ui/ui_bridge.py").read_text(encoding="utf-8")
+        bridge_py = (ROOT / "komyst/ui/ui_bridge.py").read_text(encoding="utf-8")
         context_block = bridge_py[bridge_py.index("def _human_font_context"):
                                   bridge_py.index("def _font_candidate_cache_dir")]
         self.assertIn('f"p{page:03d}.png"', context_block)

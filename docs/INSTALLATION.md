@@ -1,8 +1,11 @@
 # Instalação
 
-Este guia prepara o ambiente local do Tradutor.IA no cenário atualmente auditado: Windows 64 bits e Python 3.11.
+Para usar a Beta, baixe `Komyst-0.9.1-beta.18-Setup-x64.exe` pelo canal indicado pela equipe e
+execute-o. A instalação limpa dessa versão foi **validada por beta tester, informado pelo dono**;
+a data não foi informada. O procedimento abaixo é exclusivamente para preparar um ambiente de
+desenvolvimento a partir do código-fonte.
 
-> **Base verificada:** `5f482ce1` (branch `main`) · **Revisado em:** 2026-10-24
+Guia de desenvolvimento do Komyst para Windows 64 bits com Python 3.11.
 >
 > [Voltar ao README](../README.md) · [Desenvolvimento](DEVELOPMENT.md)
 >
@@ -20,15 +23,15 @@ Este guia prepara o ambiente local do Tradutor.IA no cenário atualmente auditad
 | Node.js | 24 | **Somente desenvolvimento**: suítes de frontend `.mjs` e serviço Better Auth. O pipeline não precisa dele |
 | Memória | 16 GB recomendados | Modelos de OCR e reconstrução podem elevar bastante o uso de RAM e memória virtual |
 | Disco | Espaço para modelos, caches e outputs | Capítulos completos podem gerar muitos arquivos intermediários |
-| Conta Komyst | login Supabase + licença Beta | Jobs com tradução passam sempre pelo backend autenticado (`yomu_backend`); a chave DeepL é segredo do servidor, não do cliente |
+| Conta Komyst | login Supabase + licença Beta | Jobs com tradução passam sempre pelo backend autenticado (`komyst_backend`); a chave DeepL é segredo do servidor, não do cliente |
 
 O suporte end-to-end de Linux e macOS ainda não foi validado. O launcher possui um caminho POSIX para grupos de processos, mas isso não equivale a suporte integral do pipeline nessas plataformas.
 
-## 1. Clonar o repositório
+## Desenvolvimento: clonar o repositório
 
 ```powershell
-git clone https://github.com/HenriquePvAr/Tradutor.Ia.git
-cd Tradutor.Ia
+git clone --branch dev https://github.com/HenriquePvAr/komyst.git
+cd Komyst
 ```
 
 ## 2. Criar o ambiente virtual
@@ -128,7 +131,7 @@ SUPABASE_URL=<url-do-projeto>
 SUPABASE_PUBLISHABLE_KEY=<chave-publishable>
 ```
 
-Todo job com tradução habilitada usa o provider interno `yomu_backend`, que chama o motor
+Todo job com tradução habilitada usa o provider interno `komyst_backend`, que chama o motor
 remoto DeepL no servidor (Edge Function `supabase/functions/translation-execute`). Por isso
 `DEEPL_API_KEY` **não** é necessária no cliente para jobs habilitados — ela é segredo do
 servidor. `NVIDIA_API_KEY` só é lida por caminhos legados/experimentais (por exemplo, o OCR
@@ -174,7 +177,7 @@ driver segue esta ordem:
 
 Essa terceira etapa evita que uma instalação Windows limpa dependa de download manual de
 ChromeDriver. Em testes herméticos, a resolução automática fica desligada por padrão; use
-`TRADUTOR_ALLOW_DRIVER_DOWNLOAD=1` somente quando quiser permitir esse resolvedor no teste.
+`KOMYST_ALLOW_DRIVER_DOWNLOAD=1` somente quando quiser permitir esse resolvedor no teste.
 Se a resolução automática falhar, defina um caminho genérico no `.env`:
 
 ```dotenv
@@ -188,7 +191,7 @@ CHROMEDRIVER_PATH=C:\ferramentas\chromedriver.exe
 Os testes abaixo são locais e não baixam capítulos:
 
 ```powershell
-python -m py_compile run_webtoon.py app_ui.py yomu/runtime/process_launcher.py
+python -m py_compile run_webtoon.py app_ui.py komyst/runtime/process_launcher.py
 python tests/test_run_webtoon.py
 python tests/test_process_launcher.py
 python tests/test_ocr_quality_regressions.py
@@ -214,7 +217,7 @@ python desktop_app.py
 
 O shell desktop cria a janela nativa e hospeda a UI local em WebView2. Para executar somente o
 servidor de UI durante desenvolvimento, use o procedimento em [Desenvolvimento](DEVELOPMENT.md);
-o endereço loopback não substitui a janela do aplicativo no uso desktop. Abra sempre **`http://127.0.0.1:8080`**, não `http://localhost:8080`: a origem permitida no projeto Supabase Auth (`SUPABASE_SITE_URL`/`SUPABASE_REDIRECT_URL`) é `127.0.0.1`, e o login pode falhar em outra origem. O servidor da UI não abre navegador nem imprime a URL (`ui.run(show=False)` em `yomu/ui/app.py`); o shell desktop (`python desktop_app.py`) já abre a janela em `http://127.0.0.1:<porta>/`.
+o endereço loopback não substitui a janela do aplicativo no uso desktop. Abra sempre **`http://127.0.0.1:8080`**, não `http://localhost:8080`: a origem permitida no projeto Supabase Auth (`SUPABASE_SITE_URL`/`SUPABASE_REDIRECT_URL`) é `127.0.0.1`, e o login pode falhar em outra origem. O servidor da UI não abre navegador nem imprime a URL (`ui.run(show=False)` em `komyst/ui/app.py`); o shell desktop (`python desktop_app.py`) já abre a janela em `http://127.0.0.1:<porta>/`.
 
  A tradução exige
 login: o backend autenticado executa o DeepL no servidor.
@@ -234,7 +237,7 @@ Use somente conteúdo que você tenha autorização para processar. Para uma pri
 
 ## 9. Launcher supervisionado
 
-Para execuções longas iniciadas fora da UI, o repositório inclui `yomu/runtime/process_launcher.py` (`python -m yomu.runtime.process_launcher --help`). Ele mantém stdout e stderr separados, persiste o exit code e controla a árvore de processos no Windows. Um exemplo completo está em [Arquitetura](ARCHITECTURE.md#launcher-supervisionado).
+Para execuções longas iniciadas fora da UI, o repositório inclui `komyst/runtime/process_launcher.py` (`python -m komyst.runtime.process_launcher --help`). Ele mantém stdout e stderr separados, persiste o exit code e controla a árvore de processos no Windows. Um exemplo completo está em [Arquitetura](ARCHITECTURE.md#launcher-supervisionado).
 
 O launcher PowerShell inline usado em experimentos antigos não faz parte do fluxo documentado e não deve ser usado para capturar o exit code.
 

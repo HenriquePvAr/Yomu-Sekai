@@ -19,7 +19,7 @@ import psycopg
 import pytest
 from psycopg import sql
 
-from yomu.community.legacy.legacy_publication_migration_executor import (
+from komyst.community.legacy.legacy_publication_migration_executor import (
     ConflictError,
     FakeLegacyArtifactStorage,
     FakeLegacyTargetBackend,
@@ -29,8 +29,8 @@ from yomu.community.legacy.legacy_publication_migration_executor import (
     TransientBackendError,
     ValidationError,
 )
-from yomu.community.legacy.legacy_publication_migrator import load_migration_input, plan_migration
-from yomu.community.legacy.legacy_publication_postgres_adapter import (
+from komyst.community.legacy.legacy_publication_migrator import load_migration_input, plan_migration
+from komyst.community.legacy.legacy_publication_postgres_adapter import (
     ALLOWED_RUNTIME_FUNCTIONS,
     FORBIDDEN_OPERATIONAL_FUNCTIONS,
     LocalPostgresConnectionSettings,
@@ -67,7 +67,7 @@ def _postgres_container():
     if not _docker_available():
         pytest.skip("Docker daemon is not available for local PostgreSQL adapter integration tests")
     port = _free_local_port()
-    name = f"tradutor-legacy-adapter-{uuid.uuid4().hex[:12]}"
+    name = f"komyst-legacy-adapter-{uuid.uuid4().hex[:12]}"
     local_password = f"local-{uuid.uuid4().hex}"
     run = subprocess.run(
         [
@@ -80,7 +80,7 @@ def _postgres_container():
             "-e",
             f"POSTGRES_PASSWORD={local_password}",
             "-e",
-            "POSTGRES_DB=tradutor_local_adapter",
+            "POSTGRES_DB=komyst_local_adapter",
             "-p",
             f"127.0.0.1:{port}:5432",
             POSTGRES_IMAGE,
@@ -94,7 +94,7 @@ def _postgres_container():
         settings = LocalPostgresConnectionSettings(
             host="127.0.0.1",
             port=port,
-            dbname="tradutor_local_adapter",
+            dbname="komyst_local_adapter",
             user="postgres",
             password=local_password,
         )
@@ -326,7 +326,7 @@ def test_local_host_guard_accepts_only_phase_allowlist():
 
 def test_parameter_binding_and_zero_direct_dml_are_static():
     assert all("%s" in sql for sql in ALLOWED_RUNTIME_FUNCTIONS.values())
-    production = Path("yomu/community/legacy/legacy_publication_postgres_adapter.py").read_text(encoding="utf-8")
+    production = Path("komyst/community/legacy/legacy_publication_postgres_adapter.py").read_text(encoding="utf-8")
     forbidden = [
         "insert into private.legacy_migration_sources",
         "insert into private.legacy_publication_migrations",
@@ -411,7 +411,7 @@ def test_error_mapping(sqlstate: str, expected: type[Exception]):
 def test_db_locality_proof_and_migrations_applied(db):
     proof = _adapter(db).locality_proof()
     assert proof["host"] in {"127.0.0.1", "localhost", "::1"}
-    assert proof["current_database"] == "tradutor_local_adapter"
+    assert proof["current_database"] == "komyst_local_adapter"
     assert proof["pg_is_in_recovery"] is False
     contract = _adapter(db).runtime_contract()
     assert {"migration_operator", "migration_publication_admin"} <= set(contract["roles"])

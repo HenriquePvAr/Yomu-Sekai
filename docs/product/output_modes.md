@@ -8,7 +8,7 @@
 ## Interface — "O que você quer gerar?" (divulgação progressiva)
 
 A primeira visão mostra **três opções principais** + "Mais opções" (que revela as outras
-três). Cada preset envia um `output_plan`; o backend (`yomu/runtime/output_plan.py`) é a
+três). Cada preset envia um `output_plan`; o backend (`komyst/runtime/output_plan.py`) é a
 **única fonte de verdade** e normaliza/valida o plano, sobrepondo os campos legados.
 
 Primeira visão: **Tradução pronta** (⭐ Recomendado), **Apenas Clean**, **Completo**.
@@ -78,9 +78,9 @@ como um job **concluído e útil**, não como falha por ausência de PDF/PNG.
 
 ## Do preset aos artefatos
 
-Mapa verificado em `yomu/runtime/output_plan.py` (`PRESETS`, `_REQUIRES`, `_close_dependencies`,
+Mapa verificado em `komyst/runtime/output_plan.py` (`PRESETS`, `_REQUIRES`, `_close_dependencies`,
 `plan_artifact_types`, `output_format`) e na escrita de `translation/translation.json` em
-`yomu/pipeline/benchmark_pipeline.py`.
+`komyst/pipeline/benchmark_pipeline.py`.
 
 ```mermaid
 flowchart LR
@@ -139,7 +139,7 @@ o perfil para `professional_qc`. O formato é `psd` se houver PSD, senão `pdf`,
 ## Por que "Apenas Clean" não cobra YK
 
 `Apenas Clean` define `translation_enabled=false`. No limite real do provedor
-(`yomu/pipeline/benchmark_pipeline.py`, `_resolve_translation_runtime`) isso significa **nenhum objeto de
+(`komyst/pipeline/benchmark_pipeline.py`, `_resolve_translation_runtime`) isso significa **nenhum objeto de
 provedor é instanciado** e o commit de carteira (único ponto de consumo de YK) está dentro
 do ramo `if translation_enabled` — portanto um run de limpeza nunca chama o provedor nem
 consome YK. Provado em `tests/test_output_plan.py`.
@@ -167,7 +167,7 @@ recebe `typeset=`:
 - `typeset=false` (Apenas Clean, Tradução + Clean): limpa a arte e **não desenha nenhum
   glifo**; a página renderizada é byte-a-byte igual ao buffer limpo (provado por teste).
 
-O pipeline é orientado por `effective_operations` (via `YOMU_EFFECTIVE_OPS`): jobs legados/
+O pipeline é orientado por `effective_operations` (via `KOMYST_EFFECTIVE_OPS`): jobs legados/
 automáticos não têm esse env e tomam exatamente o caminho de antes (zero regressão). Só um
 job com plano explícito ativa os gates (render clean-only, persistência só de CLEAN, PDF
 desligado, manifesto com artefatos pedidos pelo plano).

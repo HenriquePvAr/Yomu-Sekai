@@ -6,7 +6,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-import yomu.clean.ownership.residual_mask_revisions as rmr
+import komyst.clean.ownership.residual_mask_revisions as rmr
 
 
 class ResidualComponentDetectorTests(unittest.TestCase):

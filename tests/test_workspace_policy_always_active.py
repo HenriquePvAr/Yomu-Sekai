@@ -9,10 +9,10 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from yomu.review.source_readiness import SourceReadinessStore, default_workspace_id
-from yomu.ui.ui_bridge import UiBridge
+from komyst.review.source_readiness import SourceReadinessStore, default_workspace_id
+from komyst.ui.ui_bridge import UiBridge
 
-UI = (Path(__file__).resolve().parents[1] / "static" / "tradutor_ui.js").read_text(encoding="utf-8")
+UI = (Path(__file__).resolve().parents[1] / "static" / "komyst_ui.js").read_text(encoding="utf-8")
 
 
 class WorkspacePolicyAlwaysActiveTests(unittest.TestCase):

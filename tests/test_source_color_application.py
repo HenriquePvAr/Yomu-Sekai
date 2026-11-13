@@ -13,8 +13,8 @@ import unittest
 import cv2
 import numpy as np
 
-import yomu.ocr.ocr_balloon as ob
-from yomu.ocr.ocr_balloon import OCRLine, TextGroup
+import komyst.ocr.ocr_balloon as ob
+from komyst.ocr.ocr_balloon import OCRLine, TextGroup
 
 
 def _line(text, box):

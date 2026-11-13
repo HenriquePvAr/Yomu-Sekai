@@ -14,7 +14,7 @@ import test_support._test_bootstrap as _test_bootstrap  # noqa: F401
 import hashlib
 import unittest
 
-import yomu.download.down as down
+import komyst.download.down as down
 
 
 EP51_SOURCES = [
@@ -254,7 +254,7 @@ class ExhaustionSignalTest(unittest.TestCase):
             run_scroll(reader, max_rounds=90, stable_rounds=3)
 
     def test_cancellation_still_fails_closed(self):
-        from yomu.download.sources.chapter_source import SourceError
+        from komyst.download.sources.chapter_source import SourceError
 
         reader = FakeReader(height=224653, viewport=1080,
                             sources=fixed_sources(EP51_SOURCES[:20]))

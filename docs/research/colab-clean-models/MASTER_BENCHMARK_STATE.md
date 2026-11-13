@@ -1,12 +1,12 @@
 # Komyst clean reconstruction benchmark — current state
 
-**Mission:** `YOMU_SEKAI_COLAB_AI_CLEAN_RECONSTRUCTION_BENCHMARK_V1`
+**Mission:** `KOMYST_SEKAI_COLAB_AI_CLEAN_RECONSTRUCTION_BENCHMARK_V1`
 **Result:** `PARTIAL`
 **Scope:** research only; production pipeline unchanged.
 
 ## Execution boundary
 
-The connected Google Drive tool provided read-only access to the saved Colab notebook `Yomu_Big_LaMa_Colab_Benchmark_V4`. Its saved outputs prove one successful Anime-Manga Big-LaMa inference on a Tesla T4. Current runtime liveness, free VRAM, RAM, CUDA driver, and Colab unit/billing state remain unverified. The user asked to keep the runtime connected; it was not disconnected. A local CPU synthetic inference ran in an earlier continuation; this continuation generated a five-case synthetic dataset and prepared a runner without starting any Colab/model inference or paid resource.
+The connected Google Drive tool provided read-only access to the saved Colab notebook `KOMYST_Big_LaMa_Colab_Benchmark_V4`. Its saved outputs prove one successful Anime-Manga Big-LaMa inference on a Tesla T4. Current runtime liveness, free VRAM, RAM, CUDA driver, and Colab unit/billing state remain unverified. The user asked to keep the runtime connected; it was not disconnected. A local CPU synthetic inference ran in an earlier continuation; this continuation generated a five-case synthetic dataset and prepared a runner without starting any Colab/model inference or paid resource.
 
 The saved Colab notebook contains one successful model inference on an owner-provided test page, plus an earlier parse-time `IndentationError` execution that did not enter inference. The separate Stable Diffusion 1.5 T4 smoke is historical. The fixtures/settings differ, so their latency is not comparable.
 
@@ -51,11 +51,11 @@ Before another Colab inference, verify that the existing runtime is still active
 
 ## Reproducibility entrypoints
 
-- Existing guarded notebook: `experiments/colab-inpainting/yomu_inpainting_benchmark.ipynb`.
+- Existing guarded notebook: `experiments/colab-inpainting/Komyst_inpainting_benchmark.ipynb`.
 - Deterministic 5-case dataset generator: `experiments/colab-inpainting/build_synthetic_benchmark.py`; the generated archive checksum and split are in [REPRODUCIBILITY.md](REPRODUCIBILITY.md).
 - One-image Colab runner (prepared, not executed): `experiments/colab-inpainting/run_big_lama_colab_smoke.py`; it requires two explicit confirmation flags and refuses batch/holdout execution.
 - Existing experiment notes: `experiments/colab-inpainting/README.md`.
-- Existing Komyst integration proposal: `docs/research/colab-inpainting/YOMU_GPU_INTEGRATION_PROPOSAL.md`.
+- Existing Komyst integration proposal: `docs/research/colab-inpainting/KOMYST_GPU_INTEGRATION_PROPOSAL.md`.
 - The private Colab page/output must not be copied into Git; see [VISUAL_REVIEW.md](VISUAL_REVIEW.md) and [REPRODUCIBILITY.md](REPRODUCIBILITY.md) for sanitized evidence.
 - Model ranking remains explicitly provisional: [MODEL_RANKING.md](MODEL_RANKING.md).
 

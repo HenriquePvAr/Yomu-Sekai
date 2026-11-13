@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from yomu.translation.refinement_selection_decisions import RefinementSelectionStore, _hash
+from komyst.translation.refinement_selection_decisions import RefinementSelectionStore, _hash
 
 
 def result(owner="owner", text="Texto atual.", natural="Texto natural."):
@@ -97,7 +97,7 @@ class SelectionDecisionTests(unittest.TestCase):
             store.confirm_batch([changed], plan_hash="two")
 
     def test_no_provider_exists_in_selection_module(self):
-        import yomu.translation.refinement_selection_decisions as module
+        import komyst.translation.refinement_selection_decisions as module
         self.assertFalse(hasattr(module, "TranslatorNvidiaBatch"))
 
 

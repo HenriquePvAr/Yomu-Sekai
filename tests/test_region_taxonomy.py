@@ -7,7 +7,7 @@ install_offline_network_guard()
 
 import unittest
 
-import yomu.review.region_taxonomy as tax
+import komyst.review.region_taxonomy as tax
 
 
 class SemanticTranslatableCases(unittest.TestCase):

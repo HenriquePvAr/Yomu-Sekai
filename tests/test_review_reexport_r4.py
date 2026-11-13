@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from yomu.review.workflows.review_reexport import _apply_snapshot, build_review_snapshot, validate_review_snapshot
+from komyst.review.workflows.review_reexport import _apply_snapshot, build_review_snapshot, validate_review_snapshot
 
 
 def _snapshot(region: dict) -> dict:

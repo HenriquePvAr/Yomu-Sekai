@@ -1,4 +1,4 @@
-Yomu Sekai — third-party distribution notices
+Komyst — third-party distribution notices
 
 This artifact includes the following permissively licensed components. Their
 copyright and license terms remain with their respective authors. The full

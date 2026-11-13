@@ -13,7 +13,7 @@ _ORIGINAL_SOCKET_CONNECT_EX = socket.socket.connect_ex
 _ORIGINAL_SOCKET_SENDTO = socket.socket.sendto
 _ORIGINAL_CREATE_CONNECTION = socket.create_connection
 _ORIGINAL_GETADDRINFO = socket.getaddrinfo
-OFFLINE_TEST_ENV = "TRADUTOR_IA_OFFLINE_TEST_GUARD"
+OFFLINE_TEST_ENV = "KOMYST_OFFLINE_TEST_GUARD"
 
 
 class OfflineNetworkAttempt(AssertionError):
@@ -87,7 +87,7 @@ def _offline_getaddrinfo(host, port, family=0, socktype=0, proto=0, flags=0):
 def install_offline_network_guard() -> None:
     """Block socket connection entry points for direct unittest and pytest runs."""
 
-    if getattr(socket, "_tradutor_ia_offline_guard", False):
+    if getattr(socket, "_komyst_offline_guard", False):
         os.environ[OFFLINE_TEST_ENV] = "1"
         return
     # asyncio's Windows proactor creates a loopback socketpair for its own event-loop wakeup.
@@ -98,7 +98,7 @@ def install_offline_network_guard() -> None:
     socket.socket.sendto = _loopback_test_sendto
     socket.create_connection = _loopback_test_create_connection
     socket.getaddrinfo = _offline_getaddrinfo
-    socket._tradutor_ia_offline_guard = True
+    socket._komyst_offline_guard = True
     # Child Python processes launched by a hermetic test inherit this marker. The local
     # ``sitecustomize`` installs the same guard before they import a pipeline module.
     os.environ[OFFLINE_TEST_ENV] = "1"

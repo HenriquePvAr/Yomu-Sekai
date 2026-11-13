@@ -1,8 +1,8 @@
 from pathlib import Path
 
-import yomu.runtime.artifact_contract as ac
-import yomu.runtime.job_runner as job_runner
-import yomu.ui.ui_bridge as ui_bridge
+import komyst.runtime.artifact_contract as ac
+import komyst.runtime.job_runner as job_runner
+import komyst.ui.ui_bridge as ui_bridge
 
 
 def _normalize(monkeypatch, payload):
@@ -18,22 +18,22 @@ def test_output_profile_cards_are_native_mutually_exclusive_radios():
     assert 'name="output_profile" value="automatic" checked' in html
     assert 'name="output_profile" value="professional_qc"' in html
     assert "QC Profissional" in html
-    css = Path("static/tradutor_ui.css").read_text(encoding="utf-8")
+    css = Path("static/komyst_ui.css").read_text(encoding="utf-8")
     assert ".output-profile-card:focus-within" in css
     assert "@media (max-width:520px){.output-profile-grid{grid-template-columns:1fr;}}" in css
 
 
 def test_ui_defaults_persists_and_sends_the_profile(monkeypatch):
-    js = Path("static/tradutor_ui.js").read_text(encoding="utf-8")
+    js = Path("static/komyst_ui.js").read_text(encoding="utf-8")
     assert "outputProfile: 'automatic'" in js
-    assert "yomu.outputProfile" in js
+    assert "komyst.outputProfile" in js
     assert "output_profile: appState.outputProfile === 'professional_qc' ? 'professional_qc' : 'automatic'" in js
     assert "output_profile: appState.selectedMode === 'download_only' ? 'automatic'" in js
     assert "form.outputProfile === 'professional_qc' ? 'professional_qc' : 'automatic'" in js
 
 
 def test_switching_to_download_only_disables_profile_controls():
-    js = Path("static/tradutor_ui.js").read_text(encoding="utf-8")
+    js = Path("static/komyst_ui.js").read_text(encoding="utf-8")
     start = js.index("function applyProcessingMode(mode)")
     end = js.index("\n  function ", start + 1)
     assert "syncOutputProfileField()" in js[start:end]
@@ -86,16 +86,16 @@ def test_each_profile_requests_only_its_frozen_artifact_set():
 def test_profile_reaches_pipeline_child_and_old_jobs_fall_back_safely():
     env = {}
     job_runner._set_output_profile_environment(env, {"output_profile": "professional_qc"})
-    assert env["YOMU_OUTPUT_PROFILE"] == ac.OutputProfile.PROFESSIONAL_QC
+    assert env["KOMYST_OUTPUT_PROFILE"] == ac.OutputProfile.PROFESSIONAL_QC
     job_runner._set_output_profile_environment(env, {})
-    assert env["YOMU_OUTPUT_PROFILE"] == ac.OutputProfile.AUTOMATIC
-    assert '"output_profile"' in Path("yomu/runtime/job_runner.py").read_text(encoding="utf-8")
+    assert env["KOMYST_OUTPUT_PROFILE"] == ac.OutputProfile.AUTOMATIC
+    assert '"output_profile"' in Path("komyst/runtime/job_runner.py").read_text(encoding="utf-8")
 
 
 def test_internal_quality_report_remains_separate_from_automatic_requested_artifacts():
-    pipeline = Path("yomu/pipeline/benchmark_pipeline.py").read_text(encoding="utf-8")
+    pipeline = Path("komyst/pipeline/benchmark_pipeline.py").read_text(encoding="utf-8")
     assert "atomic_write_json(quality_json_path, quality_report)" in pipeline
     assert ac.ArtifactType.QUALITY_REPORT not in ac.profile_artifacts(ac.OutputProfile.AUTOMATIC)
-    js = Path("static/tradutor_ui.js").read_text(encoding="utf-8")
+    js = Path("static/komyst_ui.js").read_text(encoding="utf-8")
     assert "record.output_profile === 'professional_qc' ? actionButton('Relatório'" in js
     assert "record.output_profile === 'professional_qc' ? [['Qualidade', 'report'" in js

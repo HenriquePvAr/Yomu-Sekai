@@ -22,12 +22,12 @@ import unittest
 
 import numpy as np
 
-import yomu.translation.semantic_fidelity as semantic_fidelity
-from yomu.pipeline.benchmark_pipeline import (
+import komyst.translation.semantic_fidelity as semantic_fidelity
+from komyst.pipeline.benchmark_pipeline import (
     _render_plan_accounting,
     _translation_quality_accounting,
 )
-from yomu.ocr.ocr_balloon import (
+from komyst.ocr.ocr_balloon import (
     OCRLine,
     TextGroup,
     _token_is_source_vocabulary,

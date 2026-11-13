@@ -296,7 +296,7 @@ function boot() {
   let observer = null;
 
   const toast = (message, kind) => {
-    if (typeof window.__tradutorToast === 'function') window.__tradutorToast(message, kind);
+    if (typeof window.__komystToast === 'function') window.__komystToast(message, kind);
   };
 
   // ---- authenticated transport -------------------------------------------
@@ -305,9 +305,9 @@ function boot() {
   // URL. Same canonical token the rest of the app uses; no reader-only credential,
   // no token in a query string, ownership still proven server-side per request.
   async function sessionToken() {
-    const cached = window.__tradutorAccessToken || '';
+    const cached = window.__komystAccessToken || '';
     if (cached) return cached;
-    const resolve = window.__tradutorGetCanonicalAccessToken;
+    const resolve = window.__komystGetCanonicalAccessToken;
     if (typeof resolve !== 'function') return '';
     try { return (await resolve()) || ''; } catch (_) { return ''; }
   }
@@ -640,11 +640,11 @@ function boot() {
   function openExternally() {
     const jobId = reader.state.jobId;
     if (!jobId) return;
-    window.dispatchEvent(new CustomEvent('tradutor-open-artifact',
+    window.dispatchEvent(new CustomEvent('komyst-open-artifact',
       {detail: {jobId, artifact: 'pdf'}}));
   }
 
-  const backToHistory = () => window.dispatchEvent(new CustomEvent('tradutor-goto-tab', {detail: {tab: 'hist'}}));
+  const backToHistory = () => window.dispatchEvent(new CustomEvent('komyst-goto-tab', {detail: {tab: 'hist'}}));
 
   // Rescaling keeps the reader on the page it was on instead of falling back to the
   // top of the chapter.
@@ -742,14 +742,14 @@ function boot() {
     });
   }, {passive: true});
 
-  window.addEventListener('tradutor-open-reader', event => {
+  window.addEventListener('komyst-open-reader', event => {
     const jobId = String(event?.detail?.jobId || '');
     if (!jobId) return;
     void load(jobId);
   });
-  window.addEventListener('tradutor-close-reader', () => { reader.close(); releaseAll(); render(); });
+  window.addEventListener('komyst-close-reader', () => { reader.close(); releaseAll(); render(); });
 
-  window.__tradutorReader = reader;
+  window.__komystReader = reader;
   render();
 }
 

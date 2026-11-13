@@ -1,5 +1,5 @@
-"""Compatibility launcher; implementation lives in :mod:`yomu.commands.start_tradutor`."""
-from yomu.commands import start_tradutor as _implementation
+"""Compatibility launcher; implementation lives in :mod:`komyst.commands.start_tradutor`."""
+from komyst.commands import start_tradutor as _implementation
 import sys as _sys
 
 if __name__ == "__main__":

@@ -20,7 +20,7 @@ Comandos executados:
 python -m pytest -q -p no:cacheprovider tests/test_resource_monitor.py tests/test_subprocess_ocr.py
 14 passed in 2.55s
 
-python -c "from yomu.config import settings; print({'resource_monitoring_enabled': settings.RESOURCE_MONITORING, 'interval_seconds': settings.RESOURCE_MONITOR_INTERVAL_SECONDS})"
+python -c "from komyst.config import settings; print({'resource_monitoring_enabled': settings.RESOURCE_MONITORING, 'interval_seconds': settings.RESOURCE_MONITOR_INTERVAL_SECONDS})"
 {'resource_monitoring_enabled': True, 'interval_seconds': 5.0}
 ```
 

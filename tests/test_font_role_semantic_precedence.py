@@ -14,7 +14,7 @@ import test_support._test_bootstrap as _test_bootstrap  # noqa: F401
 
 import unittest
 
-from yomu.ocr.ocr_balloon import _resolve_font_role
+from komyst.ocr.ocr_balloon import _resolve_font_role
 
 
 class ShapeOnlyVisualClassYieldsToSemanticRole(unittest.TestCase):

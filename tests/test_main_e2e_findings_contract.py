@@ -16,15 +16,15 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def read(rel: str) -> str:
     if rel == "ui_bridge.py":
-        rel = "yomu/ui/ui_bridge.py"
+        rel = "komyst/ui/ui_bridge.py"
     elif rel == "ui_helpers.py":
-        rel = "yomu/ui/ui_helpers.py"
+        rel = "komyst/ui/ui_helpers.py"
     return (ROOT / rel).read_text(encoding="utf-8")
 
 
 class MainE2eUiFindingContracts(unittest.TestCase):
     def setUp(self):
-        self.js = read("static/tradutor_ui.js")
+        self.js = read("static/komyst_ui.js")
         self.html = read("ui/ui_shell.html")
 
     def test_cancel_control_is_visible_and_the_visible_button_is_used(self):
@@ -146,9 +146,9 @@ class BetaControlSurfaceContracts(unittest.TestCase):
     """#84F10: the start form offers exactly the choices the Beta really has."""
 
     def setUp(self):
-        self.js = read("static/tradutor_ui.js")
+        self.js = read("static/komyst_ui.js")
         self.html = read("ui/ui_shell.html")
-        self.css = read("static/tradutor_ui.css")
+        self.css = read("static/komyst_ui.css")
 
     def test_processing_mode_is_a_select_like_the_other_engine_fields(self):
         self.assertIn('<select id="modeSelect">', self.html)
@@ -207,7 +207,7 @@ class BetaControlSurfaceContracts(unittest.TestCase):
 
 class MainE2eDownloadFindingContracts(unittest.TestCase):
     def test_reader_count_mismatch_171_expected_101_downloaded_fails_closed(self):
-        from yomu.download.down import _build_download_gate
+        from komyst.download.down import _build_download_gate
 
         expected = [f"reader-slot-{index:03}" for index in range(1, 172)]
         downloaded = [

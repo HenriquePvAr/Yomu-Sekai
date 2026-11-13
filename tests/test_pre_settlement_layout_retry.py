@@ -6,9 +6,9 @@ from unittest import mock
 import numpy as np
 import pytest
 
-import yomu.pipeline.benchmark_pipeline as bp
-from yomu.ocr.ocr_balloon import TextGroup
-from yomu.translation.providers.yomu_backend_provider import SystemicTranslationFailure
+import komyst.pipeline.benchmark_pipeline as bp
+from komyst.ocr.ocr_balloon import TextGroup
+from komyst.translation.providers.komyst_backend_provider import SystemicTranslationFailure
 
 
 def _state():
@@ -73,7 +73,7 @@ def test_systemic_layout_error_is_not_converted_to_regional_fallback():
 
 def test_render_signature_changes_only_with_the_translation_state():
     from types import SimpleNamespace
-    from yomu.pipeline.benchmark_pipeline import _translation_render_signature
+    from komyst.pipeline.benchmark_pipeline import _translation_render_signature
 
     group = SimpleNamespace(translation="OI", translation_candidate="OI", translation_valid=True)
     before = _translation_render_signature([group])

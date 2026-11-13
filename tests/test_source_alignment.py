@@ -6,7 +6,7 @@ install_offline_network_guard()
 import unittest
 from types import SimpleNamespace
 
-import yomu.ocr.ocr_balloon as ob
+import komyst.ocr.ocr_balloon as ob
 
 
 def _group(boxes):

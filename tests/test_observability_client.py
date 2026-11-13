@@ -2,7 +2,7 @@ import time
 
 import requests
 
-from yomu.observability.client import ObservabilityClient
+from komyst.observability.client import ObservabilityClient
 
 
 def test_progress_is_throttled():
@@ -20,7 +20,7 @@ def test_http_failure_is_recorded_and_does_not_escape(monkeypatch):
         response.status_code = 404
         return response
 
-    monkeypatch.setattr("yomu.observability.client.requests.post", failed_post)
+    monkeypatch.setattr("komyst.observability.client.requests.post", failed_post)
     client = ObservabilityClient("http://127.0.0.1:18778", timeout=0.1)
     try:
         assert client.emit("JOB_STARTED", job_id="job") is True
@@ -40,7 +40,7 @@ def test_connection_failure_is_classified_without_stopping_job(monkeypatch):
     def failed_post(*args, **kwargs):
         raise requests.ConnectionError("[WinError 10061] refused")
 
-    monkeypatch.setattr("yomu.observability.client.requests.post", failed_post)
+    monkeypatch.setattr("komyst.observability.client.requests.post", failed_post)
     client = ObservabilityClient("http://127.0.0.1:18778", timeout=0.1)
     try:
         assert client.emit("JOB_STARTED", job_id="job") is True

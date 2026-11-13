@@ -11,17 +11,17 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from yomu.review.chapter_quality_revision import (
+from komyst.review.chapter_quality_revision import (
     ChapterQualityRevision,
     ContextualNvidiaReviewer,
     REVIEW_SCHEMA_VERSION,
     stable_region_key,
 )
-from yomu.runtime.job_store import JobStatus, JobStore
+from komyst.runtime.job_store import JobStatus, JobStore
 
 
 ROOT = Path(__file__).resolve().parents[1]
-JS = ROOT / "static" / "tradutor_ui.js"
+JS = ROOT / "static" / "komyst_ui.js"
 SHELL = ROOT / "ui" / "ui_shell.html"
 
 
@@ -55,7 +55,7 @@ class RevisionLifecycleContracts(unittest.TestCase):
         import os
         import subprocess
 
-        from yomu.runtime.process_options import hidden_console_options
+        from komyst.runtime.process_options import hidden_console_options
 
         options = hidden_console_options()
         if os.name == "nt":
@@ -415,7 +415,7 @@ class VisualGateStateContracts(unittest.TestCase):
 
 class VisualGateUiContracts(unittest.TestCase):
     def setUp(self) -> None:
-        self.js = Path("static/tradutor_ui.js").read_text(encoding="utf-8")
+        self.js = Path("static/komyst_ui.js").read_text(encoding="utf-8")
         self.shell = Path("ui/ui_shell.html").read_text(encoding="utf-8")
 
     def test_every_gate_reason_code_has_a_pt_br_label(self) -> None:
@@ -567,9 +567,9 @@ class LocalizedCleanupContracts(unittest.TestCase):
                 {"method": "navier_stokes", "radius": 3, "image": candidate, "overall_score": 0.89},
             ]
             with patch.object(revision, "_detect_text_polarity", return_value=("ambiguous", {})), \
-                    patch("yomu.review.chapter_quality_revision.art_text_inpainting.build_text_masks", return_value=masks), \
-                    patch("yomu.review.chapter_quality_revision.art_text_inpainting.generate_inpainting_candidates", return_value=proposals), \
-                    patch("yomu.review.chapter_quality_revision.art_text_inpainting.select_best_candidate", return_value={
+                    patch("komyst.review.chapter_quality_revision.art_text_inpainting.build_text_masks", return_value=masks), \
+                    patch("komyst.review.chapter_quality_revision.art_text_inpainting.generate_inpainting_candidates", return_value=proposals), \
+                    patch("komyst.review.chapter_quality_revision.art_text_inpainting.select_best_candidate", return_value={
                         "status": "passed", "method": "telea", "radius": 2,
                     }):
                 cleaned, metrics, reason = revision._clean_previous_translation(
@@ -610,11 +610,11 @@ class LocalizedCleanupContracts(unittest.TestCase):
             with patch.object(
                     revision, "_detect_text_polarity",
                     return_value=("dark_text_on_light_background", {})), \
-                    patch("yomu.review.chapter_quality_revision.art_text_inpainting.build_text_masks",
+                    patch("komyst.review.chapter_quality_revision.art_text_inpainting.build_text_masks",
                           return_value=masks) as build_masks, \
-                    patch("yomu.review.chapter_quality_revision.art_text_inpainting.generate_inpainting_candidates",
+                    patch("komyst.review.chapter_quality_revision.art_text_inpainting.generate_inpainting_candidates",
                           return_value=proposals) as generate, \
-                    patch("yomu.review.chapter_quality_revision.art_text_inpainting.select_best_candidate",
+                    patch("komyst.review.chapter_quality_revision.art_text_inpainting.select_best_candidate",
                           return_value={"status": "passed", "method": "local_color",
                                         "radius": None}):
                 cleaned, metrics, reason = revision._clean_previous_translation(
@@ -690,7 +690,7 @@ class ReviewedPdfVersionGateContracts(unittest.TestCase):
     def test_render_pipeline_version_participates_in_the_hash(self) -> None:
         # A renderer fix that changes pixels but not the reviewed text must still
         # count as a new material revision, so it can supersede an old PDF.
-        import yomu.review.chapter_quality_revision as cqr
+        import komyst.review.chapter_quality_revision as cqr
         with tempfile.TemporaryDirectory() as folder:
             revision = self._revision(Path(folder))
             base = revision._semantic_revision_hash(self._changes())
@@ -733,7 +733,7 @@ class ReviewedPdfVersionGateContracts(unittest.TestCase):
             self.assertIsNone(revision._latest_pdf_version())
 
     def test_gate_is_wired_into_pdf_generation(self) -> None:
-        source = (ROOT / "yomu/review/chapter_quality_revision.py").read_text(encoding="utf-8")
+        source = (ROOT / "komyst/review/chapter_quality_revision.py").read_text(encoding="utf-8")
         self.assertIn("no_new_material_changes", source)
         self.assertIn("materially_equivalent_to", source)
         self.assertIn("contains_new_material_changes", source)
@@ -745,7 +745,7 @@ class AtomicStateWriteContracts(unittest.TestCase):
         # blocks the atomic swap, which used to fail whole revisions.
         import threading
 
-        from yomu.review.chapter_quality_revision import write_json
+        from komyst.review.chapter_quality_revision import write_json
 
         with tempfile.TemporaryDirectory() as folder:
             path = Path(folder) / "checkpoint.json"
@@ -793,7 +793,7 @@ class RevisionResponseCacheContracts(unittest.TestCase):
                 "risk": "low", "confidence": 0.97, "reason_code": "ok", "terminology": []}
 
     def test_identical_inputs_hit_the_cache_across_processes(self) -> None:
-        from yomu.review.chapter_quality_revision import RevisionResponseCache
+        from komyst.review.chapter_quality_revision import RevisionResponseCache
 
         with tempfile.TemporaryDirectory() as folder:
             path = Path(folder) / "cache.jsonl"
@@ -810,7 +810,7 @@ class RevisionResponseCacheContracts(unittest.TestCase):
             self.assertEqual(second.stats()["provider_requests_avoided"], 1)
 
     def test_any_changed_input_invalidates_the_cached_answer(self) -> None:
-        from yomu.review.chapter_quality_revision import RevisionResponseCache
+        from komyst.review.chapter_quality_revision import RevisionResponseCache
 
         mutations = {
             "source_text": {"source_text": "Run away"},
@@ -831,7 +831,7 @@ class RevisionResponseCacheContracts(unittest.TestCase):
                 self.assertIn("input_changed", cache.invalidation_reasons)
 
     def test_model_ocr_and_glossary_are_part_of_the_key(self) -> None:
-        from yomu.review.chapter_quality_revision import RevisionResponseCache
+        from komyst.review.chapter_quality_revision import RevisionResponseCache
 
         with tempfile.TemporaryDirectory() as folder:
             cache = RevisionResponseCache(Path(folder) / "cache.jsonl")
@@ -843,7 +843,7 @@ class RevisionResponseCacheContracts(unittest.TestCase):
                 self.assertNotEqual(other, base, override)
 
     def test_manual_review_is_never_cached(self) -> None:
-        from yomu.review.chapter_quality_revision import RevisionResponseCache
+        from komyst.review.chapter_quality_revision import RevisionResponseCache
 
         with tempfile.TemporaryDirectory() as folder:
             cache = RevisionResponseCache(Path(folder) / "cache.jsonl")
@@ -853,7 +853,7 @@ class RevisionResponseCacheContracts(unittest.TestCase):
             self.assertIsNone(cache.lookup(key, "p1:R1"))
 
     def test_cache_file_never_stores_secrets_and_survives_corruption(self) -> None:
-        from yomu.review.chapter_quality_revision import RevisionResponseCache
+        from komyst.review.chapter_quality_revision import RevisionResponseCache
 
         with tempfile.TemporaryDirectory() as folder:
             path = Path(folder) / "cache.jsonl"
@@ -981,7 +981,7 @@ class ReviewModeNavigationContracts(unittest.TestCase):
 
     def test_review_mode_hides_unrelated_source_and_live_pipeline_surfaces(self) -> None:
         source = (ROOT / "ui" / "ui_shell.html").read_text(encoding="utf-8")
-        styles = (ROOT / "static" / "tradutor_ui.css").read_text(encoding="utf-8")
+        styles = (ROOT / "static" / "komyst_ui.css").read_text(encoding="utf-8")
         self.assertIn(
             '<!-- form -->\n        <div class="panel" id="newTranslationFormPanel">',
             source,
@@ -1018,11 +1018,11 @@ class ReviewModeNavigationContracts(unittest.TestCase):
         self.assertIn("function clearPrivateUiForAuthTransition", source)
         self.assertIn("exitReviewMode();", source)
         listener = source[
-            source.index("window.addEventListener('tradutor-auth-changed', event => {"):
-            source.index("applyCanonicalAuthSurface(getGlobal('__tradutorAuthState')")
+            source.index("window.addEventListener('komyst-auth-changed', event => {"):
+            source.index("applyCanonicalAuthSurface(getGlobal('__komystAuthState')")
         ]
         self.assertIn("clearPrivateUiForAuthTransition", listener)
-        # The listener now refreshes the bootstrap through the __tradutorRefreshBootstrap
+        # The listener now refreshes the bootstrap through the __komystRefreshBootstrap
         # indirection (void refresh()), but private review must still be cleared first.
         self.assertLess(
             listener.index("clearPrivateUiForAuthTransition"),
@@ -1108,8 +1108,8 @@ class QualityReviewBulkContracts(unittest.TestCase):
         runtime = "\n".join(
             path.read_text(encoding="utf-8", errors="ignore")
             for path in (ROOT / "static").glob("*.js")
-        ) + "\n" + (ROOT / "yomu/ui/ui_bridge.py").read_text(encoding="utf-8", errors="ignore")
-        runtime += "\n" + (ROOT / "yomu/review/chapter_quality_revision.py").read_text(encoding="utf-8", errors="ignore")
+        ) + "\n" + (ROOT / "komyst/ui/ui_bridge.py").read_text(encoding="utf-8", errors="ignore")
+        runtime += "\n" + (ROOT / "komyst/review/chapter_quality_revision.py").read_text(encoding="utf-8", errors="ignore")
         forbidden = (
             "REAL COFFEE",
             "PRECINCT",
@@ -1639,7 +1639,7 @@ class FullChapterQualityRevisionContracts(unittest.TestCase):
         self.assertIn('id="nvidiaContractCanary" hidden', shell)
         self.assertIn("qualityReviewDeveloperMode", source)
         self.assertIn("/api/ui/quality-review/revision/canary/start", source)
-        self.assertIn("tradutorDeveloperMode", source)
+        self.assertIn("komystDeveloperMode", source)
         self.assertIn("maxRegions = passed && reviewed >= 3", source)
         self.assertIn("passed && reviewed >= 1 ? 3 : 1", source)
 

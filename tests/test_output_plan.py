@@ -8,11 +8,11 @@ from pathlib import Path
 
 import pytest
 
-import yomu.pipeline.benchmark_pipeline as bp
-import yomu.runtime.artifact_contract as ac
-import yomu.ui.ui_bridge as ui_bridge
-from yomu.runtime import output_plan as op
-from yomu.runtime.output_plan import Operation, normalize_output_plan, plan_from_config
+import komyst.pipeline.benchmark_pipeline as bp
+import komyst.runtime.artifact_contract as ac
+import komyst.ui.ui_bridge as ui_bridge
+from komyst.runtime import output_plan as op
+from komyst.runtime.output_plan import Operation, normalize_output_plan, plan_from_config
 
 
 # --- dependency rules --------------------------------------------------------------------
@@ -182,15 +182,15 @@ def test_clean_only_plan_sets_translation_off():
 def test_translation_disabled_initializes_no_provider():
     # Provider spy at the REAL boundary: translation_enabled=False (what Apenas Clean sets)
     # returns no provider object at all -> it is impossible to make a provider call.
-    assert bp._build_translation_provider("yomu_backend", translation_enabled=False) is None
-    translator, _lang = bp._resolve_translation_runtime("yomu_backend", translation_enabled=False)
+    assert bp._build_translation_provider("komyst_backend", translation_enabled=False) is None
+    translator, _lang = bp._resolve_translation_runtime("komyst_backend", translation_enabled=False)
     assert translator is None  # no translator -> 0 provider calls, 0 YK
 
 
 def test_yk_commit_is_guarded_by_translation_enabled():
     # YK-spy proof by invariant: the wallet commit (the only YK charge) is reached only
     # inside the translation_enabled branch, so a clean-only run never commits YK.
-    src = Path("yomu/pipeline/benchmark_pipeline.py").read_text(encoding="utf-8")
+    src = Path("komyst/pipeline/benchmark_pipeline.py").read_text(encoding="utf-8")
     idx = src.index("settlement = commit_translation()")
     guard = src.rindex("if translation_enabled", 0, idx)
     # no competing unconditional commit between the guard and the call

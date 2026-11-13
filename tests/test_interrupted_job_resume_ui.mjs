@@ -1,6 +1,6 @@
 // Browser-side contract for resuming an interrupted job (TDD #56).
 //
-// This harness loads the REAL static/tradutor_ui.js into a small DOM model and feeds it
+// This harness loads the REAL static/komyst_ui.js into a small DOM model and feeds it
 // the same runtime payload /api/ui/state returns. It then drives the real click path on
 // the rendered control instead of calling an internal function, so what is proven is what
 // a user actually gets: the "Retomar" button appears only for a job the BACKEND marked
@@ -323,7 +323,7 @@ async function loadUi({ resumeResponse } = {}) {
   window.window = window;
   window.globalThis = window;
   const context = vm.createContext(window);
-  const source = fs.readFileSync(path.join(ROOT, 'static', 'tradutor_ui.js'), 'utf8')
+  const source = fs.readFileSync(path.join(ROOT, 'static', 'komyst_ui.js'), 'utf8')
     .replace('  refreshBootstrap();', '  // refreshBootstrap disabled by the resume UI harness')
     .replace(/\}\)\(\);\s*$/, `
   if (window.__resumeUiHarness) {
@@ -332,13 +332,13 @@ async function loadUi({ resumeResponse } = {}) {
     window.__resumeUiHarness.appState = appState;
     window.__resumeUiHarness.authenticate = () => {
       appState.bootstrap = {community: {authenticated: true, user_id: 'owner'}};
-      setGlobal('__tradutorAuthState', 'authenticated');
-      setGlobal('__tradutorCommunityAuthenticated', true);
+      setGlobal('__komystAuthState', 'authenticated');
+      setGlobal('__komystCommunityAuthenticated', true);
     };
   }
 })();`);
   window.__resumeUiHarness = { toasts };
-  vm.runInContext(source, context, { filename: 'static/tradutor_ui.js' });
+  vm.runInContext(source, context, { filename: 'static/komyst_ui.js' });
   // A synthetic signed-in session: polling is gated behind canonical authentication and
   // would otherwise never run. No credential of any kind is involved.
   window.__resumeUiHarness.authenticate();

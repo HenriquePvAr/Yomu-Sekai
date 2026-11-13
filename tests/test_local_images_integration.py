@@ -1,9 +1,9 @@
 import pytest
 from unittest.mock import patch
 
-from yomu.download.local.local_folder_job import build_local_job_command
-from yomu.commands.run_webtoon import build_parser
-from yomu.ui.ui_bridge import UiBridge
+from komyst.download.local.local_folder_job import build_local_job_command
+from komyst.commands.run_webtoon import build_parser
+from komyst.ui.ui_bridge import UiBridge
 
 
 def test_output_format_defaults_to_pdf_and_rejects_unknown():
@@ -47,9 +47,9 @@ def test_frozen_local_runner_uses_internal_child_dispatcher_and_preserves_contra
     command = build_local_job_command(
         snapshot_ref="snap-123", output="chapter", mode="quality", logical_pages=True,
         use_cache=False, force=True, use_context=False, open_output=True,
-        output_format="pdf", python_executable="YomuSekai.exe", frozen=True,
+        output_format="pdf", python_executable="Komyst.exe", frozen=True,
     )
-    assert command[:3] == ["YomuSekai.exe", "--internal-child", "local-folder"]
+    assert command[:3] == ["Komyst.exe", "--internal-child", "local-folder"]
     assert "run_local_folder.py" not in command
     assert command[command.index("--snapshot-ref") + 1] == "snap-123"
     assert command[command.index("--output") + 1] == "chapter"
@@ -60,9 +60,9 @@ def test_frozen_local_runner_uses_internal_child_dispatcher_and_preserves_contra
 
 
 def test_frozen_local_runner_dispatches_to_existing_local_entrypoint():
-    import yomu.commands.start_tradutor as start_tradutor
+    import komyst.commands.start_tradutor as start_tradutor
 
-    with patch("yomu.commands.run_local_folder.main", return_value=0) as runner:
+    with patch("komyst.commands.run_local_folder.main", return_value=0) as runner:
         assert start_tradutor.main([
             "--internal-child", "local-folder", "--snapshot-ref", "snap-123",
         ]) == 0

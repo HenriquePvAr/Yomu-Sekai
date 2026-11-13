@@ -9,9 +9,9 @@ import tempfile
 import unittest
 from pathlib import Path
 
-import yomu.clean.ownership.font_fidelity as ff
-import yomu.clean.ownership.human_mask_decisions as hmd
-import yomu.review.human_typography_decisions as htd
+import komyst.clean.ownership.font_fidelity as ff
+import komyst.clean.ownership.human_mask_decisions as hmd
+import komyst.review.human_typography_decisions as htd
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -145,9 +145,9 @@ class HumanMaskDecisionTests(unittest.TestCase):
 
 class Block6E2UiContractTests(unittest.TestCase):
     def test_mask_editor_ui_is_visible_accessible_and_non_destructive(self):
-        ui_js = (ROOT / "static" / "tradutor_ui.js").read_text(encoding="utf-8")
-        ui_css = (ROOT / "static" / "tradutor_ui.css").read_text(encoding="utf-8")
-        app_py = (ROOT / "yomu/ui/app.py").read_text(encoding="utf-8")
+        ui_js = (ROOT / "static" / "komyst_ui.js").read_text(encoding="utf-8")
+        ui_css = (ROOT / "static" / "komyst_ui.css").read_text(encoding="utf-8")
+        app_py = (ROOT / "komyst/ui/app.py").read_text(encoding="utf-8")
         self.assertIn("/api/ui/human-mask/editor-state", ui_js)
         self.assertIn("REFINAR MÁSCARA", ui_js)
         self.assertIn("blocked_pending_human_mask", ui_js)
@@ -159,7 +159,7 @@ class Block6E2UiContractTests(unittest.TestCase):
         self.assertIn("REFAZER", ui_js)
         self.assertIn("RESTAURAR AUTOMÁTICA", ui_js)
         self.assertIn("validation_halo", ui_js)
-        bridge_py = (ROOT / "yomu/ui/ui_bridge.py").read_text(encoding="utf-8")
+        bridge_py = (ROOT / "komyst/ui/ui_bridge.py").read_text(encoding="utf-8")
         self.assertIn('layers.get("combined_inpainting_mask")', bridge_py)
         self.assertIn('"combined_text_mask"', bridge_py)
         self.assertIn("hm-refine-panel", ui_css)

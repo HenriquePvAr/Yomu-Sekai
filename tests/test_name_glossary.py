@@ -4,8 +4,8 @@ Covers:
   - UI helper functions (seriesKeyFromUrl, nameGlossaryPairs) via Python equivalents
   - UiBridge._name_glossary payload parser
   - set_name_overrides / _apply_name_overrides on DeepLTranslator
-  - set_name_overrides / _apply_name_overrides on YomuBackendTranslationProvider
-  - Pipeline integration: YOMU_NAME_GLOSSARY env var → set_name_overrides call
+  - set_name_overrides / _apply_name_overrides on KomystBackendTranslationProvider
+  - Pipeline integration: KOMYST_NAME_GLOSSARY env var → set_name_overrides call
   - job_runner sets env var from configuration
 """
 import test_support._test_bootstrap as _test_bootstrap  # noqa: F401
@@ -23,7 +23,7 @@ import pytest
 class TestUiBridgeNameGlossary:
     @pytest.fixture
     def parse(self):
-        from yomu.ui.ui_bridge import UiBridge
+        from komyst.ui.ui_bridge import UiBridge
         return UiBridge._name_glossary
 
     def test_empty_payload(self, parse):
@@ -73,7 +73,7 @@ class TestUiBridgeNameGlossary:
 class TestDeepLNameOverrides:
     @pytest.fixture
     def translator(self):
-        from yomu.translation.providers.translator_deepl import DeepLTranslator
+        from komyst.translation.providers.translator_deepl import DeepLTranslator
         return DeepLTranslator(api_key="dummy")
 
     def test_set_name_overrides_stores_pairs(self, translator):
@@ -136,18 +136,18 @@ class TestDeepLNameOverrides:
 
 
 # ---------------------------------------------------------------------------
-# YomuBackendTranslationProvider.set_name_overrides / _apply_name_overrides
+# KomystBackendTranslationProvider.set_name_overrides / _apply_name_overrides
 # ---------------------------------------------------------------------------
 
-class TestYomuBackendNameOverrides:
+class TestKomystBackendNameOverrides:
     @pytest.fixture
     def provider(self, tmp_path):
-        from yomu.translation.providers.yomu_backend_provider import (
-            YomuBackendTranslationProvider,
+        from komyst.translation.providers.komyst_backend_provider import (
+            KomystBackendTranslationProvider,
         )
         from unittest.mock import MagicMock
         backend = MagicMock()
-        return YomuBackendTranslationProvider(
+        return KomystBackendTranslationProvider(
             runtime_root=tmp_path, backend=backend
         )
 
@@ -176,14 +176,14 @@ class TestYomuBackendNameOverrides:
 
 
 # ---------------------------------------------------------------------------
-# Pipeline integration: YOMU_NAME_GLOSSARY env var
+# Pipeline integration: KOMYST_NAME_GLOSSARY env var
 # ---------------------------------------------------------------------------
 
 class TestPipelineGlossaryIntegration:
     def test_env_var_sets_name_overrides(self, monkeypatch, tmp_path):
-        """Pipeline reads YOMU_NAME_GLOSSARY and calls set_name_overrides."""
+        """Pipeline reads KOMYST_NAME_GLOSSARY and calls set_name_overrides."""
         glossary = [["Sunless", "Sunny"]]
-        monkeypatch.setenv("YOMU_NAME_GLOSSARY", json.dumps(glossary))
+        monkeypatch.setenv("KOMYST_NAME_GLOSSARY", json.dumps(glossary))
 
         from unittest.mock import MagicMock
 
@@ -191,7 +191,7 @@ class TestPipelineGlossaryIntegration:
         translator.set_detected_names = MagicMock()
         translator.set_name_overrides = MagicMock()
 
-        raw = os.getenv("YOMU_NAME_GLOSSARY", "").strip()
+        raw = os.getenv("KOMYST_NAME_GLOSSARY", "").strip()
         if raw and hasattr(translator, "set_name_overrides"):
             try:
                 pairs = json.loads(raw)
@@ -206,12 +206,12 @@ class TestPipelineGlossaryIntegration:
         translator.set_name_overrides.assert_called_once_with([("Sunless", "Sunny")])
 
     def test_env_var_malformed_json_does_not_crash(self, monkeypatch):
-        """Malformed YOMU_NAME_GLOSSARY must never raise."""
-        monkeypatch.setenv("YOMU_NAME_GLOSSARY", "not-valid-json{{{")
+        """Malformed KOMYST_NAME_GLOSSARY must never raise."""
+        monkeypatch.setenv("KOMYST_NAME_GLOSSARY", "not-valid-json{{{")
         from unittest.mock import MagicMock
         translator = MagicMock()
 
-        raw = os.getenv("YOMU_NAME_GLOSSARY", "").strip()
+        raw = os.getenv("KOMYST_NAME_GLOSSARY", "").strip()
         if raw and hasattr(translator, "set_name_overrides"):
             try:
                 pairs = json.loads(raw)
@@ -223,11 +223,11 @@ class TestPipelineGlossaryIntegration:
         translator.set_name_overrides.assert_not_called()
 
     def test_env_var_absent_does_not_call_set_overrides(self, monkeypatch):
-        monkeypatch.delenv("YOMU_NAME_GLOSSARY", raising=False)
+        monkeypatch.delenv("KOMYST_NAME_GLOSSARY", raising=False)
         from unittest.mock import MagicMock
         translator = MagicMock()
 
-        raw = os.getenv("YOMU_NAME_GLOSSARY", "").strip()
+        raw = os.getenv("KOMYST_NAME_GLOSSARY", "").strip()
         if raw and hasattr(translator, "set_name_overrides"):
             translator.set_name_overrides(json.loads(raw))
 
@@ -235,12 +235,12 @@ class TestPipelineGlossaryIntegration:
 
 
 # ---------------------------------------------------------------------------
-# job_runner sets YOMU_NAME_GLOSSARY from configuration
+# job_runner sets KOMYST_NAME_GLOSSARY from configuration
 # ---------------------------------------------------------------------------
 
 class TestJobRunnerEnvVar:
     def test_name_glossary_in_configuration_sets_env_var(self):
-        """_build_env copies name_glossary list into YOMU_NAME_GLOSSARY."""
+        """_build_env copies name_glossary list into KOMYST_NAME_GLOSSARY."""
         glossary = [["Sunless", "Sunny"], ["Jinwoo", "Jin-woo"]]
         # Replicate the job_runner logic
         configuration = {"name_glossary": glossary}
@@ -248,23 +248,23 @@ class TestJobRunnerEnvVar:
 
         _name_glossary = configuration.get("name_glossary")
         if isinstance(_name_glossary, list) and _name_glossary:
-            env["YOMU_NAME_GLOSSARY"] = json.dumps(_name_glossary)
+            env["KOMYST_NAME_GLOSSARY"] = json.dumps(_name_glossary)
 
-        assert "YOMU_NAME_GLOSSARY" in env
-        assert json.loads(env["YOMU_NAME_GLOSSARY"]) == glossary
+        assert "KOMYST_NAME_GLOSSARY" in env
+        assert json.loads(env["KOMYST_NAME_GLOSSARY"]) == glossary
 
     def test_empty_glossary_not_set(self):
         configuration = {"name_glossary": []}
         env: dict[str, str] = {}
         _name_glossary = configuration.get("name_glossary")
         if isinstance(_name_glossary, list) and _name_glossary:
-            env["YOMU_NAME_GLOSSARY"] = json.dumps(_name_glossary)
-        assert "YOMU_NAME_GLOSSARY" not in env
+            env["KOMYST_NAME_GLOSSARY"] = json.dumps(_name_glossary)
+        assert "KOMYST_NAME_GLOSSARY" not in env
 
     def test_missing_glossary_not_set(self):
         configuration = {}
         env: dict[str, str] = {}
         _name_glossary = configuration.get("name_glossary")
         if isinstance(_name_glossary, list) and _name_glossary:
-            env["YOMU_NAME_GLOSSARY"] = json.dumps(_name_glossary)
-        assert "YOMU_NAME_GLOSSARY" not in env
+            env["KOMYST_NAME_GLOSSARY"] = json.dumps(_name_glossary)
+        assert "KOMYST_NAME_GLOSSARY" not in env

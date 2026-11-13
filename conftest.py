@@ -8,7 +8,7 @@ from test_support.hermetic_runtime import install_runtime_isolation_guard
 from test_support.offline_test_guard import install_offline_network_guard
 
 
-os.environ.setdefault("TRADUTOR_IA_HERMETIC_TEST_ENV", "1")
+os.environ.setdefault("KOMYST_HERMETIC_TEST_ENV", "1")
 # The learned texture fill would load the developer's local 200 MB model and make
 # results depend on the machine; tests that need it inject a fake inpainter.
 os.environ.setdefault("CLEAN_LEARNED_TEXTURE_FILL", "0")

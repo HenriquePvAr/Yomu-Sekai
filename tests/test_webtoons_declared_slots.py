@@ -11,7 +11,7 @@ import shutil
 import subprocess
 import unittest
 
-from yomu.download import webtoons_reader_bridge as bridge
+from komyst.download import webtoons_reader_bridge as bridge
 
 _HARNESS = r"""
 const images = [

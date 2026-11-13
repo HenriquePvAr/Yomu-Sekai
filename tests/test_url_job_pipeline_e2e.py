@@ -22,8 +22,8 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-import yomu.ui.ui_bridge as ui_bridge
-from yomu.runtime.job_store import JobStatus, JobStore
+import komyst.ui.ui_bridge as ui_bridge
+from komyst.runtime.job_store import JobStatus, JobStore
 
 REPO = Path(__file__).resolve().parents[1]
 CHAPTER_URL = ("https://www.webtoons.com/en/drama/daytime-in-the-bunker/episode-1/viewer"
@@ -107,7 +107,7 @@ class StageMachineTests(unittest.TestCase):
         job_id = self.make_running()
         log_path = self.tmp / "runner.log"
         log_path.write_text(
-            "PDF: C:\\Projetos\\Tradutor.Ia\\output\\chapter\\result.pdf\n",
+            "PDF: C:\\Projetos\\Komyst\\output\\chapter\\result.pdf\n",
             encoding="utf-8",
         )
         self.bridge.store.update_fields(job_id, log_path=str(log_path))

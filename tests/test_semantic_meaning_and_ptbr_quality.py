@@ -28,10 +28,10 @@ import unittest
 
 import numpy as np
 
-import yomu.translation.semantic_fidelity as semantic_fidelity
-import yomu.translation.providers.translator_deepl as translator_deepl
-import yomu.translation.providers.translator_nvidia as translator_nvidia
-from yomu.ocr.ocr_balloon import (
+import komyst.translation.semantic_fidelity as semantic_fidelity
+import komyst.translation.providers.translator_deepl as translator_deepl
+import komyst.translation.providers.translator_nvidia as translator_nvidia
+from komyst.ocr.ocr_balloon import (
     OCRLine,
     TextGroup,
     _token_is_source_vocabulary,

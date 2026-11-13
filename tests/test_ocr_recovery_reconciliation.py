@@ -19,9 +19,9 @@ from unittest.mock import patch
 
 import numpy as np
 
-import yomu.config.settings as config
-import yomu.ocr.ocr_balloon as ocr_balloon
-from yomu.ocr.ocr_balloon import (
+import komyst.config.settings as config
+import komyst.ocr.ocr_balloon as ocr_balloon
+from komyst.ocr.ocr_balloon import (
     RECOVERY_RECONCILE,
     RECOVERY_REJECT,
     RECOVERY_REPLACE,
@@ -30,8 +30,8 @@ from yomu.ocr.ocr_balloon import (
     reconcile_recovery_lines,
     score_group_ocr_quality,
 )
-from yomu.ocr.ocr_engine import OCRLine
-from yomu.ocr.source_completeness import compact, meaningful_tokens
+from komyst.ocr.ocr_engine import OCRLine
+from komyst.ocr.source_completeness import compact, meaningful_tokens
 
 
 def _line(text, box, confidence=0.92):

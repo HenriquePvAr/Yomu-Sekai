@@ -13,16 +13,16 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
-import yomu.ui.ui_bridge as ui_bridge
-from yomu.download.sources.chapter_source import (
+import komyst.ui.ui_bridge as ui_bridge
+from komyst.download.sources.chapter_source import (
     REVIEW_REQUIRED_MEDIUM_CONFIDENCE, SOURCE_NOT_READY, SUPPORTED_SPECIFIC_ADAPTER,
     UNSUPPORTED_LOW_CONFIDENCE,
     SourceError, UniversalChapterAdapter, host_of, select_adapter, supported_hosts,
 )
-from yomu.runtime.job_store import JobStatus, JobStore
-from yomu.review.source_readiness import SourceReadinessStore
-from yomu.ui.ui_helpers import build_run_command
-from yomu.runtime.worker_service import Worker
+from komyst.runtime.job_store import JobStatus, JobStore
+from komyst.review.source_readiness import SourceReadinessStore
+from komyst.ui.ui_helpers import build_run_command
+from komyst.runtime.worker_service import Worker
 
 WEBTOON_URL = "https://www.webtoons.com/en/fantasy/serie/ep-1/viewer?title_no=1&episode_no=1"
 
@@ -179,8 +179,8 @@ class WorkerCompatibilityTests(unittest.TestCase):
         bridge = self.bridge()
         with mock.patch.object(ui_bridge, "_worker_environment_matches_current",
                                return_value=False), \
-                mock.patch("yomu.commands.start_tradutor.stop_worker", return_value=0) as stop, \
-                mock.patch("yomu.commands.start_tradutor.start_worker") as start:
+                mock.patch("komyst.commands.start_tradutor.stop_worker", return_value=0) as stop, \
+                mock.patch("komyst.commands.start_tradutor.start_worker") as start:
             start.side_effect = lambda: self.store.register_worker("new", 67890)
             result = bridge.ensure_worker()
         stop.assert_called_once()
@@ -194,8 +194,8 @@ class WorkerCompatibilityTests(unittest.TestCase):
         bridge = self.bridge()
         with mock.patch.object(ui_bridge, "_worker_environment_matches_current",
                                return_value=True), \
-                mock.patch("yomu.commands.start_tradutor.stop_worker") as stop, \
-                mock.patch("yomu.commands.start_tradutor.start_worker") as start:
+                mock.patch("komyst.commands.start_tradutor.stop_worker") as stop, \
+                mock.patch("komyst.commands.start_tradutor.start_worker") as start:
             result = bridge.ensure_worker()
         stop.assert_not_called()
         start.assert_not_called()
@@ -256,7 +256,7 @@ class SubmitTests(unittest.TestCase):
         self.assertEqual(config["output_format"], "png")
 
     def test_download_only_does_not_require_translation_auth_handoff(self):
-        with mock.patch("yomu.auth.secure_auth_context.AuthEnvelopeStore.seal") as seal:
+        with mock.patch("komyst.auth.secure_auth_context.AuthEnvelopeStore.seal") as seal:
             result = self.start(download_only=True, translation_enabled=True)
         job = self.bridge.store.get_job(result["job_id"])
         self.assertEqual(job["status"], JobStatus.QUEUED)
@@ -275,7 +275,7 @@ class SubmitTests(unittest.TestCase):
         token = "test.auth.context.token"
         envelope_path = self.tmp / "runtime" / "auth" / "job.auth"
         envelope_path.parent.mkdir(parents=True)
-        with mock.patch("yomu.auth.secure_auth_context.AuthEnvelopeStore.seal", return_value=envelope_path) as seal:
+        with mock.patch("komyst.auth.secure_auth_context.AuthEnvelopeStore.seal", return_value=envelope_path) as seal:
             with mock.patch.object(ui_bridge, "env_status", return_value={
                 "env_exists": True, "nvidia_configured": True,
             }):
@@ -372,8 +372,8 @@ class SubmitTests(unittest.TestCase):
 
     def test_automatic_source_never_queues_the_pipeline_without_configured_environment(self):
         result = drive(self.bridge.start(self.payload()))
-        with mock.patch("yomu.review.source_analysis_phase.apply_source_analysis") as apply:
-            from yomu.review.source_analysis_phase import FAILED as PHASE_FAILED, SourceAnalysisPhaseResult
+        with mock.patch("komyst.review.source_analysis_phase.apply_source_analysis") as apply:
+            from komyst.review.source_analysis_phase import FAILED as PHASE_FAILED, SourceAnalysisPhaseResult
 
             def refuse(store, job, analysis, **_kw):
                 store.transition(job["id"], JobStatus.FAILED,
@@ -615,7 +615,7 @@ class QueueVisibilityTests(unittest.TestCase):
         self.assertTrue(state["queue_running"])       # the UI must not fall back to "pronto"
 
     def test_initial_click_persists_pipeline_intent_policy_mode_and_scope(self):
-        from yomu.review.source_readiness import default_workspace_id
+        from komyst.review.source_readiness import default_workspace_id
 
         readiness = SourceReadinessStore(self.bridge.store.db_path)
         try:
@@ -1188,7 +1188,7 @@ class FixtureFilteringTests(unittest.TestCase):
 class FrontendContractTests(unittest.TestCase):
     def setUp(self):
         root = Path(__file__).resolve().parents[1]
-        self.js = (root / "static" / "tradutor_ui.js").read_text(encoding="utf-8")
+        self.js = (root / "static" / "komyst_ui.js").read_text(encoding="utf-8")
         self.html = (root / "ui" / "ui_shell.html").read_text(encoding="utf-8")
 
     def test_in_flight_label_shown_while_the_request_runs(self):
