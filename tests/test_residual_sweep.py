@@ -5,7 +5,12 @@ from unittest import mock
 import numpy as np
 
 from komyst.config import settings as config
-from komyst.ocr.residual_sweep import sweep_page_residuals, synthetic_sfx_lines
+from komyst.ocr.residual_sweep import (
+    sweep_mode,
+    sweep_page_residuals,
+    sweep_unavailable_reason,
+    synthetic_sfx_lines,
+)
 from komyst.ocr.ocr_balloon import TextGroup, get_translatable_groups
 from komyst.ocr.ocr_engine import OCRLine
 from komyst.core.page_processing_contracts import PreTranslationPageResult
@@ -206,3 +211,17 @@ def test_repeated_sound_requires_both_independent_read_and_measured_glyphs():
     assert ob._line_ignore_reason(unmeasured,image.shape) == "noise_like_text"
     primary = copy.deepcopy(member);primary.engine="rapidocr"
     assert ob._line_ignore_reason(primary,image.shape) == "noise_like_text"
+
+def test_mode_off_never_starts_paddle():
+    with mock.patch.object(config, "OCR_RESIDUAL_SWEEP_MODE", "off"),             mock.patch("komyst.ocr.subprocess_ocr._ensure_gateway") as gateway:
+        assert sweep_mode() == "off"
+        assert sweep_page_residuals(np.zeros((50, 50, 3), np.uint8), [], page_index=1) == []
+    gateway.assert_not_called()
+
+
+def test_unavailable_paddle_is_reported_with_its_reason():
+    gateway = SimpleNamespace(unavailable_reason="spawn_failed:boom")
+    with mock.patch("komyst.ocr.subprocess_ocr._gateway", gateway):
+        assert sweep_unavailable_reason() == "spawn_failed:boom"
+    with mock.patch("komyst.ocr.subprocess_ocr._gateway", None):
+        assert sweep_unavailable_reason() == ""

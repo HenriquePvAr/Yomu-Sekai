@@ -29,7 +29,12 @@ import komyst.config.settings as config
 from komyst.core.gpu import inference_device_status, log_inference_device_warning
 import komyst.runtime.artifact_contract as ac
 import komyst.export.editable_psd_writer as editable_psd_writer
-from komyst.ocr.residual_sweep import sweep_page_residuals, synthetic_sfx_lines
+from komyst.ocr.residual_sweep import (
+    sweep_mode,
+    sweep_page_residuals,
+    sweep_unavailable_reason,
+    synthetic_sfx_lines,
+)
 import komyst.review.region_taxonomy as region_taxonomy
 from komyst.ocr.classification_profiler import (
     ClassificationProfiler,
@@ -278,6 +283,11 @@ def _auto_fix_residual_sfx(page_result, page_state):
         page_index=int(page_state.get("index") or 0),
     )
     page_state["residual_sweep"] = detections
+    unavailable = sweep_unavailable_reason()
+    page_state["residual_sweep_status"] = {
+        "status": "off" if sweep_mode() == "off" else ("unavailable" if unavailable else "swept"),
+        "reason": unavailable,
+    }
     if not getattr(config, "OCR_RESIDUAL_AUTO_FIX", True):
         page_state["residual_sweep_auto_fix"] = {
             "detected": len(detections), "synthetic_candidates": 0, "accepted": 0,
@@ -446,16 +456,46 @@ def _reconstructed_page_is_valid(output_path, source_path: str = "") -> bool:
     """
     if not output_path:
         return False
-    out = cv2.imread(str(output_path))
-    if out is None or out.size == 0 or out.shape[0] <= 0 or out.shape[1] <= 0:
+    out_stats = _page_file_stats(output_path)
+    if out_stats is None:
         return False
     if source_path:
-        src = cv2.imread(str(source_path))
-        if (src is not None and src.size
-                and _page_gray_variance(src) > _RECON_BLANK_VARIANCE_FLOOR
-                and _page_gray_variance(out) <= _RECON_BLANK_VARIANCE_FLOOR):
+        src_stats = _page_file_stats(source_path)
+        if (src_stats is not None
+                and src_stats[0] > _RECON_BLANK_VARIANCE_FLOOR
+                and out_stats[0] <= _RECON_BLANK_VARIANCE_FLOOR):
             return False
     return True
+
+
+_PAGE_FILE_STATS: dict = {}
+_PAGE_FILE_STATS_LOCK = threading.Lock()
+
+
+def _page_file_stats(path):
+    """(gray variance,) of a decodable non-empty image, else None; memoised per file version.
+
+    The validity rule runs at several stages on the same source and render, and each call used
+    to decode both PNGs again. The key carries size and mtime so a re-rendered file is re-read.
+    """
+    try:
+        stat = os.stat(str(path))
+    except OSError:
+        return None
+    key = (str(path), stat.st_size, stat.st_mtime_ns)
+    with _PAGE_FILE_STATS_LOCK:
+        if key in _PAGE_FILE_STATS:
+            return _PAGE_FILE_STATS[key]
+    image = cv2.imread(str(path))
+    if image is None or image.size == 0 or image.shape[0] <= 0 or image.shape[1] <= 0:
+        stats = None
+    else:
+        stats = (_page_gray_variance(image),)
+    with _PAGE_FILE_STATS_LOCK:
+        if len(_PAGE_FILE_STATS) > 512:
+            _PAGE_FILE_STATS.clear()
+        _PAGE_FILE_STATS[key] = stats
+    return stats
 
 
 def _resolve_output_profile(args=None) -> str:
@@ -3078,12 +3118,6 @@ def run_benchmark(args):
                 smart_paths if args.full else smart_paths[: max(0, int(max_images or 0))]
             )
             image_entries, _ = _select_image_entries(selected_smart_paths, [])
-        if not config.PIPELINE_STREAMING:
-            create_split_boundary_contact_sheet(
-                smart_paths,
-                smart_split_report,
-                smart_split_contact_sheet,
-            )
         print(
             "Smart split: "
             f"{len(source_image_paths)} fatias -> {len(smart_paths)} paginas logicas "
@@ -3155,6 +3189,9 @@ def run_benchmark(args):
         translation_enabled=translation_enabled,
     )
 
+    from komyst.ocr.ocr_balloon import LEARNED_COMPARE_COUNTERS
+
+    LEARNED_COMPARE_COUNTERS.update(lama_compare_run=0, lama_compare_skipped=0)
     counters = {
         "images_skipped_by_cache": 0,
         "images_skipped_by_no_text_precheck": 0,
@@ -4594,6 +4631,8 @@ def run_benchmark(args):
         "total_images": len(image_paths),
         "processed_images": len(completed_states),
         "images_skipped_by_cache": counters["images_skipped_by_cache"],
+        "lama_compare_run": LEARNED_COMPARE_COUNTERS["lama_compare_run"],
+        "lama_compare_skipped": LEARNED_COMPARE_COUNTERS["lama_compare_skipped"],
         "images_skipped_by_no_text_precheck": counters[
             "images_skipped_by_no_text_precheck"
         ],
@@ -6654,6 +6693,8 @@ def _build_quality_report(report, states, translation_retry_records):
         "rectangular_line_mask_rejections": 0,
         "background_type_counts": {},
         "residual_sweep_auto_fix_groups": 0,
+        "residual_sweep_pages_swept": 0,
+        "residual_sweep_pages_unavailable": 0,
         "inpaint_regions_measured": 0,
         "inpaint_regions_accepted": 0,
         "inpaint_regions_accepted_with_review": 0,
@@ -6714,6 +6755,11 @@ def _build_quality_report(report, states, translation_retry_records):
     for state in sorted(states, key=lambda item: item["index"]):
         auto_fix = dict(state.get("residual_sweep_auto_fix") or {})
         totals["residual_sweep_auto_fix_groups"] += int(auto_fix.get("accepted", 0) or 0)
+        sweep_status = dict(state.get("residual_sweep_status") or {})
+        if sweep_status.get("status") == "swept":
+            totals["residual_sweep_pages_swept"] += 1
+        elif sweep_status.get("status") == "unavailable":
+            totals["residual_sweep_pages_unavailable"] += 1
         debug = state.get("debug_data", {})
         items = debug.get("items", [])
         inpaint_regions = []
@@ -6992,6 +7038,7 @@ def _build_quality_report(report, states, translation_retry_records):
                 "sfx_preserved": [_quality_item_summary(item) for item in sfx],
                 "residual_sweep": list(state.get("residual_sweep") or []),
                 "residual_sweep_auto_fix": auto_fix,
+                "residual_sweep_status": dict(state.get("residual_sweep_status") or {}),
                 "inpaint_summary": {
                     "regions_measured": len(inpaint_regions),
                     "mask_pixels_sum": sum(int(region.get("mask_pixels") or 0) for region in inpaint_regions),

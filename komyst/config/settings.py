@@ -106,6 +106,7 @@ OCR_SFX_PADDLE_ESCALATION = _env_bool("OCR_SFX_PADDLE_ESCALATION", False)
 # Page-level sweep with isolated Paddle: reports text the primary OCR missed and
 # can inject visually classified SFX before the translation barrier.
 OCR_RESIDUAL_SWEEP = _env_bool("OCR_RESIDUAL_SWEEP", True)
+OCR_RESIDUAL_SWEEP_MODE = os.getenv("OCR_RESIDUAL_SWEEP_MODE", "always")  # always | off
 # Only glossary-backed, short display SFX from the residual sweep may enter the
 # normal classifier/translation path automatically. Unknown readings stay review.
 OCR_RESIDUAL_AUTO_FIX = _env_bool("OCR_RESIDUAL_AUTO_FIX", True)

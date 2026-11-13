@@ -165,6 +165,26 @@ def _mask_known_boxes(image_bgr: np.ndarray, known_boxes) -> np.ndarray:
     return masked
 
 
+def sweep_mode() -> str:
+    """"always" (default) or "off". The legacy OCR_RESIDUAL_SWEEP=0 also means off.
+
+    ponytail: no "evidence" mode - a cheap model-free text-likeness estimate saturates on most
+    pages and cannot separate pages with residual text from the rest without losing detections.
+    """
+    if not getattr(settings, "OCR_RESIDUAL_SWEEP", True):
+        return "off"
+    mode = str(getattr(settings, "OCR_RESIDUAL_SWEEP_MODE", "always") or "always").strip().lower()
+    return "off" if mode == "off" else "always"
+
+
+def sweep_unavailable_reason() -> str:
+    """Why the isolated Paddle worker cannot run ("" when it can or was never started)."""
+    from komyst.ocr import subprocess_ocr
+
+    gateway = getattr(subprocess_ocr, "_gateway", None)
+    return str(getattr(gateway, "unavailable_reason", "") or "")
+
+
 def sweep_page_residuals(original_bgr, known_boxes, page_index=None) -> list[dict]:
     """Return undetected source-text regions on this page (read-only report).
 
@@ -172,7 +192,7 @@ def sweep_page_residuals(original_bgr, known_boxes, page_index=None) -> list[dic
     and keeps reads whose box overlaps no known group. Returns ``[]`` when the
     engine is unavailable - reporting must never block or break a run.
     """
-    if not getattr(settings, "OCR_RESIDUAL_SWEEP", True):
+    if sweep_mode() == "off":
         return []
     from komyst.ocr.subprocess_ocr import _ensure_gateway
 

@@ -120,6 +120,18 @@ class ShortPageReconstructionTests(unittest.TestCase):
             self.assertFalse(bp._reconstructed_page_is_valid(bad, src))
             self.assertFalse(bp._reconstructed_page_is_valid("", src))
 
+    def test_validity_decodes_each_file_once_and_rereads_changed_files(self):
+        with TemporaryDirectory() as tmp:
+            src = self._write(tmp, "s.png", _content(800, 1000))
+            out = self._write(tmp, "o.png", _content(800, 1000))
+            real = cv2.imread
+            with patch.object(bp.cv2, "imread", side_effect=real) as spy:
+                self.assertTrue(bp._reconstructed_page_is_valid(out, src))
+                self.assertTrue(bp._reconstructed_page_is_valid(out, src))
+                self.assertEqual(spy.call_count, 2)  # one decode per file, not per call
+                self._write(tmp, "o.png", _blank(800, 1000))  # re-render: new size/mtime
+                self.assertFalse(bp._reconstructed_page_is_valid(out, src))
+
     def test_208_logical_coverage_none_dropped(self):
         # 205 normal + 3 short (48/118/143) + treat 207 as blank source: all represented.
         with TemporaryDirectory() as tmp:
