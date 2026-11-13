@@ -3964,6 +3964,24 @@ def _render_analyzed_image(
     return final, debug_data
 
 
+_PAGE_SIZED_GROUP_BUFFERS = (
+    "_fill_source_bgr", "authorized_fill_extension", "structure_protect_mask",
+    "light_enclosure_interior", "_caption_effect_layers",
+)
+
+
+def release_group_buffers(group):
+    """Drop the page-sized arrays a group keeps for rendering.
+
+    Call only after the page is fully rendered and its ``authorized_cleanup_mask`` was
+    captured (that mask reads ``authorized_fill_extension``); nothing reads these
+    attributes afterwards (reports read the debug dictionary, not the group).
+    """
+    for name in _PAGE_SIZED_GROUP_BUFFERS:
+        setattr(group, name, None)
+    group.fill_alternatives = []
+
+
 def get_font(font_path, size, role="regular", *, prefer_role=False, text=""):
     font, runtime = font_fidelity.resolve_font(
         role,

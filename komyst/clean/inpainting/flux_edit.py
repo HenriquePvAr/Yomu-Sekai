@@ -24,6 +24,7 @@ import cv2
 import numpy as np
 
 from komyst.config import settings
+from komyst.runtime import memory_guard
 from komyst.runtime.process_options import hidden_console_options
 
 _DEFAULT_MODEL_DIR = Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / "Komyst" / "models" / "flux"
@@ -60,10 +61,13 @@ def available(*, purpose="general") -> bool:
     if purpose not in {"general", "caption_effect"} or not getattr(settings, flag, False):
         return False
     directory = _model_dir()
-    return all(
+    if not all(
         (directory / name).is_file()
         for name in ("sd-cli.exe", "flux-2-klein-4b-Q4_0.gguf", "flux2-vae.safetensors", "qwen3-4b-q4_k_m.gguf")
-    )
+    ):
+        return False
+    # Checked last so a denial is counted only when FLUX would otherwise have run.
+    return memory_guard.allow("flux", settings.FLUX_MIN_FREE_RAM_MB)
 
 
 _EDIT_CACHE = OrderedDict()

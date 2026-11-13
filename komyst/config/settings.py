@@ -445,6 +445,11 @@ RENDER_FIT_BALLOON_SHAPE = _env_bool("RENDER_FIT_BALLOON_SHAPE", True)
 # (they fail one by one and the region reaches the LaMA fallback regardless);
 # small SFX and dialogue keep the full cascade.
 RENDER_SFX_STRAIGHT_TO_LAMA = _env_bool("RENDER_SFX_STRAIGHT_TO_LAMA", True)
+# Memory guard (komyst/runtime/memory_guard.py): LaMa/FLUX report "unavailable" when free
+# RAM is below these floors, and LaMa also when its context crop exceeds the pixel cap.
+LAMA_MIN_FREE_RAM_MB = _env_int("LAMA_MIN_FREE_RAM_MB", 1500)
+FLUX_MIN_FREE_RAM_MB = _env_int("FLUX_MIN_FREE_RAM_MB", 6000)
+LAMA_MAX_CROP_PIXELS = _env_int("LAMA_MAX_CROP_PIXELS", 4_000_000)
 # Lean the drawn translation like the source lettering (measured slant) when the
 # chosen font is upright.
 RENDER_MATCH_SOURCE_SLANT = _env_bool("RENDER_MATCH_SOURCE_SLANT", True)
