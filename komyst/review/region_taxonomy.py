@@ -366,6 +366,8 @@ _LEXICON_ONLY_ZIPF = 1.0
 # dictionary scraps ("ICHIGONYANYAN" -> I CHI GON YAN YAN) is left alone.
 # Three-letter pieces need 3.5: web-noise scraps ("DAE HYE ON", "SIT A GER")
 # score 3.0-3.3, the real ones of a split ("SIT", "DUST") 4+.
+# A piece missing from the dictionary needs this frequency to be a word (abbreviations).
+COMMON_NON_LEXICON_ZIPF = 4.0
 SEGMENT_MIN_PIECE_ZIPF = 2.5
 SEGMENT_MIN_SHORT_PIECE_ZIPF = 3.5
 
@@ -429,7 +431,11 @@ def _piece_zipf(piece: str) -> float | None:
     if len(piece) <= 2:
         return _frequencies().get(piece, 6.0) if piece in _SHORT_WORDS else None
     if piece not in _lexicon() and piece not in _STORY_CLAUSE_MARKERS:
-        return None
+        # Common abbreviations the dictionary lacks ("CEO", "DNA", "USB") still count
+        # when the frequency table ranks them as common as everyday words; web-noise
+        # scraps rank 3.0-3.3 and stay out.
+        listed = _frequencies().get(piece)
+        return listed if listed is not None and listed >= COMMON_NON_LEXICON_ZIPF else None
     zipf = _frequencies().get(piece)
     if zipf is not None:
         return zipf

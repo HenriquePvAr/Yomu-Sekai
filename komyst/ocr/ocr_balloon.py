@@ -1526,6 +1526,8 @@ def _restore_shape(token, letters):
 
 
 _ENGLISH_CONTRACTION_TAILS = frozenset({"S", "T", "LL", "RE", "VE", "D", "M", "EM", "CAUSE", "N"})
+# Tails of contractions that attach to a whole word; negations ("N'T") are left alone.
+_GLUED_HEAD_CONTRACTION_TAILS = frozenset({"S", "LL", "RE", "VE", "D", "M"})
 
 
 def split_glued_source_words(text, protected=(), chapter_names=(), chapter_words=frozenset()):
@@ -1562,6 +1564,18 @@ def split_glued_source_words(text, protected=(), chapter_names=(), chapter_words
                 joined = " ".join(pieces)
                 return joined if token.isupper() else joined.lower()
         head, apostrophe, tail = (re.split(r"(['’])", token, maxsplit=1) + ["", ""])[:3]
+        if apostrophe and tail.upper() in _GLUED_HEAD_CONTRACTION_TAILS:
+            # A real contraction on glued words: "ONELEAD'S" -> ONE LEAD'S. The head is
+            # split like any glued token, only when it is not already a word.
+            head_key = re.sub(r"[^A-Z]", "", head.upper())
+            if (len(head_key) >= 5 and head_key not in protected_keys and head_key not in names
+                    and not region_taxonomy.is_english_word(head_key)
+                    and region_taxonomy.word_zipf(head_key) < 3.0):
+                words = region_taxonomy.segment_words(head_key)
+                if words and len(words) > 1 and all(len(word) >= 2 for word in words):
+                    joined = " ".join(words)
+                    joined = joined if head.isupper() else joined.lower()
+                    return f"{joined}{apostrophe}{tail}"
         if apostrophe and tail.upper() not in _ENGLISH_CONTRACTION_TAILS:
             # Not a contraction ("OUTON'AWALKWITHNO"): the OCR read a space as an
             # apostrophe. The letters are split like any glued token.

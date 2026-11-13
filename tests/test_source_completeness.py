@@ -46,6 +46,23 @@ class TokenNormalizationTest(unittest.TestCase):
         )
         self.assertEqual(result["status"], completeness.STATUS_PASS)
 
+    def test_token_glued_from_many_words_is_covered_by_the_spaced_downstream(self):
+        # Five downstream words equal one glued source token; a fixed run limit of
+        # four tokens counted it as missing.
+        result = completeness.check(
+            [line("WITHMEIFYOUSTILL", (10, 10, 300, 30))],
+            downstream_text="WITH ME IF YOU STILL",
+        )
+        self.assertEqual(result["status"], completeness.STATUS_PASS)
+        self.assertEqual(result["unexplained_missing_tokens"], [])
+
+    def test_a_genuinely_missing_token_is_still_reported(self):
+        result = completeness.check(
+            [line("WITHMEIFYOUSTILL", (10, 10, 300, 30))],
+            downstream_text="WITH ME IF YOU",
+        )
+        self.assertNotEqual(result["status"], completeness.STATUS_PASS)
+
     def test_case_normalization_is_not_content_loss(self):
         result = completeness.check(
             [line("KillIng you", (10, 10, 200, 30))],

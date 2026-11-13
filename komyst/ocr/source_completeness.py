@@ -117,13 +117,19 @@ def _represented_token_forms(source_stream, downstream_streams, max_run=4):
     """
     present = set()
     downstream_tokens = set()
+    # A glued source token ("WITHMEIFYOUSTILL") equals a run of as many downstream
+    # tokens as it was glued from, so the run is bounded by the longest source token
+    # rather than by a fixed token count.
+    longest = max((len(token) for token in source_stream), default=0)
     for stream in downstream_streams:
         downstream_tokens.update(stream)
         for start in range(len(stream)):
-            for size in range(1, max_run + 1):
-                if start + size > len(stream):
+            joined = ""
+            for token in stream[start:]:
+                joined += token
+                if len(joined) > longest and len(joined) > 1:
                     break
-                present.add("".join(stream[start:start + size]))
+                present.add(joined)
     for start in range(len(source_stream)):
         for size in range(2, max_run + 1):
             if start + size > len(source_stream):

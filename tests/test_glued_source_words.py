@@ -64,3 +64,27 @@ class SourceRepairTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class GluedBeforeContractionAndAbbreviationTests(unittest.TestCase):
+    def test_glued_words_before_a_contraction_tail_are_split(self):
+        self.assertEqual(ob.split_glued_source_words("ONELEAD'S"), "ONE LEAD'S")
+        self.assertEqual(ob.split_glued_source_words("onelead's"), "one lead's")
+
+    def test_real_contractions_stay_whole(self):
+        for token in ("WE'RE", "DON'T", "COULDN'T", "IT'S", "SHE'LL", "THEY'VE", "I'M"):
+            self.assertEqual(ob.split_glued_source_words(token), token, token)
+
+    def test_a_protected_name_before_a_contraction_is_not_split(self):
+        self.assertEqual(
+            ob.split_glued_source_words("DAEHYEON'S", protected=("DAEHYEON",)), "DAEHYEON'S")
+
+    def test_common_abbreviation_counts_as_a_word_piece(self):
+        self.assertEqual(segment_words("THECEO"), ["THE", "CEO"])
+        self.assertEqual(segment_words("THEDNA"), ["THE", "DNA"])
+        self.assertEqual(ob.split_glued_source_words("THECEO"), "THE CEO")
+
+    def test_name_like_tokens_do_not_gain_a_split_from_abbreviations(self):
+        for token in ("JINHOSEO", "SEONHO", "DAEHYEON", "PAEHYEOK"):
+            self.assertIsNone(segment_words(token), token)
+
