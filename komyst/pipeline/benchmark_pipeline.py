@@ -58,6 +58,7 @@ from komyst.ocr.ocr_balloon import (
     enforce_rapidocr_quality_gate,
     get_translatable_groups,
     normalize_recurring_compact_names,
+    release_group_buffers,
     propagate_chapter_declared_names,
     split_glued_source_words,
     chapter_source_words,
@@ -211,6 +212,43 @@ def _pipeline_page_workers():
     if not 1 <= value <= MAX_PIPELINE_PAGE_WORKERS:
         raise ValueError("PIPELINE_PAGE_WORKERS must be auto or 1-4")
     return value
+
+
+# Image buffers and OCR scratch lists nobody reads once a page is rendered.  ``groups``
+# stay (clean/physical accounting, PSD regions and the structural fingerprint read them);
+# their page-sized arrays go through ``release_group_buffers`` instead.
+_PAGE_IMAGE_BUFFERS = ("original_bgr", "clean_local_base", "_preflight_render")
+_PAGE_SCRATCH_LISTS = ("candidates", "raw_lines")
+
+
+def _release_page_buffers(state):
+    """Free what no later stage reads, keeping the few facts later stages do read.
+
+    Later readers need only the page size (clean-certificate target geometry) and the
+    candidate/raw-line counts (group-count trace, structural snapshot); they are kept as
+    ``page_hw`` / ``released_counts`` so reports stay identical.
+    """
+    if not isinstance(state, dict):
+        return
+    original = state.get("original_bgr")
+    if isinstance(original, np.ndarray) and original.ndim >= 2:
+        state["page_hw"] = (int(original.shape[0]), int(original.shape[1]))
+    counts = dict(state.get("released_counts") or {})
+    for name in _PAGE_SCRATCH_LISTS:
+        if name in state:
+            counts[name] = len(state[name] or [])
+    if counts:
+        state["released_counts"] = counts
+    for name in _PAGE_IMAGE_BUFFERS + _PAGE_SCRATCH_LISTS:
+        state.pop(name, None)
+
+
+def _released_count(state, name):
+    """Length of a scratch list, or the count saved when it was released."""
+    value = state.get(name)
+    if value:
+        return len(value)
+    return int((state.get("released_counts") or {}).get(name, 0) or 0)
 
 
 def _residual_sweep_known_boxes(state):
@@ -720,7 +758,10 @@ def _clean_revision_id(state: dict) -> str:
 def _clean_target_snapshot(state: dict) -> list[dict]:
     targets = []
     page = state.get("original_bgr")
-    page_height, page_width = page.shape[:2] if isinstance(page, np.ndarray) and page.ndim >= 2 else (0, 0)
+    if isinstance(page, np.ndarray) and page.ndim >= 2:
+        page_height, page_width = page.shape[:2]
+    else:  # buffers already released: the size saved by _release_page_buffers
+        page_height, page_width = state.get("page_hw") or (0, 0)
     for group in state.get("groups", []) or []:
         geometry = None
         try:
@@ -1554,6 +1595,9 @@ def process_post_translation_page(state, *, diagnostic_folder=None, targeted_reg
         # same translations its page and CLEAN capture are the final ones (its time
         # is counted under the translation stage).
         preflight = local.pop("_preflight_render", None)
+        # Returned as ``None`` so the caller's ``state.update(...)`` overwrites (and frees)
+        # the pre-render held by the aggregate state.
+        local["_preflight_render"] = None
         reusable = bool(
             preflight is not None and debug_folder is None and _want_typeset
             and preflight["signature"] == _translation_render_signature(local["groups"])
@@ -1637,6 +1681,8 @@ def process_post_translation_page(state, *, diagnostic_folder=None, targeted_reg
     except Exception as exc:
         return PostTranslationPageResult(page_index=int(local["index"]), timings=dict(timings), page_state=local, page_recorder=page_recorder, error=f"{type(exc).__name__}: {exc}")
     finally:
+        for group in local.get("groups") or []:
+            release_group_buffers(group)
         ocr_line_provenance.activate(previous_recorder)
 
 
@@ -2166,13 +2212,12 @@ def _group_count_trace(page_states):
         "pages_with_ocr_error": 0,
     }
     for state in states:
-        raw_lines = list(state.get("raw_lines") or [])
-        candidates = list(state.get("candidates") or [])
         groups = list(state.get("groups") or [])
         translatable = list(state.get("translatable_groups") or [])
         debug = state.get("debug_data") if isinstance(state.get("debug_data"), dict) else {}
         metadata = state.get("ocr_metadata") if isinstance(state.get("ocr_metadata"), dict) else {}
-        raw_line_count = len(raw_lines)
+        raw_line_count = _released_count(state, "raw_lines")
+        candidate_count = _released_count(state, "candidates")
         if not raw_line_count:
             raw_line_count = int(debug.get("ocr_line_count") or 0)
 
@@ -2200,7 +2245,7 @@ def _group_count_trace(page_states):
             estimated_regions if estimated_regions is not None else raw_line_count
         )
         trace["candidate_regions"] += (
-            len(candidates) if candidates else int(debug.get("ocr_line_count") or 0)
+            candidate_count if candidate_count else int(debug.get("ocr_line_count") or 0)
         )
         created = len(groups) if groups else int(debug.get("group_count") or 0)
         translation_count = (
@@ -3958,6 +4003,10 @@ def run_benchmark(args):
             "translator": translator_stats,
         }
 
+    # Translation is settled: the per-page pre-translation results (each holding its page
+    # state and groups) are not read again, so stop keeping them alive through rendering.
+    pre_page_results.clear()
+    page_results = []
     resource_monitor.set_stage("rendering")
     # Page completion is reduced by the serial/job owner.  The page body only
     # records a local event; this keeps future out-of-order workers from
@@ -4155,6 +4204,12 @@ def run_benchmark(args):
                     current_page=page_index, operation="render_page",
                 )
         finally:
+            for group in state.get("groups") or []:
+                release_group_buffers(group)
+            _release_page_buffers(state)
+            # The aggregate entry in ``page_states`` is a different dict from this
+            # page-local one; popping only here left every page's image alive.
+            _release_page_buffers(state_by_index.get(state.get("index")))
             state.pop("original_bgr", None)
             state.pop("candidates", None)
             state.pop("groups", None)
@@ -4178,6 +4233,8 @@ def run_benchmark(args):
                 counters["pages_with_error"] += 1
                 continue
             state.update(result.page_state)
+            _release_page_buffers(state)
+            _release_page_buffers(result.page_state)
             for name, elapsed in result.timings.items():
                 if isinstance(elapsed, (int, float)):
                     stage_seconds[name] += float(elapsed)
@@ -5087,7 +5144,7 @@ def _structural_page_snapshot(state, groups):
         )
     return {
         "page_index": int(state.get("index") or 0),
-        "raw_lines": len(state.get("raw_lines", []) or []),
+        "raw_lines": _released_count(state, "raw_lines"),
         "groups": group_records,
     }
 
