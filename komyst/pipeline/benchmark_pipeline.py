@@ -1759,7 +1759,7 @@ from komyst.export.pdf_naming import (
     episode_number_from_url,
     series_slug_from_url,
 )
-from komyst.runtime import memory_guard
+from komyst.runtime import hardware_profile, memory_guard
 from komyst.core.page_processing_contracts import (
     PageProcessingContext,
     PageProgressAggregator,
@@ -2991,6 +2991,9 @@ def run_benchmark(args):
     if selected_page_indices:
         print(f"Paginas selecionadas: {selected_page_indices}", flush=True)
     print(f"Fast: {'sim' if args.fast else 'nao'}", flush=True)
+    _hp = hardware_profile.state()
+    print(f"HARDWARE_PROFILE profile={_hp.get('profile')} reason={_hp.get('reason', '')} "
+          f"applied={_hp.get('applied', {})} overridden_by_env={_hp.get('overridden_by_env', {})}", flush=True)
     print(f"Force: {'sim' if args.force else 'nao'}", flush=True)
     print(f"Saida: {output_folder}", flush=True)
 
@@ -4896,6 +4899,7 @@ def run_benchmark(args):
         "artifact_size_bytes": artifact_size_bytes,
         "progress_path": str(progress_path),
         "timing_report_json": str(timing_json_path),
+        "hardware_profile": hardware_profile.state(),
         "timing_report_txt": str(timing_txt_path),
         "preview_contact_sheet": str(contact_sheet_path),
         "preview_compare_sheet": str(compare_sheet_path),

@@ -2952,6 +2952,17 @@ listas `candidates`/`raw_lines` (guardando só o tamanho da página, `page_hw`, 
 `release_group_buffers` (`ocr_balloon.py`) zera os arrays do tamanho da página presos em cada
 grupo. Os `groups` em si permanecem (contabilidade de limpeza, PSD e fingerprint estrutural os leem).
 
+**Perfis de hardware (IMPLEMENTADO).** `komyst/runtime/hardware_profile.py`: `detect()` (RAM via `psutil`,
+VRAM via `nvidia-smi` ou `resource_monitor.detect_gpu_basic`; falha vira `None`), `select_profile(detected, override)`
+e `apply_to_environ()`. `komyst/config/settings.py` chama `apply_to_environ()` logo após `load_local_environment()` e
+antes de qualquer leitura, escrevendo em `os.environ` apenas as chaves do perfil que **não** estão definidas (variável
+explícita vence). O estado (perfil, motivo, detecção, `applied`, `overridden_by_env`) fica em
+`KOMYST_HARDWARE_PROFILE_STATE`, herdado pelos processos filhos (a detecção roda uma vez por árvore de processos),
+é impresso no log do job (`HARDWARE_PROFILE ...`) e gravado em `timing_report.json` (`hardware_profile`). Em ambiente
+hermético (`KOMYST_HERMETIC_TEST_ENV`) com `HARDWARE_PROFILE=auto` nada é detectado nem aplicado. Valores por perfil
+em [`docs/CONFIGURATION.md`](../CONFIGURATION.md); números medidos por perfil ainda não existem (ver
+[`docs/HARDWARE_PROFILE.md`](../HARDWARE_PROFILE.md)).
+
 Formato seguro para exemplos em documentação:
 
 ```dotenv
