@@ -94,6 +94,8 @@ Estes são os números contra os quais cada fase é comparada.
 
 Em 2026-11-03 o mesmo capítulo levava ~300 s em Tradução pronta. REF-B levou 641 s (modo Completo).
 
+**Correção da linha de base (2026-11-13).** Os números históricos de REF-A Apenas Clean (288,7 s) e Tradução pronta (278,2 s) foram medidos em ambiente degradado: o Paddle não iniciou corretamente, a varredura de resíduos foi pulada sem indicação de indisponibilidade (`residual_sweep` 2,7 s), não houve correção automática e o OCR contou 217 linhas contra 225 com Paddle funcionando. Esses tempos não são uma base válida de desempenho. Com Paddle funcional, REF-A Apenas Clean levou aproximadamente 330 s; no job `39a41cbb…`, o medidor registrou 329,43 s totais e 98,03 s na varredura de resíduos. O job REF-B Completo `c7ee941a073945db82a225d48a435c48` levou 480,62 s, com 169/177 traduções, 70/85 certificados e 7 resíduos, igual à base de qualidade. Use os números saudáveis como referências; preserve os históricos como medições degradadas, não os apague.
+
 ### 2.2 Qualidade
 
 | Métrica | REF-A (`f181a17e`) | REF-B (`278c2486`) |
@@ -428,7 +430,7 @@ Objetivo: REF-A em Tradução pronta ≤ 300 s, sem perder nenhuma métrica de q
 
 ### F2.1 Varredura de resíduo (Paddle) só onde há evidência
 
-**Problema.** `OCR_RESIDUAL_SWEEP=True` roda uma varredura Paddle de página inteira em **toda** página (`yomu/ocr/residual_sweep.py`, chamada em `bp` por `sweep_page_residuals`, ~linha 274). Custo medido: ~110 s por capítulo.
+**Problema.** `OCR_RESIDUAL_SWEEP=True` roda uma varredura Paddle de página inteira em **toda** página (`yomu/ocr/residual_sweep.py`, chamada em `bp` por `sweep_page_residuals`, ~linha 274). Custo observado em REF-A saudável: 98,03 s; poderá variar por capítulo e máquina.
 
 **Como fazer.**
 
@@ -440,6 +442,8 @@ Objetivo: REF-A em Tradução pronta ≤ 300 s, sem perder nenhuma métrica de q
 **Verificação obrigatória de qualidade.** Rode REF-A e REF-B com `always` e com `evidence` e compare a lista de detecções (`page_state["residual_sweep"]`). **Toda detecção que virou região traduzida com `always` tem que existir com `evidence`.** Se alguma se perder, afrouxe o pré-filtro; não entregue com perda.
 
 **Teste.** `tests/test_residual_sweep_gating.py`: página sem região não coberta → Paddle não é chamado (mock); com região não coberta → é chamado; modo `always` → sempre.
+
+**F2.1 — observabilidade de indisponibilidade do Paddle.** Se o Paddle não puder iniciar, não omita a etapa nem reporte duração residual enganosa: registre `residual_sweep: unavailable`, junto do motivo de falha e sem contabilizar a página como varrida. Inclua teste de inicialização indisponível. No mesmo trabalho, avalie se as páginas a varrer podem ser escolhidas apenas quando houver sinal barato de resíduo, preservando todas as detecções úteis de `always`.
 
 ### ⏸ PAUSA 2A (depois de F2.1)
 
@@ -517,9 +521,9 @@ Objetivo em REF-B: regiões traduzidas ≥ 174/177; páginas certificadas ≥ 78
 
 ### F3.0 Confirmar testes dependentes do OpenCV e corrigir máscara em texto que toca contorno
 
-O dono informou que três dos quatro testes antigos passam com OpenCV 5.0.0; a sessão de Fase 0 executou em OpenCV 4.10.0 e não deve classificar esses três como regressões de código. Reexecutar os três no runtime de referência. Para `test_text_touching_a_balloon_border_is_cleaned_without_erasing_the_border`, usar worktree isolada e confirmar `yomu.__file__` em cada passo; o bisect com import corretamente isolado apontou `80f0620` (não `cda3f90`, que passa) entre `d819f0e` e `631afac`. Preservar o contorno do balão e excluir da verificação de resíduo somente tinta OCR coincidente com a faixa de contorno medida; resíduos fora dela continuam falhando. Relato da tentativa que não passou após duas correções: `reports/perguntas_pendentes.md`. Aceite da F3.0: teste novo falhando antes e passando depois, suíte completa verde no runtime fixado, e REF-A Apenas Clean sem perda de certificado contra a base de 288,7 s.
+O dono informou que três dos quatro testes antigos passam com OpenCV 5.0.0; a sessão confirmou OpenCV 5.0.0 em `python` e `python -s`. Para `test_text_touching_a_balloon_border_is_cleaned_without_erasing_the_border`, o bisect isolado apontou `80f0620` como primeiro commit ruim entre `d819f0e` e `631afac`. Causa: `80f0620` generalizou `_refine_lettering_mask` para todo grupo e a dilatação cega de 2 px aumentou a máscara de 7.285 para 9.940 px, tocando 18 px do arco. Correção aplicada: `_long_stroke_halo_barrier` reutiliza `_balloon_border_mask` e bloqueia somente pixels tão escuros quanto a tinta em traços longos de mesma polaridade; a máscara base permanece intacta. Contrato: halo nunca cresce sobre essa estrutura e pixels já pertencentes à máscara base não são removidos. Validação física do dono: REF-A Apenas Clean pelo painel, job `39a41cbb…`, 65 páginas, FLUX funcionou na p23 e somente p10/p22 ficaram em revisão; REF-B Completo `c7ee941a073945db82a225d48a435c48`, 480,6 s, 169/177 traduções, 70/85 certificados e os mesmos 7 resíduos da base. REF-A saudável levou aproximadamente 330 s com Paddle funcionando; os tempos antigos 288,7 s (Clean) e 278,2 s (Tradução pronta) são medições degradadas, com Paddle indisponível e sweep silenciosamente pulado. Verificação final em Python 3.11, OpenCV 5.0.0 e DirectML: suíte completa **6.504 passed, 141 skipped, 1 xfailed, 8 warnings, 787 subtests**, 883,71 s; teste específico da borda **1 passed**. F3.0 fechada offline e fisicamente.
 
-Para cada teste:
+Para cada um dos três testes dependentes do OpenCV:
 
 1. Descubra em qual commit a falha começou, fazendo bisect entre `d819f0e` e `cda3f90`.
 2. Classifique a causa como regressão de código ou teste desatualizado.

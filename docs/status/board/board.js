@@ -79,6 +79,35 @@ window.BOARD = {
       ]
     },
     {
+      "id": "FASE3-QUALIDADE-20261112",
+      "title": "Fase 3 — fidelidade de tradução e limpeza",
+      "domain": "pipeline",
+      "column": "blocked",
+      "env": "local",
+      "updated": "2026-11-13",
+      "summary": "F3.0 fechada: commit c0a2616; suíte 6504 passed, 141 skipped, 1 xfailed, 8 warnings, 787 subtests; teste da borda 1 passed. Validação física do dono: REF-A Clean p23 passou com FLUX e só p10/p22 em revisão; REF-B 480,6 s, 169/177, 70/85 e os mesmos 7 resíduos. F3.1 está em working tree e ainda sem commit.",
+      "risk": "A rodada Clean após F3.1 sem FLUX deixou p23 em revisão; com FLUX habilitado no processo, a página continuou em revisão porque Vulkan falhou por falta de memória (buffer 1,85 GB, ErrorOutOfDeviceMemory). O resultado tem 1 certificado a menos que a evidência anterior, então a comparação física é inconclusiva e o aceite de F3.1 fica bloqueado. Baselines antigos REF-A 288,7/278,2 s eram degradados; referência saudável Clean 329,43 s, sweep 98,03 s.",
+      "blockedBy": "Fechar validação controlada de REF-A F3.1 com FLUX concluído e sem perda de certificado. A implementação F3.1 permanece local, sem commit. Sem push ou merge.",
+      "delivered": [
+        "Preservadas em stash as duas tentativas anteriores: f3.0-tentativas-contorno",
+        "Causa do defeito: 80f0620 generalizou _refine_lettering_mask; halo cego de 2 px elevou máscara de 7285 para 9940 px e tocou 18 px do arco",
+        "Patch fornecido aplicado: _long_stroke_halo_barrier bloqueia crescimento do halo em traços longos da mesma polaridade; a máscara base permanece intacta",
+        "Teste tests/test_pipeline_candidate_page_fixes.py: 39 passed; suíte completa: 6504 passed, 141 skipped, 1 xfailed, 8 warnings, 787 subtests"
+      ],
+      "pending": [
+        "REF-B Completo pós-patch c7ee941a: 480,6 s, 169/177, 70/85 certificados e 7 resíduos (sem alteração; base preservada)",
+        "F3.1: validar REF-A Clean com FLUX concluído; job local teve p10/p22/p23 em revisão após OOM",
+        "F3.0 commit c0a2616 (somente código e teste); suíte completa e teste da borda aprovados",
+        "F3.1 helper e testes focados: 287 passed, 1 skipped, 386 subtests; sem commit, teste físico bloqueado por OOM do FLUX"
+      ],
+      "links": [
+        { "label": "Plano KOMYST", "path": "docs/plans/PLANO_EXECUCAO_KOMYST.md" },
+        { "label": "Relatório Fase 3", "path": "reports/fase3_qualidade_20261112.md" },
+        { "label": "Falhas preexistentes", "path": "reports/falhas_preexistentes_20261111.md" },
+        { "label": "Perguntas pendentes", "path": "reports/perguntas_pendentes.md" }
+      ]
+    },
+    {
       "id": "CLEAN-PARALLEL-20261108",
       "title": "Recuperar SFX omitidos e acelerar reconstrução sem mudar pixels",
       "domain": "pipeline",

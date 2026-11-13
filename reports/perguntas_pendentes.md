@@ -44,14 +44,16 @@ A suíte completa nesta checkout em Python 3.11/OpenCV 4.10.0/NumPy 2.3.5 deu 6.
 - As medições de limpeza por CLI desta sessão rodaram pelo Python311/OpenCV 4.10.0 e devem ser tratadas como feitas no runtime divergente.
 - Não há dúvida técnica pendente para concluir a Fase 0: o único passo externo é aguardar aprovação explícita antes de qualquer merge em `dev`. Não houve merge ou push.
 
-## Fase 3.0 — diagnóstico após duas tentativas — 2026-11-12
+## Fase 3.0 — checkpoint histórico após duas tentativas — 2026-11-12
 
-- **Bisect anterior inválido:** o comando usou `git -C` para o Git, mas o shell permaneceu em `C:\Projetos\Yomu-Sekai`; todos os testes importaram `C:\Projetos\Yomu-Sekai\yomu`, independentemente da revisão da worktree. A primeira indicação `cda3f90` não é válida. Com runner de bisect que imprime `yomu.__file__` e força o import local, `d819f0e` e `cda3f90` ambos passam. O bisect válido entre `d819f0e` e `631afac` aponta `80f0620` como primeiro commit ruim. Esse commit é amplo (+2058/-300 em 28 arquivos); atribuição precisa ao hunk de máscara requer leitura adicional na F3.0.
+Este checkpoint foi supersedido pelo patch validado descrito na seção final. A tentativa antiga foi preservada em stash; a regressão e a correção atuais estão explicadas abaixo.
+
+- **Bisect e causa confirmados:** o comando antigo usou `git -C` para o Git, mas manteve o shell na pasta principal; os imports não eram isolados. Com runner que imprimiu `yomu.__file__`, `d819f0e` e `cda3f90` passam e `80f0620` é o primeiro commit ruim. Esse commit generalizou `_refine_lettering_mask`; a dilatação cega de 2 px aumentou a máscara base de 7.285 para 9.940 px e atingiu 18 px do arco.
 - **Contrato escolhido:** preservar o contorno detectado do balão. A máscara deve excluir a borda; qualquer tinta OCR que coincida com pixels de contorno é conservada deliberadamente e excluída da detecção de resíduo somente dentro de uma faixa estreita do contorno original. Motivo: inpaint nessa faixa pode apagar a estrutura que se quer manter. Resíduos fora dessa faixa continuam sujeitos à validação normal.
 - **Tentativa 1:** ampliar a tentativa de calcular enclosure fechado a grupos de fala; ainda havia 18 pixels de interseção entre máscara e borda. Não passou.
-- **Tentativa 2:** alargar o inset do enclosure e adicionar exclusão estreita de pixels de borda à métrica de resíduo. A asserção da máscara sem interseção e a preservação do arco passam, mas a validação final ainda marca texto residual: `residual_source_lettering_pixels=80`, `largest_residual_source_lettering_component=76`, `protected_border_residual_pixels>0`. O teste falha. Conforme a regra de autonomia, a F3.0 está pausada depois de duas tentativas; manter as alterações locais para revisão, sem uma terceira tentativa nesta rodada.
-- A falha ocorre na prova sintética genérica, sem dependência de capítulo. A suíte completa e REF-A Apenas Clean ainda não foram rodados para esta alteração falha; comparar certificados contra a base `288,7 s` continua pendente.
-- Próximo passo da fase, independente: F3.1, análise de regiões ignoradas do REF-B e promoção conservadora de frases legíveis.
+- **Tentativa 2:** alargar o inset do enclosure e adicionar exclusão estreita de pixels de borda à métrica de resíduo. A asserção da máscara sem interseção e a preservação do arco passam, mas a validação final ainda marca texto residual: `residual_source_lettering_pixels=80`, `largest_residual_source_lettering_component=76`, `protected_border_residual_pixels>0`. O teste falha. As duas tentativas antigas foram encerradas e preservadas em stash; o patch validado fornecido pelo dono passou depois no teste focado.
+- A falha ocorre na prova sintética genérica, sem dependência de capítulo. A validação física REF-A e a comparação REF-B continuam pendentes conforme a seção final.
+- F3.1 continua no plano; a auditoria inicial está em `reports/fase3_qualidade_20261112.md`.
 
 ## Ambiente OpenCV corrigido e revalidação (2026-11-11, noite)
 
@@ -96,4 +98,17 @@ Abertos para a Fase 3:
 
 Os 7 resíduos do REF-B e os 15 `target_or_ownership_incomplete` seguem para a Fase 3.
 
-**Suíte completa final** (OpenCV 5.0.0, Paddle funcionando, commit `9c43d6f`): 6.502 passaram, 1 falhou, 141 ignorados, 1 xfailed, 787 subtests. A falha é a antiga `test_text_touching_a_balloon_border_is_cleaned_without_erasing_the_border` (F3.0). As outras três falhas antigas de máscara eram do OpenCV 4.10.0 e não ocorrem mais.
+**Suíte completa final** (OpenCV 5.0.0, Paddle funcionando, commit `9c43d6f`): 6.502 passaram, 1 falhou, 141 ignorados, 1 xfailed, 787 subtests. A falha era `test_text_touching_a_balloon_border_is_cleaned_without_erasing_the_border`; a validação em `fase-3-qualidade` passou depois do patch validado: 6.504 passed, 141 skipped, 1 xfailed, 8 warnings, 787 subtests.
+## F3.0 — resolvida por validação física posterior (13/11)
+
+O relato de 12/11 sobre a tentativa em que FLUX falhou com `ErrorOutOfDeviceMemory` foi superado pelas execuções posteriores informadas pelo dono. REF-A Apenas Clean pelo painel, job `39a41cbb…`, com OpenCV 5.0.0 e GPU disponível: 65/65 páginas, FLUX concluiu e p23 passou; somente p10 e p22 ficaram em revisão. REF-B Completo, job `c7ee941a073945db82a225d48a435c48`: 480,62 s, 169/177 traduzidas, 70/85 certificadas e 7 resíduos, igual à base. O medidor do REF-A registrou 329,43 s totais e 98,03 s de `residual_sweep`.
+
+Os tempos REF-A anteriores de 288,7 s (Apenas Clean) e 278,2 s (Tradução pronta) eram de ambiente degradado: Paddle não iniciou, `residual_sweep` ficou em 2,7 s sem status de indisponibilidade, houve zero correções automáticas e OCR detectou 217 linhas contra 225 com Paddle funcional. Eles não devem ser comparados como baseline saudável. A Fase 2 ganhou tarefa para avaliar varredura somente em páginas com sinal de resíduo e para registrar `residual_sweep: unavailable` se o Paddle não iniciar.
+
+A suíte completa da versão final do patch terminou em OpenCV 5.0.0/DirectML: 6.504 passed, 141 skipped, 1 xfailed, 8 warnings e 787 subtests em 883,71 s. O teste específico da borda passou isoladamente (1 passed). Não há pergunta pendente da F3.0; commit isolado concluído.
+
+## F3.1 — promoção de frase legível (13/11), validação física inconclusiva
+
+O helper e os testes focados estão no working tree, ainda sem commit. A área passou: 287 passed, 1 skipped, 386 subtests. Quatro testes antigos foram atualizados porque a regra nova promove intencionalmente texto decorativo com confiança ≥0,90 e pelo menos três palavras comuns, incluindo letreiros curtos e metadados.
+
+REF-A Apenas Clean CLI após F3.1, sem FLUX: 65/65 PNGs, 317,87 s, DirectML, 54 certificados, 8 sem texto comprovado e revisões p10/p22/p23. Com FLUX habilitado só no processo, também 65/65 PNGs, 327,79 s, DirectML, mesmos 54+8 e revisões p10/p22/p23. `errors/flux_023_REGION_001.log` mostra `ErrorOutOfDeviceMemory` na RX 6600 após 1,50 s, tentando reservar buffer Vulkan de 1,85 GB. O job físico anterior do dono tinha somente p10/p22 em revisão e p23 aprovada com FLUX. Portanto há uma diferença de certificado, mas não uma comparação controlada: FLUX não concluiu neste run; não atribuir a diferença ao patch. O trabalho de F3.1 permanece local e sem commit até fechar essa validação.
