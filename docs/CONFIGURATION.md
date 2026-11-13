@@ -192,6 +192,11 @@ Guarda de memória (lida do ambiente por `komyst/config/settings.py`; ver Docume
 livre abaixo dos quais LaMa e FLUX se declaram indisponíveis; `LAMA_MAX_CROP_PIXELS` (padrão
 `4000000`) limita a área do recorte do LaMa. Sem `psutil` a guarda não bloqueia.
 
+Entrega enxuta: `KEEP_WORK_FILES` (padrão `False`, `komyst/config/settings.py`) controla se, ao concluir
+com sucesso (status `finished`), o job apaga os arquivos de trabalho que o modo escolhido não entrega.
+`True` guarda tudo. A caixa **Manter arquivos de trabalho** da tela (por job) também guarda tudo; qualquer
+um dos dois basta. Ver Documentação Técnica §26.6.
+
 FLUX (só com `GENERATIVE_INPAINT_ENABLED=1`): `GENERATIVE_INPAINT_TIMEOUT_SECONDS` (padrão `120`) é o teto de
 cada chamada do `sd-cli` e `GENERATIVE_INPAINT_MAX_CALLS_PER_JOB` (padrão `12`) o máximo de lançamentos por
 job; as regiões seguintes seguem a escada sem FLUX e vão para revisão. O FLUX continua usando o

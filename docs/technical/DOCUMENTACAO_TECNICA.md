@@ -9,7 +9,7 @@
 > Multi-idioma OCR (§14) reverificado sobre `dev` em 2026-11-03; glossário de nomes (§15)
 > verificado sobre `22f595d` (feat/GLOSSARY-01), integrado em `dev`/`main`.
 > §17, "Auditoria linguística e taxonomia semântica", item 5 (retry pelo backend) verificado sobre `885a237` (branch `dev`) em 2026-11-03.
-> **Última revisão:** 2026-11-05 (base verificada `fe8d28f`, branch `main`)
+> **Última revisão:** 2026-11-13 (base verificada `940fec5`, branch `fase-4-entrega`; §26.6)
 > **Público:** desenvolvedores, mantenedores e suporte técnico.
 
 Documentos irmãos: [Guia do Usuário](../user/GUIA_DO_USUARIO.md) ·
@@ -3658,6 +3658,46 @@ cópias adicionais. Histórico, retry, re-export, PDF, PSD raster legado, fixtur
 **Overhead de I/O (medido, 208 páginas sintéticas).** `AUTOMATIC` ≈ 2,4 s (208 cópias +
 1 decode de validação cada); `PROFESSIONAL_QC` ≈ 4,7 s (416 cópias) — pequeno frente a
 OCR + tradução + render (minutos).
+
+### 26.6 Entrega enxuta por modo (`komyst/runtime/delivery.py`) — IMPLEMENTADO
+
+`finalize_delivery(output_dir, plan, job_status, *, keep_work_files=False)` é chamada por
+`job_runner._finalize` logo depois de gravar o `job_manifest.json`, **somente** quando o status
+final é `finished` e o job não é download-only. `review_required`, `failed`, `interrupted` e
+cancelado não apagam nada (revisão, reexportação e retomada dependem dos arquivos). Falha na
+limpeza é registrada (`DELIVERY_FINALIZE_FAILED`) e nunca muda o status do job.
+
+Remove, conforme o plano (`plan_from_config` + `plan_artifact_types`):
+
+- pastas canônicas que o modo não entrega: `images/translated`, `images/clean`, `psd`. O preset
+  `traducao_pronta` entrega só o PDF (roda CLEAN internamente). `images/translated` também sai
+  quando há PDF e não há QC (o PDF já carrega as páginas; no Completo o Review Manifest aponta para
+  elas, então ficam);
+- lixo de depuração: `debug/`, `smart_input_pages/`, `smart_split_contact_sheet.jpg`.
+
+Depois de remover uma pasta, o `artifact_manifest.json` deixa de listar o tipo removido
+(`requested/produced/unavailable_artifacts`, `artifact_status`, `capabilities`), para o resumo de
+conclusão não acusar artefato "faltando".
+
+**Não removidos (leitores ativos):** `input/` e `pages/` (reexportação por `review_reexport`,
+revisão por `chapter_quality_revision`, reconstrução seletiva), `progress.json`,
+`quality_report.json`, `.translation_results/`, `translation_ready.json`, `yk_reservation.json` e
+todos os manifestos. Os dois arquivos de crédito continuam em `output_dir`: todas as leituras passam
+por `komyst/runtime/yk_reservation.py` (`read_reservation`, `record_reservation`,
+`mark_translation_ready`, `translation_ready`, `settle`) e por `job_runner` e
+`komyst_backend_provider`, que passam `output_dir`; movê-los para
+`runtime/job_state/<job_id>/` tocaria mais de três funções e também exigiria mover
+`.translation_results/`. **PLANEJADO** (não implementado).
+
+**Configuração.** `KEEP_WORK_FILES` (`settings.py`, padrão `False`) e a caixa **Manter arquivos de
+trabalho** (`#keepWorkToggle`, campo `keep_work_files` na configuração do job, whitelisted em
+`_safe_manifest_configuration`) guardam tudo; qualquer um dos dois basta.
+
+**Tradução em texto.** Nos modos Apenas tradução e Tradução + Clean, além de
+`translation/translation.json`, `_write_translation_deliverables` grava `translation/traducao.txt`
+(página, original e tradução por bloco) a partir do mesmo dado de `_build_translation_only_manifest`.
+O JSON continua em `translation/translation.json` porque a UI (**Ver tradução**) e
+`job_completion` leem esse caminho. Teste: `tests/test_delivery_by_mode.py`.
 
 ### 26.5 Resumo de conclusão do job (Missão 12)
 
