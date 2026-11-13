@@ -4,7 +4,7 @@
 window.BOARD = {
   title: 'Komyst · Quadro',
   subtitle: 'Komyst',
-  updatedAt: '2026-11-11',
+  updatedAt: '2026-11-13',
   repoUrl: 'https://github.com/HenriquePvAr/Yomu-Sekai',
   defaultBranch: 'main',
   columns: [
@@ -82,23 +82,24 @@ window.BOARD = {
       "id": "FASE3-QUALIDADE-20261112",
       "title": "Fase 3 — fidelidade de tradução e limpeza",
       "domain": "pipeline",
-      "column": "blocked",
+      "column": "dev",
       "env": "local",
       "updated": "2026-11-13",
-      "summary": "F3.0 fechada: commit c0a2616; suíte 6504 passed, 141 skipped, 1 xfailed, 8 warnings, 787 subtests; teste da borda 1 passed. Validação física do dono: REF-A Clean p23 passou com FLUX e só p10/p22 em revisão; REF-B 480,6 s, 169/177, 70/85 e os mesmos 7 resíduos. F3.1 está em working tree e ainda sem commit.",
-      "risk": "A rodada Clean após F3.1 sem FLUX deixou p23 em revisão; com FLUX habilitado no processo, a página continuou em revisão porque Vulkan falhou por falta de memória (buffer 1,85 GB, ErrorOutOfDeviceMemory). O resultado tem 1 certificado a menos que a evidência anterior, então a comparação física é inconclusiva e o aceite de F3.1 fica bloqueado. Baselines antigos REF-A 288,7/278,2 s eram degradados; referência saudável Clean 329,43 s, sweep 98,03 s.",
-      "blockedBy": "Fechar validação controlada de REF-A F3.1 com FLUX concluído e sem perda de certificado. A implementação F3.1 permanece local, sem commit. Sem push ou merge.",
+      "summary": "F3.0 fechada: commit c0a2616; suíte 6504 passed, 141 skipped, 1 xfailed, 8 warnings, 787 subtests; teste da borda 1 passed. Validação física do dono: REF-A Clean p23 passou com FLUX e só p10/p22 em revisão; REF-B 480,6 s, 169/177, 70/85 e os mesmos 7 resíduos. F3.1 em código commit 7933f64: suíte completa 6513 passed, 141 skipped, 1 xfailed, 8 warnings; validação REF-B pós-correção 169/177, 70/85, mesmas 15 páginas em revisão e 7 resíduos; p20 e p70 em PASS, placa preservada. Ganho líquido: zero traduções adicionais; foco em não regredir e preparar F3.2.",
+      "risk": "O REF-B pós-correção `dca7ca2b` terminou `review_required` em 533,57 s; p20 POTATO permaneceu decorativa e intacta. OpenCV 5.0.0; OCR/LaMa DirectML. Totais iguais à base registrada: 169/177, 70/85, mesmas 15 páginas em revisão e 7 resíduos. A pasta original da base `c7ee941a` não está mais no disco; a comparação usou a referência registrada. F3.1 alterou apenas o novo caminho de promoção de frases com vínculo e fundo estruturalmente coerentes; rotas legadas preservadas. Itens abertos: FLUX device_memory na p23 mesmo com GPU livre no início (medir VRAM, Fases 1/5); “Seon-ho”→“Seen-ho” (F3.2); sweep ~100 s/capítulo (Fase 2). Baselines antigos REF-A 288,7/278,2 s eram degradados; referência saudável Clean 329,43 s, sweep 98,03 s.",
       "delivered": [
         "Preservadas em stash as duas tentativas anteriores: f3.0-tentativas-contorno",
         "Causa do defeito: 80f0620 generalizou _refine_lettering_mask; halo cego de 2 px elevou máscara de 7285 para 9940 px e tocou 18 px do arco",
         "Patch fornecido aplicado: _long_stroke_halo_barrier bloqueia crescimento do halo em traços longos da mesma polaridade; a máscara base permanece intacta",
-        "Teste tests/test_pipeline_candidate_page_fixes.py: 39 passed; suíte completa: 6504 passed, 141 skipped, 1 xfailed, 8 warnings, 787 subtests"
+        "Teste tests/test_pipeline_candidate_page_fixes.py: 39 passed; suíte completa F3.0: 6504 passed, 141 skipped, 1 xfailed, 8 warnings, 787 subtests",
+        "F3.1 código/testes commit 7933f64, autor HenriquePvAr; suíte completa 6513 passed, 141 skipped, 1 xfailed, 8 warnings, 787 subtests",
+        "F3.1 painel REF-B 674078a0: 169/177, 70/85, 15 páginas em revisão, 7 resíduos; p20 e p70 PASS, placa preservada"
       ],
       "pending": [
-        "REF-B Completo pós-patch c7ee941a: 480,6 s, 169/177, 70/85 certificados e 7 resíduos (sem alteração; base preservada)",
-        "F3.1: validar REF-A Clean com FLUX concluído; job local teve p10/p22/p23 em revisão após OOM",
-        "F3.0 commit c0a2616 (somente código e teste); suíte completa e teste da borda aprovados",
-        "F3.1 helper e testes focados: 287 passed, 1 skipped, 386 subtests; sem commit, teste físico bloqueado por OOM do FLUX"
+        "Integração local de origin/docs em worktree separada, preservando os commits de Fase 0/Fase 3; sem push ou merge em dev",
+        "Depois da integração, continuar Fase 3 pela F3.2: palavras coladas no OCR e nome próprio Seon-ho → Seen-ho",
+        "Fase 2: investigar varredura de resíduos (~100 s/capítulo) e indisponibilidade silenciosa do Paddle",
+        "Fases 1/5: medir VRAM durante FLUX; diagnosticar device_memory na p23 mesmo com GPU livre no início"
       ],
       "links": [
         { "label": "Plano KOMYST", "path": "docs/plans/PLANO_EXECUCAO_KOMYST.md" },

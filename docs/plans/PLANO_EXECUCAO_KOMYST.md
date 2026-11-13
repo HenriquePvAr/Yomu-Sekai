@@ -540,11 +540,13 @@ Para cada um dos três testes dependentes do OpenCV:
 **Como fazer.**
 
 1. Para cada item ignorado de REF-B com `ignore_reason` em `{"decorative_text", "weak_unknown_text"}`, registre no relatório: texto, confiança, `background_type`, número de palavras de dicionário, pontuação. (Leia de `progress.json` → `pages[].debug_data.items[]`.)
-2. Regra nova, estrutural: promover a tradução quando **todas** valem: confiança de OCR ≥ 0,90; ≥ 2 palavras; **todas** as palavras com ≥ 3 letras são palavras do dicionário inglês (`region_taxonomy.is_english_word`) depois de separar palavras coladas (F3.2); o texto tem pontuação de frase (`. , ! ?`) **ou** ≥ 3 palavras; não é crédito, URL nem título da série.
+2. Regra nova: a promoção de rótulos fracos exige evidência estrutural coerente de balão/caixa de narração. O vínculo (`inside_balloon_like_region`, `inside_narration_box_like_region` ou `parent_balloon_id`) deve concordar com a classificação local do fundo (`white_balloon`, `dark_balloon` ou `narration_box`); flag isolada pode ser herdada de uma região vizinha. Uma forma visualmente fechada sozinha não basta: placas e objetos da cena também podem ter contorno. Dentro de contêiner, manter os critérios de texto: confiança de OCR ≥ 0,90; ≥ 2 palavras; **todas** as palavras com ≥ 3 letras são palavras do dicionário inglês (`region_taxonomy.is_english_word`) depois de separar palavras coladas (F3.2); o texto tem pontuação de frase (`. , ! ?`) **ou** ≥ 3 palavras; não é crédito, URL nem título da série.
 3. Uma palavra só (por exemplo "FROWN", "CLUNK") **não** é promovida por esta regra: é som ou ação e segue a política de SFX.
-4. Implemente como uma função nova `_legible_sentence_promotion_allowed(group)` chamada nos mesmos pontos das duas promoções existentes. Não afrouxe as regras antigas.
+4. Implemente como uma função nova `_legible_sentence_promotion_allowed(group)`, integrada à política final e às verificações de autoridade de tradução. A exigência estrutural vale apenas para esse caminho novo; não afrouxe nem bloqueie as rotas antigas de recuperação.
 
-**Teste.** `tests/test_legible_sentence_promotion.py`: frase legível de 3 palavras em fundo de arte → promovida; uma palavra → não; confiança 0,8 → não; palavra fora do dicionário → não; texto de crédito → não.
+**Teste.** `tests/test_legible_sentence_promotion.py`: letreiro legível em arte, inclusive com flag de narração herdada mas fundo `textured_art`, limpeza local difícil e sem fallback remoto → preservado; frase legível de 3 palavras em caixa de narração → promovida; uma palavra → não; confiança 0,8 → não; palavra fora do dicionário → não; texto de crédito → não.
+
+**Resultado F3.1 (2026-11-13).** Ganho líquido medido: zero traduções adicionais nos capítulos de referência. REF-B manteve 169/177 traduções, 70/85 certificados, as mesmas 15 páginas em revisão e os mesmos 7 resíduos; a placa da p20 ficou preservada. REF-A manteve 57/58 traduções. A finalidade da mudança é impedir regressão de arte e deixar a promoção estrutural pronta para a F3.2, que trata palavras coladas pelo OCR. Código/testes em `7933f64`; validação de qualidade e suíte no relatório F3.1.
 
 ### F3.2 Palavras coladas pelo OCR
 
