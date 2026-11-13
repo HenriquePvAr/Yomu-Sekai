@@ -112,3 +112,39 @@ Antes de anunciar mínimo de RAM/VRAM: repetir com captura desde o início,
 máquina sem aplicativos pesados concorrentes, mesma entrada/configuração,
 separando FLUX ligado/desligado; depois testar limites menores de hardware.
 Não reduzir os gates de qualidade para apresentar um consumo menor.
+
+## Perfis de hardware (seleção implementada; métricas A MEDIR)
+
+> **Estado:** a seleção de perfil está IMPLEMENTADA. As **métricas e os requisitos abaixo NÃO foram medidos**:
+> a tabela de métricas está "A MEDIR" e o texto de requisitos é **ESTIMADO / NÃO HOMOLOGADO**.
+> Nenhum requisito mínimo está homologado em hardware daquele porte.
+
+### Os três perfis
+
+| Perfil | Escolha automática (RAM total / VRAM dedicada) | Efeito |
+|---|---|---|
+| Leve | RAM < 12 GB, VRAM < 4 GB ou medição indisponível | 1 página por vez, sem varredura residual, sem comparação de preenchimentos |
+| Equilibrado | RAM ≥ 12 GB e VRAM ≥ 4 GB | 2 páginas em paralelo, varredura residual e comparação de preenchimentos ligadas |
+| Qualidade | RAM ≥ 24 GB e VRAM ≥ 8 GB | paralelismo automático, varredura residual e comparação ligadas |
+
+Valores exatos por variável: [`CONFIGURATION.md`](CONFIGURATION.md). O FLUX (`GENERATIVE_INPAINT_ENABLED`) nunca é
+ligado por perfil.
+
+### Como o perfil é escolhido
+
+1. `HARDWARE_PROFILE=leve|equilibrado|qualidade` força o perfil.
+2. `HARDWARE_PROFILE=auto` (padrão) detecta RAM e VRAM; sem medição, usa Leve.
+3. Uma variável de ambiente explícita (por exemplo `PIPELINE_PAGE_WORKERS`) sempre vence o valor do perfil.
+
+O perfil e o motivo aparecem no log do job e em `timing_report.json` (`hardware_profile`).
+
+### Métricas por perfil — A MEDIR
+
+| Perfil | Tempo total | Pico de RAM | Pico de VRAM | MB em disco por página | Qualidade | Classificação |
+|---|---|---|---|---|---|---|
+| Leve | A MEDIR | A MEDIR | A MEDIR | A MEDIR | A MEDIR | A MEDIR |
+| Equilibrado | A MEDIR | A MEDIR | A MEDIR | A MEDIR | A MEDIR | A MEDIR |
+| Qualidade | A MEDIR | A MEDIR | A MEDIR | A MEDIR | A MEDIR | A MEDIR |
+
+Quando medidos, Leve e Equilibrado serão **simulados** (perfil forçado numa máquina maior), não medidos em hardware fraco.
+Cada número deverá ser marcado MEDIDO (data e máquina) ou ESTIMADO.

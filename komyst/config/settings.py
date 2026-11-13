@@ -6,6 +6,11 @@ from komyst.runtime.runtime_paths import cache_root, temp_input_root, temp_outpu
 
 load_local_environment()
 
+# Hardware profile supplies defaults only (explicit env wins); must run before the reads below.
+from komyst.runtime import hardware_profile as _hardware_profile  # noqa: E402
+
+HARDWARE_PROFILE_STATE = _hardware_profile.apply_to_environ()
+
 
 def _env_str(name, default=""):
     value = os.getenv(name)

@@ -202,6 +202,17 @@ também desliga). Não existe modo `evidence`: um filtro barato sem modelo não 
 demais sem perder detecções (medido em dois capítulos de referência). Se o Paddle não inicia, o relatório de
 qualidade registra `residual_sweep_status: unavailable` com o motivo, e a página não conta como varrida.
 
+Perfil de hardware: `HARDWARE_PROFILE=auto|leve|equilibrado|qualidade` (padrão `auto`). O perfil só fornece
+**padrões**: variável de ambiente (ou `.env.local`) já definida sempre vence. Valores aplicados: Leve —
+`PIPELINE_PAGE_WORKERS=1`, `OCR_RESIDUAL_SWEEP_MODE=off`, `CLEAN_COMPARE_FILLS=0`, `ADVANCED_ART_INPAINTING=1`;
+Equilibrado — workers `2`, varredura `always`, `CLEAN_COMPARE_FILLS=1`; Qualidade — workers no `auto` existente,
+varredura `always`, `CLEAN_COMPARE_FILLS=1`. `GENERATIVE_INPAINT_ENABLED` nunca é ligado por perfil. Escolha
+automática (RAM total / VRAM dedicada): Qualidade ≥ 24 GB e ≥ 8 GB; Equilibrado ≥ 12 GB e ≥ 4 GB; senão Leve. RAM ou
+GPU não medidas (sem `psutil`, sem GPU dedicada) resultam em Leve. A VRAM vem de `nvidia-smi` e, na falta dele, de
+`detect_gpu_basic` (o `AdapterRAM` do Windows satura em 4 GB: placas AMD grandes podem cair em Equilibrado; force
+`HARDWARE_PROFILE=qualidade` se for o caso). O perfil e o motivo vão para o log do job (`HARDWARE_PROFILE ...`) e
+para `timing_report.json` (chave `hardware_profile`). Detalhes: [`HARDWARE_PROFILE.md`](HARDWARE_PROFILE.md).
+
 `FONT_PATH` também é suportada fora do template. Quando vazia, o código usa a resolução de fonte existente; quando definida, deve apontar para um arquivo local válido.
 
 ## Validação visual
