@@ -1256,6 +1256,24 @@ def _build_translation_only_manifest(page_states):
     }
 
 
+def _translation_txt(tm) -> str:
+    """Plain-text rendering of the translation manifest: one block per region
+    (page, original, translation). Same data as ``_build_translation_only_manifest``."""
+    blocks = []
+    for page in tm.get("pages", []):
+        for region in page.get("regions", []):
+            blocks.append("Página: %s\nOriginal: %s\nTradução: %s" % (
+                page.get("page_index"), region.get("source", ""), region.get("target", "")))
+    return "\n\n".join(blocks) + ("\n" if blocks else "")
+
+
+def _write_translation_deliverables(tm_dir, tm) -> None:
+    """Write ``translation.json`` (read by the UI) and ``traducao.txt`` side by side."""
+    tm_dir.mkdir(parents=True, exist_ok=True)
+    atomic_write_json(tm_dir / "translation.json", tm)
+    (tm_dir / "traducao.txt").write_text(_translation_txt(tm), encoding="utf-8")
+
+
 def _copy_canonical_artifact(src, dst) -> int | None:
     """Atomically copy one already-rendered page image to its canonical Artifact-Contract v2
     slot. Returns bytes written, or None when the source is missing/unreadable/degenerate
@@ -3992,9 +4010,8 @@ def run_benchmark(args):
         resource_monitor.set_stage("reports")
         tm = _build_translation_only_manifest(page_states)
         tm_dir = output_folder / "translation"
-        tm_dir.mkdir(parents=True, exist_ok=True)
         tm_path = tm_dir / "translation.json"
-        atomic_write_json(tm_path, tm)
+        _write_translation_deliverables(tm_dir, tm)
         quality = {
             "passed": True, "mode": "translation_only",
             "translation_regions": tm["summary"]["regions"],
@@ -4327,9 +4344,7 @@ def run_benchmark(args):
             and "translate" in _pipeline_flags["effective_ops"]):
         try:
             tm = _build_translation_only_manifest(completed_states)
-            tm_dir = output_folder / "translation"
-            tm_dir.mkdir(parents=True, exist_ok=True)
-            atomic_write_json(tm_dir / "translation.json", tm)
+            _write_translation_deliverables(output_folder / "translation", tm)
         except (OSError, ValueError, TypeError):
             pass
     editable_psd_export = None

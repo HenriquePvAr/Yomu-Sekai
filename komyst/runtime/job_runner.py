@@ -720,7 +720,7 @@ def _safe_manifest_configuration(configuration: object) -> dict:
         "job_type", "mode", "full", "max_images", "use_cache", "force",
         "use_context", "chapter_name", "open_output", "create_source_profile",
         "translation_provider", "translation_request_id", "download_only",
-        "output_format", "output_profile", "translate_sfx",
+        "output_format", "output_profile", "translate_sfx", "keep_work_files",
     }
     safe = {key: configuration[key] for key in allowed if key in configuration}
     if "create_source_profile" in safe:
@@ -1427,6 +1427,20 @@ def _finalize(store, job_id, job, output_dir, return_code, cancelled, log_path,
                     result_path=result_path,
                     exit_code=effective_return_code,
                     reason_code=reason_code, **manifest_updates)
+    if target == JobStatus.FINISHED and not download_only:
+        # Lean delivery: only a finished job drops work files; every other status keeps
+        # everything for review, re-export and resume.
+        try:
+            from komyst.config import settings
+            from komyst.runtime.delivery import finalize_delivery
+            from komyst.runtime.output_plan import plan_from_config
+
+            config = job.get("configuration") if isinstance(job.get("configuration"), dict) else {}
+            finalize_delivery(
+                output_dir, plan_from_config(config), target,
+                keep_work_files=config.get("keep_work_files") is True or settings.KEEP_WORK_FILES)
+        except Exception as exc:  # noqa: BLE001 - delivery cleanup must never fail a finished job
+            _append_pipeline_trace(job, "DELIVERY_FINALIZE_FAILED", exception_class=type(exc).__name__)
     if (
         target == JobStatus.FINISHED
         and isinstance(fresh_analysis, dict)

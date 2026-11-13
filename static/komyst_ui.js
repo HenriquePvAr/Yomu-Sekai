@@ -1757,6 +1757,7 @@
       force: Boolean($('#forceToggle')?.checked),
       use_context: Boolean($('#ctxToggle')?.checked),
       open_output: Boolean($('#openToggle')?.checked),
+      keep_work_files: Boolean($('#keepWorkToggle')?.checked),
       create_source_profile: Boolean($('#sourceProfileToggle')?.checked),
       output_profile: appState.outputProfile === 'professional_qc' ? 'professional_qc' : 'automatic',
     };
@@ -1839,6 +1840,7 @@
     if ($('#forceToggle') && typeof execution.force === 'boolean') $('#forceToggle').checked = execution.force;
     if ($('#ctxToggle') && typeof execution.use_context === 'boolean') $('#ctxToggle').checked = execution.use_context;
     if ($('#openToggle') && typeof execution.open_output === 'boolean') $('#openToggle').checked = execution.open_output;
+    if ($('#keepWorkToggle') && typeof execution.keep_work_files === 'boolean') $('#keepWorkToggle').checked = execution.keep_work_files;
     if ($('#sourceProfileToggle') && typeof execution.create_source_profile === 'boolean') {
       $('#sourceProfileToggle').checked = execution.create_source_profile;
     }
@@ -2004,6 +2006,7 @@
       force: $('#forceToggle').checked,
       use_context: $('#ctxToggle').checked,
       open_output: $('#openToggle').checked,
+      keep_work_files: Boolean($('#keepWorkToggle')?.checked),
       create_source_profile: !local && $('#sourceProfileToggle').checked,
       translation_provider: form.translationProvider
         || normalizeTranslationProvider(appState.settings?.translation_provider)

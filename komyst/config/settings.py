@@ -115,6 +115,9 @@ OCR_RESIDUAL_AUTO_FIX = _env_bool("OCR_RESIDUAL_AUTO_FIX", True)
 # sd-cli.exe + flux-2-klein-4b-Q4_0.gguf + flux2-vae.safetensors +
 # qwen3-4b-q4_k_m.gguf under GENERATIVE_INPAINT_MODEL_DIR.
 GENERATIVE_INPAINT_ENABLED = _env_bool("GENERATIVE_INPAINT_ENABLED", False)
+# Entrega enxuta: ao concluir (status finished) o job apaga arquivos de trabalho que a
+# pasta final nao precisa. True preserva tudo (a caixa da tela tem precedencia por job).
+KEEP_WORK_FILES = _env_bool("KEEP_WORK_FILES", False)
 GENERATIVE_CAPTION_REPAIR_ENABLED = _env_bool("GENERATIVE_CAPTION_REPAIR_ENABLED", False)
 GENERATIVE_INPAINT_MODEL_DIR = _env_str("GENERATIVE_INPAINT_MODEL_DIR", "")
 # Ceiling for one sd-cli call (callers may ask for less) and for sd-cli launches per job.
