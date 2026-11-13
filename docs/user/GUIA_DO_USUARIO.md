@@ -1,6 +1,6 @@
 # Komyst — Guia do Usuário
 
-> **Base verificada:** `b990cc8` · **Revisado em:** 2026-11-03 · Idioma original reverificado sobre `dev` (`885a237`) em 2026-11-03; glossário de nomes verificado sobre `22f595d` (feat/GLOSSARY-01), integrado em `main`
+> **Base verificada:** `940fec5` · **Revisado em:** 2026-11-13 · Idioma original reverificado sobre `dev` (`885a237`) em 2026-11-03; glossário de nomes verificado sobre `22f595d` (feat/GLOSSARY-01), integrado em `main`
 > **Para quem é:** Scans, tradutores, editores e testadores da Beta. Nenhum conhecimento
 > técnico é necessário.
 
@@ -321,6 +321,7 @@ escolher.
 | **Forçar reprocessamento** | Ignora o cache de OCR, tradução e renderização e refaz tudo. Mais lento. |
 | **Contexto temporário do capítulo** | Mantém nomes e termos consistentes entre os balões. |
 | **Abrir pasta ao terminar** | Mostra os arquivos assim que o capítulo ficar pronto. |
+| **Manter arquivos de trabalho** | Desligada por padrão. Quando o capítulo termina com sucesso, o programa apaga imagens de depuração e cópias intermediárias que o resultado escolhido não usa. Ligue para guardá-las. |
 
 Ao abrir uma tradução nova, o formulário começa com **Forçar reprocessamento** ligado e
 **Usar cache** desligado, para processar a fonte de novo. Inverta as duas opções se quiser
@@ -587,11 +588,28 @@ Isso permite repetir o mesmo capítulo sem apagar o PDF ou os relatórios da exe
 anterior. Capítulos gerados por versões antigas podem continuar aparecendo diretamente em
 `output/<nome_do_capitulo>/`.
 
+Quando o capítulo termina com sucesso (estado **Concluído**), o programa remove arquivos de trabalho que o modo escolhido não
+entrega. Resultado por modo:
+
+| Modo | O que fica na pasta de saída |
+| --- | --- |
+| Tradução pronta | O PDF traduzido. |
+| Apenas Clean | As imagens limpas (`images/clean/NNN.png`). |
+| Tradução + Clean | As imagens limpas, `translation/translation.json` e `translation/traducao.txt`. |
+| Apenas tradução | `translation/translation.json` e `translation/traducao.txt` (página, original e tradução de cada bloco). |
+| Completo | PDF, imagens traduzidas, imagens limpas, um PSD por página, Quality Report e Review Manifest. |
+| Personalizado | Só os arquivos das etapas marcadas. |
+
+A limpeza **só acontece em capítulos Concluídos**. Capítulos **Concluído — revisão recomendada**,
+com falha, interrompidos ou cancelados mantêm tudo, para você revisar, reexportar ou retomar. A caixa
+**Manter arquivos de trabalho** desliga a limpeza. Algumas pastas de apoio (`input/`, `pages/`) e
+arquivos de controle continuam na pasta porque a revisão e a retomada ainda os usam.
+
 | O que procura | Conteúdo |
 | --- | --- |
-| Resultado para leitura | PDF traduzido e imagens traduzidas. |
+| Resultado para leitura | PDF traduzido. |
 | Completo | Imagens limpas, um PSD por página, Quality Report e Review Manifest. |
-| Apenas tradução | `translation/translation.json` (aberto pela ação **Ver tradução**). |
+| Apenas tradução | `translation/translation.json` (aberto pela ação **Ver tradução**) e `translation/traducao.txt`. |
 | Diagnóstico interno | Manifests de job/run, relatório de download e tempos, quando produzidos. |
 
 O contrato V2 define os caminhos canônicos (`images/translated/`, `images/clean/`, `psd/`,

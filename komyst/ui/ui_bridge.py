@@ -6036,6 +6036,7 @@ class UiBridge:
             "use_context": normalized["use_context"],
             "chapter_name": normalized["chapter_name"],
             "open_output": normalized["open_output"],
+            "keep_work_files": normalized["keep_work_files"],
             "create_source_profile": False,
             "chapter_slug": normalized["slug"],
             "source_analysis": {},
@@ -6150,6 +6151,7 @@ class UiBridge:
             "force": force,
             "use_context": bool(payload.get("use_context", True)),
             "open_output": bool(payload.get("open_output", False)),
+            "keep_work_files": payload.get("keep_work_files") is True,
             "output_format": output_format,
             "output_profile": output_profile,
             "typesetting_mode": str(payload.get("typesetting_mode") or "on").casefold()
@@ -6561,6 +6563,7 @@ class UiBridge:
             "use_context": normalized["use_context"],
             "chapter_name": normalized["chapter_name"],
             "open_output": normalized["open_output"],
+            "keep_work_files": normalized["keep_work_files"],
             "output_format": normalized.get("output_format", "pdf"),
             "output_profile": normalized.get("output_profile", OutputProfile.AUTOMATIC),
             "typesetting_mode": normalized.get("typesetting_mode", "on"),
@@ -6928,6 +6931,7 @@ class UiBridge:
             "force": bool(config.get("force")),
             "use_context": bool(config.get("use_context", True)),
             "open_output": bool(config.get("open_output", False)),
+            "keep_work_files": config.get("keep_work_files") is True,
             "create_source_profile": config.get("create_source_profile") is True,
         }
         return await self.start(payload)
@@ -6981,6 +6985,7 @@ class UiBridge:
             "force": bool(config.get("force", False)),
             "use_context": bool(config.get("use_context", True)),
             "open_output": bool(config.get("open_output", False)),
+            "keep_work_files": config.get("keep_work_files") is True,
             "create_source_profile": bool(config.get("create_source_profile", False)),
         }
         retry = self._create_job(
@@ -7924,6 +7929,7 @@ class UiBridge:
             "force": force,
             "use_context": bool(payload.get("use_context", True)),
             "open_output": bool(payload.get("open_output", False)),
+            "keep_work_files": payload.get("keep_work_files") is True,
             "create_source_profile": payload.get("create_source_profile") is True,
             "translation_provider": self._normalize_translation_provider(payload),
             "translation_enabled": translation_enabled,
