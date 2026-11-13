@@ -22,6 +22,7 @@ import numpy as np
 
 import komyst.config.settings as config
 from komyst.core.gpu import directml_enabled
+from komyst.runtime import memory_guard
 
 
 @dataclass(frozen=True)
@@ -184,6 +185,8 @@ class AdvancedArtInpainter:
         """
         if image_bgr is None or mask is None or not np.any(mask > 0):
             raise ValueError("invalid_image_or_mask")
+        if not memory_guard.allow("lama", config.LAMA_MIN_FREE_RAM_MB):
+            raise AdvancedInpaintUnavailable("LOW_MEMORY")
         model = self.load()
         effective_device = "directml" if model is self._gpu_session else str(self.device)
         self.metrics["device_calls"][effective_device] = (
@@ -192,6 +195,8 @@ class AdvancedArtInpainter:
 
         mask_u8 = (mask > 0).astype(np.uint8) * 255
         x, y, w, h, margin = _context_crop(mask_u8, image_bgr.shape)
+        if w * h > config.LAMA_MAX_CROP_PIXELS:
+            raise AdvancedInpaintUnavailable("CROP_TOO_LARGE")
         crop_bgr = image_bgr[y : y + h, x : x + w]
         crop_mask = mask_u8[y : y + h, x : x + w]
         rgb = cv2.cvtColor(crop_bgr, cv2.COLOR_BGR2RGB)

@@ -1719,6 +1719,7 @@ from komyst.export.pdf_naming import (
     episode_number_from_url,
     series_slug_from_url,
 )
+from komyst.runtime import memory_guard
 from komyst.core.page_processing_contracts import (
     PageProcessingContext,
     PageProgressAggregator,
@@ -4486,6 +4487,7 @@ def run_benchmark(args):
     counters["translation_retries"] = summary["translation_retries"]
     counters["translation_rejections"] = summary["translation_rejections"]
     counters["visual_validation_failures"] = summary["visual_validation_failures"]
+    counters.update(memory_guard.skipped_counters())
     quality["mixed_language_items"] = summary["mixed_language_items"]
     quality["no_mixed_language_items"] = summary["mixed_language_items"] == 0
     quality["passed"] = bool(
@@ -4697,6 +4699,8 @@ def run_benchmark(args):
         "mixed_language_items": summary["mixed_language_items"],
         "text_overflow_items": summary["text_overflow_items"],
         "visual_validation_failures": counters["visual_validation_failures"],
+        "lama_skipped_low_memory": counters["lama_skipped_low_memory"],
+        "flux_skipped_low_memory": counters["flux_skipped_low_memory"],
         "translation_api_texts": translator_stats.get("api_texts", 0),
         "translation_cache_hits": translator_stats.get("cache_hits", 0),
         "translation_api_requests": translator_stats.get("api_requests", 0),

@@ -187,6 +187,11 @@ Inferências DirectML mantêm o lock compartilhado e os workers recebem a
 proveniência isolada da própria página. O replay histórico não é uma medição atual
 de capítulo completo nem define o default distribuído.
 
+Guarda de memória (lida do ambiente por `komyst/config/settings.py`; ver Documentação Técnica §22):
+`LAMA_MIN_FREE_RAM_MB` (padrão `1500`) e `FLUX_MIN_FREE_RAM_MB` (padrão `6000`) são os pisos de RAM
+livre abaixo dos quais LaMa e FLUX se declaram indisponíveis; `LAMA_MAX_CROP_PIXELS` (padrão
+`4000000`) limita a área do recorte do LaMa. Sem `psutil` a guarda não bloqueia.
+
 `FONT_PATH` também é suportada fora do template. Quando vazia, o código usa a resolução de fonte existente; quando definida, deve apontar para um arquivo local válido.
 
 ## Validação visual

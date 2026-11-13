@@ -2921,6 +2921,7 @@ no `.env.example`: `KOMYST_UI_PORT`, `AUTH_PROVIDER`, `NVIDIA_TRANSLATION_PROVID
 | Validação visual | `VISUAL_DIFF_VALIDATION`, `VISUAL_QA_STRICT`, `MAX_OUTSIDE_CHANGE_RATIO`, `REJECT_*`, `WHITE_*` | Opcional |
 | Caches | `ENABLE_*_CACHE`, `FULL_FAST_MODE` | Opcional |
 | Recursos | `OCR_PARALLEL`, `OCR_WORKERS`, `ADAPTIVE_PARALLELISM`, `RESOURCE_MONITORING`, `MIN/MAX_OCR_WORKERS`, `MEMORY_*`, `CPU_PRESSURE_HIGH_PERCENT` | Opcional |
+| Guarda de memória (LaMa/FLUX) | `LAMA_MIN_FREE_RAM_MB` (1500), `FLUX_MIN_FREE_RAM_MB` (6000), `LAMA_MAX_CROP_PIXELS` (4000000) | Opcional — ver abaixo |
 | PDF | `SMART_WEBTOON_PDF_SPLIT`, `SMART_PDF_TARGET_HEIGHT`, `SMART_PDF_MIN_HEIGHT`, `SMART_PDF_MAX_HEIGHT` | Opcional |
 | Licença Beta | `BETA_LICENSE_PROVIDER` | Ver §19 |
 | Auth | `COMMUNITY_AUTH_PROVIDER`, `SUPABASE_URL`, `SUPABASE_PUBLISHABLE_KEY`, `SUPABASE_SECRET_KEY`, `SUPABASE_JWKS_URL`, `SUPABASE_EXPECTED_ISSUER`, `SUPABASE_EXPECTED_AUDIENCE`, `SUPABASE_SITE_URL`, `SUPABASE_REDIRECT_URL` | Obrigatório para login (`SUPABASE_SITE_URL`/`SUPABASE_REDIRECT_URL` são referência para o projeto Supabase — origem `http://127.0.0.1:8080` —, não lidas pelo Python) |
@@ -2931,6 +2932,21 @@ no `.env.example`: `KOMYST_UI_PORT`, `AUTH_PROVIDER`, `NVIDIA_TRANSLATION_PROVID
 | Navegador | `SOURCE_BROWSER_ENGINE`, `SOURCE_BROWSER_EXECUTABLE`, `SOURCE_BROWSER_HEADLESS`, `SOURCE_BROWSER_STARTUP_TIMEOUT`, `SOURCE_BROWSER_NAVIGATION_TIMEOUT`, `SOURCE_BROWSER_PROFILE_MODE`, `KOMYST_ALLOW_DRIVER_DOWNLOAD` | Opcional |
 | Selenium | `SELENIUM_QUIT_TIMEOUT_SECONDS`, `SELENIUM_CLEANUP_TIMEOUT_SECONDS` | Opcional |
 | Debug | `DEBUG_VISUAL`, `SAVE_FULL_DEBUG`, `SAVE_COMPARE_SAMPLES`, `SAVE_DEBUG_ONLY_ERRORS`, `CLASSIFICATION_PROFILING`, `POST_RENDER_OCR_VALIDATION` | Opcional |
+
+**Guarda de memória e liberação de buffers (IMPLEMENTADO).** `komyst/runtime/memory_guard.py`
+mede a RAM livre com `psutil` (`available_ram_mb()`; sem `psutil` ou sem leitura devolve `None`
+e a guarda **permite**). `AdvancedArtInpainter.reconstruct` (LaMa) levanta
+`AdvancedInpaintUnavailable` — o mesmo caminho de "modelo ausente", que a escada de limpeza já
+trata — quando a RAM livre fica abaixo de `LAMA_MIN_FREE_RAM_MB` ou quando o recorte de contexto
+passa de `LAMA_MAX_CROP_PIXELS`; `flux_edit.available()` passa a negar abaixo de
+`FLUX_MIN_FREE_RAM_MB`. Cada negação por memória incrementa `lama_skipped_low_memory` /
+`flux_skipped_low_memory`, gravados no relatório de tempo (`timing_report.json`). No pipeline,
+depois do render de cada página, `_release_page_buffers` (`benchmark_pipeline.py`) remove do estado
+agregado em `page_states` as imagens (`original_bgr`, `clean_local_base`, `_preflight_render`) e as
+listas `candidates`/`raw_lines` (guardando só o tamanho da página, `page_hw`, e as contagens,
+`released_counts`, que o certificado de limpeza e o rastro de contagem de grupos ainda leem), e
+`release_group_buffers` (`ocr_balloon.py`) zera os arrays do tamanho da página presos em cada
+grupo. Os `groups` em si permanecem (contabilidade de limpeza, PSD e fingerprint estrutural os leem).
 
 Formato seguro para exemplos em documentação:
 
