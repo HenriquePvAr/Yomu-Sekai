@@ -1904,7 +1904,10 @@ class OCRQualityRegressionTests(unittest.TestCase):
         # decorative, but it is ordinary narration/dialogue.  The policy must
         # route semantic decorative text to translation instead of preserving it
         # as artwork.
-        group = self._policy_group("decorative", "IT BETTER BE WORTH IT.")
+        group = self._policy_group(
+            "decorative", "IT BETTER BE WORTH IT.",
+            inside_narration_box_like_region=True,
+        )
 
         _apply_classification_policy(group)
 
@@ -1912,13 +1915,13 @@ class OCRQualityRegressionTests(unittest.TestCase):
         self.assertEqual(group.ignore_reason, "")
         self.assertTrue(_should_translate_group(group))
 
-    def test_textured_decorative_story_sentence_is_not_silently_preserved(self):
-        # The #69 production path had the same semantic sentence in a textured
-        # visual bucket; the coarse background veto must not override strong
-        # ordinary-clause evidence.
+    def test_textured_story_clause_keeps_existing_semantic_promotion(self):
+        # Existing story-clause recovery remains intact; the structural guard is
+        # limited to the new strict dictionary-sentence promotion.
         group = self._policy_group(
             "decorative",
             "IT BETTER BE WORTH IT.",
+            inside_narration_box_like_region=True,
             background_type="textured_art",
             background_metrics={},
             main_text_score=1.0,
@@ -1932,10 +1935,11 @@ class OCRQualityRegressionTests(unittest.TestCase):
         self.assertEqual(group.ignore_reason, "")
         self.assertTrue(_should_translate_group(group))
 
-    def test_short_textured_decorative_label_still_fails_closed(self):
+    def test_short_caption_with_conflicting_container_evidence_stays_preserved(self):
         group = self._policy_group(
             "decorative",
             "A BRIGHT MESSAGE!",
+            inside_narration_box_like_region=True,
             background_type="textured_art",
             background_metrics={},
             main_text_score=1.0,
@@ -1946,7 +1950,8 @@ class OCRQualityRegressionTests(unittest.TestCase):
         _apply_classification_policy(group)
 
         self.assertTrue(group.ignored)
-        self.assertEqual(group.ignore_reason, "decorative_text")
+        self.assertEqual(group.classification, "decorative")
+        self.assertFalse(getattr(group, "story_display_promoted", False))
         self.assertFalse(_should_translate_group(group))
 
     def test_compact_scan_promo_is_preserved_even_if_legacy_label_says_speech(self):
@@ -4312,9 +4317,12 @@ class OCRQualityRegressionTests(unittest.TestCase):
         self.assertTrue(metrics["open_white_narration"])
         self.assertTrue(metrics["short_text_white_context"])
 
-    def test_short_embedded_label_on_art_is_decorative(self):
+    def test_multiword_art_label_without_container_stays_decorative(self):
         group = _scored_group("LOCAL SHOP OPEN TODAY")
         group.classification = "speech"
+        group.inside_balloon_like_region = False
+        group.inside_narration_box_like_region = False
+        group.parent_balloon_id = ""
         group.background_type = "speed_lines"
         group.background_metrics = {
             "image_width": 800,
@@ -4332,7 +4340,8 @@ class OCRQualityRegressionTests(unittest.TestCase):
 
         self.assertEqual(group.classification, "decorative")
         self.assertTrue(group.ignored)
-        self.assertEqual(group.ignore_reason, "decorative_text")
+        self.assertFalse(_should_translate_group(group))
+        self.assertFalse(group.story_display_promoted)
 
     def test_recurring_compact_name_repairs_single_spaced_variant(self):
         compact_a = _scored_group("Suchan, are you coming?")
@@ -5055,12 +5064,15 @@ class OCRQualityRegressionTests(unittest.TestCase):
         self.assertGreater(metrics["detached_dark_text_components"], 0)
         self.assertGreater(np.count_nonzero(detached[44:75, 63:74]), 0)
 
-    def test_small_multiline_screen_text_is_preserved_as_decorative(self):
+    def test_multiline_screen_text_without_container_stays_decorative(self):
         group = _scored_group("VIDEO TITLE SHARE FOLLOWERS COMMENTS SAVE")
         group.lines = [_line("VIDEO TITLE"), _line("SHARE FOLLOWERS"), _line("COMMENTS SAVE")]
         for index, line in enumerate(group.lines):
             line.box = (220, 1500 + index * 45, 260, 38)
         group.classification = "narration"
+        group.inside_balloon_like_region = False
+        group.inside_narration_box_like_region = False
+        group.parent_balloon_id = ""
         group.background_type = "speed_lines"
         group.background_metrics = {
             "image_width": 800,
@@ -5073,6 +5085,7 @@ class OCRQualityRegressionTests(unittest.TestCase):
         _refine_classification_with_background(group)
         self.assertEqual(group.classification, "decorative")
         self.assertTrue(group.ignored)
+        self.assertFalse(group.story_display_promoted)
 
     def test_unknown_short_graphic_on_high_edge_art_becomes_sfx(self):
         group = _scored_group("THROR")
@@ -5090,7 +5103,7 @@ class OCRQualityRegressionTests(unittest.TestCase):
         self.assertEqual(group.classification, "sfx")
         self.assertTrue(group.ignored)
 
-    def test_character_metadata_overlay_on_art_is_preserved_without_inpainting(self):
+    def test_character_metadata_overlay_without_container_stays_decorative(self):
         group = _scored_group("PERSON NAME (20) COLLEGE STUDENT")
         group.lines = [_line("PERSON NAME (20)"), _line("COLLEGE STUDENT")]
         for index, line in enumerate(group.lines):
@@ -5110,6 +5123,7 @@ class OCRQualityRegressionTests(unittest.TestCase):
         _refine_classification_with_background(group)
         self.assertEqual(group.classification, "decorative")
         self.assertTrue(group.ignored)
+        self.assertFalse(group.story_display_promoted)
 
 
 def _open_narration_group(text="THE NIGHT WAS ALREADY OVER"):

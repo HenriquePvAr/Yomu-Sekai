@@ -2315,6 +2315,7 @@ def _last_resort_allowed(group):
         or any(w.upper() in region_taxonomy._STORY_CLAUSE_MARKERS for w in words)
         or _decorative_textured_story_promotion_allowed(group)
         or _decorative_short_display_story_promotion_allowed(group)
+        or _legible_sentence_promotion_allowed(group)
     )
     return bool(_group_has_story_translation_authority(group) and sentence)
 
@@ -5311,6 +5312,79 @@ def _lines_sit_on_white(group):
     )
 
 
+def _group_has_story_text_container(group):
+    """Require semantic ownership and local background agreement for promotion.
+
+    A containment flag can be inherited from a nearby region, and a visually
+    enclosed shape can be a sign or prop. Require both ownership metadata and a
+    local balloon/narration background classification before treating weak OCR
+    as story text.
+    """
+    semantic_membership = bool(
+        getattr(group, "inside_balloon_like_region", False)
+        or getattr(group, "inside_narration_box_like_region", False)
+        or str(getattr(group, "parent_balloon_id", "") or "").strip()
+    )
+    # The containment flag alone can be inherited from a nearby region. Require
+    # the local background classifier to agree that the text sits in a container.
+    return bool(
+        semantic_membership
+        and str(getattr(group, "background_type", "") or "").strip().lower()
+        in {"white_balloon", "dark_balloon", "narration_box"}
+    )
+
+
+def _legible_sentence_promotion_allowed(group):
+    """Promote only clearly readable English sentences from weak visual labels.
+
+    This structural fallback excludes preserve cases, credits, URLs, series
+    branding, and SFX-shaped text. OCR-glued words are segmented before the
+    dictionary check. Weak text must also belong to a confirmed balloon or
+    narration box; sentence shape alone never promotes lettering on open art.
+    """
+    classification = str(getattr(group, "classification", "") or "").strip().lower()
+    if classification not in {"decorative", "unknown"} and not bool(
+        getattr(group, "story_display_promoted", False)
+    ):
+        return False
+    if not _group_has_story_text_container(group):
+        return False
+    if bool(getattr(group, "preserve_as_name", False)) or bool(
+        getattr(group, "ocr_quality_blocked", False)
+    ):
+        return False
+    body = str(getattr(group, "text", "") or "").strip()
+    if not body:
+        return False
+    if (
+        region_taxonomy.looks_like_strong_credit(body)
+        or region_taxonomy.looks_like_url(body)
+        or region_taxonomy.looks_like_series_title(body)
+        or region_taxonomy.looks_like_sfx(body)
+    ):
+        return False
+    body = split_glued_source_words(
+        body,
+        protected=getattr(group, "detected_proper_names", None),
+    )
+    words = re.findall(r"[A-Za-zÀ-ÿ]+(?:['’][A-Za-zÀ-ÿ]+)?", body)
+    if len(words) < 2:
+        return False
+    if not all(
+        region_taxonomy.is_english_word(word)
+        for word in words
+        if len(re.sub(r"[^A-Za-z]", "", word)) >= 3
+    ):
+        return False
+    try:
+        confidence = float(getattr(group, "confidence", 0.0) or 0.0)
+    except (TypeError, ValueError):
+        return False
+    if confidence < 0.90:
+        return False
+    return bool(re.search(r"[.,!?]", body) or len(words) >= 3)
+
+
 def _decorative_textured_story_promotion_allowed(group):
     """Allow strong ordinary prose mislabelled as decorative art to translate.
 
@@ -5544,6 +5618,11 @@ def _apply_classification_policy(group):
         group.classification,
         group.text,
     )
+    if _legible_sentence_promotion_allowed(group):
+        weak_promotion_allowed = True
+        if group.classification == "decorative":
+            group.classification = "unknown"
+        group.story_display_promoted = True
     if _decorative_textured_story_promotion_allowed(group):
         weak_promotion_allowed = True
         # Promotion must be complete, not just an ``ignored`` flip: downstream
@@ -5563,6 +5642,7 @@ def _apply_classification_policy(group):
             "sfx_area",
         }
         and not _decorative_textured_story_promotion_allowed(group)
+        and not _legible_sentence_promotion_allowed(group)
         and not (
             (group.background_metrics or {}).get("open_white_narration")
             or (group.background_metrics or {}).get("open_dark_narration")
@@ -5716,6 +5796,7 @@ def _should_translate_group(group):
             "sfx_area",
         }
         and not _decorative_textured_story_promotion_allowed(group)
+        and not _legible_sentence_promotion_allowed(group)
         and not (
             (group.background_metrics or {}).get("open_white_narration")
             or (group.background_metrics or {}).get("open_dark_narration")
@@ -5745,6 +5826,8 @@ def _group_has_story_translation_authority(group):
         return False
     if not region_taxonomy.is_translatable(category):
         return False
+    if _legible_sentence_promotion_allowed(group):
+        return True
     if _decorative_textured_story_promotion_allowed(group):
         return True
     return region_taxonomy.weak_label_semantic_promotion_allowed(
@@ -13808,6 +13891,7 @@ def _source_scoped_speech_reason(group):
     if classification in {"logo", "sfx"} or (
         classification == "decorative"
         and not _decorative_textured_story_promotion_allowed(group)
+        and not _legible_sentence_promotion_allowed(group)
     ):
         return "source_scoped_requires_story_translation_authority"
     if getattr(group, "preserve_as_name", False):
