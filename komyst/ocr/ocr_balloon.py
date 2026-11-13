@@ -2838,7 +2838,15 @@ def _finalize_translation_failure(
     rejected_candidate=None,
     validator_reason="",
 ):
-    if reason == "translation_not_rendered_after_validation" and _is_sound_lettering(group):
+    if (
+        reason == "translation_not_rendered_after_validation" and _is_sound_lettering(group)
+    ) or (
+        # A lone ordinary word or sound the model handed back unchanged ("SLIP", "WAAAH") is an
+        # interjection with nothing to translate; it is kept as lettering, not sent to review.
+        reason == "untranslated_source_after_retries"
+        and group_has_name_only_shape(group)
+        and _lone_word_is_common_or_sound(group)
+    ):
         # A sound effect whose translation could not be drawn safely keeps its
         # own lettering - part of the art, nothing a reader loses - instead of
         # becoming a review item.

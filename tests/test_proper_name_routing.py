@@ -826,6 +826,22 @@ class LoneCommonWordIsNotANameTests(unittest.TestCase):
         group = _group("SLIP", names=["SLIP"])
         self.assertTrue(group_is_untranslatable_name(group, "SLIP"))
 
+    def test_lone_common_word_echoed_by_the_model_is_kept_not_reviewed(self):
+        from komyst.ocr.ocr_balloon import _finalize_translation_failure
+
+        for word in ("SLIP", "WAAAH"):
+            group = _group(word)
+            _finalize_translation_failure(group, "untranslated_source_after_retries", candidate=word)
+            self.assertFalse(group.manual_review_required, word)
+            self.assertEqual(group.translation_final_state, "preserved_original", word)
+
+    def test_lone_unknown_token_echo_still_goes_to_review(self):
+        from komyst.ocr.ocr_balloon import _finalize_translation_failure
+
+        group = _group("ZXQVLORP")
+        _finalize_translation_failure(group, "untranslated_source_after_retries", candidate="ZXQVLORP")
+        self.assertTrue(group.manual_review_required)
+
 
 if __name__ == "__main__":
     unittest.main()
