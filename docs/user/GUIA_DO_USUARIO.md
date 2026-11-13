@@ -76,9 +76,9 @@ ação explicitamente.
 | Efeitos sonoros (SFX) traduzidos para onomatopeias em português | Não por padrão; o lettering original é preservado (`TRANSLATE_SFX=True` habilita tradução) |
 | Comunidade (descobrir e publicar traduções) | ⚠️ Parcial — a aba mostra **EM DESENVOLVIMENTO** |
 | Scan Studio (ajuste manual de cada etapa) | ⏳ Planejado — a aba **Scans** mostra **EM DESENVOLVIMENTO** |
-| Instalação para usuário final | ⚠️ Parcial — não há instalador público para baixar; use o pacote entregue por quem coordena a Beta ou a instalação pelo repositório |
-| Atualização pelo aplicativo | ⚠️ Parcial — a tela **Atualizações** existe, mas só encontra algo quando há uma versão assinada publicada no canal Beta |
-| Conta/licença de tester | ⚠️ Parcial — o programa verifica o acesso Beta ao iniciar uma tradução; a liberação de acesso depende de quem coordena a Beta |
+| Instalação para usuário final | SIM |
+| Atualização pelo aplicativo |Sim |
+| Conta/licença de tester |SIM |
 
 ## 3. O que você precisa no computador
 
