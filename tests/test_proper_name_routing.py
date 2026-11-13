@@ -812,5 +812,20 @@ class ChapterEntityMemoryTests(unittest.TestCase):
         self.assertNotIn("ZARQUON", group.detected_proper_names)
 
 
+class LoneCommonWordIsNotANameTests(unittest.TestCase):
+    def test_common_word_and_sound_are_not_untranslatable_names(self):
+        from komyst.ocr.ocr_balloon import group_is_untranslatable_name
+
+        for word in ("SLIP", "WAAAH"):
+            group = _group(word)
+            self.assertFalse(group_is_untranslatable_name(group, word), word)
+
+    def test_name_the_chapter_detected_is_still_a_name(self):
+        from komyst.ocr.ocr_balloon import group_is_untranslatable_name
+
+        group = _group("SLIP", names=["SLIP"])
+        self.assertTrue(group_is_untranslatable_name(group, "SLIP"))
+
+
 if __name__ == "__main__":
     unittest.main()

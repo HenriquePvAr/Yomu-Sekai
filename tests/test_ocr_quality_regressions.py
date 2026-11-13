@@ -5657,5 +5657,23 @@ class ShortDialogueVersusSfxTests(unittest.TestCase):
                 self.assertFalse(_should_translate_group(group))
 
 
+class PortugueseForSubjunctiveTests(unittest.TestCase):
+    SOURCE = "\"IF ONE LEAD'S A NOBODY, THAT'LL MAKE THE BIG NAME LOOK BAD?\""
+
+    def test_for_after_subject_noun_is_portuguese_not_residual_english(self):
+        valid, reason = validate_translation_text(
+            self.SOURCE,
+            '"SE O LÍDER FOR UM DESCONHECIDO, ISSO VAI PREJUDICAR A IMAGEM DO GRANDE NOME?"',
+        )
+        self.assertTrue(valid, reason)
+
+    def test_english_for_phrase_is_still_rejected(self):
+        valid, _ = validate_translation_text(
+            self.SOURCE,
+            '"VAI FOR THE MONEY, ISSO VAI PREJUDICAR A IMAGEM DO GRANDE NOME?"',
+        )
+        self.assertFalse(valid)
+
+
 if __name__ == "__main__":
     unittest.main()

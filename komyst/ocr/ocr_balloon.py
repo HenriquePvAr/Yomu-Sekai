@@ -1704,6 +1704,23 @@ def group_has_name_only_shape(group):
     return not _is_nonlexical_vocalization_token({token})
 
 
+def _lone_word_is_common_or_sound(group):
+    """A lone "SLIP"/"WAAAH" is an ordinary word or a sound, not a name, unless the chapter says so."""
+    from komyst.translation.sfx_glossary import translate_sfx_fuzzy
+
+    match = re.search(r"[A-Za-z][A-Za-z’'-]*", clean_ocr_text(group.text))
+    if not match:
+        return False
+    word = match.group(0)
+    names = {str(n).upper() for n in (getattr(group, "detected_proper_names", None) or ())}
+    if word.upper() in names:
+        return False
+    return (
+        region_taxonomy.word_zipf(word.lower()) >= region_taxonomy.COMMON_NON_LEXICON_ZIPF
+        or translate_sfx_fuzzy(word) is not None
+    )
+
+
 def group_is_untranslatable_name(group, candidate):
     """True when the model, told to translate every word, returned the source.
 
@@ -1718,6 +1735,8 @@ def group_is_untranslatable_name(group, candidate):
         return False
     candidate = clean_ocr_text(candidate)
     if not candidate:
+        return False
+    if _lone_word_is_common_or_sound(group):
         return False
     return _normalized_translation_text(candidate) == _normalized_translation_text(
         group.text
@@ -9999,6 +10018,15 @@ def _is_portuguese_folded_token(token_infos, index):
         return True
     if next_token == "O" and next_next_token == "QUE":
         return True
+    # "SE O LIDER FOR UM DESCONHECIDO": a noun sits between the conjunction and "FOR", so the
+    # left window fails. An English "for" is never followed by a Portuguese indefinite
+    # article, so "FOR UM/UMA" (with no English word before) is the subjunctive of "ser".
+    previous_token = tokens[index - 1] if index > 0 else ""
+    if (
+        next_token in {"UM", "UMA", "UNS", "UMAS"}
+        and previous_token not in RESIDUAL_TRANSLATION_ENGLISH_WORDS
+    ):
+        return True
     return False
 
 
@@ -16525,6 +16553,31 @@ def _measure_structure_continuations(original_bgr, group, cleanup_mask):
     group.structure_continuations = continuations
 
 
+LEARNED_COMPARE_COUNTERS = {"lama_compare_run": 0, "lama_compare_skipped": 0}
+_TRIVIAL_FILL_CLASSES = frozenset({"solid_light", "solid_dark"})
+_TRIVIAL_FILL_MAX_LUMINANCE_STD = 6.0
+
+
+def _classic_fill_is_trivially_safe(group):
+    """The classic fill needs no learned rival on a flat solid background.
+
+    All of: a solid light/dark local background, luminance std <= 6, not sound lettering, and the
+    spatial harmonic gate did not reject the classic fill. Anything uncertain returns False, so
+    the learned candidate is still compared exactly as before.
+    """
+    metrics = getattr(group, "background_metrics", None)
+    if not isinstance(metrics, dict):
+        return False
+    std = metrics.get("local_background_luminance_std")
+    return (
+        metrics.get("local_background_class") in _TRIVIAL_FILL_CLASSES
+        and isinstance(std, (int, float))
+        and std <= _TRIVIAL_FILL_MAX_LUMINANCE_STD
+        and str(getattr(group, "classification", "") or "").lower() != "sfx"
+        and not getattr(group, "spatial_harmonic_gate_rejected", False)
+    )
+
+
 def _apply_cleanup_mask(current_bgr, original_bgr, group, cleanup_mask, strategy="primary",
                         accepted_candidate=None):
     group.fill_alternatives = []
@@ -16559,7 +16612,11 @@ def _apply_cleanup_mask(current_bgr, original_bgr, group, cleanup_mask, strategy
             accepted_candidate=accepted_candidate)
     if learned is None and classic is not None and config.CLEAN_COMPARE_FILLS and strategy != "lama_large" \
             and not _inside_white_enclosure(current_bgr, group, cleanup_mask):
-        learned = _learned_texture_fill(current_bgr, group, cleanup_mask, strategy, force=True)
+        if _classic_fill_is_trivially_safe(group):
+            LEARNED_COMPARE_COUNTERS["lama_compare_skipped"] += 1
+        else:
+            LEARNED_COMPARE_COUNTERS["lama_compare_run"] += 1
+            learned = _learned_texture_fill(current_bgr, group, cleanup_mask, strategy, force=True)
     result = learned if classic is None else classic
     surface = None
     if config.CLEAN_SURFACE_FILL and strategy != "lama_large":
