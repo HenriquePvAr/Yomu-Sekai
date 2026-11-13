@@ -515,9 +515,9 @@ Critérios de aceite:
 
 Objetivo em REF-B: regiões traduzidas ≥ 174/177; páginas certificadas ≥ 78/85; portão físico passa. Em REF-A nada regride.
 
-### F3.0 Confirmar 3 testes dependentes do OpenCV e corrigir a falha real de máscara
+### F3.0 Confirmar testes dependentes do OpenCV e corrigir máscara em texto que toca contorno
 
-O dono informou que três dos quatro testes antigos passam com OpenCV 5.0.0; a sessão de Fase 0 executou em OpenCV 4.10.0 e não deve classificar esses três como regressões de código. Reexecutar os três no runtime de referência e, para o teste restante `test_text_touching_a_balloon_border_is_cleaned_without_erasing_the_border`, fazer bisect entre `d819f0e` e `cda3f90`, classificar regressão ou contrato de teste, e corrigir. Lista e mensagens: `reports/falhas_preexistentes_20261111.md`. Aceite da F3.0: suíte completa verde no runtime fixado, zero falhas.
+O dono informou que três dos quatro testes antigos passam com OpenCV 5.0.0; a sessão de Fase 0 executou em OpenCV 4.10.0 e não deve classificar esses três como regressões de código. Reexecutar os três no runtime de referência. Para `test_text_touching_a_balloon_border_is_cleaned_without_erasing_the_border`, usar worktree isolada e confirmar `yomu.__file__` em cada passo; o bisect com import corretamente isolado apontou `80f0620` (não `cda3f90`, que passa) entre `d819f0e` e `631afac`. Preservar o contorno do balão e excluir da verificação de resíduo somente tinta OCR coincidente com a faixa de contorno medida; resíduos fora dela continuam falhando. Relato da tentativa que não passou após duas correções: `reports/perguntas_pendentes.md`. Aceite da F3.0: teste novo falhando antes e passando depois, suíte completa verde no runtime fixado, e REF-A Apenas Clean sem perda de certificado contra a base de 288,7 s.
 
 Para cada teste:
 

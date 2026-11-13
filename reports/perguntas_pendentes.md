@@ -1,4 +1,4 @@
-# Perguntas e dependências pendentes — Fase 0
+# Perguntas e dependências pendentes — Komyst
 
 Atualizado: 2026-11-11 (reconciliação final)
 
@@ -43,6 +43,15 @@ A suíte completa nesta checkout em Python 3.11/OpenCV 4.10.0/NumPy 2.3.5 deu 6.
 - O dono confirma que três falhas antigas passam com OpenCV 5.0.0 e uma falha real continua para F3.0. A sessão não instalou/removeu pacotes; a decisão de corrigir o ambiente global continua do dono.
 - As medições de limpeza por CLI desta sessão rodaram pelo Python311/OpenCV 4.10.0 e devem ser tratadas como feitas no runtime divergente.
 - Não há dúvida técnica pendente para concluir a Fase 0: o único passo externo é aguardar aprovação explícita antes de qualquer merge em `dev`. Não houve merge ou push.
+
+## Fase 3.0 — diagnóstico após duas tentativas — 2026-11-12
+
+- **Bisect anterior inválido:** o comando usou `git -C` para o Git, mas o shell permaneceu em `C:\Projetos\Yomu-Sekai`; todos os testes importaram `C:\Projetos\Yomu-Sekai\yomu`, independentemente da revisão da worktree. A primeira indicação `cda3f90` não é válida. Com runner de bisect que imprime `yomu.__file__` e força o import local, `d819f0e` e `cda3f90` ambos passam. O bisect válido entre `d819f0e` e `631afac` aponta `80f0620` como primeiro commit ruim. Esse commit é amplo (+2058/-300 em 28 arquivos); atribuição precisa ao hunk de máscara requer leitura adicional na F3.0.
+- **Contrato escolhido:** preservar o contorno detectado do balão. A máscara deve excluir a borda; qualquer tinta OCR que coincida com pixels de contorno é conservada deliberadamente e excluída da detecção de resíduo somente dentro de uma faixa estreita do contorno original. Motivo: inpaint nessa faixa pode apagar a estrutura que se quer manter. Resíduos fora dessa faixa continuam sujeitos à validação normal.
+- **Tentativa 1:** ampliar a tentativa de calcular enclosure fechado a grupos de fala; ainda havia 18 pixels de interseção entre máscara e borda. Não passou.
+- **Tentativa 2:** alargar o inset do enclosure e adicionar exclusão estreita de pixels de borda à métrica de resíduo. A asserção da máscara sem interseção e a preservação do arco passam, mas a validação final ainda marca texto residual: `residual_source_lettering_pixels=80`, `largest_residual_source_lettering_component=76`, `protected_border_residual_pixels>0`. O teste falha. Conforme a regra de autonomia, a F3.0 está pausada depois de duas tentativas; manter as alterações locais para revisão, sem uma terceira tentativa nesta rodada.
+- A falha ocorre na prova sintética genérica, sem dependência de capítulo. A suíte completa e REF-A Apenas Clean ainda não foram rodados para esta alteração falha; comparar certificados contra a base `288,7 s` continua pendente.
+- Próximo passo da fase, independente: F3.1, análise de regiões ignoradas do REF-B e promoção conservadora de frases legíveis.
 
 ## Ambiente OpenCV corrigido e revalidação (2026-11-11, noite)
 
