@@ -72,6 +72,13 @@ def available(*, purpose="general") -> bool:
 
 _EDIT_CACHE = OrderedDict()
 _EDIT_LOCK = threading.Lock()
+_CALLS_LAUNCHED = 0
+
+
+def reset_call_budget() -> None:
+    """Start a new job's sd-cli launch budget (cache hits never count)."""
+    global _CALLS_LAUNCHED
+    _CALLS_LAUNCHED = 0
 
 
 def flux_reference_edit(
@@ -116,6 +123,13 @@ def flux_reference_edit(
             _EDIT_CACHE.move_to_end(key)
             metrics.update({"cache_hit": True, "reason": "ok"})
             return cached.copy()
+        global _CALLS_LAUNCHED
+        if _CALLS_LAUNCHED >= max(0, int(settings.GENERATIVE_INPAINT_MAX_CALLS_PER_JOB)):
+            # The remaining regions follow the normal ladder without FLUX and end in review.
+            metrics["reason"] = "generative_call_cap_reached"
+            return None
+        _CALLS_LAUNCHED += 1
+        timeout_seconds = min(float(timeout_seconds), float(settings.GENERATIVE_INPAINT_TIMEOUT_SECONDS))
         started = time.perf_counter()
         from komyst.core.gpu import DIRECTML_LOCK
         # Native Vulkan must share the same device budget as the DirectML

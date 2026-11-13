@@ -192,6 +192,16 @@ Guarda de memória (lida do ambiente por `komyst/config/settings.py`; ver Docume
 livre abaixo dos quais LaMa e FLUX se declaram indisponíveis; `LAMA_MAX_CROP_PIXELS` (padrão
 `4000000`) limita a área do recorte do LaMa. Sem `psutil` a guarda não bloqueia.
 
+FLUX (só com `GENERATIVE_INPAINT_ENABLED=1`): `GENERATIVE_INPAINT_TIMEOUT_SECONDS` (padrão `120`) é o teto de
+cada chamada do `sd-cli` e `GENERATIVE_INPAINT_MAX_CALLS_PER_JOB` (padrão `12`) o máximo de lançamentos por
+job; as regiões seguintes seguem a escada sem FLUX e vão para revisão. O FLUX continua usando o
+`DIRECTML_LOCK` compartilhado (um lock próprio fez LaMa/OCR competirem pela memória da GPU).
+
+Varredura residual do Paddle: `OCR_RESIDUAL_SWEEP_MODE` (`always`, padrão, ou `off`; `OCR_RESIDUAL_SWEEP=0`
+também desliga). Não existe modo `evidence`: um filtro barato sem modelo não separa páginas com resíduo das
+demais sem perder detecções (medido em dois capítulos de referência). Se o Paddle não inicia, o relatório de
+qualidade registra `residual_sweep_status: unavailable` com o motivo, e a página não conta como varrida.
+
 `FONT_PATH` também é suportada fora do template. Quando vazia, o código usa a resolução de fonte existente; quando definida, deve apontar para um arquivo local válido.
 
 ## Validação visual

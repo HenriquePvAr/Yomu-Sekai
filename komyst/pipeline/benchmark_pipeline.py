@@ -3238,6 +3238,9 @@ def run_benchmark(args):
     from komyst.ocr.ocr_balloon import LEARNED_COMPARE_COUNTERS
 
     LEARNED_COMPARE_COUNTERS.update(lama_compare_run=0, lama_compare_skipped=0)
+    from komyst.clean.inpainting import flux_edit as _flux_edit
+
+    _flux_edit.reset_call_budget()
     counters = {
         "images_skipped_by_cache": 0,
         "images_skipped_by_no_text_precheck": 0,

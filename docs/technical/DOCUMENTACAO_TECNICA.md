@@ -2922,6 +2922,7 @@ no `.env.example`: `KOMYST_UI_PORT`, `AUTH_PROVIDER`, `NVIDIA_TRANSLATION_PROVID
 | Caches | `ENABLE_*_CACHE`, `FULL_FAST_MODE` | Opcional |
 | Recursos | `OCR_PARALLEL`, `OCR_WORKERS`, `ADAPTIVE_PARALLELISM`, `RESOURCE_MONITORING`, `MIN/MAX_OCR_WORKERS`, `MEMORY_*`, `CPU_PRESSURE_HIGH_PERCENT` | Opcional |
 | Guarda de memória (LaMa/FLUX) | `LAMA_MIN_FREE_RAM_MB` (1500), `FLUX_MIN_FREE_RAM_MB` (6000), `LAMA_MAX_CROP_PIXELS` (4000000) | Opcional — ver abaixo |
+| FLUX / varredura | `GENERATIVE_INPAINT_TIMEOUT_SECONDS` (120), `GENERATIVE_INPAINT_MAX_CALLS_PER_JOB` (12), `OCR_RESIDUAL_SWEEP_MODE` (always\|off) | Opcional — ver `docs/CONFIGURATION.md` |
 | PDF | `SMART_WEBTOON_PDF_SPLIT`, `SMART_PDF_TARGET_HEIGHT`, `SMART_PDF_MIN_HEIGHT`, `SMART_PDF_MAX_HEIGHT` | Opcional |
 | Licença Beta | `BETA_LICENSE_PROVIDER` | Ver §19 |
 | Auth | `COMMUNITY_AUTH_PROVIDER`, `SUPABASE_URL`, `SUPABASE_PUBLISHABLE_KEY`, `SUPABASE_SECRET_KEY`, `SUPABASE_JWKS_URL`, `SUPABASE_EXPECTED_ISSUER`, `SUPABASE_EXPECTED_AUDIENCE`, `SUPABASE_SITE_URL`, `SUPABASE_REDIRECT_URL` | Obrigatório para login (`SUPABASE_SITE_URL`/`SUPABASE_REDIRECT_URL` são referência para o projeto Supabase — origem `http://127.0.0.1:8080` —, não lidas pelo Python) |
@@ -2940,7 +2941,10 @@ e a guarda **permite**). `AdvancedArtInpainter.reconstruct` (LaMa) levanta
 trata — quando a RAM livre fica abaixo de `LAMA_MIN_FREE_RAM_MB` ou quando o recorte de contexto
 passa de `LAMA_MAX_CROP_PIXELS`; `flux_edit.available()` passa a negar abaixo de
 `FLUX_MIN_FREE_RAM_MB`. Cada negação por memória incrementa `lama_skipped_low_memory` /
-`flux_skipped_low_memory`, gravados no relatório de tempo (`timing_report.json`). No pipeline,
+`flux_skipped_low_memory`, gravados no relatório de tempo (`timing_report.json`), que também traz
+`lama_compare_run`/`lama_compare_skipped`: com `CLEAN_COMPARE_FILLS`, o LaMa de comparação só é forçado
+quando o preenchimento clássico não é trivialmente seguro (`_classic_fill_is_trivially_safe`: fundo local
+`solid_light`/`solid_dark`, desvio de luminância ≤ 6, região não SFX, portão harmônico não rejeitado). No pipeline,
 depois do render de cada página, `_release_page_buffers` (`benchmark_pipeline.py`) remove do estado
 agregado em `page_states` as imagens (`original_bgr`, `clean_local_base`, `_preflight_render`) e as
 listas `candidates`/`raw_lines` (guardando só o tamanho da página, `page_hw`, e as contagens,

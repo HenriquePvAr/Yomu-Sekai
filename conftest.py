@@ -45,3 +45,15 @@ def _restore_process_environment():
         if os.environ != snapshot:
             os.environ.clear()
             os.environ.update(snapshot)
+
+
+@pytest.fixture(autouse=True)
+def _host_ram_is_not_a_test_input(monkeypatch):
+    """The LaMa/FLUX memory guard reads the host's free RAM; no test may depend on it.
+
+    Tests of the guard itself patch ``available_ram_mb`` again, which wins over this.
+    """
+    from komyst.runtime import memory_guard
+
+    monkeypatch.setattr(memory_guard, "available_ram_mb", lambda: None)
+    yield
