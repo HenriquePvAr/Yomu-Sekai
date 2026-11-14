@@ -11947,12 +11947,19 @@ def _translate_texts(translator, texts):
     return translations
 
 
+# Letters drawn alike in both cases: in all-caps lettering the OCR reads them as lowercase at random
+# ("RocK?", "NOTo"), which is not evidence that the source is in mixed case.
+_CASE_AMBIGUOUS_LETTERS = frozenset("cosuvwxzkp")
+
+
 def _match_source_case(source, translation):
     source_letters = _letters(source or "")
     if len(source_letters) < 3:
         return translation
 
-    uppercase_ratio = sum(char.isupper() for char in source_letters) / len(source_letters)
+    telling = [char for char in source_letters if char.lower() not in _CASE_AMBIGUOUS_LETTERS]
+    judged = telling or source_letters
+    uppercase_ratio = sum(char.isupper() for char in judged) / len(judged)
     if uppercase_ratio >= 0.82:
         return str(translation).upper()
 
