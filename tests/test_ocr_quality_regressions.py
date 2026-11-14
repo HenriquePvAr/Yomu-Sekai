@@ -5667,6 +5667,13 @@ class PortugueseForSubjunctiveTests(unittest.TestCase):
         )
         self.assertTrue(valid, reason)
 
+    def test_for_before_nobody_after_long_clause_is_portuguese(self):
+        valid, reason = validate_translation_text(
+            "IF ONE OF THE MAIN CANDIDATES IS A NOBODY, THE RESULT WILL BE BAD.",
+            "SE UM DOS PRINCIPAIS CANDIDATOS NÃO FOR NINGUÉM, O RESULTADO SERÁ RUIM.",
+        )
+        self.assertTrue(valid, reason)
+
     def test_english_for_phrase_is_still_rejected(self):
         valid, _ = validate_translation_text(
             self.SOURCE,

@@ -9948,7 +9948,11 @@ PORTUGUESE_FOR_CONTEXT_BRIDGE_TOKENS = {
     "TAMBEM",
     "VOCE",
 }
-PORTUGUESE_FOR_LEFT_CONTEXT_WINDOW = 4
+PORTUGUESE_FOR_LEFT_CONTEXT_WINDOW = 7
+PORTUGUESE_FOR_NEGATION_TOKENS = {"NAO", "NUNCA", "JAMAIS"}
+PORTUGUESE_FOR_NEXT_TOKENS = {
+    "UM", "UMA", "UNS", "UMAS", "NINGUEM", "NADA", "POSSIVEL", "VERDADE", "PRECISO",
+}
 HIGH_CONFIDENCE_RESIDUAL_SPANISH_MARKERS = {
     "AHORA",
     "AUNQUE",
@@ -10052,8 +10056,11 @@ def _is_portuguese_folded_token(token_infos, index):
     # article, so "FOR UM/UMA" (with no English word before) is the subjunctive of "ser".
     previous_token = tokens[index - 1] if index > 0 else ""
     if (
-        next_token in {"UM", "UMA", "UNS", "UMAS"}
-        and previous_token not in RESIDUAL_TRANSLATION_ENGLISH_WORDS
+        next_token in PORTUGUESE_FOR_NEXT_TOKENS
+        and (
+            previous_token in PORTUGUESE_FOR_NEGATION_TOKENS
+            or previous_token not in RESIDUAL_TRANSLATION_ENGLISH_WORDS
+        )
     ):
         return True
     return False
