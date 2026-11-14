@@ -179,7 +179,8 @@ rede conforme o adapter e a configuração permitirem.
 ## Backend Supabase (auditoria 2026-11-11)
 
 Correções em `supabase/migrations/20261113*` e nas edge functions `device-verify` e
-`rewarded-ad-callback`. **Migrations não aplicadas em produção até o dono aplicar.** Resumo e
+`rewarded-ad-callback`. As migrations `20261113*` foram aplicadas em produção em 2026-11-14 (relato de quem as aplicou) e as edge
+functions foram implantadas; a `20261114010000` (liquidação não bloqueada por requisição falha) **ainda não foi aplicada**. Resumo e
 pendências (auto-liquidação, `public_role`, verificação recente de dispositivo, remoção dos
 únicos globais) em [DOCUMENTACAO_TECNICA §29.1](technical/DOCUMENTACAO_TECNICA.md). Teste:
 `tests/test_supabase_security_hardening.py`.
