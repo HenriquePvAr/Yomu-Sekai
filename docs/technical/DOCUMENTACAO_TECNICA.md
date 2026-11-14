@@ -3004,6 +3004,23 @@ Fronteiras implementadas — e o que elas **não** garantem
 - O servidor liga em loopback por padrão. Bind externo exige `KOMYST_ALLOW_EXTERNAL_BIND=1`
   **e** um provider de auth que suporte, e é validado no startup (`validate_bind_security`).
 - Submissão de pasta local pela UI só é aceita em servidor loopback.
+- `LocalRequestGuardMiddleware` (`komyst/ui/app.py`, camada mais externa): `Host` fora de
+  `{127.0.0.1:PORTA, localhost:PORTA}` (PORTA = `KOMYST_UI_PORT`) responde 400 (desligado só com
+  `KOMYST_ALLOW_EXTERNAL_BIND=1`); `Origin` externo em POST/PUT/PATCH/DELETE, em WebSocket e no
+  handshake `/_nicegui_ws` responde 403. Sem `Origin` (curl, urllib, testes) passa. As origens do
+  Socket.IO do NiceGUI (`cors_allowed_origins='*'`) **não** foram fixadas na biblioteca; a
+  mitigação é este middleware (PARCIAL).
+- `/api/ui/source-trace`, `/api/ui/control-plane-trace` e `/api/auth/desktop/client-state` exigem
+  `Content-Type: application/json` (415) e Origin local; `trace_id` segue `[A-Za-z0-9._-]{1,80}` e o
+  arquivo é confinado a `DIAGNOSTICS_ROOT`.
+- `/api/update/download`, `/api/update/download/cancel` e `/api/update/install` exigem usuário
+  autenticado (sem CSRF por token: o cliente atual não o envia nessas rotas; a defesa é o guard de Origin).
+- Exclusão de histórico (`/api/ui/history/delete`, `bulk-delete`) é restrita ao dono: registro cujo
+  job pertence a outro dono responde 404. Cards legados sem job não têm dono e continuam endereçáveis.
+- Assets do editor (`font-candidate-preview`, `human-mask/asset`) só são servidos ao job que os
+  gerou (marcador `.job_id` no diretório de cache; ausente ou divergente = 404). A decisão de
+  refinamento exige `result.request.job_id == job_id` (400).
+- Relatório HTML de qualidade escapa URL e caminhos com `html.escape(..., quote=True)`.
 - A validação protege a navegação e as imagens selecionadas, mas **não é um sandbox** de
   todos os subrecursos que o navegador pode carregar, nem fixa o IP final de `requests`.
   Para URLs não confiáveis, um deploy precisaria de política de egress adicional.

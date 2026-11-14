@@ -3222,6 +3222,7 @@ class UiBridge:
             revision_id=str(data["ctx"]["revision_id"]), region_id=str(region_id),
             source_hash=str(decision.get("source_text_hash") or ""))
         cache_dir.mkdir(parents=True, exist_ok=True)
+        self._bind_asset_dir(cache_dir, str(data["job"]["id"]))
         before_path = cache_dir / "before.png"
         cv2.imwrite(str(before_path), crop)
         public_candidates = []
@@ -3335,10 +3336,27 @@ class UiBridge:
         self.history_revision += 1
         return {"ok": True, "font_choice": choice, "selection": selection}
 
-    def human_typography_candidate_asset(self, asset: str) -> Path:
+    _ASSET_JOB_MARKER = ".job_id"
+
+    @classmethod
+    def _bind_asset_dir(cls, cache_dir: Path, job_id: str) -> None:
+        """Record which job owns an editor asset directory (checked on download)."""
+        (cache_dir / cls._ASSET_JOB_MARKER).write_text(job_id, encoding="utf-8")
+
+    @classmethod
+    def _asset_bound_to_job(cls, path: Path, job_id: str) -> bool:
+        try:
+            return bool(job_id) and (
+                path.parent / cls._ASSET_JOB_MARKER
+            ).read_text(encoding="utf-8") == job_id
+        except OSError:
+            return False
+
+    def human_typography_candidate_asset(self, asset: str, job_id: str = "") -> Path:
         root = (REPO_ROOT / ".cache" / "runtime" / "human_font_candidates").resolve()
         path = (root / str(asset or "")).resolve()
-        if root == path or root not in path.parents or not path.is_file():
+        if (root == path or root not in path.parents or not path.is_file()
+                or not self._asset_bound_to_job(path, str(job_id or ""))):
             raise ValueError("font_candidate_asset_not_found")
         return path
 
@@ -3410,6 +3428,7 @@ class UiBridge:
             revision_id=str(data["ctx"]["revision_id"]), region_id=str(region_id),
             source_hash=str(data["decision"].get("source_text_hash") or ""))
         cache_dir.mkdir(parents=True, exist_ok=True)
+        self._bind_asset_dir(cache_dir, str(data["job"]["id"]))
         assets: dict[str, str] = {}
         cv2.imwrite(str(cache_dir / "auto_segmentation.png"), crop)
         assets["auto_segmentation"] = f"human_mask_editor/{cache_dir.name}/auto_segmentation.png"
@@ -3570,11 +3589,12 @@ class UiBridge:
             "inpainting_status": "blocked_pending_human_mask",
         }
 
-    def human_mask_editor_asset(self, asset: str) -> Path:
+    def human_mask_editor_asset(self, asset: str, job_id: str = "") -> Path:
         root = self.runtime_root.resolve()
         path = (root / str(asset or "")).resolve()
         allowed = (root / "human_mask_editor").resolve()
-        if allowed not in path.parents or not path.is_file() or root not in path.parents:
+        if (allowed not in path.parents or not path.is_file() or root not in path.parents
+                or not self._asset_bound_to_job(path, str(job_id or ""))):
             raise ValueError("human_mask_asset_not_found")
         return path
 
@@ -7567,13 +7587,16 @@ class UiBridge:
             raise ValueError("page_not_available") from exc
 
     def _find_local_artifact_record(
-        self, local_artifact_id: str
+        self, local_artifact_id: str, owner_id: str | None = None
     ) -> tuple[dict[str, Any], str]:
         """Find the history record for an opaque UI identifier by identity alone.
 
         Matching never depends on a confinable folder or a positive page count, so a
         legacy/discovered card is always addressable.  Raises ``local_artifact_not_found``
         only when no record matches the identifier.
+
+        When ``owner_id`` is given, a record backed by a job row of another owner is
+        treated as absent (history files are install-wide, jobs are per owner).
         """
         local_artifact_id = str(local_artifact_id or "").strip()
         if not local_artifact_id:
@@ -7581,6 +7604,8 @@ class UiBridge:
         for source in (self._history_payload(), self.history_store.load()):
             for record in source:
                 if not isinstance(record, dict):
+                    continue
+                if owner_id is not None and not self._record_visible_to_owner(record, owner_id):
                     continue
                 output_folder = str(record.get("output_folder") or "")
                 match_values = {
@@ -7606,10 +7631,16 @@ class UiBridge:
         if store is not None:
             candidates: list[dict[str, Any]] = []
             try:
-                direct = store.get_job(local_artifact_id)
+                if owner_id is not None:
+                    direct = store.get_job_for_owner(owner_id, local_artifact_id)
+                    listed = store.list_jobs_for_owner(
+                        owner_id, statuses=list(JobStatus.TERMINAL), limit=None)
+                else:
+                    direct = store.get_job(local_artifact_id)
+                    listed = store.list_jobs(statuses=list(JobStatus.TERMINAL), limit=None)
                 if direct:
                     candidates.append(direct)
-                candidates.extend(store.list_jobs(statuses=list(JobStatus.TERMINAL), limit=None))
+                candidates.extend(listed)
             except (AttributeError, OSError, sqlite3.Error):
                 candidates = []
             seen: set[str] = set()
@@ -7637,6 +7668,21 @@ class UiBridge:
                 }
                 return record, str(record.get("id") or job_id)
         raise ValueError("local_artifact_not_found")
+
+    def _record_visible_to_owner(self, record: dict[str, Any], owner_id: str) -> bool:
+        """False only when the record's job exists and belongs to someone else.
+
+        ponytail: legacy/discovered cards with no job row carry no owner and stay
+        addressable by any signed-in user of this install.
+        """
+        job_id = str(record.get("job_id") or "")
+        if not job_id:
+            return True
+        try:
+            job = self.store.get_job(job_id)
+        except (AttributeError, OSError, sqlite3.Error):
+            return True
+        return job is None or str(job.get("owner_id") or "") == str(owner_id)
 
     def _confined_output_folder(self, record: dict[str, Any]) -> Path | None:
         """Return the record's output folder confined under ``output/``, else ``None``.
@@ -7696,6 +7742,7 @@ class UiBridge:
         *,
         delete_files: bool = False,
         confirm: str = "",
+        owner_id: str | None = None,
     ) -> dict[str, Any]:
         """Remove one local history entry and, when safe, its output folder.
 
@@ -7708,7 +7755,7 @@ class UiBridge:
         """
         if str(confirm or "") != "EXCLUIR":
             raise ValueError("confirmation_invalid")
-        record, record_id = self._find_local_artifact_record(local_artifact_id)
+        record, record_id = self._find_local_artifact_record(local_artifact_id, owner_id)
         published = str(record.get("publication_status") or "").lower() == "published"
         # A published chapter's files back a live community post: never delete them here.
         if published and delete_files:
@@ -7755,6 +7802,7 @@ class UiBridge:
         *,
         delete_files: bool = False,
         confirm: str = "",
+        owner_id: str | None = None,
     ) -> dict[str, Any]:
         """Apply the safe single-item deletion primitive to each selected card.
 
@@ -7777,7 +7825,8 @@ class UiBridge:
         for item in ordered:
             try:
                 result = self.delete_local_artifact(
-                    item, delete_files=delete_files, confirm="EXCLUIR")
+                    item, delete_files=delete_files, confirm="EXCLUIR",
+                    owner_id=owner_id)
                 files_state = str(result.get("files_state") or "")
                 safe_error = str(result.get("safe_error_code") or "")
                 if bool(result.get("deleted_files")):

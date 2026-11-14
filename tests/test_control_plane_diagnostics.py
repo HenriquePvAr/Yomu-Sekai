@@ -114,6 +114,7 @@ def test_wallet_numeric_fields_survive_final_jsonl_and_auth_diagnostics_endpoint
     monkeypatch.setattr(app_ui, "DIAGNOSTICS_ROOT", tmp_path)
 
     class Request:
+        headers = {"content-type": "application/json"}
         def __init__(self, payload): self.payload = payload
         async def json(self): return self.payload
 
