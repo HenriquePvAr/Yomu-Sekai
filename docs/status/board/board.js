@@ -394,10 +394,6 @@ window.BOARD = {
         {
           "label": "auth_ui.js",
           "path": "static/auth_ui.js"
-        },
-        {
-          "label": "login-lua-rubra.gif",
-          "path": "docs/assets/videos/login-lua-rubra.gif"
         }
       ]
     },

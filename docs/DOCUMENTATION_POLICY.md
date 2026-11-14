@@ -38,7 +38,6 @@ corrigido. Não se preserva silenciosamente uma afirmação obsoleta.
 | `docs/*.md` (temas específicos) | Aprofundamento por assunto | Quem mexe naquele subsistema |
 | [`docs/architecture/clean_strategy.md`](architecture/clean_strategy.md) | Fluxo atual de limpeza, reconstrução e diagramação | Quem muda máscara, preenchimento, portões de reconstrução ou render |
 | [`docs/README.md`](README.md#estado-resumido-do-produto) | Resumo do estado do produto e da evidência | Quem fecha integração ou muda nível de evidência |
-| [`docs/DOCUMENTATION_AUDIT.md`](DOCUMENTATION_AUDIT.md) | Registro de auditoria (histórico) | Quem executa uma auditoria de documentação |
 | Relatórios de missão/auditoria | Evidência técnica ligada à tarefa | Remova do repositório quando obsoleta e substituída; mantenha no texto apenas fatos úteis e verificáveis |
 | `README.md` (raiz) | Visão geral curta + links | Quem muda o posicionamento do projeto |
 | `CLAUDE.md` | Contrato permanente para agentes | Somente por decisão explícita |
@@ -298,7 +297,7 @@ heartbeat, fail-closed.
 
 Usar caminhos canônicos e estáveis. Nunca criar variações como
 `guia_final_v2_novo_agora.md`. Atualizar o arquivo existente; se for necessário arquivar,
-mover deliberadamente e registrar em [`DOCUMENTATION_AUDIT.md`](DOCUMENTATION_AUDIT.md).
+mover deliberadamente e registrar no commit.
 
 Documentação histórica com valor **não é apagada sem justificativa registrada**.
 
@@ -335,5 +334,4 @@ mecanismo limpo no repositório.
 ---
 
 Ver também: [Documentação Técnica](technical/DOCUMENTACAO_TECNICA.md) ·
-[Guia do Usuário](user/GUIA_DO_USUARIO.md) · [Índice](README.md) ·
-[Auditoria](DOCUMENTATION_AUDIT.md)
+[Guia do Usuário](user/GUIA_DO_USUARIO.md) · [Índice](README.md)

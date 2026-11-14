@@ -28,7 +28,6 @@ flowchart LR
 | 🧑‍🎨 **Scan, tradutor, editor ou testador da Beta** | [**Guia do Usuário**](user/GUIA_DO_USUARIO.md) |
 | 🛠️ **Desenvolvedor, mantenedor ou suporte técnico** | [**Documentação Técnica**](technical/DOCUMENTACAO_TECNICA.md) |
 | 🤖 **Agente automatizado (Claude/Codex) trabalhando no repositório** | [`CLAUDE.md`](../CLAUDE.md) + [Política de Documentação](DOCUMENTATION_POLICY.md) |
-| 📋 **Auditando a documentação** | [Auditoria de Documentação](DOCUMENTATION_AUDIT.md) |
 
 ---
 
@@ -43,7 +42,6 @@ RAM/VRAM, tempo do capítulo e limites ainda não homologados de requisitos mín
 | [Saídas e artefatos](OUTPUT_ARTIFACTS.md) | Perfis Automático/QC Profissional, paths, manifests e distinção entre job, run e artifact. |
 | [Documentação Técnica](technical/DOCUMENTACAO_TECNICA.md) | Arquitetura, processos, estados, pipeline, segurança, testes, comandos, dívida técnica. |
 | [Política de Documentação](DOCUMENTATION_POLICY.md) | Quando e como a documentação deve ser atualizada junto com o código. |
-| [Auditoria de Documentação](DOCUMENTATION_AUDIT.md) | O que foi verificado, o que estava desatualizado e o que continua em aberto. |
 | [README do projeto](../README.md) | Visão geral curta e início rápido. |
 | [Estado do produto no board](status/board/index.html) | Estado operacional por evidência; um estado local não significa publicação. |
 
@@ -78,17 +76,10 @@ RAM/VRAM, tempo do capítulo e limites ainda não homologados de requisitos mín
 
 ### PSD e saídas profissionais
 
-- [M15 — matriz de compatibilidade PSD](PSD_COMPATIBILITY_MATRIX.md) — evidência física Photoshop/Photopea; cross-editor round-trip ainda não executado
-- [M17 — performance e tamanho PSD](PSD_PERFORMANCE_REPORT.md) — medições do job existente e estimativas separadas
 
 ### Qualidade
 
 - [Qualidade e validação](QUALITY_AND_VALIDATION.md) — gates, fallbacks, retries, estados terminais e riscos abertos
-- [M18.5 — hardening de qualidade de tradução](TRANSLATION_QUALITY_HARDENING.md) — guards determinísticos, retry/re-score e limitação semântica conhecida
-- [M16 — replay offline de qualidade](M16_TRANSLATION_QUALITY_REPLAY.md) — cobertura e limitações do replay read-only
-- [M20 — cobertura de tradução e integridade CLEAN](M20_RC_BLOCKER_HOTFIX.md) — ordem de reservation/retry, falhas sistêmicas e remoção independente do texto-fonte
-- [Quality Freeze](QUALITY_FREEZE.md) — o que está congelado, a evidência e como sair do freeze
-- [Taxonomia semântica e auditoria linguística](architecture/SEMANTIC_CLASSIFICATION_AUDIT.md)
 - Pesquisa (fora do produto): [Gemini safe fallback v2](research/GEMINI_SAFE_FALLBACK_V2.md), [metadados de Clean seguro](research/SAFE_CLEAN_QUALITY_METADATA_V1.md), [contrato de candidatos de treino](research/TRAINING_CANDIDATE_CONTRACT_V1.md)
 
 ### Comunidade, autenticação e armazenamento
@@ -131,8 +122,6 @@ RAM/VRAM, tempo do capítulo e limites ainda não homologados de requisitos mín
 Documentos de auditoria pontual, preservados como registro. Descrevem o estado no momento
 em que foram escritos e **não** substituem os documentos primários:
 
-- [Auditoria funcional — fontes e submissão](FULL_FUNCTIONAL_AUDIT.md)
-- [Taxonomia semântica e auditoria linguística](architecture/SEMANTIC_CLASSIFICATION_AUDIT.md)
 - [Plano de rollback da migração de auth](../scripts/auth-migration/rollback-plan.md)
 
 ---

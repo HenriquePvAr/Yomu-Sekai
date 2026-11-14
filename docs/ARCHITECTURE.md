@@ -621,9 +621,6 @@ Detalhe completo em [Fila de worker persistente](WORKER_QUEUE.md) e
 
 O pipeline separa sucesso técnico de aprovação de qualidade. Um PDF pode existir e a execução terminar como `review_required`. Consulte [Qualidade e validação](QUALITY_AND_VALIDATION.md) para as regras e [Troubleshooting](TROUBLESHOOTING.md) para diagnóstico.
 
-O congelamento atual de comportamento de produção está registrado em
-[Quality Freeze](QUALITY_FREEZE.md).
-
 ## Retenção do histórico de traduções
 
 `translation_requests` preserva requests terminais mesmo quando sua licença ou

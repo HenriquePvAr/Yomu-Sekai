@@ -691,7 +691,6 @@ Arquivos legados ausentes, vazios ou inválidos são lidos como código desconhe
   execução real** no E2E de #84 (72 páginas, RapidOCR + DeepL): `seam_suspected: 0` em 97
   reconstruções aceitas — nenhum falso positivo em produção — e `flat_patch: 0`, com a
   página 25 traduzida e a arte íntegra. Nenhuma costura óbvia foi classificada como limpa.
-  Ver o registro da Fase D em [DOCUMENTATION_AUDIT.md](DOCUMENTATION_AUDIT.md).
 - `SEMANTIC-RUNTIME-001` (**fechado offline em #84F1** — descoberto no E2E real de #84): a
   severidade `review` do validador semântico de #82 **não chegava à aceitação do candidato
   no runtime**. O E2E real produziu `ISSO NÃO TEM NADA A VER COM UM RATO DO SLLM COMO EU.`
@@ -869,9 +868,7 @@ Arquivos legados ausentes, vazios ou inválidos são lidos como código desconhe
   baseline preservada. Ver
   [Desenvolvimento](DEVELOPMENT.md#opencv-contrato-e-inconsistência-conhecida).
 
-O [Quality Freeze](QUALITY_FREEZE.md) continua nominalmente ativo, mas a reescrita da limpeza
-de 2026-10-23/24 mudou o comportamento de produção e foi medida por harness de
-desenvolvedor, não pelo E2E de produto que o freeze exige; ver o estado em
-[Quality Freeze](QUALITY_FREEZE.md#estado-em-2026-10-24).
+A reescrita da limpeza de 2026-10-23/24 mudou o comportamento de produção e foi medida por
+harness de desenvolvedor, não por E2E de produto.
 
 Para investigar uma execução sem apagar evidências, consulte [Troubleshooting](TROUBLESHOOTING.md).

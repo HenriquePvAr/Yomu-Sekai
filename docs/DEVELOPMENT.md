@@ -365,7 +365,7 @@ próprio gate do RapidOCR recusa a página, a falha é fechada e contabilizada
 | --- | --- |
 | Baseline de empacotamento | **PRONTA** — pipeline congelado, manifests pinados, evidência de E2E registrada |
 | Perfil de runtime Beta | **DEFINIDO E PROVADO EM AMBIENTE LIMPO** — `requirements/requirements-beta.txt`, uma única distribuição de OpenCV, `pip check` limpo, preflight verde, E2E real executado (job `902b149e`: 35/35 páginas, PDF válido, zero Paddle carregado) |
-| Baseline de qualidade sob o runtime Beta | **NÃO PRESERVADA** — o E2E não reproduziu P28/P31/P32; ver [Quality Freeze](QUALITY_FREEZE.md) |
+| Baseline de qualidade sob o runtime Beta | **NÃO PRESERVADA** — o E2E não reproduziu P28/P31/P32 |
 | Instalação limpa em Windows | **Validada por beta tester, informado pelo dono** — versão `v0.9.1-beta.18`; data: não informada |
 | Instalador para usuário final | **IMPLEMENTADO** — `packaging/komyst.spec`, `packaging/Komyst.iss` e `tools/build_installer.py` geram `Komyst-<versão>-Setup-x64.exe`; **validado por beta tester, informado pelo dono** — versão `v0.9.1-beta.18`; data: não informada |
 | Licença Beta | **IMPLEMENTADA** — autorização fail-closed em `komyst/auth/beta_license.py`, integrada ao início/retomada; **validado por beta tester, informado pelo dono** — versão `v0.9.1-beta.18`; data: não informada |

@@ -173,5 +173,4 @@ rede conforme o adapter e a configuração permitirem.
 
 Este documento não declara pentest, homologação de qualquer site, cobertura de todos os leitores
 ou sucesso de smoke externo. Em particular, a compatibilidade real de uma fonte deve ser verificada
-somente em smoke autorizado e isolado, após os testes herméticos pertinentes. Para o estado de
-cobertura e limitações funcionais, consulte [Auditoria funcional](FULL_FUNCTIONAL_AUDIT.md).
+somente em smoke autorizado e isolado, após os testes herméticos pertinentes.

@@ -2,9 +2,8 @@
 
 > **Base verificada:** `5f482ce1` (branch `main`) · **Revisado em:** 2026-10-24
 
-Este documento descreve a organização atual do código e dos dados versionados. A auditoria
-linha a linha da raiz e o mapa de consumidores estão em [ROOT_STRUCTURE_AUDIT.md](ROOT_STRUCTURE_AUDIT.md)
-e [ROOT_DEPENDENCY_MAP.md](ROOT_DEPENDENCY_MAP.md). `main` é a linha de integração, não uma
+Este documento descreve a organização atual do código e dos dados versionados.
+`main` é a linha de integração, não uma
 release: antes de iniciar trabalho, confirme a branch e o estado local com Git e consulte o
 Kanban. Não use um checkout antigo nem mova arquivos só para reduzir contagens.
 
@@ -60,8 +59,7 @@ O `.mcp.json` local também permanece fora do Git.
 ## Arquivos que permanecem na raiz
 
 Os 22 arquivos rastreados diretamente na raiz têm contratos convencionais, de configuração,
-bootstrap, instalação ou compatibilidade. A lista completa, consumidores e riscos está na
-[auditoria](ROOT_STRUCTURE_AUDIT.md). Em particular:
+bootstrap, instalação ou compatibilidade. Em particular:
 
 - `README.md`, `CHANGELOG.md`, `CONTRIBUTING.md`, `AGENTS.md`, `CLAUDE.md`, `.gitignore`,
   `.gitattributes`, `.env.example` e `THIRD_PARTY_NOTICES.txt` são entradas/documentação ou
@@ -95,8 +93,6 @@ bootstrap, instalação ou compatibilidade. A lista completa, consumidores e ris
 | Worker persistente | `worker_service.py` | `komyst.runtime.worker_service` |
 | Downloader histórico | `down.py` | `komyst.download.down` |
 | GUI histórica | `main.py` | `komyst.commands.legacy_gui` |
-
-As razões e verificações de identidade de módulo constam na [matriz de dependências](ROOT_DEPENDENCY_MAP.md).
 
 ## Testes, dependências e build
 

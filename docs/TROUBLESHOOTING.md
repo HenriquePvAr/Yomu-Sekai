@@ -223,8 +223,7 @@ volte ao Komyst e entre com e-mail e senha. A confirmação não cria sessão au
 
 O editor pode substituir uma fonte não instalada e exibir uma advertência. Isso não significa
 que a Type Layer foi rasterizada: o texto continua editável e a fonte pode ser escolhida no
-Photoshop/Photopea. Preserve o PSD original e não rasterize texto para contornar o aviso. Veja
-[a matriz de compatibilidade](PSD_COMPATIBILITY_MATRIX.md).
+Photoshop/Photopea. Preserve o PSD original e não rasterize texto para contornar o aviso.
 
 ## A análise da fonte falhou
 

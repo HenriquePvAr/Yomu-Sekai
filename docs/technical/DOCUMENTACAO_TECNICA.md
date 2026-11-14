@@ -1932,7 +1932,7 @@ delas modifica PDFs, páginas finais, revisões ou publicações, e nenhuma cham
 tradução. `audit_registry.py` resolve artefatos por **identidade** (diretório de saída +
 `revision_id`), nunca por glob, mtime, título ou heurística de "mais recente"; o hash do
 relatório carregado é verificado contra o registro, então arquivo velho ou trocado falha
-fechado. Detalhes em [`SEMANTIC_CLASSIFICATION_AUDIT.md`](../architecture/SEMANTIC_CLASSIFICATION_AUDIT.md).
+fechado.
 
 O denominador de qualidade segue a taxonomia semântica, não apenas o rótulo visual legado.
 `speech`, `narration`, `unknown` e `decorative` podem ser story text quando o conteúdo é
@@ -3875,8 +3875,7 @@ Guia mais amplo: [`docs/TROUBLESHOOTING.md`](../TROUBLESHOOTING.md).
 
 Registro do estado anterior à conclusão das missões M16/M17. É mantido
 para contexto histórico; estados de PSD, Auth, YK, artifacts e gates abaixo não descrevem o
-produto presente quando conflitarem com seções posteriores ou com [M15 — compatibilidade PSD](../PSD_COMPATIBILITY_MATRIX.md),
-[M17 — performance PSD](../PSD_PERFORMANCE_REPORT.md) e [Saídas e artefatos](../OUTPUT_ARTIFACTS.md).
+produto presente quando conflitarem com seções posteriores ou com [Saídas e artefatos](../OUTPUT_ARTIFACTS.md).
 Não usar este snapshot como status atual.
 
 #### Quality Review (R1–R4) — IMPLEMENTADO
@@ -4222,5 +4221,4 @@ verificado por `tests/test_yk_ads_foundation.py`.
 
 - [Guia do Usuário](../user/GUIA_DO_USUARIO.md) — como usar o Komyst
 - [Política de Documentação](../DOCUMENTATION_POLICY.md) — quando e como atualizar estes documentos
-- [Auditoria de Documentação](../DOCUMENTATION_AUDIT.md) — o que foi verificado e o que ficou em aberto
 - [Índice completo da documentação](../README.md)

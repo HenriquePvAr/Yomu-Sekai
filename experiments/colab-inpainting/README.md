@@ -20,4 +20,4 @@ The current Colab runtime liveness is not observable from this Codex session bec
 
 The Big-LaMa checkpoint size/hash are pinned. Sanster's model release links to `dreMaz/AnimeMangaInpainting`, whose model card declares MIT; the exact training-data provenance is not independently documented here. Keep this experiment research-only, do not package weights into Komyst, and retain the owner acknowledgment gate. Preserve safety/composition checks and human visual review. Never use private Komyst pages in the synthetic dataset.
 
-See `../../docs/research/colab-clean-models/MASTER_BENCHMARK_STATE.md` for the current evidence and ranking status.
+The benchmark state document was removed from the tree; see the git history for the evidence and ranking status.

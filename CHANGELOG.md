@@ -28,8 +28,7 @@ This file records source-level changes; it is not a release/tag log.
 ## 0.9.1 quality-freeze consolidation — 2026-09-25 (source-level, untagged)
 
 Consolidation of the Beta 0.9.1 quality-freeze work. No pinned image/CV dependency changed;
-the production behavior contract of the freeze is preserved. See
-[`docs/QUALITY_FREEZE.md`](docs/QUALITY_FREEZE.md) for the validated-state addendum.
+the production behavior contract of the freeze is preserved.
 
 ### Fixed — pipeline & source
 - Comix dynamic materialization: bounded resolver retry (3 passes, per-page budget 25s) for
