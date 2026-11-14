@@ -21,6 +21,23 @@ def _env_str(name: str, default: str = "") -> str:
     return value
 
 
+_PROJECT_ENV_LOADED = False
+
+
+def _load_project_environment_once() -> None:
+    """Apply the project's .env (never over existing process values), at most once per process."""
+    global _PROJECT_ENV_LOADED
+    if _PROJECT_ENV_LOADED:
+        return
+    _PROJECT_ENV_LOADED = True
+    try:
+        from komyst.runtime.local_environment import load_local_environment
+
+        load_local_environment()
+    except Exception:  # noqa: BLE001 - a malformed .env is reported by settings, not by path lookup
+        pass
+
+
 def default_user_data_root() -> Path:
     """Return the writable per-user root for runtime state."""
 
@@ -30,6 +47,13 @@ def default_user_data_root() -> Path:
             raise RuntimeError("hermetic_test_runtime_root_required")
         return Path(isolated).expanduser() / "user_data"
     configured = _env_str("KOMYST_USER_DATA_ROOT")
+    if not configured:
+        # The launcher and the worker resolve this folder before importing settings, which is
+        # what normally loads the project .env. Without this, a process started with no
+        # KOMYST_USER_DATA_ROOT in its environment used %LOCALAPPDATA% while the UI used the
+        # .env value, so work queued by one was never seen by the other.
+        _load_project_environment_once()
+        configured = _env_str("KOMYST_USER_DATA_ROOT")
     if configured:
         return Path(configured).expanduser()
     local_app_data = _env_str("LOCALAPPDATA")
