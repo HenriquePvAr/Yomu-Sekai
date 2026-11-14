@@ -9,7 +9,7 @@ def test_bulk_delete_is_partial_and_delegates_to_single_item_primitive():
     bridge = UiBridge.__new__(UiBridge)
     calls = []
 
-    def delete_one(item, *, delete_files, confirm):
+    def delete_one(item, *, delete_files, confirm, owner_id=None):
         calls.append((item, delete_files, confirm))
         if item == "bad":
             raise ValueError("local_artifact_published")

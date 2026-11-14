@@ -158,6 +158,13 @@ persiste cookies, headers privados, URL completa de recurso ou pixels de canvas.
 Perfis reutilizáveis do fallback universal são dicas locais opt-in, por host exato e com validade
 limitada. Eles não concedem acesso, não elevam score e não substituem nova validação/observação.
 
+## Servidor local
+
+O servidor em 127.0.0.1 valida `Host` (apenas `127.0.0.1:PORTA` e `localhost:PORTA`) e recusa
+`Origin` externo em requisições que mudam estado e em WebSocket/Socket.IO; rotas de telemetria
+exigem `application/json`; atualização exige usuário autenticado; exclusão de histórico e assets de
+editor são escopados ao dono/job. Detalhes em `docs/technical/DOCUMENTACAO_TECNICA.md` §23.
+
 ## Testes sem rede
 
 `conftest.py` instala a guarda offline antes da importação dos módulos de teste. Ela bloqueia

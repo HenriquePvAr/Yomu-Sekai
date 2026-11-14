@@ -38,6 +38,7 @@ from komyst.community.community_auth import (
     RequestPrincipal,
     SESSION_COOKIE_NAME,
     configured_bind_host,
+    external_bind_is_explicitly_allowed,
     get_auth_provider,
     validate_bind_security,
 )
@@ -215,6 +216,64 @@ class SecurityHeadersMiddleware:
             await send(message)
 
         await self.app(scope, receive, secured_send)
+
+
+def _local_hosts() -> frozenset[str]:
+    """Host header values that legitimately address this local UI server."""
+    return frozenset({f"127.0.0.1:{APP_PORT}", f"localhost:{APP_PORT}"})
+
+
+def _origin_is_local(origin: str) -> bool:
+    parsed = urllib_parse.urlsplit(str(origin or ""))
+    return parsed.scheme == "http" and parsed.netloc.lower() in _local_hosts()
+
+
+class LocalRequestGuardMiddleware:
+    """Refuse DNS-rebinding hosts and cross-site state changes on the loopback server.
+
+    Requests without an Origin header (curl, urllib, tests, same-origin GET) pass; any
+    Origin that is present on a mutating request or a Socket.IO/WebSocket handshake
+    must be this server itself.  The Host allow-list is skipped only when the operator
+    explicitly opted into an external bind.
+    """
+
+    _MUTATING = frozenset({"POST", "PUT", "PATCH", "DELETE"})
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        kind = scope.get("type")
+        if kind not in {"http", "websocket"}:
+            await self.app(scope, receive, send)
+            return
+        headers = {k.decode("latin-1").lower(): v.decode("latin-1") for k, v in scope.get("headers") or []}
+        reason = ""
+        if not external_bind_is_explicitly_allowed() and headers.get("host", "").lower() not in _local_hosts():
+            reason = "host_not_allowed"
+        elif "origin" in headers and not _origin_is_local(headers["origin"]) and (
+            kind == "websocket"
+            or scope.get("method") in self._MUTATING
+            or str(scope.get("path") or "").startswith("/_nicegui_ws")
+        ):
+            reason = "origin_not_allowed"
+        if not reason:
+            await self.app(scope, receive, send)
+            return
+        if kind == "websocket":
+            await send({"type": "websocket.close", "code": 1008, "reason": reason})
+            return
+        status = 400 if reason == "host_not_allowed" else 403
+        await JSONResponse({"detail": reason}, status_code=status)(scope, receive, send)
+
+
+def _require_json_request(request: Request) -> None:
+    """Telemetry bodies must be real JSON: text/plain is a CORS-simple cross-site form."""
+    if not str(request.headers.get("content-type") or "").lower().startswith("application/json"):
+        raise HTTPException(status_code=415, detail="json_required")
+    origin = request.headers.get("origin")
+    if origin is not None and not _origin_is_local(origin):
+        raise HTTPException(status_code=403, detail="origin_not_allowed")
 
 
 class MutationRateLimitMiddleware:
@@ -602,6 +661,7 @@ app.add_middleware(
     StructuredRequestAuditMiddleware,
     destination=configured_request_audit_destination(ROOT, os.environ),
 )
+app.add_middleware(LocalRequestGuardMiddleware)  # outermost: runs before everything else
 app.add_static_files("/static", STATIC_DIR)
 app.include_router(create_community_router(COMMUNITY, AUTH))
 app.include_router(create_admin_community_router(COMMUNITY, AUTH))
@@ -994,6 +1054,7 @@ async def desktop_client_state(request: Request) -> JSONResponse:
     """Accept only sanitized client-state diagnostics in desktop development mode."""
     if os.getenv("KOMYST_RUNTIME_MODE") != "desktop":
         raise HTTPException(status_code=404, detail="not_found")
+    _require_json_request(request)
     body = await request.json()
     allowed = {"pending", "polling", "lastStatus", "consumed", "authMode", "sessionState", "idPresent", "ageSeconds", "error", "errorStatus"}
     snapshot: dict[str, Any] = {}
@@ -1942,6 +2003,7 @@ def _run_update_download(token: str, manifest: update_manifest.UpdateManifest, c
 @app.post("/api/update/download")
 def api_update_download(request: Request) -> JSONResponse:
     """Start a verified Windows installer download without blocking the UI thread."""
+    _ui_principal(request)
     correlation_id = _update_correlation_id(request)
     stage = "request_received"
     _append_diagnostic_log("routes_current.jsonl", "UPDATE_DOWNLOAD_REQUEST_RECEIVED", correlation_id=correlation_id, stage=stage, method="POST", route="/api/update/download")
@@ -2018,7 +2080,8 @@ def api_update_download_status(token: str = "") -> JSONResponse:
 
 
 @app.post("/api/update/download/cancel")
-def api_update_download_cancel(token: str = "") -> JSONResponse:
+def api_update_download_cancel(request: Request, token: str = "") -> JSONResponse:
+    _ui_principal(request)
     with _UPDATE_DOWNLOADS_LOCK:
         state = _UPDATE_DOWNLOADS.get(token)
         if not state:
@@ -2028,8 +2091,9 @@ def api_update_download_cancel(token: str = "") -> JSONResponse:
 
 
 @app.post("/api/update/install")
-def api_update_install(payload: dict[str, Any] = Body(...)) -> JSONResponse:
+def api_update_install(request: Request, payload: dict[str, Any] = Body(...)) -> JSONResponse:
     """Start only the installer previously staged by ``/api/update/download``."""
+    _ui_principal(request)
     token = payload.get("handoff_token") if isinstance(payload, dict) else None
     if not isinstance(token, str) or not token:
         raise HTTPException(status_code=400, detail={"code": "invalid_handoff_token"})
@@ -2436,6 +2500,8 @@ def api_human_translation_refinement_decision(
         request, str(payload.get("job_id") or ""), mutate=True)
     result = dict(payload.get("result") or {})
     request_fields = dict(result.get("request") or {})
+    if str(request_fields.get("job_id") or "") != str(payload.get("job_id") or ""):
+        raise HTTPException(status_code=400, detail="refinement_job_mismatch")
     option = str(payload.get("option") or "")
     if option not in {"natural", "keep_current"}:
         raise HTTPException(status_code=422, detail="refinement_selection_invalid")
@@ -2507,7 +2573,7 @@ def api_human_translation_font_candidate_preview(
 ) -> FileResponse:
     _owned_ui_job(request, job_id)
     try:
-        path = BRIDGE.human_typography_candidate_asset(asset)
+        path = BRIDGE.human_typography_candidate_asset(asset, job_id)
     except ValueError as exc:
         raise _audit_error(exc) from exc
     return FileResponse(path, media_type="image/png")
@@ -2622,9 +2688,9 @@ def api_human_mask_asset(
 ) -> FileResponse:
     _owned_ui_job(request, job_id)
     try:
-        path = BRIDGE.human_mask_editor_asset(asset)
+        path = BRIDGE.human_mask_editor_asset(asset, job_id)
     except ValueError as exc:
-        raise _audit_error(exc) from exc
+        raise HTTPException(status_code=404, detail="not_found") from exc
     return FileResponse(path, media_type="image/png")
 
 
@@ -3158,11 +3224,12 @@ def api_resume_dismiss(
 @app.post("/api/ui/source-trace")
 async def api_source_trace(request: Request) -> dict[str, bool]:
     """Persist a sanitized source-action trace, starting at the click."""
+    _require_json_request(request)
     payload = await request.json()
     if not isinstance(payload, dict):
         raise HTTPException(status_code=400, detail="invalid_trace")
     trace_id = str(payload.get("trace_id") or "")
-    if not trace_id or len(trace_id) > 80:
+    if not re.fullmatch(r"[A-Za-z0-9._-]{1,80}", trace_id) or ".." in trace_id:
         raise HTTPException(status_code=400, detail="invalid_trace_id")
     safe = {"timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"), "trace_id": trace_id, "event": str(payload.get("event") or "SOURCE_UI_CLICK")[:80]}
     for key in ("status", "reason_code", "stage", "authenticated", "license_ready", "source_type", "policy_present", "policy_status", "all_submitted_sources_authorized", "guard_result", "route", "ready", "duration_ms", "sequence", "elapsed_ms", "sync_state", "bootstrap_ready", "wallet_ready", "auth_ready", "review_state", "form_valid", "button_enabled", "block_reason", "request_count", "error_code", "node_instance_id", "target_node_id", "closest_start_button_node_id", "is_connected", "disabled", "aria_disabled", "event_phase", "default_prevented", "pointer_id", "trusted", "active_element_node_id", "document_has_focus", "render_generation", "same_node_down_up", "mutation_type", "attribute", "start_button_present", "start_button_node_id", "child_count", "pointer_capture_used", "top_element", "client_x", "client_y", "target_tag", "target_start_button_match", "current_start_button_node_id", "current_button_is_connected", "computed_pointer_events", "computed_visibility", "computed_display", "result", "click_seen", "mutation_count", "audit_event_count", "audit_counts", "audit_buffer", "start_in_flight", "dry_run", "generation"):
@@ -3170,6 +3237,8 @@ async def api_source_trace(request: Request) -> dict[str, bool]:
         if isinstance(value, (str, int, bool, float)):
             safe[key] = value
     path = DIAGNOSTICS_ROOT / f"source_{trace_id}.jsonl"
+    if path.resolve().parent != DIAGNOSTICS_ROOT.resolve():
+        raise HTTPException(status_code=400, detail="invalid_trace_id")
     with path.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(safe, ensure_ascii=False, separators=(",", ":")) + "\n")
     return {"ok": True}
@@ -3183,6 +3252,7 @@ async def api_control_plane_trace(request: Request) -> dict[str, bool]:
     authentication/device-registration flow.  Credentials, request bodies and
     cryptographic material are not accepted fields.
     """
+    _require_json_request(request)
     payload = await request.json()
     if not isinstance(payload, dict):
         raise HTTPException(status_code=400, detail="invalid_trace")
@@ -3356,14 +3426,17 @@ def api_history_delete(
             payload.get("local_artifact_id") or payload.get("record_id") or "")
         # A local history card is not necessarily a live store job (legacy/discovered
         # cards have no job row), so authenticate the owner without requiring one.
-        _ui_principal(request, mutate=True)
+        principal = _ui_principal(request, mutate=True)
         return BRIDGE.delete_local_artifact(
             record_id,
             delete_files=bool(payload.get("delete_files", False)),
             confirm=str(payload.get("confirmation") or payload.get("confirm") or ""),
+            owner_id=principal.owner_id,
         )
     except ValueError as exc:
         code = str(exc)
+        if code == "local_artifact_not_found":
+            raise HTTPException(status_code=404, detail="not_found") from exc
         messages = {
             "local_artifact_not_found": "Este capítulo não foi encontrado no histórico local.",
             "local_artifact_in_use": "Este capítulo está em uso por um processamento ativo.",
@@ -3385,7 +3458,7 @@ def api_history_bulk_delete(
 ) -> dict[str, Any]:
     """Delete selected local history cards with per-item safe outcomes."""
     try:
-        _ui_principal(request, mutate=True)
+        principal = _ui_principal(request, mutate=True)
         raw_ids = payload.get("local_artifact_ids") or payload.get("record_ids") or []
         if not isinstance(raw_ids, list):
             raise ValueError("local_artifact_ids_invalid")
@@ -3393,6 +3466,7 @@ def api_history_bulk_delete(
             [str(item) for item in raw_ids],
             delete_files=bool(payload.get("delete_files", False)),
             confirm=str(payload.get("confirmation") or payload.get("confirm") or ""),
+            owner_id=principal.owner_id,
         )
     except ValueError as exc:
         code = str(exc)
