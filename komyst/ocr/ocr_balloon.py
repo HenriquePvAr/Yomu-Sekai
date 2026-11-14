@@ -12993,6 +12993,66 @@ def _component_continues_beyond_line(gray, component, origin, line_limit, median
     return bool(total and np.count_nonzero(connected & ~allowed) >= 0.3 * total)
 
 
+def _component_continues_beyond_line_cached(gray, labels, label, stat, origin, line_limit, median,
+                                            contrast, cache):
+    """Same answer as ``_component_continues_beyond_line`` for one label of ``labels``, faster.
+
+    The original relabels a near-page window for every component. Here the ink at a given level
+    is labelled once over the window that covers every component of the region (cached by level),
+    and the pixel counts come from ``bincount``. When a connected region found this way reaches
+    past the window the original would have used, its count could differ there, so that one
+    component falls back to the original computation: the result is identical.
+    """
+    if 118 < median < 138:
+        return False
+    cx, cy = int(stat[cv2.CC_STAT_LEFT]), int(stat[cv2.CC_STAT_TOP])
+    cw, ch = int(stat[cv2.CC_STAT_WIDTH]), int(stat[cv2.CC_STAT_HEIGHT])
+    ys, xs = np.nonzero(labels[cy:cy + ch, cx:cx + cw] == label)
+    if not ys.size:
+        return False
+    ys += cy
+    xs += cx
+    ox, oy = origin
+    height, width = gray.shape
+    reach = max(8, int(labels.shape[0]))
+    values = gray[oy + ys, ox + xs].astype(np.float32)
+    offset = max(16.0, contrast * 0.28)
+    if median >= 138:
+        dark = True
+        level = int(math.floor(min(median - offset, (median + float(np.percentile(values, 10))) / 2.0)))
+    else:
+        dark = False
+        level = int(math.ceil(max(median + offset, (median + float(np.percentile(values, 90))) / 2.0)))
+    entry = cache.get((dark, level))
+    if entry is None:
+        wy1, wy2 = max(0, oy - reach), min(height, oy + labels.shape[0] + reach + 1)
+        wx1, wx2 = max(0, ox - reach), min(width, ox + labels.shape[1] + reach + 1)
+        window = gray[wy1:wy2, wx1:wx2]
+        ink = (window <= level) if dark else (window >= level)
+        count, ink_labels, ink_stats, _ = cv2.connectedComponentsWithStats(ink.astype(np.uint8), connectivity=8)
+        allowed = np.asarray(line_limit)[wy1:wy2, wx1:wx2] > 0
+        entry = (wy1, wx1, ink_labels, ink_stats,
+                 np.bincount(ink_labels.ravel(), minlength=count),
+                 np.bincount(ink_labels[~allowed].ravel(), minlength=count))
+        cache[(dark, level)] = entry
+    wy1, wx1, ink_labels, ink_stats, totals, outside = entry
+    seeds = np.unique(ink_labels[oy + ys - wy1, ox + xs - wx1])
+    seeds = seeds[seeds > 0]
+    if not seeds.size:
+        return False
+    # The original's own window around this component.
+    oy1, oy2 = max(0, oy + int(ys.min()) - reach), min(height, oy + int(ys.max()) + reach + 1)
+    ox1, ox2 = max(0, ox + int(xs.min()) - reach), min(width, ox + int(xs.max()) + reach + 1)
+    boxes = ink_stats[seeds]
+    left, top = boxes[:, cv2.CC_STAT_LEFT] + wx1, boxes[:, cv2.CC_STAT_TOP] + wy1
+    right = left + boxes[:, cv2.CC_STAT_WIDTH]
+    bottom = top + boxes[:, cv2.CC_STAT_HEIGHT]
+    if not ((left >= ox1).all() and (top >= oy1).all() and (right <= ox2).all() and (bottom <= oy2).all()):
+        return _component_continues_beyond_line(gray, labels == label, origin, line_limit, median, contrast)
+    total = int(totals[seeds].sum())
+    return bool(total and int(outside[seeds].sum()) >= 0.3 * total)
+
+
 def _glyph_strokes_in_network(network, roi_gray, dark_text, ink_level, background_level,
                               stroke, line_height):
     """Glyph strokes inside a component where letters fused with same-colour art.
@@ -15840,6 +15900,8 @@ def _component_text_mask(img_bgr, group, maximum_mask, strategy="primary"):
         selected = np.zeros_like(foreground)
         line_area = max(1, w * h)
         merged_networks = []
+        accepted_labels = []
+        continuation_cache = {}
         for label in range(1, count):
             area = int(stats[label, cv2.CC_STAT_AREA])
             cw = int(stats[label, cv2.CC_STAT_WIDTH])
@@ -15852,10 +15914,15 @@ def _component_text_mask(img_bgr, group, maximum_mask, strategy="primary"):
                 # art (hatching, a dark area) hide inside it: keep their strokes.
                 merged_networks.append(labels == label)
                 continue
-            if _component_continues_beyond_line(gray, labels == label, (x1, y1), group_limit, median, contrast):
+            if _component_continues_beyond_line_cached(gray, labels, label, stats[label], (x1, y1),
+                                                       group_limit, median, contrast, continuation_cache):
                 continue
-            selected[labels == label] = 255
+            accepted_labels.append(label)
             accepted_components += 1
+        if accepted_labels:
+            lookup = np.zeros(count, dtype=selected.dtype)
+            lookup[accepted_labels] = 255
+            selected = lookup[labels]
         if merged_networks and config.CLEAN_SPLIT_MERGED_GLYPHS and not (118 < median < 138):
             widths = _stroke_widths(selected > 0)
             if widths.size < 8:
