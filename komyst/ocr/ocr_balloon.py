@@ -19812,6 +19812,19 @@ def _expanded_box(box, shape, margin):
     return x1, y1, max(1, x2 - x1), max(1, y2 - y1)
 
 
+def _neutral_ink_family(bgr):
+    """"black" or "white" for a neutral colour, None for anything chromatic or mid-tone."""
+    b, g, r = (float(v) for v in bgr)
+    high, low = max(b, g, r), min(b, g, r)
+    if high - low > 60:
+        return None
+    if high <= 80:
+        return "black"
+    if low >= 185:
+        return "white"
+    return None
+
+
 def extract_original_lettering_profile(img_bgr, group, box):
     """Infer style from the source lettering pixels owned by this region.
 
@@ -19948,7 +19961,17 @@ def extract_original_lettering_profile(img_bgr, group, box):
                     # clusters; the glow's mid-tone is not the ink. When a neutral family clearly
                     # dominates the glyph pixels, the cluster centre only replaces its median if
                     # it agrees with it (it exists to separate an outline, not to recolour).
-                    if color_family in {"white", "black"} and best_ratio > 0.0:
+                    fill_family = _neutral_ink_family(centers[fill_k])
+                    outline_family = _neutral_ink_family(centers[outline_k])
+                    if (color_family in {"white", "black"} and fill_family
+                            and fill_family != color_family and outline_family == color_family):
+                        # A thick outline can outnumber the ink it surrounds (dark lettering with
+                        # a wide white outline on a light page): the majority colour is then the
+                        # outline, and taking it as the ink inverted the lettering (white text
+                        # with a white "outline" drawn invisibly on the light art).
+                        color_family = fill_family
+                        dominant_bgr = centers[fill_k]
+                    elif color_family in {"white", "black"} and best_ratio > 0.0:
                         agrees = float(np.max(np.abs(centers[fill_k] - dominant_bgr))) <= 45.0
                         if agrees:
                             dominant_bgr = centers[fill_k]
