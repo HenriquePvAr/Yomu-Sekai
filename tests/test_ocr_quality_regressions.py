@@ -5703,3 +5703,10 @@ class RenderedRescueAndSfxCoverageTests(unittest.TestCase):
                 "translation": ""}
         items = [self._rendered("R1", (140, 534, 430, 44)), item]
         self.assertEqual(len(_incomplete_speech_region_coverage(self._state(items))), 1)
+
+    def test_known_sfx_stacked_near_balloon_is_not_untranslated_speech(self):
+        sfx = OCRQualityRegressionTests._unrendered(
+            "S1", (138, 591, 432, 43), "CLUNK-.", classification="sfx",
+            state="skipped_with_reason")
+        items = [self._rendered("R1", (140, 534, 430, 44)), sfx]
+        self.assertEqual(_incomplete_speech_region_coverage(self._state(items)), [])

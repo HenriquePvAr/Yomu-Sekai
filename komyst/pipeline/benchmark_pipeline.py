@@ -5940,6 +5940,7 @@ def _incomplete_speech_region_coverage(states):
             item
             for item in items
             if not _item_is_rendered(item)
+            and not _item_is_known_sfx(item)
             and (
                 _region_source_lexical_words(item)
                 or _item_is_partially_recognized(item)
