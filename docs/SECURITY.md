@@ -1,6 +1,6 @@
 # Segurança e limites de confiança
 
-> **Revisado em:** 2026-10-25 · **Base verificada:** `fb8875e`.
+> **Revisado em:** 2026-11-13 · **Base verificada:** `969b4e9`.
 
 Este documento descreve as fronteiras implementadas no Komyst e, igualmente importante,
 o que elas **não** garantem. O projeto lida com URLs, páginas renderizadas, imagens e pastas
@@ -168,6 +168,18 @@ de rede ficam fora do padrão `test_*.py` e exigem opt-ins explícitos.
 Essa guarda é uma proteção de desenvolvimento e CI, não uma política de rede para uma execução de
 produção. Uma execução solicitada pelo usuário fora da suíte de testes pode abrir navegador e
 rede conforme o adapter e a configuração permitirem.
+
+## Endurecimento do frontend e de tokens (IMPLEMENTADO)
+
+- CSP sem `'unsafe-inline'` em `script-src`: scripts inline de respostas HTML são permitidos
+  apenas pelo hash SHA-256 calculado por resposta; `img-src` não aceita `https:` genérico.
+- `escapeHtml`/`escapeAttr` escapam aspas simples e duplas; comentários são gravados crus e
+  escapados só na saída.
+- Iframes de anúncio usam `sandbox` (scripts e popups, sem same-origin).
+- Token OAuth do Google Drive: DPAPI no Windows (`KDPAPI1:`); fora do Windows, ou se o DPAPI
+  falhar, JSON em claro com modo 0600 (limitação conhecida).
+- O worker de pesquisa não tem caminho padrão para o arquivo do webhook do Discord:
+  `KOMYST_DISCORD_WEBHOOK_FILE` deve ser definido explicitamente.
 
 ## O que não foi afirmado aqui
 

@@ -4008,6 +4008,21 @@ a política: HTTPS obrigatório, caminho `/ad/`, sem traversal/credencial/porta,
 `is_allowed_ad_navigation` aceita só same-origin ou o redirect legado→canônico. A CSP
 `frame-src` (SecurityHeadersMiddleware) allow-lista exatamente esses hosts (sem wildcard).
 A superfície nativa (`NativeAdSurface`) renderiza fora da CSP; o iframe web é o fallback.
+O iframe web recebe `sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox"` (sem
+`allow-same-origin` nem navegação do topo).
+
+**CSP e escape no frontend (IMPLEMENTADO).** `script-src 'self'` sem `'unsafe-inline'`: o
+`SecurityHeadersMiddleware` (`komyst/ui/app.py`) bufferiza respostas `text/html`, calcula o
+SHA-256 de cada `<script>` inline (bootstraps do NiceGUI/shell e `ui/auth_callback.html`) e os
+acrescenta ao `script-src` daquela resposta; atributos `on*=` inline não são permitidos.
+`img-src` é `'self' data: blob:` mais a origem Supabase configurada (sem `https:` genérico).
+`escapeHtml` (`static/komyst_ui.js`) escapa `& < > " '` e `escapeAttr` é o mesmo helper.
+Comentários da comunidade são gravados crus (`community_store.py`) e escapados só na saída
+(`renderCommunityComment`). Tokens OAuth do Drive (`drive_auth.save_tokens`) são protegidos com
+DPAPI no Windows (arquivo `KDPAPI1:`+base64; arquivos antigos em claro continuam legíveis e
+migram ao regravar); em outros SOs ou se o DPAPI falhar, cai para JSON em claro com modo 0600.
+Verificação visual da UI sem `unsafe-inline` ainda pendente (não há como subir só a UI de forma
+hermética).
 
 **Resolver dinâmico Comix (bounded).** Fluxo: preflight HTTP → challenge/anti-bot
 (`CHALLENGE_REQUIRED`) → `down.discover_chapter_source` encaminha o comix ao **resolver
