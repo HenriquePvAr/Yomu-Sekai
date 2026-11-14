@@ -94,3 +94,9 @@ def test_internal_values_are_escaped_in_templates():
     assert "${escapeHtml(result.candidate_count)}" in UI_JS
     assert "${escapeAttr(region)}\"></figure>" in UI_JS
     assert "escapeHtml(listing.reviewable_regions || 0)" in UI_JS
+
+
+def test_ad_iframe_is_sandboxed_without_same_origin_or_top_navigation():
+    src = (ROOT / "static" / "passive_ad_slot.js").read_text(encoding="utf-8")
+    flags = re.search(r"setAttribute\('sandbox', '([^']+)'\)", src).group(1).split()
+    assert flags == ["allow-scripts", "allow-popups", "allow-popups-to-escape-sandbox"]
