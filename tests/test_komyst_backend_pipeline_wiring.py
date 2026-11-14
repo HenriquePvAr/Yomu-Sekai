@@ -109,3 +109,38 @@ def test_provider_process_boundary_uses_job_envelope_not_cli_token(tmp_path):
 def _provider_factory(provider, enabled):
     from komyst.pipeline.benchmark_pipeline import _build_translation_provider
     return _build_translation_provider(provider, translation_enabled=enabled)
+
+
+def test_strict_retry_reuses_the_previous_translation_instead_of_calling_the_backend_again(tmp_path, monkeypatch):
+    """The backend sends no extra context, so re-sending the same text cannot change the answer.
+
+    A real run lost a paid job to the extra request: the provider rejected it, the failed row blocked
+    settlement, and the batch that had already been delivered was never consumed.
+    """
+    job_id = "job-strict-retry"
+    AuthEnvelopeStore(tmp_path).seal(job_id, _token())
+    monkeypatch.setenv("KOMYST_JOB_ID", job_id)
+    monkeypatch.setenv("KOMYST_REQUEST_ID", "translation:strict-retry")
+    backend = MockBackendClient()
+    provider = KomystBackendTranslationProvider(runtime_root=tmp_path, backend=backend)
+    provider.translate_many(["word"])
+    sent = []
+    real = provider.translate_many
+    monkeypatch.setattr(provider, "translate_many", lambda values, **kw: sent.append(list(values)) or real(values, **kw))
+
+    again = provider.translate_strict("word", previous_translation="[PT-BR] word",
+                                      validation_reason="candidate_equals_source")
+
+    assert again == "[PT-BR] word"
+    assert sent == []  # nothing went on the wire
+
+
+def test_strict_retry_without_a_previous_translation_still_translates(tmp_path, monkeypatch):
+    job_id = "job-strict-first"
+    AuthEnvelopeStore(tmp_path).seal(job_id, _token())
+    monkeypatch.setenv("KOMYST_JOB_ID", job_id)
+    monkeypatch.setenv("KOMYST_REQUEST_ID", "translation:strict-first")
+    backend = MockBackendClient()
+    provider = KomystBackendTranslationProvider(runtime_root=tmp_path, backend=backend)
+
+    assert provider.translate_strict("other", previous_translation="") == "[PT-BR] other"

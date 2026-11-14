@@ -41,17 +41,21 @@ POSTGRES_IMAGE = "postgres:15-alpine"
 MIGRATIONS_DIR = ROOT / "supabase/migrations"
 PRESERVE_MIGRATION = "20260924060000_preserve_translation_requests_on_license_delete.sql"
 YK_SETTLEMENT_MIGRATION = "20260926175232_yk_job_atomic_settlement.sql"
+# The two migrations above are replayed last by this harness, so a migration that redefines their
+# functions has to come after them, as it does in the real chronological order.
+AFTER_SETTLEMENT_MIGRATIONS = ("20261114010000_settle_ignores_failed_requests_without_output.sql",)
 MIGRATION_CHAIN = [
     ROOT / "tests/sql/supabase_bootstrap.sql",
     *[
         path for path in sorted(MIGRATIONS_DIR.glob("*.sql"))
-        if path.name not in {PRESERVE_MIGRATION, YK_SETTLEMENT_MIGRATION}
+        if path.name not in {PRESERVE_MIGRATION, YK_SETTLEMENT_MIGRATION, *AFTER_SETTLEMENT_MIGRATIONS}
     ],
     # The live DB has this overload, but no recorded migration statement does.
     # Keep the snapshot in a test-only overlay instead of falsifying migration history.
     ROOT / "tests/sql/remote_schema_drift/finalize_translation_job_job_overload.sql",
     MIGRATIONS_DIR / PRESERVE_MIGRATION,
     MIGRATIONS_DIR / YK_SETTLEMENT_MIGRATION,
+    *[MIGRATIONS_DIR / name for name in AFTER_SETTLEMENT_MIGRATIONS],
 ]
 REMOTE_BASELINE_VERSION = "20260917023046"
 REMOTE_SCHEMA_DRIFT_FIXTURES = ROOT / "tests/sql/remote_schema_drift"

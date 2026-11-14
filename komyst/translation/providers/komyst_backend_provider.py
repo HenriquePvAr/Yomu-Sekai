@@ -949,4 +949,10 @@ class KomystBackendTranslationProvider:
         value = str(text or "").strip()
         if not value:
             return ""
+        # The backend request carries no instruction or context, so asking again for the same
+        # text can only repeat the first answer. Reuse it: the extra request costs characters and
+        # a rejected one leaves a failed row behind for no gain.
+        previous = str(previous_translation or "").strip()
+        if previous:
+            return previous
         return self.translate_many([value], force=force)[0]
