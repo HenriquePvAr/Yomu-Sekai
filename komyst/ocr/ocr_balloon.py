@@ -43,6 +43,7 @@ from komyst.ocr.ocr_engine import (
     OCRLine,
     assess_ocr_repair,
     clean_ocr_text,
+    hyphenated_name_tokens,
     mark_ocr_line_recovered,
     repair_ocr_text,
     segment_compact_english_word,
@@ -1547,11 +1548,12 @@ def split_glued_source_words(text, protected=(), chapter_names=(), chapter_words
     names = sorted({key for key in (_name_token_of(name) for name in chapter_names or ())
                     if len(key) >= 3}, key=len, reverse=True)
     vocabulary = frozenset(chapter_words or ())
+    hyphen_names = hyphenated_name_tokens(text)
 
     def repair(match):
         token = match.group(0)
         key = re.sub(r"[^A-Z]", "", token.upper())
-        if (len(key) < 4 or key in protected_keys or key in names or region_taxonomy.is_english_word(key)
+        if (len(key) < 4 or key in protected_keys or key in hyphen_names or key in names or region_taxonomy.is_english_word(key)
                 or region_taxonomy.word_zipf(key) >= 3.0):
             return token
         if token.isalpha():
@@ -6061,8 +6063,9 @@ def score_group_ocr_quality(group):
             reasons.append("generic_ocr_repair_available")
             score -= 0.08
 
+    hyphen_names = hyphenated_name_tokens(text)
     for token in token_letters:
-        if len(token) < 2 or _frequent_word(token) or token in SFX_WORDS:
+        if len(token) < 2 or _frequent_word(token) or token in SFX_WORDS or token in hyphen_names:
             continue
         suggestion, suggestion_score = suggest_english_word(token)
         if suggestion and suggestion_score >= 0.62:

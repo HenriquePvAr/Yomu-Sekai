@@ -1522,10 +1522,26 @@ def segment_compact_english_word(token):
     return " ".join(words), confidence
 
 
+_HYPHEN_NAME = re.compile(r"[A-Za-z]{2,}(?:-[A-Za-z]{2,})+(?:['’][A-Za-z]+)?")
+
+
+def hyphenated_name_tokens(text):
+    """Upper-case letters-only tokens inside romanized-name shapes ("AB-CD", "AB-CD'S").
+
+    Vocabulary repair and near-miss penalties must not treat their syllables as
+    misread English words.
+    """
+    return {
+        re.sub(r"[^A-Z]", "", part.upper())
+        for match in _HYPHEN_NAME.finditer(str(text or ""))
+        for part in match.group(0).split("-")
+    }
+
+
 def _repair_tokens_with_generic_vocabulary(text):
     source_text = str(text or "")
     parts = re.findall(r"[A-Za-z]+(?:'[A-Za-z]+)?|\d+|[^A-Za-z\d]+", source_text)
-    protected_vocatives = _potential_vocative_tokens(source_text)
+    protected_vocatives = _potential_vocative_tokens(source_text) | hyphenated_name_tokens(source_text)
     reasons = []
     changed = False
     for index, part in enumerate(parts):

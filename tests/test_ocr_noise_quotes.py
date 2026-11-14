@@ -9,4 +9,4 @@ def test_quoted_and_parenthesized_text_is_not_noise():
 
 def test_real_noise_still_detected():
     assert _looks_like_noise("#@%^&*")
-    assert _looks_like_noise("~|\/<>{}")
+    assert _looks_like_noise(r"~|\/<>{}")
