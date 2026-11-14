@@ -4,7 +4,7 @@
 
 1. Use Python 3.11 e instale as dependências do perfil apropriado (`requirements/requirements-beta.txt` e `requirements/requirements-dev.txt` para a suíte principal).
 2. Mantenha mudanças de produção em runtime e experimentos em `research/` (incluindo `research/experiments/`).
-3. Execute `python -m pytest --collect-only -q` após alterar discovery, paths ou localização de testes; depois execute `python -m pytest -q`. Não use contagens de execuções antigas como resultado atual; consulte o [último registro de falhas](../reports/falhas_preexistentes_20261111.md).
+3. Execute `python -m pytest --collect-only -q` após alterar discovery, paths ou localização de testes; depois execute `python -m pytest -q`. Não use contagens de execuções antigas como resultado atual; consulte o [último registro de falhas](reports/falhas_preexistentes_20261111.md).
 4. Para testes frontend, rode os arquivos em `tests/` com `node --experimental-vm-modules` quando o teste usar `vm.SourceTextModule`.
 5. Para entrypoints e packaging, rode os testes de contrato correspondentes e confirme imports sem iniciar serviços ou providers reais.
 6. Revise `git diff --check`, arquivos staged, segredos e tamanhos antes de criar commits.
