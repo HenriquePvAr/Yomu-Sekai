@@ -7125,6 +7125,18 @@ class UiBridge:
         )
         if job["status"] == JobStatus.INTERRUPTED:
             self.store.mark_resumable(job_id, resume_from_stage=job.get("resume_from_stage") or "")
+        # The translation auth envelope is bound to its context id and expires; the copy this job
+        # carries is usually long expired (auth_context_expired, so its reservation was never
+        # settled). Seal a fresh one from the current session under the same id. Without a token
+        # the old configuration is kept: the previous envelope may still be valid.
+        if configuration.get("translation_enabled") and not configuration.get("download_only"):
+            auth_context_id = str(configuration.get("auth_context_id") or logical_job_id or job_id)
+            try:
+                configuration = self._seal_translation_context(
+                    {"id": auth_context_id}, configuration, principal=principal,
+                    license_access_token=license_access_token)
+            except ValueError:
+                pass
         # A resume is a fresh attempt that reuses the same output dir and command; the
         # previous attempt is preserved for history.
         new_id = self.store.create_job(
