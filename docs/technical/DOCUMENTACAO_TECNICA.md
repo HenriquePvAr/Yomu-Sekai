@@ -3326,7 +3326,7 @@ Eventos estruturados já emitidos (nunca com chave, token ou URL com segredo):
 `supabase/tests/` + a suíte TypeScript de `apps/auth-service/`. Última execução completa
 registrada da suíte hermética: 2026-11-11; após separar falhas ambientais, permaneceram
 quatro falhas de asserção em testes de máscara e reconstrução. Consulte
-[Testes](../TESTING.md) e o [relatório completo](../../reports/falhas_preexistentes_20261111.md).
+[Testes](../TESTING.md) e o [relatório completo](../reports/falhas_preexistentes_20261111.md).
 
 `pytest.ini`:
 

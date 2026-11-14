@@ -205,7 +205,7 @@ publicado como artifact), `node --check` dos scripts de `static/` (incluindo `st
 o serviço Better Auth e `python -m compileall` de `komyst/`, `test_support/` e dos entrypoints da
 raiz. A última execução completa registrada em 2026-11-11 separou falhas ambientais e apontou
 quatro falhas de asserção em testes de máscara/reconstrução. Consulte o
-[relatório de falhas](../reports/falhas_preexistentes_20261111.md); o resultado desse snapshot
+[relatório de falhas](reports/falhas_preexistentes_20261111.md); o resultado desse snapshot
 não deve ser tratado como uma execução da branch atual. **A CI não executa as suítes `.mjs`** —
 elas são responsabilidade local.
 

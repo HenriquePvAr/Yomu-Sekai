@@ -7,7 +7,7 @@
 - Código de runtime Python novo vai para o pacote canônico `komyst/`; a raiz mantém apenas shims/entrypoints de compatibilidade (verificados por `python tools/repository/check_root_policy.py`). As demais áreas ativas são `apps/`, `ui/`, `static/`, `supabase/` e `packaging/`.
 - Testes automatizados ficam em `tests/`; experimentos isolados ficam em `research/` (incluindo `research/experiments/`), nunca no runtime de produção.
 - Scripts operacionais ficam em `scripts/`; harnesses e ferramentas de desenvolvimento ficam em `tools/`.
-- Relatórios pequenos e canônicos podem ser versionados em `reports/`. Outputs volumosos seguem [a política de artefatos](../docs/ARTIFACT_POLICY.md).
+- Relatórios pequenos e canônicos podem ser versionados em `docs/reports/`. Outputs volumosos seguem [a política de artefatos](../docs/ARTIFACT_POLICY.md).
 
 ## Verificações
 

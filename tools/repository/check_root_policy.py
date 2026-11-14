@@ -31,7 +31,7 @@ def check_root(root: Path = ROOT) -> list[str]:
         if path.suffix.casefold() == ".py" and name not in allowed_python:
             errors.append(f"unallowlisted root Python module: {name}")
         if path.suffix.casefold() == ".json" and name.endswith("_report.json"):
-            errors.append(f"root report must live under reports/: {name}")
+            errors.append(f"root report must live under docs/reports/: {name}")
     return errors
 
 

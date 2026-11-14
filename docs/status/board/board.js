@@ -73,9 +73,9 @@ window.BOARD = {
       ],
       "links": [
         { "label": "Plano Fase 0", "path": "docs/plans/PLANO_EXECUCAO_KOMYST.md" },
-        { "label": "Diagnóstico PSD F0.4", "path": "reports/fase_0_f04_psd_diagnostico.md" },
-        { "label": "Monitor F0.6", "path": "reports/fase_0_f06_monitor_recursos.md" },
-        { "label": "Falhas preexistentes", "path": "reports/falhas_preexistentes_20261111.md" }
+        { "label": "Diagnóstico PSD F0.4", "path": "docs/reports/fase_0_f04_psd_diagnostico.md" },
+        { "label": "Monitor F0.6", "path": "docs/reports/fase_0_f06_monitor_recursos.md" },
+        { "label": "Falhas preexistentes", "path": "docs/reports/falhas_preexistentes_20261111.md" }
       ]
     },
     {
@@ -103,9 +103,9 @@ window.BOARD = {
       ],
       "links": [
         { "label": "Plano KOMYST", "path": "docs/plans/PLANO_EXECUCAO_KOMYST.md" },
-        { "label": "Relatório Fase 3", "path": "reports/fase3_qualidade_20261112.md" },
-        { "label": "Falhas preexistentes", "path": "reports/falhas_preexistentes_20261111.md" },
-        { "label": "Perguntas pendentes", "path": "reports/perguntas_pendentes.md" }
+        { "label": "Relatório Fase 3", "path": "docs/reports/fase3_qualidade_20261112.md" },
+        { "label": "Falhas preexistentes", "path": "docs/reports/falhas_preexistentes_20261111.md" },
+        { "label": "Perguntas pendentes", "path": "docs/reports/perguntas_pendentes.md" }
       ]
     },
     {
@@ -165,11 +165,11 @@ window.BOARD = {
         },
         {
           "label": "Métricas agregadas",
-          "path": "reports/data/job_f3de3bca_resources.json"
+          "path": "docs/reports/data/job_f3de3bca_resources.json"
         },
         {
           "label": "Timeline CSV",
-          "path": "reports/data/job_f3de3bca_resources.csv"
+          "path": "docs/reports/data/job_f3de3bca_resources.csv"
         }
       ]
     },

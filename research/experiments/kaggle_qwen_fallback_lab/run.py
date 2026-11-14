@@ -25,7 +25,7 @@ def wait_kernel(kaggle, slug, timeout=3600):
 def main(argv=None):
     ap=argparse.ArgumentParser(description="Experimental private Kaggle Qwen lab")
     ap.add_argument("--image", required=True); ap.add_argument("--prompt", required=True)
-    ap.add_argument("--kaggle-slug", required=True); ap.add_argument("--output", default="reports/kaggle_qwen_fallback_lab.json")
+    ap.add_argument("--kaggle-slug", required=True); ap.add_argument("--output", default="docs/reports/kaggle_qwen_fallback_lab.json")
     ap.add_argument("--dry-run", action="store_true"); ap.add_argument("--keep-staging", action="store_true")
     a=ap.parse_args(argv); image=Path(a.image).resolve()
     if not image.is_file(): raise SystemExit(f"image not found: {image}")

@@ -17,7 +17,7 @@
 
 Armazene esses arquivos em uma área de artefatos local ou remota com acesso apropriado — por exemplo, sob `<pasta-de-experimentos>\KomystExperimental\` na máquina DEV ou `~/komyst/experimental/` em worker R&D. Esses exemplos não são paths de runtime e nunca devem ser hardcoded no produto.
 
-Para artefatos externos necessários a uma conclusão, mantenha um manifesto pequeno com caminho lógico, tamanho, SHA-256, finalidade e identidade do experimento; não copie o conteúdo para `reports/`.
+Para artefatos externos necessários a uma conclusão, mantenha um manifesto pequeno com caminho lógico, tamanho, SHA-256, finalidade e identidade do experimento; não copie o conteúdo para `docs/reports/`.
 
 ## Higiene
 

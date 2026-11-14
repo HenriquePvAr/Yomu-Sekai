@@ -5,7 +5,7 @@
 
 > **Última execução completa registrada:** 2026-11-11. Após separar contaminação ambiental,
 > permaneceram quatro falhas de asserção relacionadas a máscara e reconstrução. Veja
-> [Falhas preexistentes](../reports/falhas_preexistentes_20261111.md) para os testes e limites
+> [Falhas preexistentes](reports/falhas_preexistentes_20261111.md) para os testes e limites
 > dessa execução; não interprete a contagem histórica de 6.160 testes como resultado atual.
 
 ## Padrão: offline

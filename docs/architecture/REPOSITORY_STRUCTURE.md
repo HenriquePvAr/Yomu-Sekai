@@ -20,7 +20,7 @@ flowchart TD
     R --> U[ui/ + static/<br/>interface]
     R --> S[scripts/ + tools/]
     R --> A[assets/<br/>lexicon, fontes, branding]
-    R --> E[reports/ + research/<br/>evidências e estudos]
+    R --> E[docs/reports/ + research/<br/>evidências e estudos]
     R --> L[shims na raiz<br/>start_tradutor.py, run_webtoon.py,<br/>run_local_folder.py, desktop_app.py, ...]
     Y --> Y1["ocr/"] & Y2["clean/"] & Y3["translation/"] & Y4["pipeline/"] & Y5["ui/"] & Y6["download/"] & Y7["export/"]
     Y --> Y8["runtime/<br/>worker, JobStore, updater"] & Y9["review/"] & Y10["auth/ + community/"] & Y11["commands/ + desktop/<br/>implementação dos shims"]
@@ -35,9 +35,8 @@ flowchart TD
 ├── assets/           recursos de interface e marca versionados
 ├── config/           configurações e políticas do produto/repositório
 ├── deploy/           manifests e configuração de implantação
-├── docs/             documentação do produto, arquitetura, operação e auditorias
+├── docs/             documentação do produto, arquitetura, operação, auditorias e relatórios (docs/reports/)
 ├── packaging/        specs e insumos de empacotamento Windows
-├── reports/          evidência pequena e sanitizada escolhida para versionamento
 ├── research/         pesquisa não-runtime (inclui experiments/); não é automaticamente parte do produto
 ├── scripts/          comandos operacionais, de build e validação
 ├── static/           assets estáticos servidos pela UI

@@ -18,7 +18,7 @@ Requirements for a real run: Kaggle CLI on PATH, authenticated Kaggle account, G
 
 ## Actual run (2026-10-01)
 
-> Historical record of one run. The fixture image `source_crop.png` is not in the Git index (only its JSON metadata is); results: `reports/kaggle_qwen_fallback_lab_real_e2e_v1.json`.
+> Historical record of one run. The fixture image `source_crop.png` is not in the Git index (only its JSON metadata is); results: `docs/reports/kaggle_qwen_fallback_lab_real_e2e_v1.json`.
 
 The isolated venv uses Python 3.11.9 and `kaggle==2.2.4`. OAuth authentication was completed locally with `kaggle auth login`; no token was copied into this repository. A private upload probe succeeded and was deleted. The real NON-M20 fixture was `test_fixtures/quality_regression_diagnostics/real/sfx_slurp_p006/source_crop.png` (SHA-256 recorded in the report).
 
