@@ -949,10 +949,12 @@ class KomystBackendTranslationProvider:
         value = str(text or "").strip()
         if not value:
             return ""
-        # The backend request carries no instruction or context, so asking again for the same
-        # text can only repeat the first answer. Reuse it: the extra request costs characters and
-        # a rejected one leaves a failed row behind for no gain.
+        # A source echo (the provider handed the text back unchanged) cannot improve on a repeat:
+        # the backend request carries no instruction or context, so the same text gets the same
+        # answer. Reuse it instead of paying for another request, whose rejection would leave a
+        # failed row behind. Other retry reasons (terminology, semantics) still go to the provider.
         previous = str(previous_translation or "").strip()
-        if previous:
+        reason = str(validation_reason or "")
+        if previous and reason.startswith(("candidate_equals_source", "source_echo", "untranslated_source")):
             return previous
         return self.translate_many([value], force=force)[0]

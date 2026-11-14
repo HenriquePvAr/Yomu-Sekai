@@ -144,3 +144,17 @@ def test_strict_retry_without_a_previous_translation_still_translates(tmp_path, 
     provider = KomystBackendTranslationProvider(runtime_root=tmp_path, backend=backend)
 
     assert provider.translate_strict("other", previous_translation="") == "[PT-BR] other"
+
+
+def test_strict_retry_for_another_reason_still_goes_to_the_provider(tmp_path, monkeypatch):
+    job_id = "job-strict-terminology"
+    AuthEnvelopeStore(tmp_path).seal(job_id, _token())
+    monkeypatch.setenv("KOMYST_JOB_ID", job_id)
+    monkeypatch.setenv("KOMYST_REQUEST_ID", "translation:strict-terminology")
+    provider = KomystBackendTranslationProvider(runtime_root=tmp_path, backend=MockBackendClient())
+    sent = []
+    monkeypatch.setattr(provider, "translate_many", lambda values, **kw: sent.append(list(values)) or ["novo"])
+
+    result = provider.translate_strict("word", previous_translation="velho", validation_reason="terminology_conflict")
+
+    assert result == "novo" and sent == [["word"]]
