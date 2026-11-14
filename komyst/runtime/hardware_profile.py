@@ -40,6 +40,25 @@ def _vram_gb() -> float | None:
             return round(max(values) / 1024, 2)
     except Exception:  # noqa: BLE001 - no NVIDIA driver: try the generic query
         pass
+    try:  # AMD/Intel: 64-bit size from the display-class registry (AdapterRAM caps at 4 GB)
+        import winreg
+
+        key = r"SYSTEM\CurrentControlSet\Control\Class\{4d36e968-e325-11ce-bfc1-08002be10318}"
+        sizes = []
+        with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, key) as root:
+            for i in range(winreg.QueryInfoKey(root)[0]):
+                try:
+                    with winreg.OpenKey(root, winreg.EnumKey(root, i)) as sub:
+                        name = str(winreg.QueryValueEx(sub, "DriverDesc")[0])
+                        size = int(winreg.QueryValueEx(sub, "HardwareInformation.qwMemorySize")[0])
+                except OSError:
+                    continue
+                if not _NOT_DEDICATED.search(name):
+                    sizes.append(size)
+        if sizes:
+            return round(max(sizes) / 1024 ** 3, 2)
+    except Exception:  # noqa: BLE001 - not Windows / key missing: fall back to WMI
+        pass
     try:
         from komyst.runtime.resource_monitor import detect_gpu_basic
 
@@ -71,9 +90,9 @@ def select_profile(detected: Mapping[str, Any], override: str = "auto") -> str:
     ram, vram = detected.get("ram_total_gb"), detected.get("gpu_vram_gb")
     if ram is None or vram is None:
         return "leve"
-    if ram >= 24 and vram >= 8:
+    if ram >= 24 and vram >= 7.5:  # an 8 GB card reports ~7.98 GiB
         return "qualidade"
-    if ram >= 12 and vram >= 4:
+    if ram >= 12 and vram >= 3.5:  # a 4 GB card reports ~3.99 GiB
         return "equilibrado"
     return "leve"
 

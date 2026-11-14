@@ -123,9 +123,9 @@ Não reduzir os gates de qualidade para apresentar um consumo menor.
 
 | Perfil | Escolha automática (RAM total / VRAM dedicada) | Efeito |
 |---|---|---|
-| Leve | RAM < 12 GB, VRAM < 4 GB ou medição indisponível | 1 página por vez, sem varredura residual, sem comparação de preenchimentos |
-| Equilibrado | RAM ≥ 12 GB e VRAM ≥ 4 GB | 2 páginas em paralelo, varredura residual e comparação de preenchimentos ligadas |
-| Qualidade | RAM ≥ 24 GB e VRAM ≥ 8 GB | paralelismo automático, varredura residual e comparação ligadas |
+| Leve | RAM < 12 GB, VRAM < 3,5 GB ou medição indisponível | 1 página por vez, sem varredura residual, sem comparação de preenchimentos |
+| Equilibrado | RAM ≥ 12 GB e VRAM ≥ 3,5 GB | 2 páginas em paralelo, varredura residual e comparação de preenchimentos ligadas |
+| Qualidade | RAM ≥ 24 GB e VRAM ≥ 7,5 GB | paralelismo automático, varredura residual e comparação ligadas |
 
 Valores exatos por variável: [`CONFIGURATION.md`](CONFIGURATION.md). O FLUX (`GENERATIVE_INPAINT_ENABLED`) nunca é
 ligado por perfil.
@@ -133,7 +133,7 @@ ligado por perfil.
 ### Como o perfil é escolhido
 
 1. `HARDWARE_PROFILE=leve|equilibrado|qualidade` força o perfil.
-2. `HARDWARE_PROFILE=auto` (padrão) detecta RAM e VRAM; sem medição, usa Leve.
+2. `HARDWARE_PROFILE=auto` (padrão) detecta RAM e VRAM; sem medição, usa Leve. A VRAM vem do `nvidia-smi`, ou do tamanho de 64 bits no registro de vídeo do Windows (`HardwareInformation.qwMemorySize`); o `AdapterRAM` do WMI trunca em 4 GB e só é usado como último recurso. Placas de 8 GB reportam ~7,98 GiB, por isso o corte é 7,5 (e 3,5 para 4 GB).
 3. Uma variável de ambiente explícita (por exemplo `PIPELINE_PAGE_WORKERS`) sempre vence o valor do perfil.
 
 O perfil e o motivo aparecem no log do job e em `timing_report.json` (`hardware_profile`).

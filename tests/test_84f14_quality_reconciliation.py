@@ -107,6 +107,15 @@ class SfxPhysicalGateAccounting(unittest.TestCase):
         self.assertEqual(report["physical_source_residual_count"], 0)
         self.assertEqual(report["ordinary_story_physical_residual_count"], 0)
 
+    def test_lone_word_kept_as_lettering_is_not_a_physical_residual(self):
+        echo = _sfx_residual("BALAO_2", "ROCK?")
+        echo.update({"manual_review_required": False, "translation": "ROCK?",
+                     "translation_final_state": "preserved_original",
+                     "translation_final_reason": "sfx_original_lettering_kept"})
+        report = benchmark_pipeline._physical_residual_accounting([_page(20, [echo])])
+        self.assertEqual(report["physical_regions_preserved"], 1)
+        self.assertEqual(report["physical_source_residual_count"], 0)
+
     def test_source_echo_that_needs_review_is_still_residual(self):
         echo = _story_residual("BALAO_1", "THE NIGHTMARE SPELL TOOK EVERYTHING FROM THEM.")
         echo.update({"translation_final_state": "manual_review",

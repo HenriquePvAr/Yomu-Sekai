@@ -6516,7 +6516,8 @@ def _physical_residual_accounting(states, *, translation_applicable=True):
             # as retained English story was the gate contradicting the render decision. An echo
             # that still needs review (ordinary story text) is not preserved and stays residual.
             if final_reason == PROPER_NAME_ONLY_REASON or (
-                final_reason == "source_echo_preserved_original" and preserved and not review
+                final_reason in {"source_echo_preserved_original", "sfx_original_lettering_kept"}
+                and preserved and not review
             ):
                 result["physical_regions_preserved"] += 1
                 continue

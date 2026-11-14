@@ -16,6 +16,7 @@ class SelectProfileTests(unittest.TestCase):
             (d(16, 2), "leve"), (d(12, 4), "equilibrado"), (d(16, 6), "equilibrado"),
             (d(32, 6), "equilibrado"), (d(24, 8), "qualidade"), (d(64, 24), "qualidade"),
             (d(11.9, 24), "leve"), (d(None, 24), "leve"),
+            (d(31.4, 7.98), "qualidade"), (d(16, 3.99), "equilibrado"),  # real 8 GB / 4 GB cards
         ]
         for detected, expected in cases:
             with self.subTest(detected=detected):
