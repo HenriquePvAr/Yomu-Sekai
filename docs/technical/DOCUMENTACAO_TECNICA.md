@@ -3321,7 +3321,7 @@ Eventos estruturados já emitidos (nunca com chave, token ou URL com segredo):
 
 ## 24. Arquitetura de testes
 
-466 arquivos `test_*.py` versionados em `tests/` (mais dois em `experiments/`, também em
+466 arquivos `test_*.py` versionados em `tests/` (mais dois em `research/experiments/`, também em
 `testpaths`) + 19 arquivos `test_*.mjs` de frontend (testes Node) + testes SQL em
 `supabase/tests/` + a suíte TypeScript de `apps/auth-service/`. Última execução completa
 registrada da suíte hermética: 2026-11-11; após separar falhas ambientais, permaneceram
@@ -3333,7 +3333,7 @@ quatro falhas de asserção em testes de máscara e reconstrução. Consulte
 ```ini
 [pytest]
 addopts = -m "not network and not manual"
-testpaths = tests experiments
+testpaths = tests research/experiments
 norecursedirs = output .cache .git .venv tmp node_modules __pycache__ .local-audit
 markers =
     unit / integration / network / manual / slow

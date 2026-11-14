@@ -1,6 +1,6 @@
 # Kaggle Qwen fallback lab (experimental)
 
-> **Revisado em:** 2026-10-24 · **Base verificada:** `5f482ce1` · Status: **experimental (DEV/LAB)**; no production caller (`git grep` finds no import outside `experiments/`).
+> **Revisado em:** 2026-10-24 · **Base verificada:** `5f482ce1` · Status: **experimental (DEV/LAB)**; no production caller (`git grep` finds no import outside `research/experiments/`).
 
 Isolated DEV/LAB benchmark. This package is deliberately not imported by Komyst production code.
 
@@ -9,10 +9,10 @@ The runner selects a non-M20 image, creates a temporary staging directory, creat
 ## Run
 
 ```powershell
-python experiments/kaggle_qwen_fallback_lab/run.py --image path\to\image.png --prompt "Audit this image" --kaggle-slug your-user/qwen-fallback-lab-<unique>
+python research/experiments/kaggle_qwen_fallback_lab/run.py --image path\to\image.png --prompt "Audit this image" --kaggle-slug your-user/qwen-fallback-lab-<unique>
 ```
 
-Flags verified with `--help`: `--image`, `--prompt`, `--kaggle-slug` (required), `--output`, `--dry-run`, `--keep-staging`. Lab dependency: `experiments/kaggle_qwen_fallback_lab/requirements-lab.txt` (`kaggle==2.2.4`), installed in a separate venv, not in the `requirements/` profiles. Lab tests: `experiments/kaggle_qwen_fallback_lab/test_lab.py`.
+Flags verified with `--help`: `--image`, `--prompt`, `--kaggle-slug` (required), `--output`, `--dry-run`, `--keep-staging`. Lab dependency: `research/experiments/kaggle_qwen_fallback_lab/requirements-lab.txt` (`kaggle==2.2.4`), installed in a separate venv, not in the `requirements/` profiles. Lab tests: `research/experiments/kaggle_qwen_fallback_lab/test_lab.py`.
 
 Requirements for a real run: Kaggle CLI on PATH, authenticated Kaggle account, GPU notebook quota, and a unique `--kaggle-slug`. The runner refuses an M20 image, non-private datasets, and a slug without an owner. `--dry-run` exercises planning without network access.
 

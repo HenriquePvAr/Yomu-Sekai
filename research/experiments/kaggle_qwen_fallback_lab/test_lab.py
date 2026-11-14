@@ -1,7 +1,7 @@
 import json
 from pathlib import Path
 import pytest
-from experiments.kaggle_qwen_fallback_lab.run import is_m20, main
+from research.experiments.kaggle_qwen_fallback_lab.run import is_m20, main
 
 def test_rejects_m20():
     assert is_m20(Path("/tmp/M20/page.png"))

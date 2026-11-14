@@ -92,7 +92,7 @@ node --check static/komyst_ui.js   # a CI verifica também os demais scripts de 
 python -m compileall -q komyst test_support
 ```
 
-O `pytest.ini` descobre testes em `tests/` e `experiments/` (`testpaths`).
+O `pytest.ini` descobre testes em `tests/` e `research/experiments/` (`testpaths`).
 
 O `pytest.ini` exclui os marcadores `network` e `manual` por padrão. Os
 marcadores disponíveis são `unit`, `integration`, `network`, `manual` e
