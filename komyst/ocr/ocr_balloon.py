@@ -17996,6 +17996,33 @@ def _balloon_shape_layout(draw, text, font, area, center, spacing, stroke_width)
     return None
 
 
+_RASTER_MATCH_MIN_SCORE = 0.55
+_RASTER_MATCH_MIN_GAIN = 0.03
+
+
+def _raster_font_choice(source_bgr, group, profile, text, font_path, font_role):
+    """The candidate face that redraws the source lines best, when it clearly beats the role's face."""
+    lines = [line for line in (getattr(group, "lines", None) or []) if getattr(line, "box", None)]
+    if not lines:
+        return None
+    ink = (profile.get("original_lettering") or {}).get("dominant_bgr")
+    try:
+        masks = font_fidelity.source_line_masks(source_bgr, lines, ink_bgr=ink)
+        best = font_fidelity.match_font_by_raster(masks, font_fidelity.raster_match_pool(), draw_text=text)
+        if not best or best["score"] < _RASTER_MATCH_MIN_SCORE:
+            return None
+        role_font = get_font(font_path, 40, role=font_role, prefer_role=True, text=text)
+        role_path = str(getattr(role_font, "path", "") or "")
+        if role_path and Path(role_path).resolve() == Path(best["path"]).resolve():
+            return None
+        role_score = (font_fidelity.match_font_by_raster(masks, [role_path]) or {}).get("score", 0.0)             if role_path else 0.0
+    except Exception:  # noqa: BLE001 - font matching refines the choice, it never blocks rendering
+        return None
+    if best["score"] - float(role_score) < _RASTER_MATCH_MIN_GAIN:
+        return None
+    return {**best, "role_font": Path(role_path).name if role_path else "", "role_score": round(float(role_score), 4)}
+
+
 def _draw_group_translation(img_bgr, group, font_path, strategy="primary", source_bgr=None):
     text = group.translation or group.text
     if not text:
@@ -18119,6 +18146,16 @@ def _draw_group_translation(img_bgr, group, font_path, strategy="primary", sourc
         font_role = "shout"
     else:
         font_role = "regular"
+
+    # The face follows the source lettering when its own words, redrawn in a candidate face, look
+    # clearly more like the source than the face of the semantic role does (shape, condensation,
+    # stroke). Sound effects keep their display face; an explicit preview font is never replaced.
+    if not preview_font_path and not is_sfx and bool(getattr(config, "FONT_RASTER_MATCH", True)):
+        raster_match = _raster_font_choice(typography_source, group, typography_profile, text,
+                                           font_path, font_role)
+        if raster_match:
+            preview_font_path = raster_match["path"]
+            typography_profile["font_raster_match"] = raster_match
 
     # The starting size follows the source's real letter height, not a fixed share of the OCR
     # line box (which carries padding): measured on the reference chapter, 0.78 x box left the

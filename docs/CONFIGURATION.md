@@ -163,6 +163,7 @@ quiser permitir explicitamente a resolução no ambiente de teste.
 | `TEXT_SAFE_PADDING` | `12` | Margem interna reservada para o texto traduzido |
 | `MIN_FONT_SIZE` | `12` | Menor fonte permitida, com piso interno de 6 |
 | `MAX_FONT_SIZE` | `42` | Maior fonte permitida |
+| `FONT_RASTER_MATCH` | `1` | Escolhe a fonte redesenhando as palavras do original em cada fonte candidata e comparando forma, largura e traço; troca a fonte do papel só quando a candidata vence com folga |
 | `MAX_TEXT_OVERFLOW_RATIO` | `0.01` | Overflow máximo antes de reprovação |
 | `AUTO_LINE_WRAP` | `True` | Habilita quebra automática de linha |
 | `AUTO_FONT_SHRINK` | `True` | Reduz a fonte quando necessário para caber |

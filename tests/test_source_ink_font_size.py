@@ -51,6 +51,13 @@ def _group(text, boxes, translation):
 
 
 class SourceInkFontSizeTests(unittest.TestCase):
+    # These pin the size rule; the face is held to the role's so a raster font match does not
+    # change which size the rule starts from.
+    def setUp(self):
+        patcher = mock.patch.object(ob.config, "FONT_RASTER_MATCH", False, create=True)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     def test_cap_ratio_of_a_bundled_face_is_a_sane_share_of_the_size(self):
         ratio = ob._font_cap_ratio(ImageFont.truetype(str(FONT), 100))
         self.assertTrue(0.55 < ratio < 0.85, ratio)

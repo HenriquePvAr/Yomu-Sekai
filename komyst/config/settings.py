@@ -441,6 +441,8 @@ ALLOW_LARGE_RECTANGLE_MASK = _env_bool("ALLOW_LARGE_RECTANGLE_MASK", False)
 TEXT_SAFE_PADDING = max(0, _env_int("TEXT_SAFE_PADDING", 12))
 MIN_FONT_SIZE = max(6, _env_int("MIN_FONT_SIZE", 12))
 MAX_FONT_SIZE = max(MIN_FONT_SIZE, _env_int("MAX_FONT_SIZE", 42))
+# Pick the lettering face by comparing the source lines with each candidate face (raster match).
+FONT_RASTER_MATCH = _env_bool("FONT_RASTER_MATCH", True)
 MAX_TEXT_OVERFLOW_RATIO = _env_float("MAX_TEXT_OVERFLOW_RATIO", 0.01)
 # Separate, more lenient hard gate (TDD #84F32R) for the rendered *effect*
 # footprint (glow/shadow), which is allowed to graze the safe area edge the

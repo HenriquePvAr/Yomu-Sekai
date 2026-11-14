@@ -7,6 +7,7 @@ name.
 """
 from __future__ import annotations
 
+import functools
 import hashlib
 import os
 from pathlib import Path
@@ -265,9 +266,23 @@ def file_sha256(path: str | Path) -> str:
         return ""
 
 
+def _mask_signature(font: ImageFont.ImageFont, char: str) -> tuple | None:
+    try:
+        mask = font.getmask(char)
+    except Exception:  # noqa: BLE001
+        return None
+    return (mask.size, bytes(mask))
+
+
 def _glyph_support(font: ImageFont.ImageFont, text: str) -> dict[str, Any]:
+    """Characters the face cannot draw: empty, or drawn with its missing-glyph box (tofu).
+
+    A missing character is rendered with the face's .notdef glyph, which has ink, so an ink check
+    alone passed tofu as supported; it is compared with a code point no font maps.
+    """
     missing: list[str] = []
     checked: list[str] = []
+    notdef = _mask_signature(font, "􏿽")
     for char in dict.fromkeys(str(text or "")):
         if char.isspace():
             continue
@@ -276,7 +291,7 @@ def _glyph_support(font: ImageFont.ImageFont, text: str) -> dict[str, Any]:
             bbox = font.getmask(char).getbbox()
         except Exception:
             bbox = None
-        if bbox is None:
+        if bbox is None or (notdef is not None and notdef[1] and _mask_signature(font, char) == notdef):
             missing.append(char)
     return {
         "status": "complete" if not missing else "missing_glyphs",
@@ -710,3 +725,122 @@ def typography_gate(font_runtime: dict[str, Any], style_score: dict[str, Any]) -
         "fallback_used": bool(font_runtime.get("fallback_used")),
         "glyph_support": (font_runtime.get("glyph_support") or {}).get("status", ""),
     }
+
+
+# --- raster font matching -------------------------------------------------------------------
+# Choose the face whose rendering of the source's own words looks most like the source lettering
+# (shape overlap at equal height, condensation, stroke weight), instead of a font picked by the
+# semantic role alone. Only fonts already in the role chains take part.
+
+_MATCH_HEIGHT = 40
+
+
+@functools.lru_cache(maxsize=1)
+def raster_match_pool() -> list[str]:
+    """Every existing font file referenced by the role chains (bundled faces included), deduplicated."""
+    seen: dict[str, None] = {}
+    for role in ROLE_FONT_FILES:
+        for path in role_font_paths(role):
+            if path and Path(path).is_file():
+                seen.setdefault(str(Path(path).resolve()), None)
+    return list(seen)
+
+
+def _tight(mask: np.ndarray) -> np.ndarray | None:
+    ys, xs = np.nonzero(mask)
+    if xs.size < 20:
+        return None
+    return mask[ys.min():ys.max() + 1, xs.min():xs.max() + 1]
+
+
+def _normalised(mask: np.ndarray) -> np.ndarray | None:
+    tight = _tight(mask)
+    if tight is None or tight.shape[0] < 6:
+        return None
+    width = max(4, int(round(tight.shape[1] * _MATCH_HEIGHT / tight.shape[0])))
+    return cv2.resize(tight.astype(np.uint8) * 255, (width, _MATCH_HEIGHT),
+                      interpolation=cv2.INTER_AREA) > 96
+
+
+def _stroke_ratio(mask: np.ndarray) -> float:
+    dist = cv2.distanceTransform(mask.astype(np.uint8), cv2.DIST_L2, 3)
+    inner = dist[dist > 0]
+    return float(np.percentile(inner, 80)) * 2.0 / _MATCH_HEIGHT if inner.size else 0.0
+
+
+@functools.lru_cache(maxsize=4096)
+def _rendered_line(path: str, text: str) -> np.ndarray | None:
+    try:
+        font = ImageFont.truetype(path, 72)
+    except Exception:  # noqa: BLE001 - an unreadable face simply does not take part
+        return None
+    return _normalised(render_text_raster(text, font) > 96)
+
+
+def _line_similarity(source: np.ndarray, candidate: np.ndarray) -> float:
+    width_sim = 1.0 - abs(source.shape[1] - candidate.shape[1]) / max(source.shape[1], candidate.shape[1])
+    resized = cv2.resize(candidate.astype(np.uint8), (source.shape[1], source.shape[0]),
+                         interpolation=cv2.INTER_NEAREST) > 0
+    kernel = np.ones((3, 3), np.uint8)
+    grown_source = cv2.dilate(source.astype(np.uint8), kernel) > 0
+    grown_candidate = cv2.dilate(resized.astype(np.uint8), kernel) > 0
+    precision = float(np.sum(resized & grown_source)) / max(1, int(np.sum(resized)))
+    recall = float(np.sum(source & grown_candidate)) / max(1, int(np.sum(source)))
+    shape = 2 * precision * recall / max(1e-6, precision + recall)
+    stroke_source, stroke_candidate = _stroke_ratio(source), _stroke_ratio(resized)
+    stroke_sim = 1.0 - min(1.0, abs(stroke_source - stroke_candidate) / max(0.02, stroke_source))
+    return 0.5 * shape + 0.3 * width_sim + 0.2 * stroke_sim
+
+
+def source_line_masks(image_bgr: np.ndarray, lines, ink_bgr=None) -> list[tuple[str, np.ndarray]]:
+    """Ink masks of the longest source lines, normalised to the matching height."""
+    picked = sorted((line for line in lines if len(str(getattr(line, "text", "") or "").strip()) >= 3),
+                    key=lambda line: len(str(line.text)), reverse=True)[:3]
+    masks: list[tuple[str, np.ndarray]] = []
+    for line in picked:
+        x, y, w, h = (int(v) for v in line.box)
+        crop = image_bgr[max(0, y):y + h, max(0, x):x + w]
+        if crop.size == 0:
+            continue
+        if ink_bgr is not None:
+            distance = np.max(np.abs(crop.astype(np.int16) - np.array(ink_bgr, np.int16)), axis=2)
+            ink = distance < 70
+        else:
+            gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
+            _, otsu = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+            ink = otsu == 0 if float(np.median(gray)) > 127 else otsu > 0
+        normalised = _normalised(ink)
+        if normalised is not None:
+            masks.append((str(line.text).strip(), normalised))
+    return masks
+
+
+def match_font_by_raster(source_masks, candidates, *, draw_text: str = "") -> dict[str, Any] | None:
+    """Rank candidate faces by how closely they reproduce the source lettering.
+
+    ``draw_text`` (the translation) excludes faces that cannot draw it. Returns the best and
+    second-best scores so the caller can require a clear win.
+    """
+    if not source_masks:
+        return None
+    scored = []
+    for path in candidates:
+        if draw_text:
+            try:
+                if _glyph_support(ImageFont.truetype(path, 24), draw_text)["status"] != "complete":
+                    continue
+            except Exception:  # noqa: BLE001
+                continue
+        values = []
+        for text, mask in source_masks:
+            rendered = _rendered_line(path, text)
+            if rendered is not None:
+                values.append(_line_similarity(mask, rendered))
+        if values:
+            scored.append((float(np.mean(values)), path))
+    if not scored:
+        return None
+    scored.sort(reverse=True)
+    return {"path": scored[0][1], "score": round(scored[0][0], 4),
+            "runner_up_score": round(scored[1][0], 4) if len(scored) > 1 else 0.0,
+            "ranking": [(Path(p).name, round(s, 4)) for s, p in scored[:5]]}
