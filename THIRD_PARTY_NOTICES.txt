@@ -54,3 +54,15 @@ https://github.com/loudifier/Comic-Relief — full text: assets/fonts/OFL-ComicR
 
 Bangers (Copyright 2010 The Bangers Project Authors) — SIL Open Font License 1.1
 https://github.com/googlefonts/bangers — full text: assets/fonts/OFL-Bangers.txt
+
+Comic Neue (Copyright 2014 The Comic Neue Project Authors) — SIL Open Font License 1.1
+https://github.com/google/fonts/tree/main/ofl/comicneue — full text: assets/fonts/OFL-ComicNeue.txt
+
+Kalam (Copyright 2014 Indian Type Foundry) — SIL Open Font License 1.1
+https://github.com/google/fonts/tree/main/ofl/kalam — full text: assets/fonts/OFL-Kalam.txt
+
+Patrick Hand (Copyright 2010-2012 Patrick Wagesreiter) — SIL Open Font License 1.1
+https://github.com/google/fonts/tree/main/ofl/patrickhand — full text: assets/fonts/OFL-PatrickHand.txt
+
+Luckiest Guy (Astigmatic, Brian J. Bonislawsky) — Apache License 2.0
+https://github.com/google/fonts/tree/main/apache/luckiestguy — full text: assets/fonts/Apache-2.0-LuckiestGuy.txt

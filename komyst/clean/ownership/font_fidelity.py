@@ -23,7 +23,7 @@ BUNDLED_FONTS_DIR = Path(__file__).resolve().parents[3] / "assets" / "fonts"
 ROLE_FONT_FILES = {
     "bold": ("arialbd.ttf", "calibrib.ttf", "seguisb.ttf", "trebucbd.ttf"),
     "decorative": ("georgia.ttf", "georgiab.ttf", "calibril.ttf"),
-    "shout": ("bangers-regular.ttf", "impact.ttf", "bahnschrift.ttf", "arialbd.ttf", "arialbi.ttf", "segoeuii.ttf"),
+    "shout": ("bangers-regular.ttf", "luckiestguy-regular.ttf", "impact.ttf", "bahnschrift.ttf", "arialbd.ttf", "arialbi.ttf", "segoeuii.ttf"),
     "regular": ("segoeui.ttf", "calibri.ttf", "arial.ttf"),
     # Role-aware, source-derived typography (TDD #84F32). Each semantic text
     # role gets its own local-font candidate chain instead of collapsing onto
@@ -34,13 +34,13 @@ ROLE_FONT_FILES = {
     # system fonts used only to prove the architecture - see FUTURE PACKAGING.
     # Bundled comic-lettering faces (assets/fonts) come first; the Windows fonts
     # stay as the fallback of each chain.
-    "balloon_dialogue": ("comicrelief-regular.ttf", "comic.ttf", "segoepr.ttf", "comici.ttf", "calibri.ttf"),
+    "balloon_dialogue": ("comicrelief-regular.ttf", "comicneue-regular.ttf", "comic.ttf", "segoepr.ttf", "comici.ttf", "calibri.ttf"),
     # Heavy monoline lettering, the webtoon norm, measured from the source strokes.
-    "bold_dialogue": ("comicrelief-bold.ttf", "comicbd.ttf", "trebucbd.ttf", "arialbd.ttf"),
-    "thought_dialogue": ("comici.ttf", "segoepr.ttf", "comic.ttf", "calibrii.ttf"),
-    "narration_box": ("trebucbd.ttf", "comicbd.ttf", "segoeprb.ttf", "calibrib.ttf"),
+    "bold_dialogue": ("comicrelief-bold.ttf", "comicneue-bold.ttf", "kalam-bold.ttf", "comicbd.ttf", "trebucbd.ttf", "arialbd.ttf"),
+    "thought_dialogue": ("comicneue-italic.ttf", "patrickhand-regular.ttf", "kalam-regular.ttf", "comici.ttf", "segoepr.ttf", "comic.ttf", "calibrii.ttf"),
+    "narration_box": ("trebucbd.ttf", "comicneue-bold.ttf", "comicbd.ttf", "segoeprb.ttf", "calibrib.ttf"),
     "story_caption": ("trebuc.ttf", "corbel.ttf", "calibri.ttf", "segoepr.ttf"),
-    "display": ("bahnschrift.ttf", "impact.ttf", "arialbd.ttf"),
+    "display": ("bahnschrift.ttf", "luckiestguy-regular.ttf", "impact.ttf", "arialbd.ttf"),
     "dramatic_display": ("impact.ttf", "bahnschrift.ttf", "arialbi.ttf"),
     "system_text": ("corbeli.ttf", "calibrili.ttf", "trebucit.ttf"),
     "location_label": ("corbelb.ttf", "calibrib.ttf", "trebucbd.ttf"),
@@ -50,7 +50,7 @@ ROLE_FONT_FILES = {
     "serif_narration": ("georgia.ttf", "georgiab.ttf", "times.ttf", "trebuc.ttf"),
     "serif_regular": ("georgia.ttf", "times.ttf", "calibri.ttf"),
     "serif_italic": ("georgiai.ttf", "timesi.ttf", "ariali.ttf"),
-    "italic_dialogue": ("comici.ttf", "ariali.ttf", "calibrii.ttf"),
+    "italic_dialogue": ("comicneue-italic.ttf", "comicneue-bolditalic.ttf", "comici.ttf", "ariali.ttf", "calibrii.ttf"),
     "condensed": ("bahnschrift.ttf", "impact.ttf", "arialbd.ttf"),
 }
 
@@ -87,6 +87,15 @@ FONT_METADATA = {
     "comicrelief-regular.ttf": {"family": "comic", "weight": "regular", "italic": False, "width_ratio": 0.56},
     "comicrelief-bold.ttf":    {"family": "comic", "weight": "bold", "italic": False, "width_ratio": 0.57},
     "bangers-regular.ttf":   {"family": "display", "weight": "bold", "italic": False, "width_ratio": 0.42},
+    # Width ratios measured with the same advance/cap-height probe, scaled to Comic Relief's entry.
+    "comicneue-regular.ttf":    {"family": "comic", "weight": "regular", "italic": False, "width_ratio": 0.55},
+    "comicneue-bold.ttf":       {"family": "comic", "weight": "bold", "italic": False, "width_ratio": 0.53},
+    "comicneue-italic.ttf":     {"family": "comic", "weight": "regular", "italic": True, "width_ratio": 0.54},
+    "comicneue-bolditalic.ttf": {"family": "comic", "weight": "bold", "italic": True, "width_ratio": 0.52},
+    "kalam-regular.ttf":        {"family": "comic", "weight": "regular", "italic": False, "width_ratio": 0.50},
+    "kalam-bold.ttf":           {"family": "comic", "weight": "bold", "italic": False, "width_ratio": 0.48},
+    "patrickhand-regular.ttf":  {"family": "comic", "weight": "regular", "italic": False, "width_ratio": 0.45},
+    "luckiestguy-regular.ttf":  {"family": "display", "weight": "bold", "italic": False, "width_ratio": 0.49},
     "segoepr.ttf":    {"family": "handwritten", "weight": "regular", "italic": False, "width_ratio": 0.50},
     "segoeprb.ttf":   {"family": "handwritten", "weight": "bold", "italic": False, "width_ratio": 0.52},
     "impact.ttf":     {"family": "display", "weight": "bold", "italic": False, "width_ratio": 0.40},
