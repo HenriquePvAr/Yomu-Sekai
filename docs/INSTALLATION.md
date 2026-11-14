@@ -1,8 +1,8 @@
 # Instalação
 
 Para usar a Beta, baixe `Komyst-0.9.1-beta.18-Setup-x64.exe` pelo canal indicado pela equipe e
-execute-o. A instalação limpa dessa versão foi **validada por beta tester, informado pelo dono**;
-a data não foi informada. O procedimento abaixo é exclusivamente para preparar um ambiente de
+execute-o. A instalação limpa dessa versão foi validada por um beta tester (data não registrada).
+O procedimento abaixo é exclusivamente para preparar um ambiente de
 desenvolvimento a partir do código-fonte.
 
 Guia de desenvolvimento do Komyst para Windows 64 bits com Python 3.11.

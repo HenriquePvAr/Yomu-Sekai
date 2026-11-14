@@ -1,7 +1,6 @@
 # Release
 
-O fluxo abaixo descreve os componentes de release. A versão Beta reportada como validada é
-`v0.9.1-beta.18` (**validado por beta tester, informado pelo dono**; data não informada).
+O fluxo abaixo descreve os componentes de release. A versão Beta validada é `v0.9.1-beta.18`. A instalação limpa em Windows foi validada por um beta tester com a `v0.9.1-beta.18` (data não registrada).
 Este documento não autoriza criar ou publicar outra versão.
 
 - `PRODUCT_VERSION` e `BUILD_VERSION` são definidos em `komyst/runtime/version.py`; não mantenha
@@ -29,8 +28,7 @@ flowchart LR
     C --> U["Cliente: aba Atualizações"]
 ```
 
-O instalador, a licença e a instalação limpa da `v0.9.1-beta.18` foram reportados pelo dono como
-validados por beta tester. Isso não comprova assinatura Authenticode, publicação de manifesto
+A validação por beta tester não comprova assinatura Authenticode, publicação de manifesto
 novo, nem o E2E completo do updater. Consulte [RELEASE_CHECKLIST.md](RELEASE_CHECKLIST.md) para os
 gates separados.
 
