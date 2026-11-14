@@ -82,7 +82,7 @@ UI_JS = (ROOT / "static" / "komyst_ui.js").read_text(encoding="utf-8")
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node not available")
 def test_escape_html_escapes_quotes_and_is_used_for_attributes():
-    block = re.search(r"const escapeHtml = .*?\n\s*const escapeAttr = escapeHtml;", UI_JS, re.S).group(0)
+    block = re.search(r"const escapeHtml = .*?\n\s*const escapeAttr = value => escapeHtml\(value\);", UI_JS, re.S).group(0)
     script = block + " console.log(JSON.stringify([escapeHtml(process.argv[1]), escapeAttr(null), escapeHtml(3)]));"
     payload = '<a href="x" onclick=' + "'y'" + '>&'
     out = subprocess.run(["node", "-e", script, "--", payload], capture_output=True, text=True, check=True).stdout

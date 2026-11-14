@@ -28,9 +28,8 @@
     if (event.key === KOMYST_THEME_KEY || event.key === null) applyKomystTheme(event.newValue);
   });
   // Safe for text nodes and quoted attribute values alike (& < > " ').
-  const escapeHtml = value => String(value ?? '').replace(/[&<>"']/g, ch => (
-    {'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[ch]));
-  const escapeAttr = escapeHtml;
+  const escapeHtml = value => String(value ?? '').replace(/[&<>"']/g, ch => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[ch]));
+  const escapeAttr = value => escapeHtml(value);
   // The app's own confirmation dialog (the browser's confirm() box looks foreign
   // and shows "127.0.0.1:8080 diz"). Resolves true only on the confirm button.
   function komystConfirm(message, {title = 'Confirmar ação', confirmLabel = 'Confirmar', cancelLabel = 'Cancelar', danger = false} = {}) {
