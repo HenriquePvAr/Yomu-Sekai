@@ -9,7 +9,6 @@ ever stored as a BLOB - only a reference to the file in the storage provider.
 from __future__ import annotations
 
 import json
-import html
 import re
 import sqlite3
 import time
@@ -709,7 +708,7 @@ class CommunityStore:
     def create_comment(self, user_id: str, post_id: str, body: str, *, parent_comment_id: str = "") -> dict[str, Any]:
         if not self._published_post_exists(post_id):
             return {"code": "publication_not_found"}
-        clean = html.escape(" ".join(str(body or "").split()), quote=False)
+        clean = " ".join(str(body or "").split())  # stored raw; escaped on output by the UI
         if not clean or len(clean) > 1000:
             return {"code": "invalid_comment"}
         parent = str(parent_comment_id or "")
@@ -766,7 +765,7 @@ class CommunityStore:
             return {"code": "comment_not_owned"}
         if row.get("deleted_at"):
             return {"code": "comment_deleted"}
-        clean = html.escape(" ".join(str(body or "").split()), quote=False)
+        clean = " ".join(str(body or "").split())  # stored raw; escaped on output by the UI
         if not clean or len(clean) > 1000:
             return {"code": "invalid_comment"}
         self._conn.execute(

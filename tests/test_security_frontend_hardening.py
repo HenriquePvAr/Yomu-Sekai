@@ -100,3 +100,11 @@ def test_ad_iframe_is_sandboxed_without_same_origin_or_top_navigation():
     src = (ROOT / "static" / "passive_ad_slot.js").read_text(encoding="utf-8")
     flags = re.search(r"setAttribute\('sandbox', '([^']+)'\)", src).group(1).split()
     assert flags == ["allow-scripts", "allow-popups", "allow-popups-to-escape-sandbox"]
+
+
+def test_comment_body_is_stored_raw_and_every_display_escapes_it():
+    src = (ROOT / "komyst" / "community" / "community_store.py").read_text(encoding="utf-8")
+    assert "html.escape" not in src
+    # the only renderer of this store's comments interpolates through escapeHtml
+    render = re.search(r"function renderCommunityComment.*?\n  }\n", UI_JS, re.S).group(0)
+    assert "escapeHtml(body)" in render and "${body}" not in render.replace("escapeHtml(body)", "")
