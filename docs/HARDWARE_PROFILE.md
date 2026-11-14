@@ -154,8 +154,10 @@ medições (outros contêineres em uso na mesma máquina).
   correção da leitura de VRAM). A diferença de tempo entre os dois está dentro da variação entre execuções; não há
   evidência de que um seja mais rápido que o outro.
 - **Leve não foi medido:** uma tentativa com `HARDWARE_PROFILE=leve` exportado no shell não chegou ao worker
-  supervisionado (o `timing_report.json` registrou o perfil automático), então o número foi descartado. O canal pelo
-  `.env` do usuário não foi verificado; até confirmar, trate o override manual como NÃO VERIFICADO.
+  supervisionado, que já estava em execução (o `timing_report.json` registrou o perfil automático), então o número foi
+  descartado. Para forçar um perfil, defina `HARDWARE_PROFILE` no `.env` e reinicie o worker. Um estado de perfil
+  herdado de outro processo agora é recalculado quando `HARDWARE_PROFILE` muda. Uma variável explícita do perfil
+  (por exemplo `PIPELINE_PAGE_WORKERS` no `.env`) continua vencendo o valor do perfil e aparece em `overridden_by_env`.
 - "MB em disco por página" inclui os arquivos de trabalho mantidos pelo modo completo (620 MB / 65 páginas).
 - Pico de VRAM não é capturado pelo monitor de recursos nesta versão.
 - Nenhum perfil foi medido em hardware fraco; os requisitos de RAM/VRAM continuam **ESTIMADOS / NÃO HOMOLOGADOS**.

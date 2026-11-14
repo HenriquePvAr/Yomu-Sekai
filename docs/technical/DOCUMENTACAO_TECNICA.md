@@ -1462,7 +1462,8 @@ Reconstrução com textura (item 5, **IMPLEMENTADO**):
 - `CLEAN_LEARNED_TEXTURE_FILL` (padrão `True`): em fundo `textured_art` /
   `STRUCTURED_OR_TEXTURED`, `_apply_cleanup_mask` usa o modelo LaMa local já existente
   (`komyst/clean/inpainting/advanced_art_inpainting.py`, arquivo externo verificado por SHA-256
-  em `ADVANCED_ART_INPAINT_MODEL_PATH`) em vez do Telea; sem o modelo, cai no preenchimento
+  em `ADVANCED_ART_INPAINT_MODEL_PATH`, cujo padrão é `models_root()/anime_manga_lama_large.pt` em
+  `komyst/runtime/runtime_paths.py`: pasta de dados do usuário, com fallback para `%LOCALAPPDATA%\Komyst\models`) em vez do Telea; sem o modelo, cai no preenchimento
   clássico e registra `group.learned_texture_fill`. Os portões existentes continuam valendo.
   Custo ~1 s por região texturizada em CPU. O cache guarda só os pixels reconstruídos dentro
   da máscara. A suíte roda com `CLEAN_LEARNED_TEXTURE_FILL=0` (definido no `conftest.py` da raiz)

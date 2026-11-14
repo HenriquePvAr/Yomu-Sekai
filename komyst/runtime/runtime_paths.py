@@ -41,6 +41,26 @@ def default_user_data_root() -> Path:
     return Path.home() / f".{APP_DIR_NAME.lower()}"
 
 
+def models_root() -> Path:
+    """Folder that holds the optional model files (learned fill, FLUX, OCR, upscale).
+
+    Follows the user data root (``KOMYST_USER_DATA_ROOT``); the legacy
+    ``%LOCALAPPDATA%\Komyst\models`` folder is used only when it is the one that exists.
+    """
+
+    try:
+        primary = default_user_data_root() / "models"
+    except RuntimeError:  # hermetic test guard without a runtime root
+        primary = None
+    if primary is not None and primary.is_dir():
+        return primary
+    base = _env_str("LOCALAPPDATA")
+    legacy = (Path(base) if base else Path.home()) / APP_DIR_NAME / "models"
+    if primary is None or legacy.is_dir():
+        return legacy
+    return primary
+
+
 def runtime_root() -> Path:
     """Root for queue DB, logs, profiles and other mutable app state."""
 

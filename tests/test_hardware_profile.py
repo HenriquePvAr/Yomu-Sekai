@@ -74,3 +74,35 @@ class ResolveTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class StaleProfileStateTests(unittest.TestCase):
+    """A profile state inherited from a parent must not outlive a changed HARDWARE_PROFILE."""
+
+    DETECTED = {"ram_total_gb": 32, "ram_free_gb": 16, "gpu_vram_gb": 8}
+
+    def test_changed_override_replaces_the_inherited_state_and_its_values(self):
+        env = {}
+        with mock.patch.object(hp, "detect", return_value=self.DETECTED):
+            first = hp.apply_to_environ(env)  # auto -> qualidade
+            self.assertEqual(first["profile"], "qualidade")
+            env["HARDWARE_PROFILE"] = "leve"
+            second = hp.apply_to_environ(env)
+        self.assertEqual(second["profile"], "leve")
+        self.assertEqual(env["PIPELINE_PAGE_WORKERS"], "1")
+        self.assertEqual(env["OCR_RESIDUAL_SWEEP_MODE"], "off")
+        self.assertEqual(second["overridden_by_env"], {})
+
+    def test_user_value_set_before_the_first_profile_still_wins(self):
+        env = {"PIPELINE_PAGE_WORKERS": "3", "HARDWARE_PROFILE": "leve"}
+        with mock.patch.object(hp, "detect", return_value=self.DETECTED):
+            state = hp.apply_to_environ(env)
+        self.assertEqual(env["PIPELINE_PAGE_WORKERS"], "3")
+        self.assertEqual(state["overridden_by_env"], {"PIPELINE_PAGE_WORKERS": "3"})
+
+    def test_unchanged_state_is_reused(self):
+        env = {}
+        with mock.patch.object(hp, "detect", return_value=self.DETECTED) as detect:
+            hp.apply_to_environ(env)
+            hp.apply_to_environ(env)
+        self.assertEqual(detect.call_count, 1)

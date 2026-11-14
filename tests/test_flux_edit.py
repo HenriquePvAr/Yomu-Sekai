@@ -177,3 +177,21 @@ def test_generative_second_chance_uses_protected_mask_and_context_prompt(monkeyp
     assert np.array_equal(observed["mask"], grown)
     assert "screentone" in observed["prompt"]
     assert "Do not add lettering" in observed["prompt"]
+
+
+def test_reference_edit_decodes_the_vae_in_tiles(tmp_path, monkeypatch):
+    """A large banner must not ask Vulkan for one contiguous VAE-decode buffer."""
+    import subprocess
+
+    from komyst.clean.inpainting import flux_edit as fe
+
+    seen = {}
+
+    def fake_run(command, **kwargs):
+        seen["command"] = list(command)
+        raise OSError("stop after capturing the command")
+
+    monkeypatch.setattr(fe.subprocess, "run", fake_run)
+    metrics = {}
+    fe._run_reference_edit(np.full((64, 64, 3), 90, np.uint8), tmp_path, "prompt", 4, 5.0, metrics)
+    assert "--vae-tiling" in seen["command"]

@@ -1,7 +1,7 @@
 import os
 
 from komyst.runtime.local_environment import load_local_environment
-from komyst.runtime.runtime_paths import cache_root, temp_input_root, temp_output_root
+from komyst.runtime.runtime_paths import cache_root, models_root, temp_input_root, temp_output_root
 
 
 load_local_environment()
@@ -647,14 +647,13 @@ ADVANCED_ART_INPAINT_MODEL_ID = _env_str(
     "ADVANCED_ART_INPAINT_MODEL_ID",
     "anime_manga_lama_large_jit",
 )
+def _default_lama_large_path() -> str:
+    return os.path.join(str(models_root()), "anime_manga_lama_large.pt")
+
+
 ADVANCED_ART_INPAINT_MODEL_PATH = _env_str(
     "ADVANCED_ART_INPAINT_MODEL_PATH",
-    os.path.join(
-        os.getenv("LOCALAPPDATA") or os.getcwd(),
-        "Komyst",
-        "models",
-        "anime_manga_lama_large.pt",
-    ),
+    _default_lama_large_path(),
 )
 ADVANCED_ART_INPAINT_MODEL_SHA256 = _env_str(
     "ADVANCED_ART_INPAINT_MODEL_SHA256",

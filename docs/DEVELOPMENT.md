@@ -249,7 +249,7 @@ As raízes não ficam dentro do repositório: são resolvidas em
 `komyst/runtime/runtime_paths.py` a partir de `KOMYST_USER_DATA_ROOT` ou, sem ele, de
 `%LOCALAPPDATA%\Komyst` (`komyst/ui/ui_helpers.py` expõe `OUTPUT_ROOT` e `HISTORY_PATH`).
 Em testes herméticos, tudo é redirecionado para `KOMYST_TEST_RUNTIME_ROOT`. Modelos locais de reconstrução de arte ficam fora do
-repositório, sob `%LOCALAPPDATA%\Komyst\models` por padrão
+repositório, sob `<pasta de dados do usuário>\models` por padrão (`KOMYST_USER_DATA_ROOT`; cai em `%LOCALAPPDATA%\Komyst\models` se só essa existir)
 (`ADVANCED_ART_INPAINT_MODEL_PATH`).
 
 O modelo de instalação previsto pelo updater (`komyst/runtime/update_installer.py`) mantém `data/` fora de

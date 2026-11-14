@@ -433,7 +433,7 @@ brilho cromático e proveniência foram medidos. Não ativa o FLUX geral nem mud
 
 São necessários `sd-cli.exe`, `flux-2-klein-4b-Q4_0.gguf`,
 `flux2-vae.safetensors` e `qwen3-4b-q4_k_m.gguf` em
-`GENERATIVE_INPAINT_MODEL_DIR` (vazio: `%LOCALAPPDATA%/komyst/models/flux`).
+`GENERATIVE_INPAINT_MODEL_DIR` (vazio: `<pasta de dados do usuário>/models/flux`; se essa pasta não existir e `%LOCALAPPDATA%/Komyst/models` existir, usa a antiga). O comando do `sd-cli` sempre inclui `--vae-tiling`.
 Não há download automático. Referência limitada a 1.048.576 pixels, quatro
 passos, seed 42, timeout de 240 s, inferência serializada e composição externa
 restrita à máscara. A chamada nativa não combina `-r` e `--mask`.

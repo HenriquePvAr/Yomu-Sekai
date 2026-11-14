@@ -26,12 +26,10 @@ import numpy as np
 from komyst.config import settings
 from komyst.runtime import memory_guard
 from komyst.runtime.process_options import hidden_console_options
-
-_DEFAULT_MODEL_DIR = Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / "Komyst" / "models" / "flux"
-
+from komyst.runtime.runtime_paths import models_root
 
 def _model_dir() -> Path:
-    return Path(getattr(settings, "GENERATIVE_INPAINT_MODEL_DIR", "") or _DEFAULT_MODEL_DIR)
+    return Path(getattr(settings, "GENERATIVE_INPAINT_MODEL_DIR", "") or models_root() / "flux")
 
 
 def manga_reconstruction_prompt(group=None) -> str:
@@ -206,6 +204,7 @@ def _run_reference_edit(source, directory, prompt, steps, timeout_seconds, metri
             "-W", str(int(padded.shape[1])),
             "-H", str(int(padded.shape[0])),
             "--offload-to-cpu",
+            "--vae-tiling",
             "-s", "42",
         ]
         try:

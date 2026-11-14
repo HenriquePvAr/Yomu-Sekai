@@ -125,9 +125,18 @@ def apply_to_environ(env: MutableMapping[str, str] | None = None) -> dict[str, A
     cached = env.get(STATE_ENV)
     if cached:
         try:
-            return json.loads(cached)
+            state = json.loads(cached)
         except ValueError:
-            pass
+            state = None
+        if state is not None:
+            override = str(env.get("HARDWARE_PROFILE") or "auto").strip().lower()
+            if override not in PROFILES or state.get("profile") == override:
+                return state
+            # The inherited state is for another profile: drop the values it wrote so the new
+            # profile does not mistake them for explicit user settings, then resolve again.
+            for key, value in (state.get("applied") or {}).items():
+                if env.get(key) == value:
+                    del env[key]
     if env.get("KOMYST_HERMETIC_TEST_ENV") and str(env.get("HARDWARE_PROFILE") or "auto").lower() == "auto":
         return {"profile": "none", "reason": "hermetic test environment", "applied": {}}
     state = resolve(env)
