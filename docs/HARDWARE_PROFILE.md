@@ -138,13 +138,24 @@ ligado por perfil.
 
 O perfil e o motivo aparecem no log do job e em `timing_report.json` (`hardware_profile`).
 
-### Métricas por perfil — A MEDIR
+### Métricas por perfil
 
-| Perfil | Tempo total | Pico de RAM | Pico de VRAM | MB em disco por página | Qualidade | Classificação |
+Máquina de medição (2026-11-13): 31,4 GB de RAM, AMD Radeon RX 6600 com 8 GB, Windows 10. Capítulo de referência de 58
+balões / 65 páginas lógicas, modo "Tradução pronta", sem cache. A RAM do sistema estava em 61–66% durante as
+medições (outros contêineres em uso na mesma máquina).
+
+| Perfil | Tempo total | Pico de RAM do pipeline | Pico de VRAM | MB em disco por página | Qualidade | Classificação |
 |---|---|---|---|---|---|---|
-| Leve | A MEDIR | A MEDIR | A MEDIR | A MEDIR | A MEDIR | A MEDIR |
-| Equilibrado | A MEDIR | A MEDIR | A MEDIR | A MEDIR | A MEDIR | A MEDIR |
-| Qualidade | A MEDIR | A MEDIR | A MEDIR | A MEDIR | A MEDIR | A MEDIR |
+| Leve | não medido | não medido | não medido | não medido | não medido | ESTIMADO |
+| Equilibrado | 338 s | 2 777 MB | não medido | ~9,5 MB | 56/58 traduzidos | MEDIDO |
+| Qualidade | 308 s | 2 743 MB | não medido | ~9,5 MB | 56/58 traduzidos | MEDIDO |
 
-Quando medidos, Leve e Equilibrado serão **simulados** (perfil forçado numa máquina maior), não medidos em hardware fraco.
-Cada número deverá ser marcado MEDIDO (data e máquina) ou ESTIMADO.
+- Equilibrado e Qualidade foram medidos nesta máquina (Qualidade é o que o modo automático escolhe aqui desde a
+  correção da leitura de VRAM). A diferença de tempo entre os dois está dentro da variação entre execuções; não há
+  evidência de que um seja mais rápido que o outro.
+- **Leve não foi medido:** uma tentativa com `HARDWARE_PROFILE=leve` exportado no shell não chegou ao worker
+  supervisionado (o `timing_report.json` registrou o perfil automático), então o número foi descartado. O canal pelo
+  `.env` do usuário não foi verificado; até confirmar, trate o override manual como NÃO VERIFICADO.
+- "MB em disco por página" inclui os arquivos de trabalho mantidos pelo modo completo (620 MB / 65 páginas).
+- Pico de VRAM não é capturado pelo monitor de recursos nesta versão.
+- Nenhum perfil foi medido em hardware fraco; os requisitos de RAM/VRAM continuam **ESTIMADOS / NÃO HOMOLOGADOS**.
