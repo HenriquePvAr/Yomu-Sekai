@@ -40,7 +40,7 @@ BOX = (24, 34, 416, 96)
 
 def test_dark_ink_with_a_thick_white_outline_on_a_light_page_stays_dark():
     image = _page(background=(226, 222, 218), ink=(18, 18, 18), outline=(255, 255, 255))
-    profile = ob.extract_original_lettering_profile(image, _group(), BOX)
+    profile = ob.extract_original_lettering_profile(image, _group(), BOX, fill_ink=True)
     assert profile["color_family"] == "black"
     assert max(profile["dominant_bgr"]) <= 80
     assert profile["stroke_present"] and min(profile["stroke_color"]) >= 185
@@ -48,6 +48,14 @@ def test_dark_ink_with_a_thick_white_outline_on_a_light_page_stays_dark():
 
 def test_white_ink_with_a_dark_outline_stays_white():
     image = _page(background=(226, 222, 218), ink=(255, 255, 255), outline=(18, 18, 18))
-    profile = ob.extract_original_lettering_profile(image, _group(), BOX)
+    profile = ob.extract_original_lettering_profile(image, _group(), BOX, fill_ink=True)
     assert profile["color_family"] == "white"
     assert min(profile["dominant_bgr"]) >= 185
+
+
+def test_the_cleanup_reading_keeps_the_majority_colour():
+    """The cleanup is calibrated on the majority reading; only typography asks for the fill."""
+    image = _page(background=(226, 222, 218), ink=(18, 18, 18), outline=(255, 255, 255))
+    profile = ob.extract_original_lettering_profile(image, _group(), BOX)
+    assert profile["color_family"] == "white"
+

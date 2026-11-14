@@ -19942,8 +19942,11 @@ def _neutral_ink_family(bgr):
     return None
 
 
-def extract_original_lettering_profile(img_bgr, group, box):
+def extract_original_lettering_profile(img_bgr, group, box, *, fill_ink=False):
     """Infer style from the source lettering pixels owned by this region.
+
+    ``fill_ink`` (typography): when a thick outline outnumbers the ink it surrounds, report the
+    enclosed fill as the ink. The cleanup keeps the majority reading it is calibrated on.
 
     It is intentionally approximate: enough to preserve colour family, outline,
     glow and visual weight without pretending to identify the exact commercial
@@ -20080,7 +20083,7 @@ def extract_original_lettering_profile(img_bgr, group, box):
                     # it agrees with it (it exists to separate an outline, not to recolour).
                     fill_family = _neutral_ink_family(centers[fill_k])
                     outline_family = _neutral_ink_family(centers[outline_k])
-                    if (color_family in {"white", "black"} and fill_family
+                    if (fill_ink and color_family in {"white", "black"} and fill_family
                             and fill_family != color_family and outline_family == color_family):
                         # A thick outline can outnumber the ink it surrounds (dark lettering with
                         # a wide white outline on a light page): the majority colour is then the
@@ -20663,7 +20666,7 @@ def typography_profile_for_region(img_bgr, group, box, *, style=None):
     # glyph-aware role and source colour are additive so the pipeline can adopt
     # them after review without changing existing behaviour here.
     glyph_style = extract_glyph_style_profile(img_bgr, group, box)
-    lettering = extract_original_lettering_profile(img_bgr, group, box)
+    lettering = extract_original_lettering_profile(img_bgr, group, box, fill_ink=True)
     profile["glyph_style"] = glyph_style
     profile["color_style"] = {
         "color_family": lettering.get("color_family", ""),
@@ -20892,7 +20895,7 @@ def _typography_profile_for_region(img_bgr, group, box, *, style=None):
         "font_match_confidence": 0.0,
         "fallback_reason": "",
     }
-    lettering = extract_original_lettering_profile(img_bgr, group, box)
+    lettering = extract_original_lettering_profile(img_bgr, group, box, fill_ink=True)
     if float(lettering.get("confidence") or 0.0) >= 0.42:
         base["style_source"] = "original_pixels"
         base["style_confidence"] = float(lettering.get("confidence") or 0.0)
