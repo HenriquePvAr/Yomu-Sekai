@@ -5677,3 +5677,29 @@ class PortugueseForSubjunctiveTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class RenderedRescueAndSfxCoverageTests(unittest.TestCase):
+    _state = staticmethod(OCRQualityRegressionTests._coverage_state)
+
+    @staticmethod
+    def _rendered(id_, box):
+        return OCRQualityRegressionTests._rendered_speech(id_, box)
+
+    def test_redrawn_learned_clean_rescue_counts_as_rendered(self):
+        rescued = {"id": "S1", "classification": "speech", "redrawn": True,
+                   "translation_final_state": "manual_review",
+                   "translation_final_reason": "rendered_on_learned_clean_rescue",
+                   "bounding_box": [138, 591, 432, 43], "clean_text": "THINGS YOU BECOME",
+                   "translation": "COISAS QUE VOCE SE TORNA"}
+        items = [self._rendered("R1", (140, 534, 430, 44)), rescued]
+        self.assertEqual(_incomplete_speech_region_coverage(self._state(items)), [])
+
+    def test_manual_review_without_redraw_is_still_residual(self):
+        item = {"id": "S1", "classification": "speech", "redrawn": False,
+                "translation_final_state": "manual_review",
+                "translation_final_reason": "rendered_on_learned_clean_rescue",
+                "bounding_box": [138, 591, 432, 43], "clean_text": "THINGS YOU BECOME",
+                "translation": ""}
+        items = [self._rendered("R1", (140, 534, 430, 44)), item]
+        self.assertEqual(len(_incomplete_speech_region_coverage(self._state(items))), 1)

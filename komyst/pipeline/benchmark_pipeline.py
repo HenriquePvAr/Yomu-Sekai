@@ -110,6 +110,7 @@ from komyst.pipeline.pipeline_cache import (
 from komyst.pipeline.session_context import SessionContextStore
 from komyst.export.png_output import export_final_pages_png, PngExportError
 from komyst.translation.providers.komyst_backend_provider import SystemicTranslationFailure
+from komyst.translation.sfx_glossary import translate_sfx_fuzzy
 
 _RAPIDOCR_INFERENCE_LOCK = threading.BoundedSemaphore(1)
 
@@ -5840,10 +5841,18 @@ def _item_is_unassigned_residue_candidate(item):
 
 
 def _item_is_rendered(item):
+    if not item.get("redrawn"):
+        return False
     return (
         str(item.get("translation_final_state") or "") == "translated"
-        and bool(item.get("redrawn"))
+        or str(item.get("translation_final_reason") or "") == "rendered_on_learned_clean_rescue"
     )
+
+
+def _item_is_known_sfx(item):
+    """Whether the item's text (sans trailing punctuation) is a glossary sound effect."""
+    text = re.sub(r"[\s.!?,;:\-…]+$", "", _item_source_text(item))
+    return bool(text) and translate_sfx_fuzzy(text) is not None
 
 
 def _boxes_form_one_speech_block(a, b, *, allow_small_residual=False):
