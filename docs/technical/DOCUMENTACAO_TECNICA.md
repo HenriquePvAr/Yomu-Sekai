@@ -1892,6 +1892,26 @@ estilo de diálogo (`balloon_dialogue`, fonte `comic_sans_style`) com a cor medi
 "contorno" de tom intermediário entre tinta e fundo é a moldura do balão (a caixa segura a inclui) ou a borda
 suavizada, e não desqualifica a tinta simples. Teste: `tests/test_blue_ink_on_light_box_style.py`.
 
+Outras regras de fidelidade da tipografia (2026-11-14):
+
+- **Polaridade com contorno grosso** (`extract_original_lettering_profile`): quando o k-means encontra um contorno
+  real e a cor majoritária é a do contorno, a família da tinta segue o miolo. Antes, texto escuro com contorno branco
+  largo numa página clara virava "tinta branca" e saía invisível. Teste: `tests/test_outlined_ink_polarity.py`.
+- **Sem cor inventada**: com leitura fraca dos pixels, um grito em fundo claro é tinta escura simples (antes recebia o
+  preset vermelho com brilho). Teste: `tests/test_low_confidence_shout_is_not_red.py`.
+- **Tamanho de display**: o lettering display também parte da altura real da tinta do original; só o SFX traduzido
+  mantém a regra própria. Teste: `tests/test_source_ink_font_size.py`.
+- **Fonte por casamento de imagem** (`FONT_RASTER_MATCH`, `font_fidelity.match_font_by_raster`): as palavras do
+  original são redesenhadas em cada fonte das cadeias de papel e comparadas com a tinta do original (forma na mesma
+  altura, condensação, traço); a vencedora substitui a fonte do papel só com vantagem de pelo menos 0,03. Fontes que
+  não desenham a tradução (inclusive o quadradinho de glifo ausente, o "tofu") ficam de fora. Teste:
+  `tests/test_raster_font_match.py`.
+- **Censura**: uma sequência de 3 ou mais ideogramas iguais num texto em escrita latina (asteriscos lidos pelo OCR
+  como CJK) volta a ser `*` em `clean_ocr_text`. Teste: `tests/test_ocr_censor_glyphs.py`.
+- **Caixa alta**: a decisão de maiúsculas ignora as letras de mesmo desenho nos dois casos (c, o, s, v, w, x, z, k, p,
+  u), que o OCR troca ao acaso. Teste: `tests/test_source_case_ocr_noise.py`.
+
+
 ## 17. Qualidade, validação física e proveniência
 
 O sistema separa **sucesso técnico** de **aprovação de qualidade**. Um PDF pode existir e a
