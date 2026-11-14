@@ -74,9 +74,6 @@ RAM/VRAM, tempo do capítulo e limites ainda não homologados de requisitos mín
 - [Entrada por pasta local](LOCAL_FOLDER_INPUT.md) — processar imagens já presentes no computador
 - [Transportes de download](DOWNLOAD_TRANSPORTS.md) — abstração de transporte e validação por bytes
 
-### PSD e saídas profissionais
-
-
 ### Qualidade
 
 - [Qualidade e validação](QUALITY_AND_VALIDATION.md) — gates, fallbacks, retries, estados terminais e riscos abertos
@@ -137,9 +134,9 @@ em que foram escritos e **não** substituem os documentos primários:
 | Fila, worker e supervisão | **IMPLEMENTADOS** — fila local persistente, worker separado e recuperação supervisionada |
 | Retomada de job | **IMPLEMENTADA** — a interface permite retomar jobs elegíveis (`can_resume`) |
 | Leitor, PDF e histórico | **IMPLEMENTADOS** — páginas e artefatos locais podem ser consultados no aplicativo |
-| Licença Beta | **IMPLEMENTADA** — autorização fail-closed no início/retomada; **validado por beta tester, informado pelo dono** na versão `v0.9.1-beta.18`; data não informada |
-| Instalador Windows | **IMPLEMENTADO** — PyInstaller e Inno Setup geram `Komyst-<versão>-Setup-x64.exe`; instalação da `v0.9.1-beta.18` **validada por beta tester, informado pelo dono**; data não informada |
-| Instalação limpa Windows | **VALIDADA** na `v0.9.1-beta.18` por beta tester, informado pelo dono; data não informada |
+| Licença Beta | **IMPLEMENTADA** — autorização fail-closed no início/retomada |
+| Instalador Windows | **IMPLEMENTADO** — PyInstaller e Inno Setup geram `Komyst-<versão>-Setup-x64.exe` |
+| Instalação limpa Windows | **VALIDADA** por um beta tester na `v0.9.1-beta.18` (data não registrada) |
 | Atualizador | **IMPLEMENTADO** no cliente, com verificação de assinatura e hash; disponibilidade do manifesto depende do canal Beta |
 | Comunidade | **EM DESENVOLVIMENTO** — a interface informa indisponibilidade nesta versão |
 | Scan Studio | **EM DESENVOLVIMENTO** — a aba exibe aviso de indisponibilidade |
@@ -149,4 +146,4 @@ e [§29 Dívida técnica](technical/DOCUMENTACAO_TECNICA.md#29-dívida-técnica-
 
 ---
 
-Para proveniência e limites de cada capacidade, consulte os documentos técnicos e o [board operacional](status/board/index.html). A validação Beta acima foi informada pelo dono; não é uma medição executada nesta integração.
+Para proveniência e limites de cada capacidade, consulte os documentos técnicos e o [board operacional](status/board/index.html).

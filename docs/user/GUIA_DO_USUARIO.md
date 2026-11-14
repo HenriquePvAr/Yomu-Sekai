@@ -1,6 +1,6 @@
 # Komyst — Guia do Usuário
 
-> **Base verificada:** `940fec5` · **Revisado em:** 2026-11-13 · Idioma original reverificado sobre `dev` (`885a237`) em 2026-11-03; glossário de nomes verificado sobre `22f595d` (feat/GLOSSARY-01), integrado em `main`
+> **Base verificada:** `b758ccc` · **Revisado em:** 2026-11-13 · Idioma original reverificado sobre `dev` (`885a237`) em 2026-11-03; glossário de nomes verificado sobre `22f595d` (feat/GLOSSARY-01), integrado em `main`
 > **Para quem é:** Scans, tradutores, editores e testadores da Beta. Nenhum conhecimento
 > técnico é necessário.
 
@@ -75,9 +75,9 @@ ação explicitamente.
 | Efeitos sonoros (SFX) traduzidos para onomatopeias em português | Não por padrão; o lettering original é preservado (`TRANSLATE_SFX=True` habilita tradução) |
 | Comunidade (descobrir e publicar traduções) | ⏳ Em desenvolvimento — a interface informa indisponibilidade nesta versão |
 | Scan Studio (ajuste manual de cada etapa) | ⏳ Planejado — a aba **Scans** mostra **EM DESENVOLVIMENTO** |
-| Instalação para usuário final | ✅ Instalador Beta `v0.9.1-beta.18`; instalador e instalação limpa **validados por beta tester, informado pelo dono**; data não informada |
+| Instalação para usuário final | ✅ Instalador Beta `v0.9.1-beta.18` |
 | Atualização pelo aplicativo | ✅ A tela **Atualizações** verifica o canal e instala pacotes assinados; uma versão precisa estar publicada no canal Beta |
-| Conta/licença de tester | ✅ A autorização Beta é verificada ao iniciar ou retomar um job; `v0.9.1-beta.18` **validada por beta tester, informado pelo dono**; data não informada |
+| Conta/licença de tester | ✅ A autorização Beta é verificada ao iniciar ou retomar um job |
 
 ## 3. O que você precisa no computador
 
@@ -96,8 +96,8 @@ de 8 GB; isso não é um mínimo homologado nem uma promessa de tempo por capít
 ## 4. Como instalar
 
 Baixe `Komyst-0.9.1-beta.18-Setup-x64.exe` pelo canal Beta indicado pela equipe e execute o
-instalador. A instalação dessa versão em Windows limpo foi **validada por beta tester, informado
-pelo dono**; a data da rodada não foi informada. Você não precisa instalar Python nem configurar
+instalador. A instalação dessa versão em Windows limpo foi validada por um beta tester (data não registrada).
+Você não precisa instalar Python nem configurar
 o ambiente de desenvolvimento.
 
 Depois da instalação, abra o Komyst pelo atalho e siga para [abrir o programa pela primeira vez](#5-abrindo-o-programa-pela-primeira-vez).

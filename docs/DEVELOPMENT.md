@@ -356,17 +356,16 @@ modos. Sem a biblioteca, a escalação é pulada e a leitura do RapidOCR é mant
 próprio gate do RapidOCR recusa a página, a falha é fechada e contabilizada
 (`paddle_error:ModuleNotFoundError`), nunca silenciosa.
 
-> Os estados de implementação abaixo descrevem o código. A validação de instalação Beta foi
-> informada pelo dono e não foi reproduzida nesta sessão.
+> Os estados de implementação abaixo descrevem o código. A instalação limpa em Windows foi validada por um beta tester com a `v0.9.1-beta.18` (data não registrada).
 
 | Item | Estado |
 | --- | --- |
 | Baseline de empacotamento | **PRONTA** — pipeline congelado, manifests pinados, evidência de E2E registrada |
 | Perfil de runtime Beta | **DEFINIDO E PROVADO EM AMBIENTE LIMPO** — `requirements/requirements-beta.txt`, uma única distribuição de OpenCV, `pip check` limpo, preflight verde, E2E real executado (job `902b149e`: 35/35 páginas, PDF válido, zero Paddle carregado) |
 | Baseline de qualidade sob o runtime Beta | **NÃO PRESERVADA** — o E2E não reproduziu P28/P31/P32 |
-| Instalação limpa em Windows | **Validada por beta tester, informado pelo dono** — versão `v0.9.1-beta.18`; data: não informada |
-| Instalador para usuário final | **IMPLEMENTADO** — `packaging/komyst.spec`, `packaging/Komyst.iss` e `tools/build_installer.py` geram `Komyst-<versão>-Setup-x64.exe`; **validado por beta tester, informado pelo dono** — versão `v0.9.1-beta.18`; data: não informada |
-| Licença Beta | **IMPLEMENTADA** — autorização fail-closed em `komyst/auth/beta_license.py`, integrada ao início/retomada; **validado por beta tester, informado pelo dono** — versão `v0.9.1-beta.18`; data: não informada |
+| Instalação limpa em Windows | **VALIDADA** (`v0.9.1-beta.18`) |
+| Instalador para usuário final | **IMPLEMENTADO** — `packaging/komyst.spec`, `packaging/Komyst.iss` e `tools/build_installer.py` geram `Komyst-<versão>-Setup-x64.exe` |
+| Licença Beta | **IMPLEMENTADA** — autorização fail-closed em `komyst/auth/beta_license.py`, integrada ao início/retomada |
 | Modelo de atualização | **IMPLEMENTADO no cliente** — assinatura, hash, download e instalação atômica (`komyst/runtime/update_*`, `installer_update.py`) e aba **Atualizações**; publicação do manifesto depende do canal Beta |
 | Comunidade | **EM DESENVOLVIMENTO** — a interface informa indisponibilidade nesta versão |
 

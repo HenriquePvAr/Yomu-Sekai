@@ -73,8 +73,6 @@ window.BOARD = {
       ],
       "links": [
         { "label": "Plano Fase 0", "path": "docs/plans/PLANO_EXECUCAO_KOMYST.md" },
-        { "label": "Diagnóstico PSD F0.4", "path": "docs/reports/fase_0_f04_psd_diagnostico.md" },
-        { "label": "Monitor F0.6", "path": "docs/reports/fase_0_f06_monitor_recursos.md" },
         { "label": "Falhas preexistentes", "path": "docs/reports/falhas_preexistentes_20261111.md" }
       ]
     },
@@ -103,9 +101,7 @@ window.BOARD = {
       ],
       "links": [
         { "label": "Plano KOMYST", "path": "docs/plans/PLANO_EXECUCAO_KOMYST.md" },
-        { "label": "Relatório Fase 3", "path": "docs/reports/fase3_qualidade_20261112.md" },
-        { "label": "Falhas preexistentes", "path": "docs/reports/falhas_preexistentes_20261111.md" },
-        { "label": "Perguntas pendentes", "path": "docs/reports/perguntas_pendentes.md" }
+        { "label": "Falhas preexistentes", "path": "docs/reports/falhas_preexistentes_20261111.md" }
       ]
     },
     {

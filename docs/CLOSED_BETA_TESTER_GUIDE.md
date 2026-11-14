@@ -7,9 +7,7 @@
 3. Entre com a conta habilitada para a Beta. A autorização é verificada pelo aplicativo ao iniciar
    ou retomar um job; em caso de bloqueio, siga a mensagem exibida e fale com a equipe.
 
-Instalador, licença Beta e instalação limpa da versão `v0.9.1-beta.18` foram **validados por beta
-tester, informado pelo dono**. **Data da rodada:** não informada. Esse resultado foi comunicado pelo
-dono e não foi reproduzido nesta atualização documental.
+A instalação limpa em Windows foi validada por um beta tester com a `v0.9.1-beta.18` (data não registrada).
 
 ## Atualização
 

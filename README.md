@@ -12,8 +12,8 @@ reconstrói as imagens e gera um PDF. Regiões com qualidade incerta podem exigi
 
 Baixe o instalador da versão Beta disponibilizada pela equipe, execute `Komyst-0.9.1-beta.18-Setup-x64.exe`
 e abra o Komyst pelo atalho criado. Entre com sua conta e a licença Beta fornecida pela equipe.
-O instalador e a instalação limpa dessa versão foram **validados por beta tester, informado pelo dono**;
-a data dessa rodada não foi informada. Consulte o [Guia do Usuário](docs/user/GUIA_DO_USUARIO.md)
+A instalação limpa em Windows foi validada por um beta tester com a `v0.9.1-beta.18` (data não registrada).
+Consulte o [Guia do Usuário](docs/user/GUIA_DO_USUARIO.md)
 para o primeiro acesso e a [documentação de instalação](docs/INSTALLATION.md) para detalhes técnicos.
 
 ## Desenvolvimento

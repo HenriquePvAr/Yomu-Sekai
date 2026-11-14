@@ -149,15 +149,15 @@ WHY: <motivo — ex.: refatoração interna sem mudança de comportamento, API, 
   no canal continua gate externo.
 - Instalador Beta: `packaging/Komyst.iss`, `packaging/komyst.spec` e
   `tools/build_installer.py` definem o pacote `Komyst-<versão>-Setup-x64.exe`. A versão
-  `v0.9.1-beta.18` foi **validada por beta tester, informado pelo dono**; data não informada.
+  `v0.9.1-beta.18` foi validada por um beta tester (data não registrada).
 - Licença de tester: `komyst/auth/beta_license.py` define a autorização fail-closed e a
-  integração remota; a versão `v0.9.1-beta.18` foi **validada por beta tester, informado pelo
-  dono**; data não informada. Nenhum segredo administrativo deve entrar na documentação.
+  integração remota; a versão `v0.9.1-beta.18` foi validada por um beta tester (data não
+  registrada). Nenhum segredo administrativo deve entrar na documentação.
 
 ### Estado do produto e evidência
 
 A tabela resume o código atual e os gates externos conhecidos. Para cada release, confira novamente os contratos no código e os artefatos de validação.
-código. Ela envelhece: confira o código antes de assumir que um valor não mudou.
+A tabela é um instantâneo do código. Ela envelhece: confira o código antes de assumir que um valor não mudou.
 
 > Os estados desta tabela devem ser conferidos contra o código atual antes de qualquer release.
 
@@ -170,9 +170,9 @@ código. Ela envelhece: confira o código antes de assumir que um valor não mud
 | Retomada de job interrompido na UI | **implementada** — `#interruptedJobsPanel` + botão `Retomar` em `static/komyst_ui.js`, exibido só com `can_resume` |
 | SFX e tipografia | `TRANSLATE_SFX=False` por padrão (SFX preservados no original); `RENDER_FIT_BALLOON_SHAPE` e `RENDER_MATCH_SOURCE_SLANT` padrão `True`, só em `komyst/config/settings.py` |
 | Updater | **IMPLEMENTADO** (código + UI): `komyst/runtime/update_manifest.py` (Ed25519 + SHA-256, chave `beta-2026-10`), `update_transport.py`, `update_installer.py`, `installer_update.py`, `update_bootstrap.py` (`DEFAULT_MANIFEST_URL` configurada), aba **Atualizações** e rotas `/api/update/*` em `komyst/ui/app.py`. Manifest publicado no canal: `EXTERNAL_GATE` |
-| Instalador | **IMPLEMENTADO** — `packaging/komyst.spec`, `packaging/Komyst.iss`, `tools/build_installer.py`; `v0.9.1-beta.18` validada por beta tester, informado pelo dono; data não informada |
-| Licença de tester Beta | **IMPLEMENTADA** — autorização remota fail-closed; versão `v0.9.1-beta.18` **validada por beta tester, informado pelo dono**; data não informada |
-| Instalação limpa em Windows | **Validada por beta tester, informado pelo dono** — versão `v0.9.1-beta.18`; data: não informada |
+| Instalador | **IMPLEMENTADO** — `packaging/komyst.spec`, `packaging/Komyst.iss`, `tools/build_installer.py`; `v0.9.1-beta.18` validada por um beta tester (data não registrada) |
+| Licença de tester Beta | **IMPLEMENTADA** — autorização remota fail-closed; versão `v0.9.1-beta.18` validada por um beta tester (data não registrada) |
+| Instalação limpa em Windows | **Validada por um beta tester** — versão `v0.9.1-beta.18`; data não registrada |
 | CF clearance (comix.to) | o persistidor `_save_comix_cf_clearance` do branch `feat/comix-cloudflare-clearance-v1` **não está** na `main`; só o posicionamento oculto do CloakBrowser existe (`komyst/download/readers/scrapling_reader_resolver.py`) |
 | Requisitos | `requirements.txt` na raiz; perfis em `requirements/` (`requirements-beta.txt` inclui `-r ../requirements.txt`) |
 | Suíte hermética | Consulte o resultado da suíte anexado à revisão da branch; totais históricos não são estado atual |

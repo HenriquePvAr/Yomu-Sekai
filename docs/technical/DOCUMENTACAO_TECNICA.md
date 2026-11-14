@@ -9,7 +9,7 @@
 > Multi-idioma OCR (§14) reverificado sobre `dev` em 2026-11-03; glossário de nomes (§15)
 > verificado sobre `22f595d` (feat/GLOSSARY-01), integrado em `dev`/`main`.
 > §17, "Auditoria linguística e taxonomia semântica", item 5 (retry pelo backend) verificado sobre `885a237` (branch `dev`) em 2026-11-03.
-> **Última revisão:** 2026-11-13 (base verificada `940fec5`, branch `fase-4-entrega`; §26.6)
+> **Última revisão:** 2026-11-13 (base verificada `b758ccc`; §26.6)
 > **Público:** desenvolvedores, mantenedores e suporte técnico.
 
 Documentos irmãos: [Guia do Usuário](../user/GUIA_DO_USUARIO.md) ·
@@ -101,11 +101,11 @@ O produto caminha para a **primeira beta externa com Scans**. Estado por área:
 | Leitor PDF integrado | **IMPLEMENTADO** — TDD #83: **LER** é a ação primária do card do Histórico e abre o capítulo na aba **Leitor**, dentro do shell, com paginação, zoom, ajuste à largura/página, miniaturas preguiçosas, teclado e tela cheia. Sem dependência nova: as páginas são os JPEGs já contidos no PDF da execução. Abrir externamente permanece como ação secundária |
 | Comunidade social (Supabase + Drive) | **PARCIAL** — rotas de backend existem (fail-closed se não configurado), mas a UI está desligada no cliente (`COMMUNITY_ENABLED = false` em `static/social_community.js`; a aba aparece como "EM BREVE"/"EM DESENVOLVIMENTO") |
 | Tradução no cliente | **IMPLEMENTADO** — todo job com tradução habilitada usa o provider interno autenticado `komyst_backend` (Edge Function `translation-execute`); providers locais DeepL/NVIDIA/NLLB só no pipeline legado (§15) |
-| Licenciamento / expiração de tester | **IMPLEMENTADO** — gate fail-closed e autorização remota no início/retomada; `v0.9.1-beta.18` **validada por beta tester, informado pelo dono**; data não informada |
+| Licenciamento / expiração de tester | **IMPLEMENTADO** — gate fail-closed e autorização remota no início/retomada |
 | Retomada de job interrompido | **IMPLEMENTADO** — TDD #56: `POST /api/ui/resume` mais o painel `#interruptedJobsPanel` e o botão `Retomar`, renderizado apenas para os jobs que o backend marca `can_resume` (`static/komyst_ui.js`, `tests/test_interrupted_job_resume_ui.py`/`.mjs`) |
-| Instalador para usuário final | **IMPLEMENTADO** — `packaging/komyst.spec`, `packaging/Komyst.iss` e `tools/build_installer.py`; `v0.9.1-beta.18` **validada por beta tester, informado pelo dono**; data não informada |
+| Instalador para usuário final | **IMPLEMENTADO** — `packaging/komyst.spec`, `packaging/Komyst.iss` e `tools/build_installer.py` |
 | Atualizador automático assinado | **IMPLEMENTADO no cliente** — verificação de assinatura/hash, transporte, instalação e UI; publicação de manifesto compatível permanece gate do canal Beta. E2E do updater não foi reportado como validado |
-| Instalação limpa em Windows | **Validada por beta tester, informado pelo dono** para `v0.9.1-beta.18`; data não informada. O E2E funcional completo é um gate separado |
+| Instalação limpa em Windows | **VALIDADA** por um beta tester na `v0.9.1-beta.18` (data não registrada). O E2E funcional completo é um gate separado |
 
 > **Aviso.** Nada em `PLANEJADO` deve ser descrito como disponível em nenhum documento,
 > release note ou mensagem de UI.
@@ -209,8 +209,7 @@ flowchart TD
 ```
 
 `<runtime>` e `<output>` são resolvidos por `komyst/runtime/runtime_paths.py` (§10): por padrão
-`%LOCALAPPDATA%\Komyst
-untime` e `%LOCALAPPDATA%\Komyst\output`.
+`%LOCALAPPDATA%\Komyst\runtime` e `%LOCALAPPDATA%\Komyst\output`.
 
 Pontos de contrato:
 
@@ -3981,8 +3980,7 @@ limpa/updater · `YK_POSTGRES_VALIDATION`.
 > Itens de instalador, canal/chave do updater e instalação limpa foram removidos desta lista:
 > o código atual tem `packaging/komyst.spec`, `packaging/Komyst.iss`, `tools/build_installer.py`,
 > a chave `beta-2026-10` em `update_manifest.TRUSTED_PUBLIC_KEYS`, `DEFAULT_MANIFEST_URL` em
-> `update_bootstrap.py` e a aba **Atualizações**; instalador, licença Beta e instalação limpa da
-> `v0.9.1-beta.18` foram **validados por beta tester, informado pelo dono** (data não informada).
+> `update_bootstrap.py` e a aba **Atualizações**; a instalação limpa em Windows foi validada por um beta tester com a `v0.9.1-beta.18` (data não registrada).
 > `UI-COPY-NAMES-NVIDIA` e `PROVIDER-HTTP-TELEMETRY-GAP` não foram reconferidos. Os módulos
 > citados vivem sob `komyst/` (§3).
 
@@ -4116,9 +4114,8 @@ Provado por `tests/test_supabase_security_hardening.py` (PostgreSQL real em Dock
 
 ### Estado atual
 
-Instalador, licença Beta e instalação limpa em Windows da versão `v0.9.1-beta.18` foram
-**validados por beta tester, informado pelo dono**; a data da validação não foi informada e esta
-documentação não a reexecutou. Fora dessa versão, confira o código e os artefatos antes de
+A instalação limpa em Windows foi validada por um beta tester com a `v0.9.1-beta.18` (data não
+registrada). Fora dessa versão, confira o código e os artefatos antes de
 qualquer decisão de release.
 
 ### Empacotamento — IMPLEMENTADO
@@ -4158,12 +4155,12 @@ administrativa fora do cliente. Nenhum segredo administrativo em nenhum document
 | Detecção de crash duro do worker | ✅ fechada |
 | Supervisão do launcher | ✅ fechada |
 | Documentação técnica + guia do usuário | ✅ (este documento) |
-| Instalador para usuário final | ✅ `v0.9.1-beta.18` validada por beta tester, informado pelo dono (data não informada) |
+| Instalador para usuário final | ✅ implementado |
 | Updater assinado — núcleo de confiança (manifest, assinatura, SHA, staging, ativação, rollback) | ✅ fechado (TDD #57) |
 | Updater assinado — transporte remoto + seam do launcher | ✅ fechado (TDD #58) |
 | Updater assinado — chave, URL de canal e aba Atualizações | ✅ implementados; manifest publicado no canal é gate externo |
-| Licenciamento de tester | ✅ `v0.9.1-beta.18` validada por beta tester, informado pelo dono (§19) |
-| Instalação limpa em Windows | ✅ `v0.9.1-beta.18` validada por beta tester, informado pelo dono (data não informada) |
+| Licenciamento de tester | ✅ implementado (§19) |
+| Instalação limpa em Windows | ✅ validada por um beta tester na `v0.9.1-beta.18` (data não registrada) |
 | Screenshots reais no guia do usuário | ⬜ pendente |
 
 ## 31. Economia de YK e anúncios — PARCIAL

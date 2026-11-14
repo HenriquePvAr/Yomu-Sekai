@@ -1,7 +1,7 @@
 # Relatório final — Fases 0 a 6 (2026-11-13)
 
 Base: `dev` @ `15e3f0b`. Máquina de medição: 31,4 GB de RAM, AMD Radeon RX 6600 (8 GB), Windows 10.
-**Condição das medições:** a RAM do sistema ficou em 61–66% (o WSL/Docker do dono estava em uso na mesma
+**Condição das medições:** a RAM do sistema ficou em 61–66% (o WSL/Docker da máquina estava em uso na mesma
 máquina). Os tempos são, portanto, de uma máquina sob uso, não de uma máquina livre.
 
 **Ressalva (descoberta depois do fechamento):** em todos os jobs de 2026-11-13 o LaMa grande e o FLUX
