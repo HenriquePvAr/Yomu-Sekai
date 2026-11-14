@@ -5667,6 +5667,13 @@ class PortugueseForSubjunctiveTests(unittest.TestCase):
         )
         self.assertTrue(valid, reason)
 
+    def test_for_before_nobody_after_long_clause_is_portuguese(self):
+        valid, reason = validate_translation_text(
+            "IF ONE OF THE MAIN CANDIDATES IS A NOBODY, THE RESULT WILL BE BAD.",
+            "SE UM DOS PRINCIPAIS CANDIDATOS NÃO FOR NINGUÉM, O RESULTADO SERÁ RUIM.",
+        )
+        self.assertTrue(valid, reason)
+
     def test_english_for_phrase_is_still_rejected(self):
         valid, _ = validate_translation_text(
             self.SOURCE,
@@ -5677,3 +5684,36 @@ class PortugueseForSubjunctiveTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class RenderedRescueAndSfxCoverageTests(unittest.TestCase):
+    _state = staticmethod(OCRQualityRegressionTests._coverage_state)
+
+    @staticmethod
+    def _rendered(id_, box):
+        return OCRQualityRegressionTests._rendered_speech(id_, box)
+
+    def test_redrawn_learned_clean_rescue_counts_as_rendered(self):
+        rescued = {"id": "S1", "classification": "speech", "redrawn": True,
+                   "translation_final_state": "manual_review",
+                   "translation_final_reason": "rendered_on_learned_clean_rescue",
+                   "bounding_box": [138, 591, 432, 43], "clean_text": "THINGS YOU BECOME",
+                   "translation": "COISAS QUE VOCE SE TORNA"}
+        items = [self._rendered("R1", (140, 534, 430, 44)), rescued]
+        self.assertEqual(_incomplete_speech_region_coverage(self._state(items)), [])
+
+    def test_manual_review_without_redraw_is_still_residual(self):
+        item = {"id": "S1", "classification": "speech", "redrawn": False,
+                "translation_final_state": "manual_review",
+                "translation_final_reason": "rendered_on_learned_clean_rescue",
+                "bounding_box": [138, 591, 432, 43], "clean_text": "THINGS YOU BECOME",
+                "translation": ""}
+        items = [self._rendered("R1", (140, 534, 430, 44)), item]
+        self.assertEqual(len(_incomplete_speech_region_coverage(self._state(items))), 1)
+
+    def test_known_sfx_stacked_near_balloon_is_not_untranslated_speech(self):
+        sfx = OCRQualityRegressionTests._unrendered(
+            "S1", (138, 591, 432, 43), "CLUNK-.", classification="sfx",
+            state="skipped_with_reason")
+        items = [self._rendered("R1", (140, 534, 430, 44)), sfx]
+        self.assertEqual(_incomplete_speech_region_coverage(self._state(items)), [])

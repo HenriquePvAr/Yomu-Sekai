@@ -1749,6 +1749,13 @@ Décima primeira passada (reconstrução e regiões restantes, 2026-10-25, **IMP
   38 → 68 traduzidos, 33 → 0 falhas visuais, falha estrutural → só revisão. GPU (item 6):
   otimizar o grafo do LaMa na CPU reduz 9.739 → 5.184 nós mas a inicialização DirectML só cai
   de 10,4 s para 9,4 s (o custo é a compilação das convoluções); não adotado.
+  Qualidade (`fix-ocr`): aspas retas/curvas e parênteses não contam como caractere estranho em
+  `_looks_like_noise`; nomes romanizados ligados por hífen (`AB-CD`, `hyphenated_name_tokens`)
+  ficam fora da correção por vocabulário e das penalidades `dictionary_near_miss`/
+  `unknown_short_token_in_phrase`; "FOR" subjuntivo aceito após `NÃO/NUNCA/JAMAIS` antes de
+  `UM/NINGUÉM/NADA/POSSÍVEL/VERDADE/PRECISO`; "a nobody" (substantivo) não conta como negação em
+  `_negation_asymmetry`; `_incomplete_speech_region_coverage` trata item redesenhado por
+  `rendered_on_learned_clean_rescue` como renderizado e ignora onomatopeia do glossário.
 - Revisão visual (passo 15): **texto fora do balão e inglês restante.** Agrupamento: duas
   linhas sobre fundo claro separadas por um traço escuro longo (borda de balão,
   `_balloon_border_mask`/`_border_separates`) não se juntam, e um grupo cujas linhas formam

@@ -43,6 +43,7 @@ from komyst.ocr.ocr_engine import (
     OCRLine,
     assess_ocr_repair,
     clean_ocr_text,
+    hyphenated_name_tokens,
     mark_ocr_line_recovered,
     repair_ocr_text,
     segment_compact_english_word,
@@ -1547,6 +1548,7 @@ def split_glued_source_words(text, protected=(), chapter_names=(), chapter_words
     names = sorted({key for key in (_name_token_of(name) for name in chapter_names or ())
                     if len(key) >= 3}, key=len, reverse=True)
     vocabulary = frozenset(chapter_words or ())
+    hyphen_names = hyphenated_name_tokens(text)
 
     def repair(match):
         token = match.group(0)
@@ -1583,7 +1585,7 @@ def split_glued_source_words(text, protected=(), chapter_names=(), chapter_words
             if words and len(words) > 1:
                 joined = " ".join(words)
                 return joined if token.upper() == token else joined.lower()
-        corrected = _misread_correction(key, vocabulary)
+        corrected = None if key in hyphen_names else _misread_correction(key, vocabulary)
         return (_restore_shape(token, corrected) or token) if corrected else token
 
     return re.sub(r"[A-Za-z][A-Za-z'’]*[A-Za-z]|[A-Za-z]", repair, str(text or ""))
@@ -4125,7 +4127,7 @@ def _looks_like_noise(text):
     odd = sum(
         1
         for char in sanitized
-        if not (char.isalnum() or char in "'!?.,:; -")
+        if not (char.isalnum() or char in "'!?.,:; -\"“”‘’()")
     )
     if odd / max(1, len(sanitized)) > 0.28:
         return True
@@ -6061,8 +6063,9 @@ def score_group_ocr_quality(group):
             reasons.append("generic_ocr_repair_available")
             score -= 0.08
 
+    hyphen_names = hyphenated_name_tokens(text)
     for token in token_letters:
-        if len(token) < 2 or _frequent_word(token) or token in SFX_WORDS:
+        if len(token) < 2 or _frequent_word(token) or token in SFX_WORDS or token in hyphen_names:
             continue
         suggestion, suggestion_score = suggest_english_word(token)
         if suggestion and suggestion_score >= 0.62:
@@ -9945,7 +9948,11 @@ PORTUGUESE_FOR_CONTEXT_BRIDGE_TOKENS = {
     "TAMBEM",
     "VOCE",
 }
-PORTUGUESE_FOR_LEFT_CONTEXT_WINDOW = 4
+PORTUGUESE_FOR_LEFT_CONTEXT_WINDOW = 7
+PORTUGUESE_FOR_NEGATION_TOKENS = {"NAO", "NUNCA", "JAMAIS"}
+PORTUGUESE_FOR_NEXT_TOKENS = {
+    "UM", "UMA", "UNS", "UMAS", "NINGUEM", "NADA", "POSSIVEL", "VERDADE", "PRECISO",
+}
 HIGH_CONFIDENCE_RESIDUAL_SPANISH_MARKERS = {
     "AHORA",
     "AUNQUE",
@@ -10049,8 +10056,11 @@ def _is_portuguese_folded_token(token_infos, index):
     # article, so "FOR UM/UMA" (with no English word before) is the subjunctive of "ser".
     previous_token = tokens[index - 1] if index > 0 else ""
     if (
-        next_token in {"UM", "UMA", "UNS", "UMAS"}
-        and previous_token not in RESIDUAL_TRANSLATION_ENGLISH_WORDS
+        next_token in PORTUGUESE_FOR_NEXT_TOKENS
+        and (
+            previous_token in PORTUGUESE_FOR_NEGATION_TOKENS
+            or previous_token not in RESIDUAL_TRANSLATION_ENGLISH_WORDS
+        )
     ):
         return True
     return False
