@@ -4125,7 +4125,7 @@ def _looks_like_noise(text):
     odd = sum(
         1
         for char in sanitized
-        if not (char.isalnum() or char in "'!?.,:; -")
+        if not (char.isalnum() or char in "'!?.,:; -\"“”‘’()")
     )
     if odd / max(1, len(sanitized)) > 0.28:
         return True
