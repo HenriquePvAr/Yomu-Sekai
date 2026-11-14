@@ -90,3 +90,23 @@ SCREENSHOTS:     NOT REQUIRED
 WHY:             docs/HARDWARE_PROFILE.md ganhou a leitura de VRAM, os limiares e as métricas medidas;
                  a correção do gate não muda rótulo, tela ou fluxo visível ao usuário.
 ```
+
+## 6. Medição com os modelos aprendidos ligados (2026-11-14)
+
+Depois de corrigir o caminho dos modelos (`models_root()`), o LaMa grande passou a ser encontrado (`MODEL_UNAVAILABLE`: 0).
+A RAM do sistema voltou a ficar em 93–99% (contêineres em uso), então **os tempos abaixo não são comparáveis** com os
+anteriores; a comparação válida é a de qualidade.
+
+| REF-B | Sem modelos | Com modelos |
+|---|---|---|
+| Traduzidas | 164/177 | **169/177** |
+| Revisão manual | 8 | **4** |
+| Resíduos físicos | 8 | **1** (`SIMPLE`, letreiro que depende de heurística não implementada) |
+| Páginas Clean certificadas | 60/85 | **68/85** |
+| Gate físico | falso | falso (1 resíduo; 16 páginas sem certificado) |
+| Pico de RAM do pipeline | 2 579 MB | 3 489 MB |
+| Tempo | 402 s | 793 s (RAM do sistema em 93%) |
+
+REF-A com modelos: 56/58, gate físico verdadeiro, 0 resíduos, 750 s (RAM do sistema em 99,5%). O guard de memória pulou o
+FLUX 53 vezes na REF-A e 145 na REF-B por falta de RAM livre; com a máquina livre esse número deve cair, mas isso não foi medido.
+O custo de RAM dos modelos aprendidos (~+900 MB de pico) conta contra a meta de redução de RAM da Fase 1.
