@@ -27,7 +27,10 @@ def _webhook() -> str:
     value = os.environ.get("KOMYST_DISCORD_WEBHOOK_URL", "").strip()
     if value:
         return value
-    path = Path(os.environ.get("KOMYST_DISCORD_WEBHOOK_FILE", "/home/ubuntu/komyst/.secrets/discord.env"))
+    file_value = os.environ.get("KOMYST_DISCORD_WEBHOOK_FILE", "").strip()
+    if not file_value:  # no default location: the secrets path must be configured explicitly
+        return ""
+    path = Path(file_value)
     try:
         for line in path.read_text(encoding="utf-8").splitlines():
             key, separator, value = line.partition("=")

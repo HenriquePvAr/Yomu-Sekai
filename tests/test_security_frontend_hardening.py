@@ -132,3 +132,12 @@ def test_drive_tokens_are_dpapi_protected_and_plaintext_files_still_load(tmp_pat
         assert legacy.read_bytes().startswith(b"KDPAPI1:")
     assert drive_auth.load_tokens(legacy).refresh_token == "R"
     assert drive_auth.load_tokens(tmp_path / "missing.json").refresh_token == ""
+
+
+def test_discord_webhook_file_has_no_default_path(monkeypatch):
+    from research.gemini_vps_web_worker import discord_observability as obs
+
+    monkeypatch.delenv("KOMYST_DISCORD_WEBHOOK_URL", raising=False)
+    monkeypatch.delenv("KOMYST_DISCORD_WEBHOOK_FILE", raising=False)
+    assert obs._webhook() == ""
+    assert "/home/ubuntu" not in (ROOT / "research" / "gemini_vps_web_worker" / "discord_observability.py").read_text(encoding="utf-8")
