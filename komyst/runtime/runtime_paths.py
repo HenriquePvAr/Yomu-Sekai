@@ -42,7 +42,7 @@ def default_user_data_root() -> Path:
 
 
 def models_root() -> Path:
-    """Folder that holds the optional model files (learned fill, FLUX, OCR, upscale).
+    r"""Folder that holds the optional model files (learned fill, FLUX, OCR, upscale).
 
     Follows the user data root (``KOMYST_USER_DATA_ROOT``); the legacy
     ``%LOCALAPPDATA%\Komyst\models`` folder is used only when it is the one that exists.

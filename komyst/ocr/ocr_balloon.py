@@ -20582,7 +20582,7 @@ def typography_profile_for_region(img_bgr, group, box, *, style=None):
             # Apply the measured outline without ever weakening an intentional
             # preset outline (never remove an outline that mattered).
             stroke_w = lettering.get("stroke_width")
-            if stroke_w:
+            if stroke_w and not profile.get("plain_lettering"):
                 profile["stroke_width"] = max(int(profile.get("stroke_width") or 1), int(stroke_w))
 
     # --- STROKE_STYLE: measured outline colour, independent of fill/role ----------
@@ -20663,6 +20663,19 @@ def typography_profile_for_region(img_bgr, group, box, *, style=None):
         profile["shadow_offset"] = tuple(shadow.get("shadow_offset") or (2, 2))
         profile["shadow_blur"] = int(shadow.get("shadow_blur") or 1)
     return profile
+
+
+def _dark_ink_on_light_background(lettering):
+    """True for dark ink on a bright background with no measured outline or glow.
+
+    The luminous caption presets (outlined, glowing, condensed) describe light lettering over dark
+    art; dark ink in a light box is ordinary lettering whatever its hue.
+    """
+    dominant = lettering.get("dominant_bgr")
+    if not dominant or lettering.get("stroke_present") or lettering.get("measured_neutral_glow"):
+        return False
+    luminance = 0.114 * dominant[0] + 0.587 * dominant[1] + 0.299 * dominant[2]
+    return float(lettering.get("background_brightness") or 0.0) >= 170.0 and luminance <= 120.0
 
 
 def _typography_profile_for_region(img_bgr, group, box, *, style=None):
@@ -20761,6 +20774,23 @@ def _typography_profile_for_region(img_bgr, group, box, *, style=None):
                 "content_width_ratio": 0.88,
                 "line_height_scale": 0.9,
                 "selected_font_role": "shout",
+            })
+            return base
+        if color_family == "blue" and open_caption and _dark_ink_on_light_background(lettering):
+            # Dark blue ink in a light box (a plain narration caption) has no luminous lettering to
+            # reproduce: the measured colour is applied later, with the ordinary dialogue style.
+            base.update({
+                "visual_class": "balloon_dialogue",
+                "font_class": "comic_sans_style",
+                "fill_color": (32, 28, 38),
+                "stroke_color": (250, 250, 252),
+                "stroke_width": 1,
+                "glow_color": None,
+                "glow_strength": 0,
+                "shadow_color": None,
+                "shadow_offset": (0, 0),
+                "font_size_scale": 0.78,
+                "plain_lettering": True,
             })
             return base
         if color_family == "blue" and open_caption:
