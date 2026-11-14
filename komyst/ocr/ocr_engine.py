@@ -859,11 +859,34 @@ def _join_line_break_hyphens(text):
     return _LINE_BREAK_HYPHEN.sub(join, text)
 
 
+# A censor run is its own token of one symbol repeated three or more times; short or glued
+# ideographs ("no人人") are OCR noise and must stay visible to the noise scoring.
+_CENSOR_LOOKALIKES = re.compile(
+    r"(?<!\S)([㐀-䶿一-鿿※＊])\1{2,}(?=[\s!?.,;:]|$)")
+_LETTER_BEFORE_CENSOR = re.compile(r"\b([A-Za-z]) (?=\*{3,})")
+
+
+def _normalize_censor_glyphs(text):
+    """Asterisk censoring ("B****") read as CJK ideographs in Latin-script lettering.
+
+    The OCR models know CJK, so a run of stars comes back as ideographs such as U+7C73, which the
+    translator keeps and the lettering font cannot draw (tofu). In text written in Latin script an
+    ideograph is not lettering of the chapter's language, so it is restored to the asterisk it
+    almost always stands for, and the gap the OCR put after a lone initial is closed.
+    """
+    if not _CENSOR_LOOKALIKES.search(text):
+        return text
+    if sum(1 for char in text if char.isascii() and char.isalpha()) < 3:
+        return text
+    starred = _CENSOR_LOOKALIKES.sub(lambda match: "*" * len(match.group(0)), text)
+    return _LETTER_BEFORE_CENSOR.sub(r"\1", starred)
+
+
 def clean_ocr_text(text):
     text = (text or "").replace("\r", "\n")
     text = re.sub(r"[ \t]+", " ", text)
     text = re.sub(r"\s*\n\s*", " ", text)
-    return _join_line_break_hyphens(text.strip())
+    return _normalize_censor_glyphs(_join_line_break_hyphens(text.strip()))
 
 
 COMMON_REPEATED_WORDS = {
