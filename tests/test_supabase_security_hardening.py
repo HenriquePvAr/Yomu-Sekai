@@ -157,6 +157,33 @@ def test_user_delete_schema_ready_has_empty_search_path(db):
     ).fetchone()[0] is False
 
 
+PIN_MIGRATION = ROOT / "supabase/migrations/20261113103500_pin_user_delete_schema_ready_search_path.sql"
+
+
+def test_pin_migration_hardens_the_name_production_actually_has(db):
+    """Production created the function as yomu_*; the repo copy of that migration says komyst_*."""
+    with db.conn.transaction():
+        db.conn.execute("alter function public.komyst_user_delete_schema_ready() "
+                        "rename to yomu_user_delete_schema_ready")
+        db.conn.execute("alter function public.yomu_user_delete_schema_ready() reset search_path")
+        db.conn.execute("grant execute on function public.yomu_user_delete_schema_ready() to authenticated")
+        db.conn.execute(PIN_MIGRATION.read_text(encoding="utf-8"))
+        cfg = db.conn.execute(
+            "select proconfig from pg_proc where proname='yomu_user_delete_schema_ready'").fetchone()[0]
+        assert cfg is not None and any(c.replace(" ", "") in ('search_path=""', "search_path=") for c in cfg)
+        assert db.conn.execute(
+            "select has_function_privilege('authenticated','public.yomu_user_delete_schema_ready()','execute')"
+        ).fetchone()[0] is False
+        raise psycopg.Rollback()
+
+
+def test_pin_migration_is_a_no_op_when_the_function_does_not_exist(db):
+    with db.conn.transaction():
+        db.conn.execute("drop function public.komyst_user_delete_schema_ready()")
+        db.conn.execute(PIN_MIGRATION.read_text(encoding="utf-8"))  # must not raise
+        raise psycopg.Rollback()
+
+
 # --- I5 ---------------------------------------------------------------------
 def test_rewarded_callback_has_no_dead_code():
     src = (FUNCTIONS / "rewarded-ad-callback/index.ts").read_text(encoding="utf-8")

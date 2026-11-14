@@ -4103,7 +4103,7 @@ Provado por `tests/test_supabase_security_hardening.py` (PostgreSQL real em Dock
 | B3 chaves únicas por usuário | Parcial | Índices `(user_id, job_id)` e `(user_id, request_id)` adicionados; os globais permanecem porque settle/finalize/release/persist buscam só por `job_id`/`request_id`. **Pendente:** filtrar por `user_id` e então remover os globais. |
 | B4 anon/TRUNCATE | Corrigido na migration | `anon` sem privilégios nas tabelas privadas; só SELECT nas de configuração; sem TRUNCATE/REFERENCES/TRIGGER para `authenticated`. |
 | I1 leitura anônima | Mantido | Planos ativos, ranks, flags e config remota seguem legíveis por `anon` (uso pré-login); decisão do dono a confirmar. |
-| I4 / I5 | Corrigido | `komyst_user_delete_schema_ready` com `search_path=''`; `rewarded-ad-callback` sem código morto (continua 503). |
+| I4 / I5 | Corrigido | a função de prontidão da exclusão de usuário (`komyst_user_delete_schema_ready` no repositório, `yomu_user_delete_schema_ready` em produção, nomes divergentes pelo renomeio de pacote) com `search_path=''`; `rewarded-ad-callback` sem código morto (continua 503). |
 
 ## 30. Empacotamento, updater e prontidão para Beta
 
