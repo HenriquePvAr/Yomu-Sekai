@@ -108,3 +108,27 @@ def test_comment_body_is_stored_raw_and_every_display_escapes_it():
     # the only renderer of this store's comments interpolates through escapeHtml
     render = re.search(r"function renderCommunityComment.*?\n  }\n", UI_JS, re.S).group(0)
     assert "escapeHtml(body)" in render and "${body}" not in render.replace("escapeHtml(body)", "")
+
+
+def test_drive_tokens_are_dpapi_protected_and_plaintext_files_still_load(tmp_path):
+    import json as _json
+    import os
+    from komyst.community.storage import drive_auth
+
+    path = tmp_path / "tok.json"
+    tokens = drive_auth.OAuthTokens(access_token="AT-secret", refresh_token="RT-secret", expiry=123.0)
+    drive_auth.save_tokens(path, tokens)
+    raw = path.read_bytes()
+    if os.name == "nt":
+        assert raw.startswith(b"KDPAPI1:") and b"RT-secret" not in raw
+    loaded = drive_auth.load_tokens(path)
+    assert (loaded.access_token, loaded.refresh_token, loaded.expiry) == ("AT-secret", "RT-secret", 123.0)
+
+    legacy = tmp_path / "legacy.json"
+    legacy.write_text(_json.dumps({"access_token": "A", "refresh_token": "R", "expiry": 5}), encoding="utf-8")
+    assert drive_auth.load_tokens(legacy).refresh_token == "R"
+    drive_auth.save_tokens(legacy, drive_auth.load_tokens(legacy))  # migrates on rewrite
+    if os.name == "nt":
+        assert legacy.read_bytes().startswith(b"KDPAPI1:")
+    assert drive_auth.load_tokens(legacy).refresh_token == "R"
+    assert drive_auth.load_tokens(tmp_path / "missing.json").refresh_token == ""
