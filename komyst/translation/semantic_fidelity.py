@@ -521,7 +521,12 @@ _TARGET_NEGATIONS = frozenset({
 })
 
 
+# "a nobody" is a noun ("um ninguem"), not a verbal negation.
+_NOBODY_NOUN = re.compile(r"\b(?:a|an|some)\s+nobody\b")
+
+
 def _negation_asymmetry(source, candidate):
+    source = _NOBODY_NOUN.sub(" ", _fold(source))
     source_words = _words(source)
     source_negated = any(word in _SOURCE_NEGATIONS for word in source_words) or bool(
         re.search(r"\bn['’]t\b", _fold(source))
