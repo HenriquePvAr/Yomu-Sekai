@@ -3026,7 +3026,7 @@ launcher antes de worker/UI. Desde então também existem:
 - **Raiz de confiança populada**: `update_manifest.TRUSTED_PUBLIC_KEYS` contém a chave pública
   `beta-2026-10` (a privada fica fora do repositório).
 - **Canal padrão configurado**: `update_bootstrap.DEFAULT_MANIFEST_URL` aponta para o manifest
-  beta em um repositório GitHub de releases (`.../Komyst-Releases/main/updates/beta/latest.json`);
+  beta em um repositório GitHub de releases (`.../YomuSekai-Releases/main/updates/beta/latest.json`);
   `KOMYST_UPDATE_MANIFEST_URL` sobrescreve.
 - **Dois tipos de artefato** no manifest: `zip` (payload versionado, aplicado pelo bootstrap
   do launcher) e `windows-installer` (Setup `*-Setup-x64.exe`, aplicado por
@@ -3973,7 +3973,7 @@ documentação de produto, mas não executou auditoria de release nem nova regre
 | `PROVIDER-HTTP-TELEMETRY-GAP` | Baixa | Não há telemetria HTTP unificada entre providers (latência, taxa de erro, retries) — cada provider mantém suas próprias `stats`. | `translator_deepl.py`, `translator_nvidia.py` | TDD futuro, se a Beta exigir observabilidade de provider |
 | `LAUNCHER-SELF-UPDATE-DEFERRED` | Média | Um launcher em execução não se sobrescreve; o update atual faz handoff entre payloads versionados e bloqueia payload que exige bootstrap mais novo. Self-update do bootstrap depende do formato do Setup. | `update_bootstrap.py`, `start_tradutor.py` | Resolver na missão de Setup/bootstrapper |
 | `TESTER-CONFIG-PROVISIONING-PENDING` | Alta (bloqueia Beta externa) | Não há caminho de provisionamento de configuração: um tester precisa criar `.env` manualmente com `DEEPL_API_KEY`, `SUPABASE_URL` e `SUPABASE_PUBLISHABLE_KEY` para a aplicação funcionar. | `.env.example`, `config.py`, `docs/DEVELOPMENT.md#variáveis-de-ambiente` | Definir junto com o Setup: config pública embutida, provisionamento pelo login ou entrega controlada pelo owner |
-| `YK-ADS-MIGRATION-NOT-APPLIED` | Alta (bloqueia Beta comercial) | A fundação de YK+ads (expiração simétrica do diário, alvo por plano, preferência de anúncios, hardening de privilégios) existe apenas como migration local; o remoto ainda roda `claim_daily_yk` com literal `5`, `finalize_translation_job` com débito diário eterno e `finalize_yk_reservation` acessível por `authenticated`. | `supabase/migrations/20260915140000_yk_ads_foundation.sql`, §31 | Owner revisar e aplicar; até lá o bucket diário remoto continua contaminável |
+| `YK-ADS-MIGRATION-NOT-APPLIED` | Alta (bloqueia Beta comercial) | A fundação de YK+ads (expiração simétrica do diário, alvo por plano, preferência de anúncios, hardening de privilégios) existe apenas como migration local; o remoto ainda roda `claim_daily_yk` com literal `5`, `finalize_translation_job` com débito diário eterno e `finalize_yk_reservation` acessível por `authenticated`. | `supabase/migrations/20260916041829_yk_ads_foundation.sql`, §31 | Owner revisar e aplicar; até lá o bucket diário remoto continua contaminável |
 | `PASSIVE-ADS-UI-PLACEHOLDER` | Média | `#passiveAdsSettings` é um placeholder "Em breve"; o backend já tem `set_passive_ads_enabled`, mas nenhuma tela liga/desliga a preferência. | `ui/ui_shell.html`, §31 | TDD de UI após a migration ser aplicada |
 | `ADS-INVENTORY-BLOCKER` | Alta (bloqueia monetização por anúncios) | Pesquisa concluída: nenhum provider entrega anúncio passivo verificável neste runtime (Win32 + WebView local, sem domínio). AdSense/Ad Manager proíbem desktop apps por política; Microsoft e AdDuplex estão mortos; Pubfinity/PubMatic são UWP; AdsJumbo é .NET sem rewarded nem SSV. Único viável: offerwall web com postback HMAC — produto diferente de "assistir anúncio". | `docs/technical/ADS_PROVIDER_RESEARCH.md`, §31 | Decisão comercial do owner: offerwall, beta sem anúncios passivos, ou monetização fora do escopo da beta |
 | `CI-JS-SUITES-NOT-RUN` | Média | A CI roda apenas `node --check` sobre `static/*.js`; as 14 suítes `.mjs` (que exigem `--experimental-vm-modules`) não são executadas em nenhum job. Regressão de frontend só é detectada localmente. | `.github/workflows/tests.yml`, `docs/DEVELOPMENT.md#ci` | Adicionar um step que itere `test_*.mjs` com a flag; barato e sem impacto no comportamento de produção |
@@ -4113,7 +4113,7 @@ administrativa fora do cliente. Nenhum segredo administrativo em nenhum document
 
 ## 31. Economia de YK e anúncios — PARCIAL
 
-> **Estado:** a migration `supabase/migrations/20260915140000_yk_ads_foundation.sql`
+> **Estado:** a migration `supabase/migrations/20260916041829_yk_ads_foundation.sql`
 > existe localmente e **não foi aplicada remotamente**. O remoto está em
 > `20260915013128_chapter_level_translation_finalization`. Nada nesta seção descreve
 > comportamento em produção até o owner revisar e aplicar a migration.
