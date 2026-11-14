@@ -7,8 +7,8 @@ import time
 from pathlib import Path
 
 if __package__:
-    from scripts.manual_network import NetworkSmokeNotAuthorized, require_network_smoke
-else:  # Supports the documented ``python scripts\\...`` invocation.
+    from tools.scripts.manual_network import NetworkSmokeNotAuthorized, require_network_smoke
+else:  # Supports the documented ``python tools\scripts\\...`` invocation.
     from manual_network import NetworkSmokeNotAuthorized, require_network_smoke
 
 

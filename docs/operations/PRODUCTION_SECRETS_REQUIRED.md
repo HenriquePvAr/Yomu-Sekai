@@ -15,7 +15,7 @@ consumer is a reserved contract name, not a live integration.
 | `BILLING_API_KEY`, `BILLING_WEBHOOK_SECRET` | hosted billing provider | none | PLANNED |
 | `AD_PROVIDER_SECRET` | rewarded-ad verification (generic) | none | PLANNED |
 | `AYET_REWARDED_ADSLOT_ID` | ayeT placement identifier (non-secret config) | none (the callback reads `adslot_id` from the request) | PLANNED |
-| Update signing private key | release publisher only | not an environment variable: `scripts/sign_release.py --key <path-to-pem>` | IMPLEMENTED (file path argument) |
+| Update signing private key | release publisher only | not an environment variable: `tools/scripts/sign_release.py --key <path-to-pem>` | IMPLEMENTED (file path argument) |
 
 Use the sanitized configuration checker (`python tools/release/check_beta_configuration.py`)
 before activation; it reads only process environment variables and prints only

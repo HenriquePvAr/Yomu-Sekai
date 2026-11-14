@@ -88,7 +88,7 @@ Instale o conjunto correspondente dentro da venv:
 
 ```powershell
 python -s -m pip install -r requirements/requirements-beta.txt   # inclui requirements.txt, RapidOCR e NiceGUI
-python -s scripts/check_runtime_profile.py
+python -s tools/scripts/check_runtime_profile.py
 ```
 
 Não misture o Python global com o da `.venv`. Confira o executável ativo:

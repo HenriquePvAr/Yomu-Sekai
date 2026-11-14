@@ -86,7 +86,7 @@ snapshots/
 .vscode/
 
 # Private key material must never reach a commit. The release signing key lives OUTSIDE this
-# repository (see scripts/sign_release.py); this is only a guard against an accidental copy.
+# repository (see tools/scripts/sign_release.py); this is only a guard against an accidental copy.
 *.pem
 *.key
 *.pk8

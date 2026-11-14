@@ -85,7 +85,7 @@ O equivalente local da CI é:
 ```powershell
 python -m pip install -r requirements/requirements-beta.txt
 python -m pip install -r requirements/requirements-dev.txt
-python scripts/check_runtime_profile.py
+python tools/scripts/check_runtime_profile.py
 python -m pytest --collect-only -q
 python -m pytest -q
 node --check static/komyst_ui.js   # a CI verifica também os demais scripts de static/ e static/i18n/
@@ -173,7 +173,7 @@ Para NVIDIA, as duas variáveis devem ter exatamente o valor `1`. O smoke usa
 ```powershell
 $env:ALLOW_NETWORK_TESTS = "1"
 $env:ALLOW_NVIDIA_SMOKE = "1"
-python -m scripts.manual_nvidia_smoke --short
+python -m tools.scripts.manual_nvidia_smoke --short
 ```
 
 Para Webtoon, também são exigidas duas autorizações. A URL deve ser fornecida
@@ -185,7 +185,7 @@ pasta, nunca nas raízes normais do projeto.
 ```powershell
 $env:ALLOW_NETWORK_TESTS = "1"
 $env:ALLOW_WEBTOON_SMOKE = "1"
-python -m scripts.manual_webtoon_smoke `
+python -m tools.scripts.manual_webtoon_smoke `
   --url "<URL_AUTORIZADA>" `
   --output-dir "$env:TEMP\smoke_webtoon_manual"
 ```

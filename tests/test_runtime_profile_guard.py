@@ -11,7 +11,7 @@ import test_support._test_bootstrap as _test_bootstrap  # noqa: F401
 import unittest
 from unittest.mock import patch
 
-from scripts import check_runtime_profile as guard
+from tools.scripts import check_runtime_profile as guard
 
 
 def _run(installed, cv2_version="5.0.0"):

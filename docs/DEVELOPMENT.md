@@ -53,7 +53,7 @@ python -m pip install --upgrade pip setuptools wheel
 python -s -m pip install -r requirements/requirements-beta.txt
 python -s -m pip install -r requirements/requirements-dev.txt   # somente para rodar os testes
 
-python -s scripts/check_runtime_profile.py         # prova o perfil antes de confiar nele
+python -s tools/scripts/check_runtime_profile.py         # prova o perfil antes de confiar nele
 ```
 
 Sequência de preparo do ambiente de desenvolvimento:
@@ -62,7 +62,7 @@ Sequência de preparo do ambiente de desenvolvimento:
 flowchart TD
     A["git clone + py -3.11 -m venv .venv"] --> B["pip install -r requirements/requirements-beta.txt"]
     B --> C["pip install -r requirements/requirements-dev.txt"]
-    C --> D["python -s scripts/check_runtime_profile.py"]
+    C --> D["python -s tools/scripts/check_runtime_profile.py"]
     D --> E["Copy-Item .env.example .env<br/>SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY"]
     E --> F["python -m pytest -q"]
     F --> G["python start_tradutor.py"]
@@ -82,7 +82,7 @@ Os manifests são a fonte de verdade das dependências. Não replique a lista aq
 | `apps/auth-service/package.json` | serviço Better Auth (Node/TypeScript) |
 
 Nenhum arquivo de requisitos consegue dizer "este pacote não pode estar instalado". Quem
-impõe essa parte do contrato é `scripts/check_runtime_profile.py`, que falha quando existe
+impõe essa parte do contrato é `tools/scripts/check_runtime_profile.py`, que falha quando existe
 mais de uma distribuição de OpenCV, quando qualquer distribuição Paddle está presente, ou
 quando o `cv2` realmente importado não é o declarado.
 
@@ -138,7 +138,7 @@ python run_webtoon.py --help
 ## Testes
 
 Os testes padrão são **offline**: um guard de processo bloqueia socket antes de qualquer
-request. Smokes de rede vivem em `scripts/`, exigem opt-in explícito e estão documentados em
+request. Smokes de rede vivem em `tools/scripts/`, exigem opt-in explícito e estão documentados em
 [Testes](TESTING.md).
 
 ### Python
@@ -199,7 +199,7 @@ npm run build
 
 O workflow `Hermetic Tests` (`.github/workflows/tests.yml`) roda em `windows-latest` com
 Python 3.11 e Node 24, instala `requirements/requirements-beta.txt` +
-`requirements/requirements-dev.txt`, roda `scripts/check_runtime_profile.py`, confirma que
+`requirements/requirements-dev.txt`, roda `tools/scripts/check_runtime_profile.py`, confirma que
 nenhum opt-in de smoke de rede está autorizado, roda `pytest` (timeout de 50 min; JUnit
 publicado como artifact), `node --check` dos scripts de `static/` (incluindo `static/i18n/`),
 o serviço Better Auth e `python -m compileall` de `komyst/`, `test_support/` e dos entrypoints da
@@ -225,8 +225,7 @@ política completa está em [Estrutura do projeto](architecture/REPOSITORY_STRUC
 ├── tests/                   # suíte hermética Python (test_*.py) e frontend (test_*.mjs); fixtures em tests/fixtures/
 ├── test_support/            # helpers compartilhados de teste
 ├── packaging/               # specs PyInstaller e script Inno Setup
-├── tools/                   # release, admin, dev, harnesses e auditorias
-├── scripts/                 # smokes manuais com opt-in, assinatura de release, migração de auth
+├── tools/                   # release, admin, dev, harnesses, auditorias e tools/scripts/ (smokes manuais, assinatura de release, migração de auth)
 ├── static/                  # JS/CSS do frontend, i18n, assets da UI
 ├── ui/                      # shell HTML da interface
 ├── apps/auth-service/       # serviço Better Auth (Node/TypeScript)
@@ -301,7 +300,7 @@ Consequências:
   não um contrato;
 - a correção arquitetural é remover a aresta, não reordenar a instalação — PaddleOCR sai do
   perfil de runtime (`requirements/requirements-paddle.txt`, opcional) e um preflight de build recusa
-  ambiente ambíguo (`scripts/check_runtime_profile.py`).
+  ambiente ambíguo (`tools/scripts/check_runtime_profile.py`).
 
 Registrado como `OPENCV-VARIANT-SHADOWING-001` em [Riscos conhecidos](#riscos-conhecidos).
 
@@ -339,7 +338,7 @@ empacotamento; remover um pacote muda o ambiente resolvido e invalida a baseline
 ### `BETA1_OCR_RUNTIME_CONTRACT`
 
 Perfil de runtime que a Beta 1 empacota. Declarado em `requirements/requirements-beta.txt`, imposto por
-`scripts/check_runtime_profile.py`.
+`tools/scripts/check_runtime_profile.py`.
 
 | Componente | Contrato | Onde |
 | --- | --- | --- |

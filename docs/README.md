@@ -122,7 +122,7 @@ RAM/VRAM, tempo do capítulo e limites ainda não homologados de requisitos mín
 Documentos de auditoria pontual, preservados como registro. Descrevem o estado no momento
 em que foram escritos e **não** substituem os documentos primários:
 
-- [Plano de rollback da migração de auth](../scripts/auth-migration/rollback-plan.md)
+- [Plano de rollback da migração de auth](../tools/scripts/auth-migration/rollback-plan.md)
 
 ---
 

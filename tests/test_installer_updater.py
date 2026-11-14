@@ -7,7 +7,7 @@ from unittest.mock import patch
 
 import komyst.runtime.installer_update as installer_update
 import komyst.runtime.update_manifest as update_manifest
-from scripts.sign_release import public_key_material, sign_manifest
+from tools.scripts.sign_release import public_key_material, sign_manifest
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 

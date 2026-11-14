@@ -168,9 +168,9 @@ class BetterAuthServiceScaffoldTests(unittest.TestCase):
         self.assertIn('503', server)
 
     def test_migration_scripts_are_dry_run_only_by_default(self):
-        self.assertIn("remoteMigrationExecuted: false", read("scripts/auth-migration/audit.ts"))
-        self.assertIn("intentionally disabled", read("scripts/auth-migration/migrate.ts"))
-        self.assertIn("Do not run a remote cutover", read("scripts/auth-migration/rollback-plan.md"))
+        self.assertIn("remoteMigrationExecuted: false", read("tools/scripts/auth-migration/audit.ts"))
+        self.assertIn("intentionally disabled", read("tools/scripts/auth-migration/migrate.ts"))
+        self.assertIn("Do not run a remote cutover", read("tools/scripts/auth-migration/rollback-plan.md"))
 
 
 class PipelineIdentityUiTests(unittest.TestCase):

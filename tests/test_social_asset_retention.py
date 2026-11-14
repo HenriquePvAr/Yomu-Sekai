@@ -285,7 +285,7 @@ class SafetyTests(Base):
     def test_no_permanent_delete_anywhere_in_the_retention_code(self):
         root = Path(__file__).resolve().parents[1]
         for name in ("komyst/community/social_asset_retention.py", "komyst/community/social_asset_reconcile.py",
-                     "scripts/social_asset_maintenance_cli.py"):
+                     "tools/scripts/social_asset_maintenance_cli.py"):
             src = (root / name).read_text(encoding="utf-8")
             for bad in ("delete_file", "empty_trash", "emptyTrash", "files.delete"):
                 self.assertNotIn(bad, src, f"{name}: {bad}")

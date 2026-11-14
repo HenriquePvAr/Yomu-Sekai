@@ -12,7 +12,7 @@
 # Install into a clean interpreter with user site-packages disabled:
 #   python -m venv .venv-beta
 #   .venv-beta\Scripts\python.exe -s -m pip install -r requirements/requirements-beta.txt
-#   .venv-beta\Scripts\python.exe -s scripts/check_runtime_profile.py
+#   .venv-beta\Scripts\python.exe -s tools/scripts/check_runtime_profile.py
 #
 # `check_runtime_profile.py` is the enforcement point: no requirements file can
 # express "must not be installed", so the guard fails the build when more than one

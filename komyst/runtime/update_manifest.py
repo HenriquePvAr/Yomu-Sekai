@@ -10,7 +10,7 @@ Why asymmetric and not a shared secret: the client is distributed to testers, so
 contains is public in practice. An HMAC key or API token embedded in the client would let
 anyone who extracts it sign a malicious update. The client therefore holds only Ed25519
 **public** verification keys; the private release key lives outside this repository and is used
-only by ``scripts/sign_release.py`` in a trusted release process.
+only by ``tools/scripts/sign_release.py`` in a trusted release process.
 
 Ed25519 comes from ``cryptography``, already a pinned dependency (``cryptography>=42,<50``) used
 by the auth boundary. No new crypto stack, no home-grown cryptography.

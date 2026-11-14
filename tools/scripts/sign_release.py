@@ -12,11 +12,11 @@ Generate a release key **outside this repository**, once, on the release machine
 
 Then publish its public half into the client's trust store::
 
-    python scripts/sign_release.py pubkey --key <secure-path>/komyst-release.pem
+    python tools/scripts/sign_release.py pubkey --key <secure-path>/komyst-release.pem
 
 And sign a release::
 
-    python scripts/sign_release.py sign --key <secure-path>/komyst-release.pem \
+    python tools/scripts/sign_release.py sign --key <secure-path>/komyst-release.pem \
         --key-id beta-2026 --version 1.1.0 --minimum-version 1.0.0 \
         --package dist/komyst-1.1.0.zip \
         --url https://<host>/komyst-1.1.0.zip --out dist/update.json
@@ -37,7 +37,7 @@ from pathlib import Path
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey, Ed25519PublicKey
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from komyst.runtime.update_manifest import (  # noqa: E402  (path bootstrap above)
     APP_ID,

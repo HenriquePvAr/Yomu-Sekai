@@ -18,7 +18,7 @@ flowchart TD
     R --> Q[requirements.txt<br/>+ requirements/ perfis]
     R --> P[packaging/ + deploy/ + apps/ + supabase/]
     R --> U[ui/ + static/<br/>interface]
-    R --> S[scripts/ + tools/]
+    R --> S[tools/ + tools/scripts/]
     R --> A[assets/<br/>lexicon, fontes, branding]
     R --> E[docs/reports/ + research/<br/>evidências e estudos]
     R --> L[shims na raiz<br/>start_tradutor.py, run_webtoon.py,<br/>run_local_folder.py, desktop_app.py, ...]
@@ -38,12 +38,11 @@ flowchart TD
 ├── docs/             documentação do produto, arquitetura, operação, auditorias e relatórios (docs/reports/)
 ├── packaging/        specs e insumos de empacotamento Windows
 ├── research/         pesquisa não-runtime (inclui experiments/); não é automaticamente parte do produto
-├── scripts/          comandos operacionais, de build e validação
 ├── static/           assets estáticos servidos pela UI
 ├── supabase/         migrations, funções e configuração Supabase versionadas
 ├── test_support/     guards herméticos e utilitários exclusivos de teste
 ├── tests/            testes Python, frontend, integração e contrato; fixtures em tests/fixtures/
-├── tools/            auditorias, validações e ferramentas de desenvolvimento
+├── tools/            auditorias, validações, ferramentas de desenvolvimento e tools/scripts/ (comandos operacionais, build e validação)
 ├── ui/               fontes/integrações de UI mantidas fora do pacote runtime Python
 └── komyst/             implementação canônica do runtime Python
 ```

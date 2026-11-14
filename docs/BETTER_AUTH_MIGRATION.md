@@ -4,7 +4,7 @@
 > Production/default authentication is Supabase (`komyst/community/community_auth.py::build_auth_provider`
 > falls back to `supabase`; see [SUPABASE_AUTH.md](SUPABASE_AUTH.md)). No cutover to Better Auth
 > happened: the active backend cutover of 2026-09-29 (commit `8b0053fe`) moved to a new Supabase
-> project, and `scripts/auth-migration/migrate.ts` still throws by design. The code below remains
+> project, and `tools/scripts/auth-migration/migrate.ts` still throws by design. The code below remains
 > in the repository as an optional, local-only provider.
 
 This repository keeps Supabase as the default authentication provider. Better Auth is prepared behind an explicit provider flag and a same-origin proxy so the UI can be exercised locally without exposing cookies, tokens, or admin credentials to the browser.
@@ -56,7 +56,7 @@ No remote migration is executed by these commands.
 
 ## Migration scripts
 
-The files under `scripts/auth-migration/` are intentionally dry-run first:
+The files under `tools/scripts/auth-migration/` are intentionally dry-run first:
 
 - `audit.ts` reads planned inputs and reports safe metadata.
 - `dry-run.ts` validates that migration settings are present without writing remotely.

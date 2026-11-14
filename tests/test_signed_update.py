@@ -25,7 +25,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 import komyst.runtime.update_installer as update_installer
 import komyst.runtime.update_manifest as update_manifest
-from scripts.sign_release import public_key_material, sign_manifest
+from tools.scripts.sign_release import public_key_material, sign_manifest
 from komyst.runtime.update_manifest import (
     ManifestInvalid,
     PackageHashMismatch,

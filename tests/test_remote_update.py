@@ -40,7 +40,7 @@ import komyst.runtime.update_bootstrap as update_bootstrap
 import komyst.runtime.update_installer as update_installer
 import komyst.runtime.update_manifest as update_manifest
 import komyst.runtime.update_transport as update_transport
-from scripts.sign_release import public_key_material, sign_manifest
+from tools.scripts.sign_release import public_key_material, sign_manifest
 
 APP_ID = "komyst"
 KEY_ID = "beta-test"

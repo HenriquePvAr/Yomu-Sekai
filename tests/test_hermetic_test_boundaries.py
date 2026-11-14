@@ -14,8 +14,8 @@ from unittest.mock import patch
 
 import sitecustomize
 
-from scripts.manual_network import NetworkSmokeNotAuthorized
-from scripts import manual_nvidia_smoke, manual_webtoon_smoke
+from tools.scripts.manual_network import NetworkSmokeNotAuthorized
+from tools.scripts import manual_nvidia_smoke, manual_webtoon_smoke
 
 
 class HermeticTestBoundaryTests(unittest.TestCase):
@@ -164,8 +164,8 @@ class HermeticTestBoundaryTests(unittest.TestCase):
 
         self.assertNotIn("test_pipeline_webtoon.py", discovered)
         self.assertNotIn("test_nvidia_translation.py", discovered)
-        self.assertTrue((root / "scripts" / "manual_webtoon_smoke.py").is_file())
-        self.assertTrue((root / "scripts" / "manual_nvidia_smoke.py").is_file())
+        self.assertTrue((root / "tools" / "scripts" / "manual_webtoon_smoke.py").is_file())
+        self.assertTrue((root / "tools" / "scripts" / "manual_nvidia_smoke.py").is_file())
 
     def test_automated_tests_are_not_left_loose_in_repository_root(self):
         root = Path(__file__).resolve().parents[1]

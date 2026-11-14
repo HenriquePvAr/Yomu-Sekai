@@ -60,7 +60,7 @@ então instalar por ele é o caminho suportado:
 # -s desabilita o site-packages do usuário, que já mascarou o cv2 carregado.
 python -s -m pip install -r requirements/requirements-beta.txt
 python -s -m pip install -r requirements/requirements-dev.txt
-python -s scripts/check_runtime_profile.py
+python -s tools/scripts/check_runtime_profile.py
 ```
 
 Os arquivos têm responsabilidades diferentes:
@@ -83,11 +83,11 @@ flowchart LR
     B --> O["requirements/requirements-rapidocr.txt<br/>RapidOCR + onnxruntime"]
     B --> X["scrapling[fetchers] + psd-tools"]
     D["requirements/requirements-dev.txt<br/>pytest, fastapi, httpx"] -.-> T["suíte hermética"]
-    B --> C["scripts/check_runtime_profile.py<br/>um único OpenCV, sem Paddle"]
+    B --> C["tools/scripts/check_runtime_profile.py<br/>um único OpenCV, sem Paddle"]
     P["requirements/requirements-paddle.txt"] -.->|"não instalar no mesmo venv"| C
 ```
 
-`scripts/check_runtime_profile.py` é o portão: nenhum arquivo de requisitos consegue proibir
+`tools/scripts/check_runtime_profile.py` é o portão: nenhum arquivo de requisitos consegue proibir
 um pacote, então o script falha quando existe mais de uma distribuição de OpenCV, quando
 qualquer distribuição Paddle está instalada, ou quando o `cv2` realmente importado não é o
 declarado.
@@ -110,7 +110,7 @@ qualquer resultado de qualidade. Ver `OPENCV-THRESHOLD-SENSITIVITY-001` em
 > Verifique com:
 >
 > ```powershell
-> python -s scripts/check_runtime_profile.py
+> python -s tools/scripts/check_runtime_profile.py
 > ```
 
 Se pretende usar somente a CLI, NiceGUI é opcional. PaddleOCR **não** é requisito para o modo
@@ -200,7 +200,7 @@ python tests/test_ocr_quality_regressions.py
 Para uma verificação rápida das bibliotecas:
 
 ```powershell
-python -s scripts/check_runtime_profile.py
+python -s tools/scripts/check_runtime_profile.py
 python -c "from rapidocr_onnxruntime import RapidOCR; print('RapidOCR: OK')"
 python -c "import nicegui; print('NiceGUI: OK')"
 ```

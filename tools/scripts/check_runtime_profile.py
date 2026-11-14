@@ -9,7 +9,7 @@ point for that contract.
 It is packaging infrastructure, deliberately kept out of the OCR pipeline: the
 pipeline must not decide whether its own environment is legitimate.
 
-    python -s scripts/check_runtime_profile.py
+    python -s tools/scripts/check_runtime_profile.py
 
 Exits 0 when the environment is unambiguous, 1 otherwise.
 """

@@ -56,7 +56,7 @@ jobs:
       # No requirements file can forbid a package, and pip does not report that
       # opencv-python and opencv-contrib-python ship the same `cv2` directory.
       - name: Check Beta runtime profile
-        run: python scripts/check_runtime_profile.py
+        run: python tools/scripts/check_runtime_profile.py
 
       - name: Confirm network smokes are disabled
         run: |

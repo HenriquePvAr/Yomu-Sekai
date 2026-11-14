@@ -3,7 +3,7 @@
 > **Revisado em:** 2026-10-24 · **Base verificada:** `5f482ce1`.
 > **Estado:** IMPLEMENTADO no backend (`komyst/community/social_asset_retention.py`,
 > `social_asset_reconcile.py`, `chapter_asset_repository.py`,
-> `scripts/social_asset_maintenance_cli.py`), coberto por `tests/test_social_asset_retention.py`.
+> `tools/scripts/social_asset_maintenance_cli.py`), coberto por `tests/test_social_asset_retention.py`.
 > A UI social que oferece "Desvincular"/restaurar está desligada no cliente
 > (`COMMUNITY_ENABLED = false` em `static/social_community.js`).
 
@@ -80,14 +80,14 @@ provider atual não implementa *untrash* e o sistema não finge que o arquivo vo
 ## CLI de manutenção (nunca automático)
 
 ```
-python -m scripts.social_asset_maintenance_cli retention-scan
-python -m scripts.social_asset_maintenance_cli retention-sweep            # dry-run
-python -m scripts.social_asset_maintenance_cli retention-sweep --apply
-python -m scripts.social_asset_maintenance_cli reconcile                  # dry-run
-python -m scripts.social_asset_maintenance_cli reconcile --apply
+python -m tools.scripts.social_asset_maintenance_cli retention-scan
+python -m tools.scripts.social_asset_maintenance_cli retention-sweep            # dry-run
+python -m tools.scripts.social_asset_maintenance_cli retention-sweep --apply
+python -m tools.scripts.social_asset_maintenance_cli reconcile                  # dry-run
+python -m tools.scripts.social_asset_maintenance_cli reconcile --apply
 ```
 
-Execute a partir da raiz do repositório. `python scripts/social_asset_maintenance_cli.py`
+Execute a partir da raiz do repositório. `python tools/scripts/social_asset_maintenance_cli.py`
 direto falha com `ModuleNotFoundError: komyst` (verificado com `--help`); o opcional `--db`
 aponta outro banco SQLite.
 

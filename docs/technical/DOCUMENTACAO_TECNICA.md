@@ -137,8 +137,7 @@ helpers de teste em `test_support/`.
 ├── tests/  test_support/
 ├── requirements.txt  requirements/   # núcleo + perfis (beta, dev, rapidocr, ui, optional, paddle, gemini-vps)
 ├── packaging/          # spec PyInstaller, perfis de runtime, scripts Inno Setup
-├── tools/              # build_installer.py, admin/, harnesses/
-├── scripts/            # sign_release.py, smokes manuais, migração de auth
+├── tools/              # build_installer.py, admin/, harnesses/, scripts/ (sign_release.py, smokes manuais, migração de auth)
 ├── supabase/           # migrations SQL, Edge Functions, testes de banco
 ├── apps/auth-service/  # serviço Better Auth (TypeScript, nunca ativado em produção)
 └── docs/
@@ -161,7 +160,7 @@ helpers de teste em `test_support/`.
 | Pipeline | `pipeline/benchmark_pipeline.py`, `pipeline/pipeline_cache.py`, `pipeline/pipeline_streaming.py`, `pipeline/pipeline_telemetry.py` |
 | Comunidade | `community/community_*.py`, `community/social_*.py`, `community/supabase_social.py`, `community/publish_authorization.py`, `community/storage/*` (Google Drive), `community/legacy/*` |
 | Auth / licença | `community/community_auth.py` (seleção do provider), `auth/supabase_auth.py`, `auth/beta_license.py`, `auth/secure_auth_context.py`, `auth/desktop_identity.py`, `auth/device_control.py`; `test_support/local_test_auth.py` (só testes) |
-| Updater assinado | `runtime/version.py`, `runtime/update_manifest.py`, `runtime/update_installer.py`, `runtime/update_transport.py`, `runtime/update_bootstrap.py`, `runtime/installer_update.py`, `scripts/sign_release.py` (raiz) |
+| Updater assinado | `runtime/version.py`, `runtime/update_manifest.py`, `runtime/update_installer.py`, `runtime/update_transport.py`, `runtime/update_bootstrap.py`, `runtime/installer_update.py`, `tools/scripts/sign_release.py` (raiz) |
 | Configuração | `config/settings.py` (importado como `config`), `runtime/local_environment.py` |
 | Infra de testes | `test_support/hermetic_runtime.py`, `test_support/offline_test_guard.py`, `test_support/_test_bootstrap.py`, `conftest.py`, `sitecustomize.py` |
 
@@ -3068,7 +3067,7 @@ assinatura **assimétrica**.
 
 ```mermaid
 flowchart TD
-    signer["Processo de release confiável<br/>scripts/sign_release.py"]
+    signer["Processo de release confiável<br/>tools/scripts/sign_release.py"]
     key["Chave privada Ed25519<br/>FORA do repositório"]
     manifest["Manifest assinado<br/>payload canônico + assinatura + key_id"]
     pkg["Pacote .zip + SHA-256"]
@@ -3409,7 +3408,7 @@ terminação forçada parecem para o banco.
 
 `windows-latest`, Python 3.11 + Node 24, timeout de 60 min. Etapas: instalar
 `requirements/requirements-beta.txt` (que inclui `requirements.txt` e o perfil RapidOCR) +
-`requirements/requirements-dev.txt`, `scripts/check_runtime_profile.py` (perfil de runtime
+`requirements/requirements-dev.txt`, `tools/scripts/check_runtime_profile.py` (perfil de runtime
 Beta, ex.: conflito de OpenCV), **confirmar que os opt-ins de smoke de rede estão desligados**
 (`ALLOW_NETWORK_TESTS`, `ALLOW_WEBTOON_SMOKE`, `ALLOW_NVIDIA_SMOKE`), coletar e rodar pytest
 (JUnit enviado como artifact), `node --check` nos JS principais e de i18n, typecheck/test/build
