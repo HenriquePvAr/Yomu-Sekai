@@ -6,9 +6,9 @@ webhook URL.
 
 ## Configuration
 
-The dispatcher reads `KOMYST_DISCORD_WEBHOOK_URL` from:
-
-`/home/ubuntu/komyst/.secrets/discord.env`
+The dispatcher reads `KOMYST_DISCORD_WEBHOOK_URL` from the environment or from the file named by
+`KOMYST_DISCORD_WEBHOOK_FILE` (for example `/home/ubuntu/komyst/.secrets/discord.env`). The research
+worker (`research/gemini_vps_web_worker`) has no default file path: without the variable it sends nothing.
 
 The file must be owned by the worker account and mode `600`; the directory must be
 mode `700`. Add the real value directly on the VPS, never in chat, Git, the EXE, or a

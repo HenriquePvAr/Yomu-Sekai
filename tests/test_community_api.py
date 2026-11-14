@@ -389,7 +389,7 @@ class CommunityApiTests(unittest.TestCase):
         self.api.store.set_post_status(result["post_id"], PostStatus.PUBLISHED,
                                        moderation_status=Moderation.APPROVED)
         comment = self.api.create_comment(result["post_id"], {"body": "<b>olá</b>"}, principal=MEMBER)
-        self.assertIn("&lt;b&gt;olá&lt;/b&gt;", comment["body"])
+        self.assertEqual("<b>olá</b>", comment["body"])  # stored raw, escaped on output
         notifications = self.api.notifications(principal=OWNER)
         self.assertEqual(notifications["unread"], 1)
         comments = self.api.comments(result["post_id"], principal=OWNER)["comments"]

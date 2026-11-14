@@ -27,12 +27,10 @@
   window.addEventListener('storage', event => {
     if (event.key === KOMYST_THEME_KEY || event.key === null) applyKomystTheme(event.newValue);
   });
-  const escapeHtml = value => {
-    const node = document.createElement('div');
-    node.textContent = String(value ?? '');
-    return node.innerHTML;
-  };
-  const escapeAttr = value => escapeHtml(value).replace(/"/g, '&quot;');
+  // Safe for text nodes and quoted attribute values alike (& < > " ').
+  const escapeHtml = value => String(value ?? '').replace(/[&<>"']/g, ch => (
+    {'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[ch]));
+  const escapeAttr = escapeHtml;
   // The app's own confirmation dialog (the browser's confirm() box looks foreign
   // and shows "127.0.0.1:8080 diz"). Resolves true only on the confirm button.
   function komystConfirm(message, {title = 'Confirmar ação', confirmLabel = 'Confirmar', cancelLabel = 'Cancelar', danger = false} = {}) {
@@ -5142,7 +5140,7 @@
         + `<span class="pr-region-text"><small>fonte</small> ${escapeHtml(r.source_text || '—')}</span>`
         + `<span class="pr-region-text"><small>tradução</small> ${escapeHtml(r.current_translation || '—')}</span></label>`;
     }).join('');
-    root.innerHTML = `<div class="pr-summary">${listing.reviewable_regions || 0} revisáveis · ${listing.requests_needed || 0} exigiriam NVIDIA (não serão chamadas)</div>${rows || '<div class="muted">Nenhuma região.</div>'}`;
+    root.innerHTML = `<div class="pr-summary">${escapeHtml(listing.reviewable_regions || 0)} revisáveis · ${escapeHtml(listing.requests_needed || 0)} exigiriam NVIDIA (não serão chamadas)</div>${rows || '<div class="muted">Nenhuma região.</div>'}`;
   }
 
   function selectedPageRegions() {
@@ -5220,7 +5218,7 @@
         body: JSON.stringify({...id, page: pageRevisionState.page})});
       const rows = (result.candidates || []).map(c => `<div class="pr-candidate">${escapeHtml(c.region_id)} · ${escapeHtml(c.classification)}`
         + `${c.do_not_translate ? ' · <em>não traduzir</em>' : ' · decisão humana'} — ${escapeHtml(c.source_text || c.current_translation || '')}</div>`).join('');
-      $('#pageRevisionPreview').innerHTML = `<div class="pr-candidates"><strong>${result.candidate_count} candidato(s)</strong>${rows}</div>`;
+      $('#pageRevisionPreview').innerHTML = `<div class="pr-candidates"><strong>${escapeHtml(result.candidate_count)} candidato(s)</strong>${rows}</div>`;
       pageRevisionMessage('Candidatos exibidos para decisão humana. Nada foi traduzido.', 'ok');
     } catch (error) { pageRevisionMessage(error.message || 'Falha na busca.', 'error'); }
   }
@@ -6178,7 +6176,7 @@
           const assets = data.assets || {};
           const maskAssetUrl = (asset) => `/api/ui/human-mask/asset?job_id=${encodeURIComponent(id.job_id || '')}&asset=${encodeURIComponent(asset)}`;
           const assetImg = (key, label) => assets[key]
-            ? `<figure><figcaption>${escapeHtml(label)}</figcaption><img src="${maskAssetUrl(assets[key])}" alt="${escapeAttr(label)} da região ${region}"></figure>`
+            ? `<figure><figcaption>${escapeHtml(label)}</figcaption><img src="${maskAssetUrl(assets[key])}" alt="${escapeAttr(label)} da região ${escapeAttr(region)}"></figure>`
             : `<figure><figcaption>${escapeHtml(label)}</figcaption><div class="visual-comparison-empty">camada indisponível</div></figure>`;
           const auto = data.automatic_segmentation || {};
           const boundary = data.boundary_review || {};
@@ -9270,7 +9268,7 @@
       const operation = item.operation_kind === 'review_rerun'
         ? `${item.operation_label || 'Rerun de pendências'} · ${Number(item.target_region_count || 0)} região(ões)`
         : (item.chapter_name || item.url);
-      return `<div class="queue-item status-${queueClass(item.status)}" data-id="${escapeAttr(item.id)}"><span class="qi-num">${terminalRunStatuses.has(item.status) ? checkIcon : index + 1}</span><span class="qi-url">${escapeHtml(operation)}</span><span class="qi-status">${runStatusLabels[item.status] || item.status}</span>${['waiting','queued'].includes(item.status) ? `<button class="qi-remove" data-id="${escapeAttr(item.id)}" aria-label="Remover da fila">${closeIcon}</button>` : ''}</div>`;
+      return `<div class="queue-item status-${queueClass(item.status)}" data-id="${escapeAttr(item.id)}"><span class="qi-num">${terminalRunStatuses.has(item.status) ? checkIcon : index + 1}</span><span class="qi-url">${escapeHtml(operation)}</span><span class="qi-status">${escapeHtml(runStatusLabels[item.status] || item.status)}</span>${['waiting','queued'].includes(item.status) ? `<button class="qi-remove" data-id="${escapeAttr(item.id)}" aria-label="Remover da fila">${closeIcon}</button>` : ''}</div>`;
     }).join('') : '<div class="empty-real-state">fila vazia · adicione uma URL acima</div>';
   }
   $('#queueAddBtn')?.addEventListener('click', addQueueItem);

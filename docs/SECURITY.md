@@ -184,6 +184,18 @@ pendências (auto-liquidação, `public_role`, verificação recente de disposit
 únicos globais) em [DOCUMENTACAO_TECNICA §29.1](technical/DOCUMENTACAO_TECNICA.md). Teste:
 `tests/test_supabase_security_hardening.py`.
 
+## Endurecimento do frontend e de tokens (IMPLEMENTADO)
+
+- CSP sem `'unsafe-inline'` em `script-src`: scripts inline de respostas HTML são permitidos
+  apenas pelo hash SHA-256 calculado por resposta; `img-src` não aceita `https:` genérico.
+- `escapeHtml`/`escapeAttr` escapam aspas simples e duplas; comentários são gravados crus e
+  escapados só na saída.
+- Iframes de anúncio usam `sandbox` (scripts e popups, sem same-origin).
+- Token OAuth do Google Drive: DPAPI no Windows (`KDPAPI1:`); fora do Windows, ou se o DPAPI
+  falhar, JSON em claro com modo 0600 (limitação conhecida).
+- O worker de pesquisa não tem caminho padrão para o arquivo do webhook do Discord:
+  `KOMYST_DISCORD_WEBHOOK_FILE` deve ser definido explicitamente.
+
 ## O que não foi afirmado aqui
 
 Este documento não declara pentest, homologação de qualquer site, cobertura de todos os leitores

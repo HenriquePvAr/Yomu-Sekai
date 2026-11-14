@@ -17,6 +17,7 @@ request. Tests mock the flow seam, so no browser opens and no real Google endpoi
 from __future__ import annotations
 
 import argparse
+import base64
 import json
 import os
 import sys
@@ -45,10 +46,32 @@ class OAuthTokens:
         return not self.access_token or time.time() >= (self.expiry - skew)
 
 
+_DPAPI_PREFIX = b"KDPAPI1:"
+
+
+def _seal(raw: bytes) -> bytes:
+    """Protect at rest with Windows DPAPI (current user). Other OSes / DPAPI failure: plaintext
+    JSON, relying on the 0600 file mode (explicit, documented fallback in docs/SECURITY.md)."""
+    if os.name == "nt":
+        try:
+            from komyst.auth.desktop_identity import _protect
+            return _DPAPI_PREFIX + base64.b64encode(_protect(raw))
+        except Exception:  # noqa: BLE001 - never lose the refresh token over a DPAPI failure
+            pass
+    return raw
+
+
+def _unseal(blob: bytes) -> bytes:
+    if blob.startswith(_DPAPI_PREFIX):  # legacy plaintext files (no prefix) are read as-is
+        from komyst.auth.desktop_identity import _unprotect
+        return _unprotect(base64.b64decode(blob[len(_DPAPI_PREFIX):]))
+    return blob
+
+
 def load_tokens(path: Path) -> OAuthTokens:
     try:
-        data = json.loads(Path(path).read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+        data = json.loads(_unseal(Path(path).read_bytes()).decode("utf-8"))
+    except (OSError, ValueError, RuntimeError):
         return OAuthTokens()
     return OAuthTokens(access_token=data.get("access_token", ""),
                        refresh_token=data.get("refresh_token", ""),
@@ -56,11 +79,11 @@ def load_tokens(path: Path) -> OAuthTokens:
 
 
 def save_tokens(path: Path, tokens: OAuthTokens) -> None:
-    """Atomically write the token file with owner-only permissions."""
+    """Atomically write the token file (DPAPI-protected on Windows) with owner-only permissions."""
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(json.dumps(asdict(tokens)), encoding="utf-8")
+    tmp.write_bytes(_seal(json.dumps(asdict(tokens)).encode("utf-8")))
     try:
         os.chmod(tmp, 0o600)
     except OSError:
