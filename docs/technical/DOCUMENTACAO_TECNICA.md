@@ -4057,6 +4057,22 @@ navegador normal ultrapassa o challenge e materializa páginas parciais). Parale
 materialização (K≥2) exigiria Playwright async/multiprocesso fora da abstração sync da
 Scrapling e fica como trabalho futuro.
 
+### 29.1 Endurecimento Supabase (auditoria 2026-11-11) — migrations NÃO APLICADAS
+
+Source-only em `supabase/migrations/20261113*`; **nenhuma foi aplicada em produção** (o dono aplica).
+Provado por `tests/test_supabase_security_hardening.py` (PostgreSQL real em Docker).
+
+| Achado | Estado | Notas |
+| --- | --- | --- |
+| A1 reserva paga traduções ilimitadas | Corrigido na migration | `begin_translation_request` recusa (`reservation_quota_exceeded`) acima de 50 pedidos e 500.000 caracteres **por YK reservado** (derivado de `yk_reservations.amount`). **Pendente:** a liquidação continua dependendo de `settle_translation_job` pelo cliente (sem auto-liquidação). |
+| M2 / B1 colunas graváveis | Parcial | `comments`: UPDATE só em `content`, `deleted_at`. `profiles`: sem UPDATE em `avatar_object_key`/`banner_object_key`. **Pendente:** `public_role` segue gravável porque o formulário de perfil o envia. |
+| M1 prova de dispositivo | Parcial | `consume_device_challenge` fora de `authenticated`; `device-verify` usa a sobrecarga `(uuid,text,uuid)` via service_role. **Pendente:** nenhuma RPC exige verificação recente do dispositivo. |
+| B2 overloads antigos | Corrigido na migration | Sobrecargas de 4 e 5 argumentos removidas. |
+| B3 chaves únicas por usuário | Parcial | Índices `(user_id, job_id)` e `(user_id, request_id)` adicionados; os globais permanecem porque settle/finalize/release/persist buscam só por `job_id`/`request_id`. **Pendente:** filtrar por `user_id` e então remover os globais. |
+| B4 anon/TRUNCATE | Corrigido na migration | `anon` sem privilégios nas tabelas privadas; só SELECT nas de configuração; sem TRUNCATE/REFERENCES/TRIGGER para `authenticated`. |
+| I1 leitura anônima | Mantido | Planos ativos, ranks, flags e config remota seguem legíveis por `anon` (uso pré-login); decisão do dono a confirmar. |
+| I4 / I5 | Corrigido | `komyst_user_delete_schema_ready` com `search_path=''`; `rewarded-ad-callback` sem código morto (continua 503). |
+
 ## 30. Empacotamento, updater e prontidão para Beta
 
 ### Estado atual

@@ -1,6 +1,6 @@
 # Segurança e limites de confiança
 
-> **Revisado em:** 2026-10-25 · **Base verificada:** `fb8875e`.
+> **Revisado em:** 2026-11-13 · **Base verificada:** `969b4e9`.
 
 Este documento descreve as fronteiras implementadas no Komyst e, igualmente importante,
 o que elas **não** garantem. O projeto lida com URLs, páginas renderizadas, imagens e pastas
@@ -168,6 +168,14 @@ de rede ficam fora do padrão `test_*.py` e exigem opt-ins explícitos.
 Essa guarda é uma proteção de desenvolvimento e CI, não uma política de rede para uma execução de
 produção. Uma execução solicitada pelo usuário fora da suíte de testes pode abrir navegador e
 rede conforme o adapter e a configuração permitirem.
+
+## Backend Supabase (auditoria 2026-11-11)
+
+Correções em `supabase/migrations/20261113*` e nas edge functions `device-verify` e
+`rewarded-ad-callback`. **Migrations não aplicadas em produção até o dono aplicar.** Resumo e
+pendências (auto-liquidação, `public_role`, verificação recente de dispositivo, remoção dos
+únicos globais) em [DOCUMENTACAO_TECNICA §29.1](technical/DOCUMENTACAO_TECNICA.md). Teste:
+`tests/test_supabase_security_hardening.py`.
 
 ## O que não foi afirmado aqui
 
