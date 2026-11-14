@@ -1553,7 +1553,7 @@ def split_glued_source_words(text, protected=(), chapter_names=(), chapter_words
     def repair(match):
         token = match.group(0)
         key = re.sub(r"[^A-Z]", "", token.upper())
-        if (len(key) < 4 or key in protected_keys or key in hyphen_names or key in names or region_taxonomy.is_english_word(key)
+        if (len(key) < 4 or key in protected_keys or key in names or region_taxonomy.is_english_word(key)
                 or region_taxonomy.word_zipf(key) >= 3.0):
             return token
         if token.isalpha():
@@ -1585,7 +1585,7 @@ def split_glued_source_words(text, protected=(), chapter_names=(), chapter_words
             if words and len(words) > 1:
                 joined = " ".join(words)
                 return joined if token.upper() == token else joined.lower()
-        corrected = _misread_correction(key, vocabulary)
+        corrected = None if key in hyphen_names else _misread_correction(key, vocabulary)
         return (_restore_shape(token, corrected) or token) if corrected else token
 
     return re.sub(r"[A-Za-z][A-Za-z'’]*[A-Za-z]|[A-Za-z]", repair, str(text or ""))
