@@ -37,6 +37,7 @@ _LAMA_INFERENCE_LOCK = threading.BoundedSemaphore(4)
 from tools.research.cleanup_forensic_capture import CleanupForensicCapture
 from komyst.ocr.classification_profiler import profile_step, record_count, record_group
 from komyst.core.json_utils import dump_json
+from komyst.ocr.ocr_engine import _normalize_censor_glyphs
 from komyst.ocr.ocr_engine import (
     COMMON_ENGLISH_WORDS as OCR_REPAIR_ENGLISH_WORDS,
     OCREngine,
@@ -18098,7 +18099,9 @@ def _raster_font_choice(source_bgr, group, profile, text, font_path, font_role):
 
 
 def _draw_group_translation(img_bgr, group, font_path, strategy="primary", source_bgr=None):
-    text = group.translation or group.text
+    # Translations stored before the OCR normalised censoring can still carry the ideographs the
+    # OCR read for asterisks; they would be drawn as missing-glyph boxes.
+    text = _normalize_censor_glyphs(group.translation or group.text or "")
     if not text:
         return img_bgr
     if strategy == "caption_overlay":
