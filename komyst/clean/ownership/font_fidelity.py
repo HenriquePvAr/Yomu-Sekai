@@ -37,7 +37,7 @@ ROLE_FONT_FILES = {
     "balloon_dialogue": ("comicrelief-regular.ttf", "comicneue-regular.ttf", "comic.ttf", "segoepr.ttf", "comici.ttf", "calibri.ttf"),
     # Heavy monoline lettering, the webtoon norm, measured from the source strokes.
     "bold_dialogue": ("comicrelief-bold.ttf", "comicneue-bold.ttf", "kalam-bold.ttf", "comicbd.ttf", "trebucbd.ttf", "arialbd.ttf"),
-    "thought_dialogue": ("comicneue-italic.ttf", "patrickhand-regular.ttf", "kalam-regular.ttf", "comici.ttf", "segoepr.ttf", "comic.ttf", "calibrii.ttf"),
+    "thought_dialogue": ("comici.ttf", "segoepr.ttf", "comicneue-italic.ttf", "patrickhand-regular.ttf", "kalam-regular.ttf", "comic.ttf", "calibrii.ttf"),
     "narration_box": ("trebucbd.ttf", "comicneue-bold.ttf", "comicbd.ttf", "segoeprb.ttf", "calibrib.ttf"),
     "story_caption": ("trebuc.ttf", "corbel.ttf", "calibri.ttf", "segoepr.ttf"),
     "display": ("bahnschrift.ttf", "luckiestguy-regular.ttf", "impact.ttf", "arialbd.ttf"),
@@ -50,7 +50,7 @@ ROLE_FONT_FILES = {
     "serif_narration": ("georgia.ttf", "georgiab.ttf", "times.ttf", "trebuc.ttf"),
     "serif_regular": ("georgia.ttf", "times.ttf", "calibri.ttf"),
     "serif_italic": ("georgiai.ttf", "timesi.ttf", "ariali.ttf"),
-    "italic_dialogue": ("comicneue-italic.ttf", "comicneue-bolditalic.ttf", "comici.ttf", "ariali.ttf", "calibrii.ttf"),
+    "italic_dialogue": ("comici.ttf", "comicneue-bolditalic.ttf", "comicneue-italic.ttf", "ariali.ttf", "calibrii.ttf"),
     "condensed": ("bahnschrift.ttf", "impact.ttf", "arialbd.ttf"),
 }
 
@@ -818,10 +818,32 @@ def source_line_masks(image_bgr: np.ndarray, lines, ink_bgr=None) -> list[tuple[
             gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
             _, otsu = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
             ink = otsu == 0 if float(np.median(gray)) > 127 else otsu > 0
+        if _text_bands(ink) != 1:
+            # A box holding a stacked block (a whole balloon given as one line) cannot be compared
+            # with its words drawn on one line; leaving it out avoids choosing a face on nonsense.
+            continue
         normalised = _normalised(ink)
         if normalised is not None:
             masks.append((str(line.text).strip(), normalised))
     return masks
+
+
+def _text_bands(ink: np.ndarray) -> int:
+    """Number of stacked runs of text rows in an ink mask (gaps of a few empty rows separate them)."""
+    rows = ink.sum(axis=1) > max(1, int(0.02 * ink.shape[1]))
+    bands, gap, inside = 0, 0, False
+    min_gap = max(2, ink.shape[0] // 40)
+    for has_ink in rows:
+        if has_ink:
+            if not inside:
+                bands += 1
+                inside = True
+            gap = 0
+        else:
+            gap += 1
+            if gap >= min_gap:
+                inside = False
+    return bands
 
 
 def match_font_by_raster(source_masks, candidates, *, draw_text: str = "") -> dict[str, Any] | None:

@@ -77,3 +77,13 @@ def test_renderer_choice_replaces_the_role_face_only_when_the_match_clearly_wins
     image, lines = _page(_system("bahnschrift.ttf"), LINES)
     group.lines = lines
     assert ob._raster_font_choice(image, group, profile, "VAMOS VER SE", None, "display") is None
+
+
+def test_a_stacked_block_given_as_one_line_takes_no_part():
+    image, lines = _page(str(BUNDLED / "comicrelief-regular.ttf"), LINES)
+    x0 = min(l.box[0] for l in lines); y0 = min(l.box[1] for l in lines)
+    x1 = max(l.box[0] + l.box[2] for l in lines); y1 = max(l.box[1] + l.box[3] for l in lines)
+    block = OCRLine(text=" ".join(LINES), confidence=0.9,
+                    polygon=np.array([[x0, y0], [x1, y0], [x1, y1], [x0, y1]], dtype=np.int32),
+                    box=(x0, y0, x1 - x0, y1 - y0), raw_text="x", engine="rapidocr", page=1)
+    assert ff.source_line_masks(image, [block], ink_bgr=(0, 0, 0)) == []
