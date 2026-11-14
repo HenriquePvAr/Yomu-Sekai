@@ -21,9 +21,11 @@ def _font(size):
     return ImageFont.load_default()
 
 
-def _page(background, ink, text="WHILE ABCDEFG HIJKLM", size=34):
+def _page(background, ink, text="WHILE ABCDEFG HIJKLM", size=34, frame=None):
     image = Image.new("RGB", (420, 260), background)
     draw = ImageDraw.Draw(image)
+    if frame is not None:
+        draw.rectangle((16, 36, 404, 214), outline=frame, width=4)
     font = _font(size)
     for index, line in enumerate(text.split(" ", 1)):
         draw.text((40, 60 + index * 60), line, font=font, fill=ink)
@@ -41,6 +43,7 @@ def _group(text="WHILE ABCDEFG HIJKLM"):
 
 
 BOX = (30, 50, 360, 130)
+FRAMED_BOX = (8, 28, 404, 196)  # like the safe draw box: includes the balloon frame
 
 
 def test_navy_ink_on_a_light_blue_box_is_not_the_luminous_preset():
@@ -50,6 +53,15 @@ def test_navy_ink_on_a_light_blue_box_is_not_the_luminous_preset():
     assert not profile.get("glow_color") and not profile.get("glow_strength")
     assert int(profile["stroke_width"]) <= 1
     assert profile["font_class"] != "condensed_display"
+
+
+def test_navy_ink_in_a_framed_box_is_still_plain_lettering():
+    """The safe draw box includes the balloon frame; its mid-tone edge is not a text outline."""
+    image = _page(background=(218, 242, 246), ink=(48, 63, 93), frame=(147, 164, 184))
+    profile = ob.typography_profile_for_region(image, _group(), FRAMED_BOX)
+    assert profile["visual_class"] != "mystic_blue_system"
+    assert not profile.get("glow_color") and not profile.get("glow_strength")
+    assert int(profile["stroke_width"]) <= 1
 
 
 def test_luminous_blue_lettering_on_a_dark_background_keeps_the_preset():

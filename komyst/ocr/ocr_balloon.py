@@ -20666,16 +20666,25 @@ def typography_profile_for_region(img_bgr, group, box, *, style=None):
 
 
 def _dark_ink_on_light_background(lettering):
-    """True for dark ink on a bright background with no measured outline or glow.
+    """True for dark ink on a bright background with no real outline or glow.
 
     The luminous caption presets (outlined, glowing, condensed) describe light lettering over dark
-    art; dark ink in a light box is ordinary lettering whatever its hue.
+    art; dark ink in a light box is ordinary lettering whatever its hue. A "stroke" whose tone lies
+    between the ink and the background is the balloon frame or the anti-aliased edge, not an outline
+    (the safe draw box includes the frame), so it does not disqualify plain lettering.
     """
     dominant = lettering.get("dominant_bgr")
-    if not dominant or lettering.get("stroke_present") or lettering.get("measured_neutral_glow"):
+    if not dominant or lettering.get("measured_neutral_glow"):
         return False
-    luminance = 0.114 * dominant[0] + 0.587 * dominant[1] + 0.299 * dominant[2]
-    return float(lettering.get("background_brightness") or 0.0) >= 170.0 and luminance <= 120.0
+    ink = 0.114 * dominant[0] + 0.587 * dominant[1] + 0.299 * dominant[2]
+    background = float(lettering.get("background_brightness") or 0.0)
+    if background < 170.0 or ink > 120.0:
+        return False
+    stroke = lettering.get("stroke_color")
+    if lettering.get("stroke_present") and stroke:
+        stroke_luminance = 0.114 * stroke[0] + 0.587 * stroke[1] + 0.299 * stroke[2]
+        return ink + 15.0 < stroke_luminance < background - 15.0
+    return True
 
 
 def _typography_profile_for_region(img_bgr, group, box, *, style=None):
