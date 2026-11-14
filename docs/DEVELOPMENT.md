@@ -222,9 +222,8 @@ política completa está em [Estrutura do projeto](architecture/REPOSITORY_STRUC
 ├── *.py                     # shims/entrypoints de compatibilidade
 ├── requirements.txt         # stack base; perfis em requirements/
 ├── requirements/            # perfis beta, rapidocr, ui, dev, paddle, optional, gemini-vps
-├── tests/                   # suíte hermética Python (test_*.py) e frontend (test_*.mjs)
+├── tests/                   # suíte hermética Python (test_*.py) e frontend (test_*.mjs); fixtures em tests/fixtures/
 ├── test_support/            # helpers compartilhados de teste
-├── test_fixtures/           # artefatos fixos usados por testes
 ├── packaging/               # specs PyInstaller e script Inno Setup
 ├── tools/                   # release, admin, dev, harnesses e auditorias
 ├── scripts/                 # smokes manuais com opt-in, assinatura de release, migração de auth

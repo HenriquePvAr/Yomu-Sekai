@@ -14,7 +14,7 @@ import pytest
 from komyst.config import settings as config
 from komyst.ocr.sfx_region_reocr import _is_candidate, repair_sfx_region_reads
 
-_FIXTURES = Path(__file__).resolve().parent.parent / "test_fixtures" / "sfx_region_reocr"
+_FIXTURES = Path(__file__).resolve().parent / "fixtures" / "sfx_region_reocr"
 _PADDLE_AVAILABLE = importlib.util.find_spec("paddleocr") is not None
 
 

@@ -13,7 +13,7 @@ Kanban. Não use um checkout antigo nem mova arquivos só para reduzir contagens
 ```mermaid
 flowchart TD
     R[(raiz)] --> Y[komyst/<br/>pacote do produto]
-    R --> T[tests/ + test_support/ + test_fixtures/]
+    R --> T[tests/ + test_support/ + tests/fixtures/]
     R --> D[docs/<br/>user, technical, architecture, operations]
     R --> Q[requirements.txt<br/>+ requirements/ perfis]
     R --> P[packaging/ + deploy/ + apps/ + supabase/]
@@ -41,9 +41,8 @@ flowchart TD
 ├── scripts/          comandos operacionais, de build e validação
 ├── static/           assets estáticos servidos pela UI
 ├── supabase/         migrations, funções e configuração Supabase versionadas
-├── test_fixtures/    fixtures estáticas de teste
 ├── test_support/     guards herméticos e utilitários exclusivos de teste
-├── tests/            testes Python, frontend, integração e contrato
+├── tests/            testes Python, frontend, integração e contrato; fixtures em tests/fixtures/
 ├── tools/            auditorias, validações e ferramentas de desenvolvimento
 ├── ui/               fontes/integrações de UI mantidas fora do pacote runtime Python
 └── komyst/             implementação canônica do runtime Python

@@ -20,7 +20,7 @@ Requirements for a real run: Kaggle CLI on PATH, authenticated Kaggle account, G
 
 > Historical record of one run. The fixture image `source_crop.png` is not in the Git index (only its JSON metadata is); results: `docs/reports/kaggle_qwen_fallback_lab_real_e2e_v1.json`.
 
-The isolated venv uses Python 3.11.9 and `kaggle==2.2.4`. OAuth authentication was completed locally with `kaggle auth login`; no token was copied into this repository. A private upload probe succeeded and was deleted. The real NON-M20 fixture was `test_fixtures/quality_regression_diagnostics/real/sfx_slurp_p006/source_crop.png` (SHA-256 recorded in the report).
+The isolated venv uses Python 3.11.9 and `kaggle==2.2.4`. OAuth authentication was completed locally with `kaggle auth login`; no token was copied into this repository. A private upload probe succeeded and was deleted. The real NON-M20 fixture was `tests/fixtures/quality_regression_diagnostics/real/sfx_slurp_p006/source_crop.png` (SHA-256 recorded in the report).
 
 The real kernel completed on Kaggle with `Qwen/Qwen3-VL-8B-Instruct`, returned `result.json`, and reported 161.901 seconds runtime including model load/inference. The kernel was deleted. The explicit dataset-delete API call returned HTTP 403, but a subsequent private dataset listing found no matching temporary dataset; this is recorded as a cleanup limitation, not silently treated as a perfect delete confirmation. No production routing, provider, quality mode, YK, DeepL, or Supabase code was changed.
 

@@ -311,7 +311,7 @@ class LastRunStructuralInvariantTests(unittest.TestCase):
     # hermetic (no read of the live output/ tree) while still asserting
     # against real captured pipeline data rather than synthetic numbers.
     FIXTURE = os.path.join(
-        "test_fixtures", "84f40_last_run_quality_report_trimmed.json"
+        "tests", "fixtures", "84f40_last_run_quality_report_trimmed.json"
     )
 
     def _load(self):
