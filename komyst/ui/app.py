@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import base64
+import hashlib
 import os
 import json
 import hmac
@@ -160,12 +162,26 @@ I18N_ASSETS = [
 ]
 
 
+def _inline_script_hashes(body: bytes) -> str:
+    """CSP 'sha256-...' sources for every inline (src-less) <script> block of an HTML body."""
+    out = []
+    for attrs, text in re.findall(rb"<script([^>]*)>(.*?)</script>", body, re.S | re.I):
+        if re.search(rb"src\s*=", attrs, re.I) or not text.strip():
+            continue
+        digest = base64.b64encode(hashlib.sha256(text).digest()).decode("ascii")
+        token = f"'sha256-{digest}'"
+        if token not in out:
+            out.append(token)
+    return " ".join(out)
+
+
 class SecurityHeadersMiddleware:
     """Apply conservative headers to every local UI response.
 
     The loopback desktop runtime is HTTP by design, so HSTS is intentionally omitted.
-    Inline UI bootstrap is currently required by the NiceGUI shell and is constrained
-    to this same-origin application; no external script sources are allowed.
+    script-src has no 'unsafe-inline': inline <script> blocks of HTML responses are
+    allowed one by one through their SHA-256 hash (NiceGUI and the shell emit
+    server-built inline bootstraps); inline event-handler attributes are not allowed.
     """
 
     _HEADERS = {
@@ -176,8 +192,9 @@ class SecurityHeadersMiddleware:
         "Content-Security-Policy": (
             "default-src 'self'; base-uri 'self'; object-src 'none'; "
             "frame-ancestors 'none'; form-action 'self'; "
-            "script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; "
-            "img-src 'self' data: blob: https:; font-src 'self' data:; "
+            "script-src 'self'; style-src 'self' 'unsafe-inline'; "
+            "img-src 'self' data: blob:" + (" " + _SUPABASE_CSP_ORIGIN if _SUPABASE_CSP_ORIGIN else "") + "; "
+            "font-src 'self' data:; "
             "connect-src 'self' ws: wss:" + (" " + _SUPABASE_CSP_ORIGIN if _SUPABASE_CSP_ORIGIN else "") + "; " +
             "frame-src 'self'" + (" " + _SUPABASE_CSP_ORIGIN if _SUPABASE_CSP_ORIGIN else "") +
             " https://henriquepvar.github.io https://yomusekai.com.br https://game-deals-alpha.vercel.app;"
@@ -192,26 +209,54 @@ class SecurityHeadersMiddleware:
             await self.app(scope, receive, send)
             return
 
-        async def secured_send(message):
-            if message.get("type") == "http.response.start":
-                headers = list(message.get("headers") or [])
+        pending: dict[str, Any] = {}
+
+        async def emit_start(message, body=b""):
+            headers = list(message.get("headers") or [])
+            existing = {k.lower() for k, _ in headers}
+            # Auth modules are mutable critical code in the desktop app. Do
+            # not allow a stable module URL to remain fresh for an hour in
+            # WebView2; the entry point already uses content-hash URLs, and
+            # these dependency modules are defensively no-store as well.
+            if scope.get("path", "") in {
+                "/static/auth_ui.js", "/static/auth_provider.js",
+                "/static/supabase_auth.js", "/static/auth_presentation.js",
+            }:
+                headers = [(k, v) for k, v in headers if k.lower() != b"cache-control"]
+                headers.append((b"cache-control", b"no-store"))
                 existing = {k.lower() for k, _ in headers}
-                # Auth modules are mutable critical code in the desktop app. Do
-                # not allow a stable module URL to remain fresh for an hour in
-                # WebView2; the entry point already uses content-hash URLs, and
-                # these dependency modules are defensively no-store as well.
-                if scope.get("path", "") in {
-                    "/static/auth_ui.js", "/static/auth_provider.js",
-                    "/static/supabase_auth.js", "/static/auth_presentation.js",
-                }:
-                    headers = [(k, v) for k, v in headers if k.lower() != b"cache-control"]
-                    headers.append((b"cache-control", b"no-store"))
-                    existing = {k.lower() for k, _ in headers}
-                for name, value in self._HEADERS.items():
-                    key = name.lower().encode("latin-1")
-                    if key not in existing:
-                        headers.append((key, value.encode("latin-1")))
-                message = {**message, "headers": headers}
+            for name, value in self._HEADERS.items():
+                key = name.lower().encode("latin-1")
+                if name == "Content-Security-Policy" and body:
+                    hashes = _inline_script_hashes(body)
+                    if hashes:
+                        value = value.replace("script-src 'self';", "script-src 'self' " + hashes + ";", 1)
+                if key not in existing:
+                    headers.append((key, value.encode("latin-1")))
+            await send({**message, "headers": headers})
+
+        async def secured_send(message):
+            kind = message.get("type")
+            if kind == "http.response.start":
+                ctype = next((v for k, v in message.get("headers") or [] if k.lower() == b"content-type"), b"")
+                if ctype.lower().startswith(b"text/html"):
+                    pending["start"], pending["body"] = message, bytearray()  # buffered to hash inline scripts
+                    return
+                await emit_start(message)
+                return
+            if "start" in pending:
+                start = pending.pop("start")
+                if kind != "http.response.body":  # e.g. pathsend: no body to hash
+                    await emit_start(start)
+                    await send(message)
+                    return
+                pending["body"].extend(message.get("body") or b"")
+                if message.get("more_body"):
+                    pending["start"] = start
+                    return
+                await emit_start(start, bytes(pending["body"]))
+                await send({**message, "body": bytes(pending["body"])})
+                return
             await send(message)
 
         await self.app(scope, receive, secured_send)
