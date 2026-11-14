@@ -98,5 +98,5 @@ O `komyst/export/editable_psd_writer.py` produz o `EDITABLE_PSD` atual com os gr
 separado e rasterizado, não o writer do contrato `EDITABLE_PSD`. Aviso ou substituição de fonte
 não implica rasterização. Não rasterize texto para economizar espaço.
 
-A compatibilidade física foi validada no Photoshop 2025 e no Photopea, (relatório histórico removido; consulte o histórico do git). O round-trip direto entre os dois
+A compatibilidade física foi validada no Photoshop 2025 e no Photopea. O round-trip direto entre os dois
 editores permanece **NOT RUN**.

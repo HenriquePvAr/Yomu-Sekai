@@ -74,9 +74,6 @@ RAM/VRAM, tempo do capítulo e limites ainda não homologados de requisitos mín
 - [Entrada por pasta local](LOCAL_FOLDER_INPUT.md) — processar imagens já presentes no computador
 - [Transportes de download](DOWNLOAD_TRANSPORTS.md) — abstração de transporte e validação por bytes
 
-### PSD e saídas profissionais
-
-
 ### Qualidade
 
 - [Qualidade e validação](QUALITY_AND_VALIDATION.md) — gates, fallbacks, retries, estados terminais e riscos abertos
