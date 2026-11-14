@@ -1,3 +1,4 @@
+import html
 import json
 import copy
 import hashlib
@@ -7240,6 +7241,9 @@ def _quality_item_summary(item):
 
 
 def _quality_report_html(report):
+    def esc(value):
+        return html.escape(str(value), quote=True)
+
     summary = report["summary"]
     totals = report["totals"]
     rows = []
@@ -7254,7 +7258,7 @@ def _quality_report_html(report):
             f"<td>{len(page['mixed_language_items'])}</td>"
             f"<td>{len(page['text_overflow_items'])}</td>"
             f"<td>{len(page['visual_validation_failures'])}</td>"
-            f"<td><a href=\"pages/{Path(page['output_path']).name}\">final</a></td>"
+            f"<td><a href=\"pages/{esc(Path(page['output_path']).name)}\">final</a></td>"
             "</tr>"
         )
     return f"""<!doctype html>
@@ -7277,14 +7281,14 @@ code {{ color:#ffd1bd; }}
 <body>
 <h1>Komyst — Quality Report</h1>
 <div class="card">
-<p><strong>URL:</strong> {summary.get('url')}</p>
-<p><strong>OCR:</strong> {summary.get('ocr_engine')} → fallback {summary.get('ocr_fallback_engine')}</p>
+<p><strong>URL:</strong> {esc(summary.get('url'))}</p>
+<p><strong>OCR:</strong> {esc(summary.get('ocr_engine'))} → fallback {esc(summary.get('ocr_fallback_engine'))}</p>
 <p><strong>Páginas:</strong> {summary.get('processed_images')} &nbsp; <strong>Tempo:</strong> {summary.get('total_seconds')}s</p>
-<p><strong>PDF:</strong> <a href="{Path(summary.get('pdf_path', '')).name}">{summary.get('pdf_path')}</a></p>
+<p><strong>PDF:</strong> <a href="{esc(Path(summary.get('pdf_path', '')).name)}">{esc(summary.get('pdf_path'))}</a></p>
 </div>
 <div class="card">
 <h2>Totais</h2>
-<pre>{json.dumps(totals, ensure_ascii=False, indent=2)}</pre>
+<pre>{esc(json.dumps(totals, ensure_ascii=False, indent=2))}</pre>
 </div>
 <div class="card">
 <h2>Contact sheet</h2>
