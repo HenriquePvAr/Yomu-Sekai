@@ -4,6 +4,12 @@ Base: `dev` @ `15e3f0b`. Máquina de medição: 31,4 GB de RAM, AMD Radeon RX 66
 **Condição das medições:** a RAM do sistema ficou em 61–66% (o WSL/Docker do dono estava em uso na mesma
 máquina). Os tempos são, portanto, de uma máquina sob uso, não de uma máquina livre.
 
+**Ressalva (descoberta depois do fechamento):** em todos os jobs de 2026-11-13 o LaMa grande e o FLUX
+ficaram indisponíveis (`MODEL_UNAVAILABLE`, `caption_effect_model_unavailable`), porque o caminho padrão dos modelos
+ainda apontava para `%LOCALAPPDATA%\Komyst\models` e os arquivos estão na pasta de dados do usuário. Os tempos são
+comparáveis entre si, mas as métricas de qualidade e os tempos absolutos **não representam** o pipeline com os
+modelos aprendidos ligados.
+
 Capítulos de referência: REF-A (65 páginas lógicas, 58 balões) e REF-B (85 páginas lógicas, 177 regiões).
 
 ## 1. O que foi entregue
