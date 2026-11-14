@@ -92,7 +92,7 @@ Use o [índice da documentação](docs/README.md) para encontrar guias por assun
 - [Guia do usuário](docs/user/GUIA_DO_USUARIO.md)
 - [Desenvolvimento](docs/DEVELOPMENT.md) · [Arquitetura](docs/ARCHITECTURE.md)
 - [Testes](docs/TESTING.md) · [Segurança](docs/SECURITY.md)
-- [Contribuir](CONTRIBUTING.md)
+- [Contribuir](.github/CONTRIBUTING.md)
 
 Relatórios, auditorias e planos antigos estão preservados como histórico. Eles registram o
 estado na data em que foram escritos; para comportamento atual, use primeiro os guias acima e

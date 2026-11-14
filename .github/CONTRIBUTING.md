@@ -7,11 +7,11 @@
 - Código de runtime Python novo vai para o pacote canônico `komyst/`; a raiz mantém apenas shims/entrypoints de compatibilidade (verificados por `python tools/repository/check_root_policy.py`). As demais áreas ativas são `apps/`, `ui/`, `static/`, `supabase/` e `packaging/`.
 - Testes automatizados ficam em `tests/`; experimentos isolados ficam em `experiments/` ou `research/`, nunca no runtime de produção.
 - Scripts operacionais ficam em `scripts/`; harnesses e ferramentas de desenvolvimento ficam em `tools/`.
-- Relatórios pequenos e canônicos podem ser versionados em `reports/`. Outputs volumosos seguem [a política de artefatos](docs/ARTIFACT_POLICY.md).
+- Relatórios pequenos e canônicos podem ser versionados em `reports/`. Outputs volumosos seguem [a política de artefatos](../docs/ARTIFACT_POLICY.md).
 
 ## Verificações
 
-Use Python 3.11 e o perfil de dependências indicado em [Desenvolvimento](docs/DEVELOPMENT.md) (`requirements/requirements-beta.txt` + `requirements/requirements-dev.txt`). Para a suíte offline padrão (~6160 testes, ~10 min):
+Use Python 3.11 e o perfil de dependências indicado em [Desenvolvimento](../docs/DEVELOPMENT.md) (`requirements/requirements-beta.txt` + `requirements/requirements-dev.txt`). Para a suíte offline padrão (~6160 testes, ~10 min):
 
 ```powershell
 python -m pytest -q

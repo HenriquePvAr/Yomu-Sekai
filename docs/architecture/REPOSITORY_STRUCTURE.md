@@ -58,10 +58,10 @@ O `.mcp.json` local também permanece fora do Git.
 
 ## Arquivos que permanecem na raiz
 
-Os 22 arquivos rastreados diretamente na raiz têm contratos convencionais, de configuração,
+Os 21 arquivos rastreados diretamente na raiz têm contratos convencionais, de configuração,
 bootstrap, instalação ou compatibilidade. Em particular:
 
-- `README.md`, `CHANGELOG.md`, `CONTRIBUTING.md`, `AGENTS.md`, `CLAUDE.md`, `.gitignore`,
+- `README.md`, `CHANGELOG.md`, `AGENTS.md`, `CLAUDE.md`, `.gitignore`,
   `.gitattributes`, `.env.example` e `THIRD_PARTY_NOTICES.txt` são entradas/documentação ou
   convenções de ferramenta/distribuição.
 - `app_ui.py`, `desktop_app.py`, `down.py`, `main.py`, `run_local_folder.py`, `run_webtoon.py`,
