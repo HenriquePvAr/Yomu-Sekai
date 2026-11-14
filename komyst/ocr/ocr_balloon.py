@@ -18124,7 +18124,10 @@ def _draw_group_translation(img_bgr, group, font_path, strategy="primary", sourc
     # line box (which carries padding): measured on the reference chapter, 0.78 x box left the
     # translated lettering ~14 % smaller than the original. The fit loop below still shrinks the
     # size until the text fits, so a larger start can only reach a size the old start could not.
-    if not display_lettering and not is_sfx:
+    # Display lettering (a shout, a caption in a condensed face) starts from its real letter height
+    # too: its fixed share of the OCR box rendered it at about half the source height. Only a
+    # translated sound effect keeps its own rule, the size of the drawn sound.
+    if not is_sfx:
         source_cap = _source_ink_cap_height(typography_source, group)
         if source_cap:
             probe = get_font(preview_font_path or font_path, 100, role=font_role,
@@ -20890,20 +20893,20 @@ def _typography_profile_for_region(img_bgr, group, box, *, style=None):
             return base
 
     if open_caption and stats["brightness"] >= 172 and emphatic:
+        # Without a confident read of the source pixels there is no evidence of a colour, so an
+        # emphatic caption on a light background is drawn as plain dark display ink. (This used to
+        # invent a dark-red glowing preset, turning black shouts in white balloons red.)
         base.update({
-            "visual_class": "dramatic_red_display",
+            "visual_class": "ink_display",
             "font_class": "tall_display",
-            "fill_color": (118, 8, 10),
-            "stroke_color": (255, 250, 250),
-            "stroke_width": 2,
-            "glow_color": (146, 22, 32),
-            "glow_strength": 4,
-            "shadow_color": (48, 8, 12),
-            "shadow_offset": (2, 2),
-            "shadow_blur": 2,
-            "letter_spacing": 0.02,
-            "line_height": 0.94,
-            "content_width_ratio": 0.88,
+            "fill_color": (18, 16, 22),
+            "stroke_color": (250, 250, 252),
+            "stroke_width": 1,
+            "glow_color": None,
+            "glow_strength": 0,
+            "shadow_color": None,
+            "shadow_offset": (0, 0),
+            "content_width_ratio": 0.92,
             "font_size_scale": 0.98,
             "line_height_scale": 0.9,
             "selected_font_role": "shout",

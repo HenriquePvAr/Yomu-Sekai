@@ -86,7 +86,8 @@ class SourceInkFontSizeTests(unittest.TestCase):
         self.assertGreater(derived["size"], old_start)
         self.assertLessEqual(group.font_size, derived["size"])
 
-    def test_display_lettering_keeps_its_own_size_rule(self):
+    def test_display_lettering_also_starts_from_the_real_letter_height(self):
+        """Its fixed share of the OCR box drew a shout at about half the source height."""
         original = ob.typography_profile_for_region
 
         def display_style(*args, **kwargs):
@@ -99,7 +100,16 @@ class SourceInkFontSizeTests(unittest.TestCase):
         group = _group("NOT TOO SHABBY.", boxes, "NAO ESTA TAO RUIM ASSIM.")
         with mock.patch.object(ob, "typography_profile_for_region", display_style):
             render_analyzed_image(image, [], [], [group], page_index=1)
-        profile = group.font_runtime_validation["typography_profile"]
+        derived = group.font_runtime_validation["typography_profile"].get("font_size_from_source_ink")
+        self.assertIsNotNone(derived)
+        self.assertLessEqual(group.font_size, derived["size"])
+
+    def test_a_translated_sound_effect_keeps_its_own_size_rule(self):
+        image, boxes, _ = _page_with_lettering()
+        group = _group("NOT TOO SHABBY.", boxes, "NAO ESTA TAO RUIM ASSIM.")
+        group.classification = "sfx"
+        render_analyzed_image(image, [], [], [group], page_index=1)
+        profile = (getattr(group, "font_runtime_validation", None) or {}).get("typography_profile") or {}
         self.assertIsNone(profile.get("font_size_from_source_ink"))
 
 
