@@ -157,7 +157,7 @@ WHY: <motivo — ex.: refatoração interna sem mudança de comportamento, API, 
 ### Estado do produto e evidência
 
 A tabela resume o código atual e os gates externos conhecidos. Para cada release, confira novamente os contratos no código e os artefatos de validação.
-código. Ela envelhece: confira o código antes de assumir que um valor não mudou.
+A tabela é um instantâneo do código. Ela envelhece: confira o código antes de assumir que um valor não mudou.
 
 > Os estados desta tabela devem ser conferidos contra o código atual antes de qualquer release.
 
