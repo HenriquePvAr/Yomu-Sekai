@@ -1883,6 +1883,15 @@ flowchart TD
     T -->|não| U[broad_rectangular_or_polygonal_mask]
 ```
 
+### Estilo da tipografia: tinta escura em caixa clara
+
+`_typography_profile_for_region` só usa o preset luminoso `mystic_blue_system` (fonte condensada, contorno
+azul de 2 px e brilho) para legenda azul **clara** sobre fundo escuro. Tinta escura sobre fundo claro
+(`_dark_ink_on_light_background`: luminância da tinta ≤ 120, fundo ≥ 170, sem brilho neutro medido) usa o
+estilo de diálogo (`balloon_dialogue`, fonte `comic_sans_style`) com a cor medida e sem contorno nem brilho. Um
+"contorno" de tom intermediário entre tinta e fundo é a moldura do balão (a caixa segura a inclui) ou a borda
+suavizada, e não desqualifica a tinta simples. Teste: `tests/test_blue_ink_on_light_box_style.py`.
+
 ## 17. Qualidade, validação física e proveniência
 
 O sistema separa **sucesso técnico** de **aprovação de qualidade**. Um PDF pode existir e a
@@ -4096,7 +4105,9 @@ Scrapling e fica como trabalho futuro.
 
 ### 29.1 Endurecimento Supabase (auditoria 2026-11-11) — migrations NÃO APLICADAS
 
-Source-only em `supabase/migrations/20261113*`; **nenhuma foi aplicada em produção** (o dono aplica).
+As migrations `20261113100000` a `20261113103500` foram aplicadas em produção em 2026-11-14, segundo o relato de quem
+as aplicou (histórico alinhado às versões dos arquivos; não reverificado aqui). A `20261114010000` (liquidação)
+**não foi aplicada**.
 Provado por `tests/test_supabase_security_hardening.py` (PostgreSQL real em Docker).
 
 | Achado | Estado | Notas |
@@ -4108,6 +4119,7 @@ Provado por `tests/test_supabase_security_hardening.py` (PostgreSQL real em Dock
 | B3 chaves únicas por usuário | Parcial | Índices `(user_id, job_id)` e `(user_id, request_id)` adicionados; os globais permanecem porque settle/finalize/release/persist buscam só por `job_id`/`request_id`. **Pendente:** filtrar por `user_id` e então remover os globais. |
 | B4 anon/TRUNCATE | Corrigido na migration | `anon` sem privilégios nas tabelas privadas; só SELECT nas de configuração; sem TRUNCATE/REFERENCES/TRIGGER para `authenticated`. |
 | I1 leitura anônima | Mantido | Planos ativos, ranks, flags e config remota seguem legíveis por `anon` (uso pré-login); decisão do dono a confirmar. |
+| Liquidação bloqueada por requisição falha | Corrigido na migration `20261114010000` (NÃO APLICADA) | `settle_translation_job` e `finalize_translation_job` exigiam todas as requisições `completed`; um retry unitário rejeitado pelo provedor (`failed`, sem resultado) impedia consumir e liberar a reserva. Linhas `failed` sem resultado agora são ignoradas; `processing`, `provider_succeeded` e falhas com resultado persistido continuam bloqueando. O provedor de backend também reaproveita a tradução anterior em `translate_strict`, sem nova requisição. Testes: `tests/test_settle_ignores_failed_requests.py`, `tests/test_komyst_backend_pipeline_wiring.py`. |
 | I4 / I5 | Corrigido | a função de prontidão da exclusão de usuário (`komyst_user_delete_schema_ready` no repositório, `yomu_user_delete_schema_ready` em produção, nomes divergentes pelo renomeio de pacote) com `search_path=''`; `rewarded-ad-callback` sem código morto (continua 503). |
 
 ## 30. Empacotamento, updater e prontidão para Beta
