@@ -70,3 +70,27 @@ def test_auth_callback_inline_scripts_are_covered_by_hashes():
     html = (ROOT / "ui" / "auth_callback.html").read_bytes()
     csp, _ = _serve(html)
     assert len(_directive(csp, "script-src")) >= 3
+
+
+import shutil
+import subprocess
+
+import pytest
+
+UI_JS = (ROOT / "static" / "komyst_ui.js").read_text(encoding="utf-8")
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node not available")
+def test_escape_html_escapes_quotes_and_is_used_for_attributes():
+    block = re.search(r"const escapeHtml = .*?\n\s*const escapeAttr = escapeHtml;", UI_JS, re.S).group(0)
+    script = block + " console.log(JSON.stringify([escapeHtml(process.argv[1]), escapeAttr(null), escapeHtml(3)]));"
+    payload = '<a href="x" onclick=' + "'y'" + '>&'
+    out = subprocess.run(["node", "-e", script, "--", payload], capture_output=True, text=True, check=True).stdout
+    assert out.strip() == '["&lt;a href=&quot;x&quot; onclick=&#39;y&#39;&gt;&amp;","","3"]'
+
+
+def test_internal_values_are_escaped_in_templates():
+    assert "${escapeHtml(runStatusLabels[item.status] || item.status)}" in UI_JS
+    assert "${escapeHtml(result.candidate_count)}" in UI_JS
+    assert "${escapeAttr(region)}\"></figure>" in UI_JS
+    assert "escapeHtml(listing.reviewable_regions || 0)" in UI_JS
