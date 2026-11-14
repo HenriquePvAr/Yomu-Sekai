@@ -49,8 +49,14 @@ export async function handleRequest(req: Request): Promise<Response> {
     if (!await crypto.subtle.verify({ name: 'Ed25519' }, key, signatureBytes, nonceBytes)) {
       return json({ code: 'device_signature_invalid' }, 401);
     }
+    // Consumption is service_role-only: authenticated clients cannot burn a challenge
+    // without passing the signature check above. The owner comes from the challenge
+    // row that get_device_challenge_for_verify returned for this caller's JWT.
+    const sk = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') || Deno.env.get('SUPABASE_SECRET_KEY');
+    if (!sk) return json({ code: 'control_plane_not_configured' }, 503);
     const consume = await fetch(`${u}/rest/v1/rpc/consume_device_challenge`, {
-      method: 'POST', headers: h, body: JSON.stringify({ p_challenge_id: b.challenge_id, p_nonce_hash: hash })
+      method: 'POST', headers: { apikey: sk, Authorization: `Bearer ${sk}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ p_challenge_id: b.challenge_id, p_nonce_hash: hash, p_user_id: c.user_id })
     });
     const out = await consume.json().catch(() => ({}));
     return consume.ok ? json({ verified: true, ...out }) : json({ code: 'device_challenge_invalid' }, 409);
