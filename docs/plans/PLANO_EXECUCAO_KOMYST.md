@@ -691,7 +691,7 @@ README, callbacks, títulos de janela, relatórios, mensagens e instalador devem
 
 ### F6.4 Documentação e histórico
 
-1. Atualize o guia do usuário e a documentação técnica para instalador, licença Beta, instalação limpa e atualização. Para validação do beta tester, use a versão `v0.9.1-beta.18`, a data “não informada” e a formulação **validado por beta tester, informado pelo dono**.
+1. Atualize o guia do usuário e a documentação técnica para instalador, licença Beta, instalação limpa e atualização. Para a validação do beta tester, declare uma única vez por documento: “A instalação limpa em Windows foi validada por um beta tester com a `v0.9.1-beta.18` (data não registrada).” Não repita a atribuição nem escreva em primeira pessoa.
 2. Remova snapshots de estado com SHA/data antigos; use código atual e proveniência de validação.
 3. Remova pelo Git os relatórios históricos de tarefa obsoletos; não apague artefatos não rastreados nem dados fora do repositório.
 4. Corrija links relativos e valide `docs/status/board/board.js` sem duplicar ids nem quebrar referências.
