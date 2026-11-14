@@ -80,17 +80,6 @@ python -c "from komyst.runtime import hardware_profile as h; print(h.resolve())"
 
 Nenhuma tag, release, instalador ou manifesto foi criado ou publicado. A beta validada continua sendo a
 `v0.9.1-beta.18`.
-
-```text
-DOCUMENTATION IMPACT
-
-TECHNICAL DOC:   UPDATED
-USER GUIDE:      NOT REQUIRED
-SCREENSHOTS:     NOT REQUIRED
-WHY:             docs/HARDWARE_PROFILE.md ganhou a leitura de VRAM, os limiares e as métricas medidas;
-                 a correção do gate não muda rótulo, tela ou fluxo visível ao usuário.
-```
-
 ## 6. Medição com os modelos aprendidos ligados (2026-11-14)
 
 Depois de corrigir o caminho dos modelos (`models_root()`), o LaMa grande passou a ser encontrado (`MODEL_UNAVAILABLE`: 0).
@@ -107,6 +96,6 @@ anteriores; a comparação válida é a de qualidade.
 | Pico de RAM do pipeline | 2 579 MB | 3 489 MB |
 | Tempo | 402 s | 793 s (RAM do sistema em 93%) |
 
-REF-A com modelos: 56/58, gate físico verdadeiro, 0 resíduos, 750 s (RAM do sistema em 99,5%). O guard de memória pulou o
-FLUX 53 vezes na REF-A e 145 na REF-B por falta de RAM livre; com a máquina livre esse número deve cair, mas isso não foi medido.
+REF-A com modelos: 56/58, gate físico verdadeiro, 0 resíduos, 750 s (RAM do sistema em 99,5%). O guard de memória negou o
+FLUX em 53 consultas na REF-A e 145 na REF-B por falta de RAM livre (o contador conta consultas de disponibilidade, uma por grupo, não regiões distintas; o FLUX não rodou nenhuma vez); com a máquina livre esse número deve cair, mas isso não foi medido.
 O custo de RAM dos modelos aprendidos (~+900 MB de pico) conta contra a meta de redução de RAM da Fase 1.
